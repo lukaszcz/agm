@@ -1376,11 +1376,26 @@ def _grouping_params_for(n: int) -> list[object]:
 
 def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
     """Evaluate *decls* on *session* as one entry per *sizes*; every entry must succeed."""
+    _eval_grouped_final(session, decls, sizes)
+
+
+def _eval_grouped_final(
+    session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]
+) -> EntryResult:
+    """Evaluate *decls* as one entry per *sizes*; every entry but the last must succeed.
+
+    Returns the last entry's result unchecked, for a caller that expects it to
+    fail depending on how the grouping combines declarations into entries.
+    """
     start = 0
+    result: EntryResult | None = None
     for size in sizes:
-        entry = session.eval_entry("\n".join(decls[start : start + size]))
-        assert entry.ok, entry.diagnostics
+        result = session.eval_entry("\n".join(decls[start : start + size]))
+        if start + size < len(decls):
+            assert result.ok, result.diagnostics
         start += size
+    assert result is not None
+    return result
 
 
 class TestBareConstructorVisibilityAcrossEntries:
@@ -1527,11 +1542,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         """Every grouping of the same declarations into entries leaves the same constructors."""
         sources, _, probes = _GROUPING_CASES[case]
         s = open_session()
-        start = 0
-        for size in sizes:
-            entry = s.eval_entry("\n\n".join(sources[start : start + size]))
-            assert entry.ok, entry.diagnostics
-            start += size
+        _eval_grouped(s, sources, sizes)
 
         for probe, expected in probes:
             result = s.eval_entry(probe)
@@ -1915,6 +1926,46 @@ def test_alias_rejects_a_member_of_a_same_path_enum_declared_after_its_target_is
     "use",
     (
         "C::A",
+        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
+        "(C::A) is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_declaring_an_alias_in_the_same_entry_that_retires_its_target_fails_every_position(
+    use: str,
+) -> None:
+    """A brand-new alias never gets a chance to disagree with its own entry.
+
+    When the ``use`` an alias would be reached through, and the redeclaration
+    that retires it, both land in the one entry that also declares the alias,
+    every position sees the same, entry-local picture: the alias's target is
+    already gone before the entry's own declarations are even resolved, so it
+    fails to resolve there -- exactly like file mode, where such a
+    redeclaration and reference could never coexist in one compilation unit.
+    Value, pattern, ``is`` and type positions must all fail the same way, not
+    let one succeed on a stale reference while the others reject it.
+    """
+    s = ReplSession()
+    for decl in ("enum Foo | Old", "enum Foo::Old::E = A | B", "use Foo::Old::*"):
+        assert s.eval_entry(decl).ok
+
+    result = s.eval_entry(f"type C = E\nenum Foo | New\n{use}")
+    assert not result.ok
+    assert result.diagnostics
+    assert result.error is None
+
+    # The failed entry leaves the session exactly as it was: the alias never
+    # comes into being, and the original target is still reachable by its own
+    # path, untouched by the never-promoted redeclaration.
+    assert not s.eval_entry("C::A").ok
+    assert s.eval_entry("Foo::Old::E::A").ok
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
         "case d of\n  | C::A => 1\n  | _ => 2",
         "d is C::A",
         "fn(x: C::A) => 1",
@@ -2013,6 +2064,26 @@ def test_retained_alias_of_an_imported_alias_reaches_members(
     assert s.eval_entry("x is C::Green").value == BoolValue(True)
 
 
+def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
+    tmp_path: Path,
+) -> None:
+    """An imported generic enum's referenced member stays rejected once applied.
+
+    ``Stored[T]`` is imported, then spelled with explicit type arguments
+    (``Stored[int]::...``); an inline member of that applied owner
+    constructs fine, but its referenced member must still be rejected,
+    exactly as the unapplied owner is.
+    """
+    (tmp_path / "gen.agl").write_text(
+        "record Saved\n  id: int\nenum Stored[T] = ::Saved | Kept(value: T)\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import gen::{Stored}").ok
+
+    assert s.eval_entry("Stored[int]::Kept(value = 1)").ok
+    assert not s.eval_entry("Stored[int]::Saved").ok
+
+
 @pytest.mark.parametrize(
     "use",
     (
@@ -2051,6 +2122,257 @@ def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
 
     with pytest.raises(HiddenMemberError):
         s.type_of(use)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(4))
+def test_alias_chain_reaches_a_lifted_import_at_every_link(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """A chain of aliases must reach a member a later import lifts back in,
+    at every link of the chain, regardless of how the declarations are split
+    into entries."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(
+        s,
+        ("import m::* hiding Color::Red", "type K = Color", "type C = K", "import m::{Color}"),
+        sizes,
+    )
+    assert s.eval_entry("type D = C").ok
+
+    for owner in ("K", "C", "D"):
+        assert s.eval_entry(f"{owner}::Red").ok
+
+
+def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
+    """A two-link chain of generic aliases must still reach its target's member."""
+    s = ReplSession()
+    for decl in (
+        "enum E[T] = A(x: T) | B",
+        "type K[T] = E[T]",
+        "type C[T] = K[T]",
+    ):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("C[int]::A(x = 1)").ok
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
+        "(C::A) is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_a_two_link_alias_chain_narrows_with_a_later_local_use(use: str) -> None:
+    """A local ``use ... hiding`` that narrows an earlier glob ``use`` must
+    reach through a two-link alias chain (``C`` of ``K`` of ``E``), not only
+    a single alias."""
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type K = E",
+        "type C = K",
+        "use s::* hiding E::A",
+    ):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("K::B").ok
+    assert s.eval_entry("C::B").ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+
+
+def test_alias_freezes_a_member_hidden_by_an_ambiguous_later_import(tmp_path: Path) -> None:
+    """An alias's reach freezes once its own spelling stops picking out a
+    single owner: a later import of a same-named enum from another module
+    makes the bare spelling ambiguous, so the alias keeps resolving its
+    member exactly as its own declaration did."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    for decl in ("import m::* hiding Color::Red", "type C = Color", "import n::*"):
+        assert s.eval_entry(decl).ok
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of("C::Red")
+    assert s.eval_entry("C::Green").ok
+
+
+def test_alias_freezes_a_member_hidden_by_a_later_locally_shadowing_enum(tmp_path: Path) -> None:
+    """An alias's reach also freezes once a later, locally declared enum of
+    the same bare name shadows the import its target was reached through:
+    the alias keeps naming its own declaration-time member, and a member the
+    fresh, unrelated enum declares is simply not one of the alias's own
+    members."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    for decl in (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "import n::*",
+        "enum Color = X | Y",
+    ):
+        assert s.eval_entry(decl).ok
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of("C::Red")
+    assert s.eval_entry("C::Green").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("C::X")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+def test_alias_keeps_declaration_time_members_once_its_hidden_target_is_redeclared() -> None:
+    """An alias's target being redeclared after a narrowing ``use`` lifts the
+    narrowing's effect through the alias, since the narrowing then has
+    nothing left to hide: a fresh enum at the same path is a fresh
+    declaration, not the alias's target, so the alias keeps resolving its own
+    declaration-time members regardless.
+
+    Explicit grouping (one entry per declaration): merging the narrowing use
+    with the redeclaration would change what the alias's own declaration saw,
+    which is a different scenario (see the freeze tests above).
+    """
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type C = E",
+        "use s::* hiding E::A",
+        "scope s\n  enum E = X | Y\nend s",
+    ):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("C::A").ok
+    assert s.eval_entry("C::B").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("C::X")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+class TestUseThenRedeclare:
+    """A scope's members re-derive against a later redeclaration of the same
+    scope reached through an earlier ``use``, never against the stale
+    snapshot the ``use`` originally saw."""
+
+    def test_bare_wildcard_use_reaches_a_redeclared_scopes_new_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            "scope s\n  enum E = A | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+        with pytest.raises(AglError) as excinfo:
+            s.type_of("E::B")
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+    def test_bare_named_use_reaches_a_redeclared_scopes_new_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::{E}",
+            "scope s\n  enum E = A | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+
+    def test_a_use_hiding_clause_still_applies_after_the_scope_gains_a_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::* hiding E::A",
+            "scope s\n  enum E = A | B | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+        with pytest.raises(HiddenMemberError):
+            s.type_of("E::A")
+
+
+def test_a_new_type_declared_in_a_used_scope_is_reachable_bare() -> None:
+    """A type a ``use``-opened scope gains after the ``use`` must be reachable
+    exactly as one it already had, in constructor and type position alike."""
+    s = ReplSession()
+    for decl in ("scope s\n  record R\nend s", "use s::*", "scope s\n  record Q\nend s"):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("fn(x: Q) => 1").ok
+    assert s.eval_entry("let q: Q = Q()").ok
+    assert s.eval_entry("Q()").ok
+
+
+def test_a_runtime_failed_entrys_redeclaration_before_the_failure_point_is_promoted() -> None:
+    """A redeclaration completed before a later runtime failure in the same
+    entry is promoted -- the same completion rule every other declaration
+    follows -- but one written after the failure point never took effect,
+    leaving the scope's earlier member reachable and the new one absent."""
+    s = ReplSession()
+    for decl in ("scope s\n  enum E = A | B\nend s", "use s::*"):
+        assert s.eval_entry(decl).ok
+
+    failed = s.eval_entry("let boom: int = [1][5]\n\nscope s\n  enum E = A | C\nend s")
+    assert not failed.ok
+    assert failed.error is not None
+
+    assert s.eval_entry("fn(x: E::B) => 1").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("E::C")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+@pytest.mark.parametrize(
+    ("works", "fails"),
+    (
+        ("C::A", "C::X"),
+        ("case d of\n  | C::A => 1\n  | _ => 2", "case d of\n  | C::X => 1\n  | _ => 2"),
+        ("d is C::A", "d is C::X"),
+        ("fn(x: C::A) => 1", "fn(x: C::X) => 1"),
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
+    sizes: tuple[int, ...], works: str, fails: str
+) -> None:
+    """An alias declared through a use-opened scope keeps naming its own
+    declaration once that scope is redeclared with different members, in
+    every position, matching file mode, regardless of how the declarations
+    are split into entries -- every grouping that keeps each entry's own
+    header items ahead of its non-header ones and never merges the alias's
+    own declaration with the entry that retires its source, the only ones
+    any module admits.
+    """
+    s = ReplSession()
+    _eval_grouped(
+        s,
+        (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            "type C = E",
+            "scope s\n  enum E = X | Y\nend s",
+        ),
+        sizes,
+    )
+    assert s.eval_entry("let d: C = C::A").ok
+    s.type_of(works)
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(fails)
+    assert not isinstance(excinfo.value, HiddenMemberError)
 
 
 # ---------------------------------------------------------------------------
@@ -2661,11 +2983,9 @@ class TestBuiltinIdentityAcrossEntries:
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
 
-        if grouping == "single-entry":
-            result = session.eval_entry(f"{declaration}\nimport lib::{{ExecResult}}")
-        else:
-            assert session.eval_entry(declaration).ok
-            result = session.eval_entry("import lib::{ExecResult}")
+        decls = (declaration, "import lib::{ExecResult}")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = _eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics
@@ -2748,11 +3068,9 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
 
-        if grouping == "single-entry":
-            result = session.eval_entry("builtin type path = text\nimport libp")
-        else:
-            assert session.eval_entry("builtin type path = text").ok
-            result = session.eval_entry("import libp")
+        decls = ("builtin type path = text", "import libp")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = _eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics
@@ -2768,11 +3086,9 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
 
-        if grouping == "single-entry":
-            result = session.eval_entry(f"{declaration}\nimport libs")
-        else:
-            assert session.eval_entry(declaration).ok
-            result = session.eval_entry("import libs")
+        decls = (declaration, "import libs")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = _eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics
@@ -2802,11 +3118,8 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         own_enum = f"scope A\n  builtin enum Agent{agent_variants}\nend A"
         own_alias = "scope B\n  type Agent = A::Agent\nend B"
 
-        if grouping == "single-entry":
-            assert session.eval_entry(f"{own_enum}\n{own_alias}").ok
-        else:
-            assert session.eval_entry(own_enum).ok
-            assert session.eval_entry(own_alias).ok
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        _eval_grouped(session, (own_enum, own_alias), sizes)
 
         result = session.eval_entry("import libeb")
 
@@ -9443,6 +9756,42 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
+
+    def test_bare_hidden_member_query_is_rejected_not_echoed_as_a_type(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare ``Owner::member`` query for a member a ``use`` hides must be
+        rejected exactly as ``fn(x: Owner::member) => 1`` is, never silently
+        echoed as a type."""
+        (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+        s = ReplSession(cwd=tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        failed = s.eval_entry("import m::{Color}\nlet boom: int = [1][5]")
+        assert not failed.ok
+
+        typed = s.eval_entry("fn(x: C::Red) => 1")
+        assert not typed.ok
+
+        bare = s.eval_entry("C::Red")
+        assert bare.kind != "type"
+        assert not bare.ok
+
+    def test_bare_referenced_member_query_is_rejected_not_echoed_as_a_type(self) -> None:
+        """A bare ``Owner::member`` query for a member the owner only
+        references (not one of its inline members) must be rejected, never
+        echoed as a type."""
+        s = open_session()
+        assert s.eval_entry(
+            "record Saved\n  id: int\nenum Status = ::Saved | Fresh(n: int)\ntype A = Status"
+        ).ok
+
+        typed = s.eval_entry("fn(x: A::Saved) => 1")
+        assert not typed.ok
+
+        bare = s.eval_entry("A::Saved")
+        assert bare.kind != "type"
+        assert not bare.ok
 
 
 # ---------------------------------------------------------------------------

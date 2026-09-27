@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic, ReferencedMemberError, hidden_member
+from agm.agl.diagnostics import Diagnostic, ReferencedMemberError
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
@@ -58,11 +58,8 @@ from agm.agl.scope.symbols import (
     to_bare_atom,
 )
 from agm.agl.scope.type_names import (
-    MemberHidden,
     TypeNameSite,
     bare_type_selection,
-    nominal_selection,
-    owner_member_selection,
     owner_type_expr,
     type_name_selection,
 )
@@ -1051,8 +1048,6 @@ class TypeEnvironment:
       import-tail-exposed type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
-    - ``hidden_alias_members`` maps each program alias of an enum to the
-      members its target's import hides (``ModuleResolution.hidden_alias_members``).
 
     Every environment the checker or match compiler actually queries carries
     these fields. Absent program tables are empty: on the transient,
@@ -1076,7 +1071,6 @@ class TypeEnvironment:
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
-        hidden_alias_members: Mapping[DeclKey, frozenset[str]] | None = None,
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1142,10 +1136,6 @@ class TypeEnvironment:
             program_alias_resolver
         )
         self._import_env: ImportEnv | None = import_env
-        # Alias -> the inline members of its enum its target's import hides.
-        self._hidden_alias_members: Mapping[DeclKey, frozenset[str]] = (
-            {} if hidden_alias_members is None else hidden_alias_members
-        )
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
         # type declarations, so failed qualified type references retain their
@@ -1414,16 +1404,12 @@ class TypeEnvironment:
             if owner_template is None:
                 return None
             enum_template, type_params, alias = owner_template
-            self._reject_hidden_owner_member(qualifier, owner_expr, owner_template, member, span)
             if alias is None:
                 return None
             selected = self.owner_inline_member(
                 enum_template, render_qualifier_path(qualifier), member, span=span
             )
             return None if selected is None else OwnerMember(selected, type_params)
-        owner_template = self._enum_owner_template(owner_expr, span)
-        if owner_template is not None:
-            self._reject_hidden_owner_member(qualifier, owner_expr, owner_template, member, span)
         owner = self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
@@ -1444,44 +1430,6 @@ class TypeEnvironment:
         if selected is None and self.type_table.references_member(owner, member):
             raise ReferencedMemberError(spelling, member, span=span)
         return selected
-
-    def _reject_hidden_owner_member(
-        self,
-        qualifier: QualifierChain,
-        owner_expr: NameT | AppliedT,
-        owner_template: tuple[EnumType, tuple[str, ...], DeclKey | None],
-        member: str,
-        span: SourceSpan | None,
-    ) -> None:
-        """Raise when *owner_expr*'s *member* is hidden: an alias's snapshot, or a fresh query.
-
-        An alias's own hidden set is a declaration-time snapshot
-        (:attr:`_hidden_alias_members`), taken against the alias's own written
-        spelling. A direct (non-alias) enum owner has none: its member is
-        checked fresh, at this qualifier's site, but only when *owner_expr*
-        itself was reached indirectly -- through a ``use`` contribution or an
-        import route -- since a direct lexical hit never depends on hiding.
-        """
-        enum_template, _, alias = owner_template
-        if alias is not None:
-            if member in self._hidden_alias_members.get(alias, ()):
-                raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
-            return
-        site = self._type_name_site()
-        owner_selection = nominal_selection(site, owner_expr)
-        if owner_selection is None or not owner_selection[1]:
-            return
-        declared = (
-            (
-                enum_template.module_id,
-                to_bare_atom((*enum_template.scope_path, enum_template.name, member)),
-            )
-            if self.type_table.inline_member(enum_template, member) is not None
-            else None
-        )
-        selection = owner_member_selection(site, owner_expr, member, declared)
-        if isinstance(selection, MemberHidden):
-            raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
 
     def _reject_referenced_owner_member(
         self, qualifier: QualifierChain, name: str, span: SourceSpan | None

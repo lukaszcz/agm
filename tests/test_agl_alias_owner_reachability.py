@@ -1,9 +1,9 @@
 """An alias's owner-qualified members must reach through every alias on its chain.
 
-A chain of aliases reaches every member its innermost link does, rather than
-losing them to a redundant second filter. A local ``use ... hiding`` is
-honoured through an alias exactly as it is directly, whether the alias's
-target is declared locally or reached through an imported module.
+A chain of aliases reaches every member its innermost link does. A local
+``use ... hiding`` is honoured through an alias exactly as it is directly,
+whether the alias's target is declared locally or reached through an
+imported module, and exactly as it is through an applied (generic) owner.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglTypeError, HiddenMemberError
+from agm.agl.diagnostics import AglError, AglTypeError, HiddenMemberError
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -169,3 +169,115 @@ class TestUseHidingThroughAliasStaysHonouredWhenImported:
                     "entry": ("import m\nuse m::* hiding E::A\ntype C = E\nC::A"),
                 },
             )
+
+
+class TestAppliedOwnerHiddenMember:
+    """A ``use ... hiding`` clause stays honoured through an applied (generic) owner."""
+
+    _SOURCE = "use s::* hiding E::A\n\nscope s\n  enum E[T] = A(x: T) | B\nend s\n\n{expr}"
+
+    def test_hidden_member_through_an_applied_owner_is_rejected_in_type_position(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(HiddenMemberError):
+            check_agl_program(
+                tmp_path, {"entry": self._SOURCE.format(expr="def f(x: E[int]::A) -> int = 1")}
+            )
+
+    def test_hidden_member_through_an_applied_owner_is_rejected_in_value_position(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(HiddenMemberError):
+            check_agl_program(tmp_path, {"entry": self._SOURCE.format(expr="E[int]::A(x = 1)")})
+
+
+class TestUnknownMemberStaysUnknownNotHidden:
+    """A genuinely undeclared member is reported as unknown, never as hidden,
+    however its owner is spelled: an applied (generic) owner, a module
+    route, or an alias.
+    """
+
+    @pytest.mark.parametrize(
+        "probe",
+        (
+            "E[int]::Zzz",
+            "let v = E[int]::B\ncase v of\n  | E[int]::Zzz => 1\n  | _ => 2",
+            "let v = E[int]::B\nv is E[int]::Zzz",
+            "def f(x: E[int]::Zzz) -> int = 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_unknown_member_of_an_applied_owner_stays_unknown(
+        self, tmp_path: Path, probe: str
+    ) -> None:
+        source = "use s::* hiding E::A\n\nscope s\n  enum E[T] = A(x: T) | B\nend s\n" + probe
+        with pytest.raises(AglError) as excinfo:
+            check_agl_program(tmp_path, {"entry": source})
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+    @pytest.mark.parametrize(
+        "probe",
+        (
+            "m::E::Zzz",
+            "let v = m::E::A\ncase v of\n  | m::E::Zzz => 1\n  | _ => 2",
+            "let v = m::E::A\nv is m::E::Zzz",
+            "def f(x: m::E::Zzz) -> int = 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_unknown_member_through_a_module_route_stays_unknown(
+        self, tmp_path: Path, probe: str
+    ) -> None:
+        with pytest.raises(AglError) as excinfo:
+            check_agl_program(tmp_path, {"m": "enum E = A | B", "entry": "import m\n" + probe})
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+    @pytest.mark.parametrize(
+        "probe",
+        (
+            "C::Zzz",
+            "let v = C::A\ncase v of\n  | C::Zzz => 1\n  | _ => 2",
+            "let v = C::A\nv is C::Zzz",
+            "def f(x: C::Zzz) -> int = 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_unknown_member_through_an_alias_stays_unknown(
+        self, tmp_path: Path, probe: str
+    ) -> None:
+        source = "use s::*\n\nscope s\n  enum E = A | B\nend s\n\ntype C = E\n" + probe
+        with pytest.raises(AglError) as excinfo:
+            check_agl_program(tmp_path, {"entry": source})
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+class TestTypePositionInsideDeclarations:
+    """Scope's qualifier walk covers declaration annotations, not only ``def`` signatures."""
+
+    @pytest.mark.parametrize(
+        "declaration",
+        ("record R\n  x: E::A", "type K = E::A"),
+        ids=("record-field", "type-alias"),
+    )
+    def test_hidden_member_in_a_declaration_annotation_is_rejected(
+        self, tmp_path: Path, declaration: str
+    ) -> None:
+        source = "use s::* hiding E::A\n\nscope s\n  enum E = A | B\nend s\n" + declaration
+        with pytest.raises(HiddenMemberError):
+            check_agl_program(tmp_path, {"entry": source})
+
+
+class TestTypeParameterOwnerStaysTypechecksToReport:
+    """A function's own type parameter shadows a same-named hidden enum: the
+    qualifier's owner is then the type variable, which typecheck -- not
+    scope -- reports, so it is never mistaken for a hidden member.
+    """
+
+    def test_type_parameter_owner_is_not_reported_as_hidden(self, tmp_path: Path) -> None:
+        source = (
+            "use s::* hiding E::A\n\nscope s\n  enum E = A | B\nend s\n\n"
+            "def f[E](x: E::A) -> int = 1"
+        )
+        with pytest.raises(AglError) as excinfo:
+            check_agl_program(tmp_path, {"entry": source})
+        assert not isinstance(excinfo.value, HiddenMemberError)

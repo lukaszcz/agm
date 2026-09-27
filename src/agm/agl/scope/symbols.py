@@ -410,6 +410,11 @@ class ConstructorRef:
             and self.owner_name == member_name
         )
 
+    @property
+    def qname(self) -> QName:
+        """This reference's declaration path, as a :data:`QName`."""
+        return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name))
+
 
 @dataclass(frozen=True, slots=True)
 class TypeTarget:
@@ -734,6 +739,31 @@ class ScopeNode:
             scope = scope.parent
         return None
 
+    def entry_copy(self) -> "ScopeNode":
+        """Copy this layer into a REPL entry's own image.
+
+        Mirrors how a retained named-scope layer is copied into a fresh entry
+        node: ``bindings``/``members`` are shared by reference, since they are
+        read-only during resolve, while the bare tables and use contributions
+        are copied so the entry's own re-derivation (see
+        ``_Resolver._refresh_layer_contributions``) never mutates the
+        session's own record.
+        """
+        return ScopeNode(
+            node_id=self.node_id,
+            parent=self.parent,
+            bindings=self.bindings,
+            scope_path=self.scope_path,
+            is_scope_region=self.is_scope_region,
+            members=self.members,
+            bare_contributions={atom: set(refs) for atom, refs in self.bare_contributions.items()},
+            bare_constructor_contributions={
+                atom: set(refs) for atom, refs in self.bare_constructor_contributions.items()
+            },
+            local_use_contributions=list(self.local_use_contributions),
+            imported_use_contributions=list(self.imported_use_contributions),
+        )
+
     def contribute_bare(self, name: BareAtom, ref: BindingRef) -> None:
         """Add one use-site-resolved bare contribution to this region."""
         self.bare_contributions.setdefault(name, set()).add(ref)
@@ -745,6 +775,17 @@ class ScopeNode:
     def contribute_local_use(self, contribution: LocalUseContribution) -> None:
         """Add a local scope use whose source members remain live."""
         self.local_use_contributions.append(contribution)
+
+    def retract_bare(
+        self,
+        bindings: Mapping[BareAtom, Iterable[BindingRef]],
+        constructors: Mapping[BareAtom, Iterable[ConstructorRef]],
+    ) -> None:
+        """Subtract one contribution's snapshot, promoted into a wider entry's own layer."""
+        for atom, refs in bindings.items():
+            self.bare_contributions.get(atom, set()).difference_update(refs)
+        for atom, constructor_refs in constructors.items():
+            self.bare_constructor_contributions.get(atom, set()).difference_update(constructor_refs)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -963,10 +1004,6 @@ class ModuleResolution:
         Maps each enum declaration's node id to :attr:`TypeOwner.referenced`:
         the names spelling the members it only references. Typecheck records
         these, so an owner spelling of one is rejected alike in every position.
-    ``hidden_alias_members``
-        Maps each alias path this module declares or retains to
-        :attr:`TypeOwner.hidden`, when non-empty, so typecheck rejects the
-        hidden member's type spelling through the alias too.
     """
 
     program: Program
@@ -998,7 +1035,6 @@ class ModuleResolution:
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
     referenced_member_names: dict[int, frozenset[str]] = field(default_factory=dict)
-    hidden_alias_members: dict[ScopePath, frozenset[str]] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

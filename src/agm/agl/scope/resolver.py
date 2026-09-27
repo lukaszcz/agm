@@ -120,6 +120,10 @@ from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
     MemberHidden,
+    MemberReferenced,
+    MemberSelection,
+    OwnerRoute,
+    nominal_selection,
     owner_member_selection,
     owner_type_expr,
     type_name_selection,
@@ -356,21 +360,6 @@ def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> AglSc
     return AglScopeError(f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span)
 
 
-def _reject_unselectable_member(
-    owner: TypeOwner | None, spelling: str, member: str, span: SourceSpan | None
-) -> None:
-    """Raise when *spelling*, selecting *owner*, names a member *owner* does not select.
-
-    That is a member its enum only references, or one its alias's import hides.
-    """
-    if owner is None:
-        return
-    if member in owner.referenced:
-        raise ReferencedMemberError(spelling, member, span=span)
-    if member in owner.hidden:
-        raise hidden_member(f"{spelling}::{member}", span)
-
-
 # ---------------------------------------------------------------------------
 # Resolver class
 # ---------------------------------------------------------------------------
@@ -426,6 +415,11 @@ class _Resolver:
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
+        # The REPL session layer is copied into this entry's own image, exactly
+        # as a retained named layer already is (see ``_build_scope_nodes``), so
+        # this entry's contribution re-derivation never mutates session state.
+        if repl_session_scope is not None and parent_scope is repl_session_scope:
+            parent_scope = repl_session_scope = repl_session_scope.entry_copy()
         # Program parameters. One _Resolver is built per module of a whole
         # program (see scope/program.py::resolve_program); the import
         # environment and whole-program public-type table are always real,
@@ -698,8 +692,7 @@ class _Resolver:
         # read off its stored, declaration-time value: an indirect alias's
         # reachable members/hidden set can go stale as later entries change
         # what is imported (``TypeOwnerIndex.owner``). Constructor candidates
-        # and ``hidden_alias_members`` share this one derivation, so scope and
-        # typecheck (which reads ``hidden_alias_members``) never disagree.
+        # read this one derivation.
         current_type_owners = {
             path: owner
             for path in {**self._repl_session_type_paths, **type_owners}
@@ -762,9 +755,6 @@ class _Resolver:
                 declaration.node_id: type_owners[(*path, declaration.name)].referenced
                 for declaration, path in self._type_declarations
                 if isinstance(declaration, EnumDef)
-            },
-            hidden_alias_members={
-                path: owner.hidden for path, owner in current_type_owners.items() if owner.hidden
             },
         )
 
@@ -1043,12 +1033,39 @@ class _Resolver:
             owner = self._foreign_receiver_owner((*region_path, *owner_path), span)
         if owner is None:
             return
-        _reject_unselectable_member(
+        self._select_owner_member(
             self._type_owners.owner((owner.module_id, _bare_atom(owner.scope_path))),
             "::".join(owner_path),
             type_path[-1],
             span,
+            None,
         )
+
+    def _select_owner_member(
+        self,
+        owner: TypeOwner | None,
+        spelling: str,
+        member: str,
+        span: SourceSpan | None,
+        route: OwnerRoute | None,
+    ) -> MemberSelection | None:
+        """Return what ``spelling::member`` selects through *owner*, by identity.
+
+        Raises :class:`ReferencedMemberError` or the hidden-member error for
+        a referenced or hidden member; ``None`` when *owner* itself is
+        unresolved (an unknown or ambiguous owner), left to typecheck's
+        existing diagnostics. *route*, when given, live-filters a nominal
+        (non-alias) owner reached indirectly (see
+        :func:`~agm.agl.scope.type_names.owner_member_selection`).
+        """
+        if owner is None:
+            return None
+        selection = owner_member_selection(owner, member, route)
+        if isinstance(selection, MemberReferenced):
+            raise ReferencedMemberError(spelling, member, span=span)
+        if isinstance(selection, MemberHidden):
+            raise hidden_member(f"{spelling}::{member}", span)
+        return selection
 
     def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
         """Return the module's alias scope paths with their declarations, computed once.
@@ -1228,63 +1245,25 @@ class _Resolver:
             if not path:
                 continue
             retained = self._repl_session_scope_nodes.get(path)
-            node = ScopeNode(
-                node_id=self._scope_node_ids[path],
-                parent=nodes[path[:-1]],
-                scope_path=path,
-                is_scope_region=path in self._scope_region_paths,
-            )
-            if retained is not None:
-                # A retained member is registered like any freshly declared
-                # one, so a replayed REPL scope layer is indistinguishable
-                # from a layer this program declared itself.
+            if retained is None:
+                node = ScopeNode(
+                    node_id=self._scope_node_ids[path],
+                    parent=nodes[path[:-1]],
+                    scope_path=path,
+                    is_scope_region=path in self._scope_region_paths,
+                )
+            else:
+                # A replayed REPL scope layer's declarations start from a
+                # fresh members dict -- a retained member is registered like
+                # any freshly declared one, so this entry's own registrations
+                # (below) never mutate the session's persisted layer.
+                node = retained.entry_copy()
+                node.parent = nodes[path[:-1]]
+                node.members = {}
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
-                node.bare_contributions = {
-                    atom: set(refs) for atom, refs in retained.bare_contributions.items()
-                }
-                node.bare_constructor_contributions = {
-                    atom: set(refs)
-                    for atom, refs in retained.bare_constructor_contributions.items()
-                }
-                node.imported_use_contributions = list(retained.imported_use_contributions)
-                node.local_use_contributions = list(retained.local_use_contributions)
                 for contribution in node.imported_use_contributions:
-                    origin = contribution.target.wildcard_facade_origin_node_id
-                    facade_modules = (
-                        frozenset(
-                            module
-                            for declarations in self._import_env.facade_aliases.values()
-                            for node_id, modules in declarations.items()
-                            if node_id == origin
-                            for module in modules
-                        )
-                        if origin is not None
-                        else None
-                    )
-                    # An unrelated import replacement can remove the facade
-                    # alias from this entry's import environment altogether.
-                    # Its retained contribution then keeps its last resolved
-                    # surface rather than being erased by an empty refresh.
-                    if facade_modules == frozenset():
-                        facade_modules = None
-                    for atom, refs in contribution.bindings.items():
-                        stale = {
-                            ref
-                            for ref in refs
-                            if facade_modules is not None and ref.module_id not in facade_modules
-                        }
-                        if stale:
-                            node.bare_contributions.get(atom, set()).difference_update(stale)
-                        node.bare_contributions.setdefault(atom, set()).update(
-                            ref
-                            for ref in refs
-                            if facade_modules is None or ref.module_id in facade_modules
-                        )
-                    for atom, constructor_refs in contribution.constructors.items():
-                        node.bare_constructor_contributions.setdefault(atom, set()).update(
-                            constructor_refs
-                        )
+                    self._refresh_imported_use(node, contribution)
             nodes[path] = node
         # A replacement type declaration owns fresh constructors: stale enum
         # variants must not survive, while unrelated retained members remain.
@@ -2677,53 +2656,76 @@ class _Resolver:
         return members
 
     def _validate_local_use_contributions(self) -> None:
-        """Validate local use selections and snapshot what each one exposed.
+        """Re-derive every visible layer's stored bare tables from its current uses.
 
-        Rebuilds each scope's ``local_use_contributions`` with snapshot-carrying
-        replacements (the dataclass is frozen) so a later replay -- the REPL
-        promotion loop in ``session.py`` -- can subtract and re-add exactly
-        what a contribution exposed, the same protocol
-        :class:`ImportedUseContribution` already uses.
-
-        A contribution :meth:`_local_contribution_superseded` in this entry is
-        still validated (a retained target must remain nameable even once
-        superseded) but is dropped from the rebuilt list rather than kept with
-        an empty snapshot: a named (non-root) scope re-seeds its node from the
-        retained one on every later entry (see ``_build_scope_nodes``), so a
-        superseded contribution kept around would keep being copied forward
-        and, once some later entry declares no competing ``use`` of its own,
-        would read as live again through the two consumers above -- dropping
-        it here is what makes supersession permanent rather than only good
-        for the one entry that introduced it.
+        Runs for every named layer this entry built plus, when this entry has
+        a REPL session parent, that parent layer too -- the one layer
+        :meth:`_build_scope_nodes` never visits, whose stored tables would
+        otherwise go stale relative to its live derivation
+        (:meth:`_layer_bare_bindings`).
         """
-        for scope in self._scope_nodes.values():
-            rebuilt: list[LocalUseContribution] = []
-            for contribution in scope.local_use_contributions:
-                # ``_local_use_exposures`` returns a materialized list, so
-                # calling it for its ``validate=True`` side effect alone (a
-                # superseded contribution below) still runs the check even
-                # though the result is otherwise unused.
-                exposures = self._local_use_exposures(contribution, validate=True)
-                if self._local_contribution_superseded(contribution):
-                    continue
-                bindings: dict[NameAtom, set[BindingRef]] = {}
-                constructors: dict[NameAtom, set[ConstructorRef]] = {}
-                for exposed, source in exposures:
-                    if not isinstance(source, BindingRef):
-                        continue
-                    scope.contribute_bare(exposed, source)
-                    bindings.setdefault(exposed, set()).add(source)
-                    for constructor in self._declaring_constructor_candidates(source.name, source):
-                        scope.contribute_bare_constructor(exposed, constructor)
-                        constructors.setdefault(exposed, set()).add(constructor)
-                rebuilt.append(
-                    replace(
-                        contribution,
-                        bindings={atom: frozenset(refs) for atom, refs in bindings.items()},
-                        constructors={atom: frozenset(refs) for atom, refs in constructors.items()},
-                    )
-                )
-            scope.local_use_contributions = rebuilt
+        layers: Iterable[ScopeNode] = self._scope_nodes.values()
+        if self._repl_session_scope is not None:
+            layers = (*layers, self._repl_session_scope)
+        for layer in layers:
+            self._refresh_layer_contributions(layer)
+
+    def _refresh_layer_contributions(self, layer: ScopeNode) -> None:
+        """Make *layer*'s stored bare tables equal its live derivation, re-snapshotting its uses."""
+        for imported_contribution in layer.imported_use_contributions:
+            self._refresh_imported_use(layer, imported_contribution)
+        rebuilt: list[LocalUseContribution] = []
+        for local_contribution in layer.local_use_contributions:
+            layer.retract_bare(local_contribution.bindings, local_contribution.constructors)
+            # A local use's tail/hiding names are checked against the members
+            # visible when it is first declared -- this entry's own new
+            # declarations, identified the same way
+            # ``_local_contribution_superseded`` tells them apart from a
+            # retained one. A retained contribution from an earlier entry is
+            # never re-validated here: a later entry may retire or reshape
+            # its target so that a hidden name no longer matches, which must
+            # not turn an already-valid ``use`` into a static error on
+            # re-derivation, and it must agree with the live overlay
+            # (``_local_use_sources``), which never validates either.
+            validate = local_contribution.declaration.node_id in self._current_use_declaration_ids
+            exposures = self._local_use_exposures(local_contribution, validate=validate)
+            if self._local_contribution_superseded(local_contribution):
+                # Dropped from the rebuilt list rather than kept with an
+                # empty snapshot: a named (non-root) scope re-seeds its node
+                # from the retained one on every later entry
+                # (``_build_scope_nodes``), so a superseded contribution kept
+                # around would keep being copied forward and, once some later
+                # entry declares no competing ``use`` of its own, would read
+                # as live again -- dropping it here is what makes
+                # supersession permanent rather than only good for the one
+                # entry that introduced it.
+                continue
+            bindings, constructors = self._contribute_exposures(layer, exposures)
+            rebuilt.append(
+                replace(local_contribution, bindings=bindings, constructors=constructors)
+            )
+        layer.local_use_contributions = rebuilt
+
+    def _contribute_exposures(
+        self, layer: ScopeNode, exposures: list[tuple[NameAtom, BindingRef | _LocalScopeRoute]]
+    ) -> tuple[
+        Mapping[NameAtom, frozenset[BindingRef]], Mapping[NameAtom, frozenset[ConstructorRef]]
+    ]:
+        """Add one local use's live exposures to *layer* and return its fresh snapshot."""
+        bindings: dict[NameAtom, set[BindingRef]] = {}
+        constructors: dict[NameAtom, set[ConstructorRef]] = {}
+        for exposed, source in exposures:
+            if not isinstance(source, BindingRef):
+                continue
+            layer.contribute_bare(exposed, source)
+            bindings.setdefault(exposed, set()).add(source)
+            for constructor in self._declaring_constructor_candidates(source.name, source):
+                layer.contribute_bare_constructor(exposed, constructor)
+                constructors.setdefault(exposed, set()).add(constructor)
+        return (
+            {atom: frozenset(refs) for atom, refs in bindings.items()},
+            {atom: frozenset(refs) for atom, refs in constructors.items()},
+        )
 
     def _contribute_use_facade_members(
         self,
@@ -2884,7 +2886,7 @@ class _Resolver:
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
                 self._classify_method_declaration(node)
-                self._validate_qualifier_chains(node)
+                self._validate_qualifier_chains(node, node.type_params)
                 self._resolve_program_config(node)
                 self._resolve_params_and_body(node)
             return
@@ -2897,7 +2899,7 @@ class _Resolver:
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
         self._classify_method_declaration(node)
-        self._validate_qualifier_chains(node)
+        self._validate_qualifier_chains(node, node.type_params)
         self._resolve_program_config(node)
         previous_synthetic_entry = self._in_synthetic_entry
         previous_entry_items = self._synthetic_entry_items
@@ -2947,9 +2949,9 @@ class _Resolver:
         # lexical owner layer.
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
-                self._validate_qualifier_chains(node)
+                self._validate_qualifier_chains(node, node.type_params)
         else:
-            self._validate_qualifier_chains(node)
+            self._validate_qualifier_chains(node, node.type_params)
 
     # ------------------------------------------------------------------
     # Binder handlers
@@ -3545,8 +3547,13 @@ class _Resolver:
             return self._prefer_local_constructor_candidates(candidates)
         return tuple(self._constructor_candidates.get(name, ()))
 
-    def _validate_qualifier_chains(self, root: SyntaxNode) -> None:
-        """Validate qualifier syntax in the current lexical scope layer."""
+    def _validate_qualifier_chains(self, root: SyntaxNode, type_params: Iterable[str] = ()) -> None:
+        """Validate qualifier syntax in the current lexical scope layer.
+
+        *type_params* are the enclosing declaration's type parameters, which
+        shadow every type-path owner: ``def f[E](x: E::A)`` leaves ``E::A``
+        to typecheck, since ``E`` denotes no fixed declaration here.
+        """
 
         def validate(node: object) -> None:
             chain = (
@@ -3567,7 +3574,33 @@ class _Resolver:
                 raise AglScopeError(
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
-            self._validate_local_scope_chain(chain)
+            local_path = self._validate_local_scope_chain(chain)
+            if (
+                isinstance(node, (NameT, AppliedT))
+                and chain.segments
+                # A spelling that is itself a locally declared nested type's
+                # own path (e.g. a record ``Box::Item`` an enum ``Box``
+                # references at that same path) names that declaration
+                # directly, agreeing with the value/pattern/is-test
+                # constructor paths (``_local_owner_constructor``), never
+                # going through owner-member selection at all.
+                and not (
+                    local_path is not None
+                    and self._scoped_constructor_candidates.get((local_path, node.name))
+                )
+            ):
+                site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
+                owner_expr = owner_type_expr(chain)
+                selected = nominal_selection(site, owner_expr)
+                if selected is not None and len(selected[0]) == 1:
+                    owner = self._type_owners.owner(next(iter(selected[0])))
+                    self._select_owner_member(
+                        owner,
+                        render_qualifier_path(chain),
+                        node.name,
+                        chain.span,
+                        OwnerRoute(site, owner_expr),
+                    )
 
         walk(root, validate)
 
@@ -3854,14 +3887,13 @@ class _Resolver:
         checker can assess it against the type being matched.
         """
         try:
-            owner_ref = self._imported_chain_owner(chain)
+            owner = self._imported_chain_owner(chain)
         except AglScopeError:
             if defer_diagnostics:
                 return None
             raise
-        if owner_ref is not None:
-            self._reject_hidden_member(chain, owner_ref, variant)
-            return self._owner_constructor(_ref_qname(owner_ref), chain, variant)
+        if owner is not None:
+            return self._owner_constructor(owner, chain, variant)
         if (
             chain.anchor is not QualifierAnchor.MODULE
             and len(chain.segments) == 1
@@ -3922,18 +3954,12 @@ class _Resolver:
             self._reject_use_alias_referenced_member(chain, variant)
             return None
         type_owner = self._type_owners.owner(_ref_qname(owner_ref))
-        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
-        member = (
-            None
-            if type_owner is None or type_owner.constructor is not None
-            else type_owner.members.get(variant)
+        # Only the raise matters here: the returned reference, below, always
+        # comes from `select`, which folds an alias's own type parameters
+        # back in rather than the target's raw member (see `TypeOwner.select`).
+        self._select_owner_member(
+            type_owner, render_qualifier_path(chain), variant, chain.span, self._owner_route(chain)
         )
-        if member is not None:
-            # A nominal enum's (or an enum alias's) own inline members arrive only as
-            # use contributions, which honor hiding: none was open above, so a name
-            # the owner's own (unfiltered) declaration still selects is one this
-            # route hides rather than lacks.
-            raise hidden_member(render_qualified_name(chain, variant), chain.span)
         declared_child = _bare_atom((*owner_ref.scope_path, owner_ref.name, variant))
         if (owner_ref.module_id, declared_child) in self._decl_info:
             return set()
@@ -3946,14 +3972,20 @@ class _Resolver:
             )
         return {constructor}
 
+    def _owner_route(self, chain: QualifierChain) -> OwnerRoute:
+        """Return the route *chain* spells its owner through, at the current lexical layer."""
+        site = self._type_owners.site(self._module_id, self._scope.scope_path)
+        return OwnerRoute(site, owner_type_expr(chain))
+
     def _reject_use_alias_referenced_member(self, chain: QualifierChain, variant: str) -> None:
-        """Raise when a whole-target ``use`` alias spells a referenced member of its enum target.
+        """Raise when a whole-target ``use`` alias spells a referenced or hidden member.
 
         ``use Status as S`` contributes only what ``Status``'s scope declares
         beneath ``S``, so ``S::member`` of a member ``Status`` merely
-        references reaches no contribution.
+        references, or its import hides, reaches no contribution.
         """
         alias, *rest = (segment.name for segment in chain.segments)
+        route = self._owner_route(chain)
         layer: ScopeNode | None = self._scope
         while layer is not None:
             contributions: list[LocalUseContribution | ImportedUseContribution] = [
@@ -3970,11 +4002,12 @@ class _Resolver:
                     else target.imported_routes
                 )
                 for module_id, path in targets:
-                    _reject_unselectable_member(
+                    self._select_owner_member(
                         self._type_owners.owner((module_id, _bare_atom((*path, *rest)))),
                         render_qualifier_path(chain),
                         variant,
                         chain.span,
+                        route,
                     )
             layer = layer.parent
 
@@ -3985,27 +4018,34 @@ class _Resolver:
 
         Raises when the type qualifies no constructor at all.
         """
-        if not self._is_constructible_type_ref((self._module_id, _bare_atom(path))):
+        owner = self._constructible_owner((self._module_id, _bare_atom(path)))
+        if owner is None:
             raise type_name_not_a_value(render_qualifier_path(chain), chain.span)
         scoped = self._scoped_constructor_candidates.get((path, variant), ())
         if scoped:
             return scoped[0]
-        return self._owner_constructor((self._module_id, _bare_atom(path)), chain, variant)
+        return self._owner_constructor(owner, chain, variant)
 
     def _owner_constructor(
-        self, owner: QName, chain: QualifierChain, variant: str
+        self, owner: TypeOwner, chain: QualifierChain, variant: str
     ) -> ConstructorRef | None:
-        """Return the constructor ``chain::variant`` selects below type path *owner*.
+        """Return the constructor ``chain::variant`` selects from *owner*, already resolved.
 
-        The owner is resolved by declaration identity, each alias on its chain
+        *owner* is resolved by declaration identity, each alias on its chain
         where that alias is declared; *chain* is the owner's spelling at the
-        use.
+        use. Every caller already confirmed *owner* qualifies constructors
+        (see :meth:`_constructible_owner`).
         """
-        type_owner = self._type_owners.owner(owner)
-        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
-        return None if type_owner is None else type_owner.select(variant, chain.segments[-1].name)
+        # Only the raise matters here: an alias's own constructor identity --
+        # not the target's raw member -- must reach the caller, so the
+        # returned reference always comes from `select`, which folds the
+        # alias's own type parameters back in (see `TypeOwner.select`).
+        self._select_owner_member(
+            owner, render_qualifier_path(chain), variant, chain.span, self._owner_route(chain)
+        )
+        return owner.select(variant, chain.segments[-1].name)
 
-    def _imported_chain_owner(self, chain: QualifierChain) -> BindingRef | None:
+    def _imported_chain_owner(self, chain: QualifierChain) -> TypeOwner | None:
         """Resolve a constructible type owner reached through imports.
 
         The final chain segment is selected as a normal imported member; any
@@ -4016,14 +4056,12 @@ class _Resolver:
         """
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
-        owner_ref: BindingRef | None = None
         if len(chain.segments) == 1 and not chain.anchored:
             owner_ref = self._lookup_import_env_unqualified(
                 chain.segments[0].name, chain.span, self._is_type_contribution
             )
-            if owner_ref is not None and not self._is_constructible_type_ref(_ref_qname(owner_ref)):
-                return None
-        elif len(chain.segments) > 1:
+            return None if owner_ref is None else self._constructible_owner(_ref_qname(owner_ref))
+        if len(chain.segments) > 1:
             route = QualifierChain(
                 anchor=chain.anchor,
                 segments=chain.segments[:-1],
@@ -4041,33 +4079,14 @@ class _Resolver:
                 # module-path resolver consume the complete atom.
                 return None
             owner_qname = _ref_qname(owner_ref)
-            if not self._is_constructible_type_ref(owner_qname):
+            owner = self._constructible_owner(owner_qname)
+            if owner is None:
                 rendered = render_qualifier_path(chain)
                 if self._type_owners.is_declared(owner_qname):
                     raise type_name_not_a_value(rendered, chain.span)
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
-        return owner_ref
-
-    def _reject_hidden_member(
-        self, chain: QualifierChain, owner_ref: BindingRef, variant: str
-    ) -> None:
-        """Reject imported owner *chain* spelling a declared *variant* its import surface hides.
-
-        A member the owner declares is reachable through its owner only where
-        the written spelling's complete path is: a route's member atom, or a
-        bare import tail's ``Owner::variant`` atom, both of which ``hiding``
-        filters. Values, patterns, and ``is`` tests reject it alike.
-        """
-        declared = (
-            owner_ref.module_id,
-            _bare_atom((*owner_ref.scope_path, owner_ref.name, variant)),
-        )
-        if declared not in self._cross_module_constructor_refs:
-            return
-        site = self._type_owners.site(self._module_id, self._scope.scope_path)
-        selection = owner_member_selection(site, owner_type_expr(chain), variant, declared)
-        if isinstance(selection, MemberHidden):
-            raise hidden_member(render_qualified_name(chain, variant), chain.span)
+            return owner
+        return None
 
     def _nearest_layer[T](
         self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None
@@ -4150,6 +4169,37 @@ class _Resolver:
                 constructors.update(candidates)
         return constructors
 
+    def _facade_modules(
+        self, contribution: ImportedUseContribution, origin: int
+    ) -> frozenset[ModuleId] | None:
+        """Return *contribution*'s current wildcard-facade modules, live at this entry's site.
+
+        ``None`` means "keep the contribution's own snapshot unfiltered",
+        when the union below is empty: an unrelated import replacement can
+        remove a facade alias from this entry's import environment
+        altogether, and the retained contribution then keeps its last
+        resolved surface rather than being erased by an empty refresh.
+        """
+        modules = frozenset(
+            module
+            for declarations in self._import_env.facade_aliases.values()
+            for node_id, candidates in declarations.items()
+            if node_id == origin
+            for module in candidates
+        )
+        # A direct replacement of one member import must not shrink a
+        # retained wildcard facade. Preserve contribution modules that are
+        # still independently importable, then add the facade's current
+        # wildcard members. Removed modules are absent from the import
+        # environment and therefore still disappear.
+        modules |= frozenset(
+            ref.module_id
+            for refs in contribution.bindings.values()
+            for ref in refs
+            if ref.module_id in self._import_env.contributions
+        )
+        return modules or None
+
     def _facade_refresh(
         self, contribution: ImportedUseContribution, name: NameAtom
     ) -> tuple[set[BindingRef], list[QName], SourceSpan] | None:
@@ -4165,34 +4215,43 @@ class _Resolver:
         existing_refs = tuple(ref for refs in contribution.bindings.values() for ref in refs)
         if not existing_refs:
             return None
-        modules = frozenset(
-            module
-            for declarations in self._import_env.facade_aliases.values()
-            for node_id, candidates in declarations.items()
-            if node_id == origin
-            for module in candidates
-        )
-        # A direct replacement of one member import must not shrink a
-        # retained wildcard facade. Preserve contribution modules that are
-        # still independently importable, then add the facade's current
-        # wildcard members. Removed modules are absent from the import
-        # environment and therefore still disappear.
-        modules |= frozenset(
-            ref.module_id
-            for ref in existing_refs
-            if ref.module_id in self._import_env.contributions
-        )
+        modules = self._facade_modules(contribution, origin)
         stale = {
             ref
             for ref in contribution.bindings.get(name, frozenset())
-            if ref.module_id not in modules
+            if modules is not None and ref.module_id not in modules
         }
         qnames = [
             qname
-            for module in modules
+            for module in modules or frozenset()
             if (qname := self._import_env.contributions[module].members.get(name)) is not None
         ]
         return stale, qnames, existing_refs[0].decl_span
+
+    def _refresh_imported_use(
+        self, layer: ScopeNode, contribution: ImportedUseContribution
+    ) -> None:
+        """Make *layer*'s stored bare tables reflect *contribution*'s current facade, if any.
+
+        The static counterpart of :meth:`_facade_refresh`: the same module
+        derivation, applied once across every atom the contribution's own
+        snapshot covers, rather than queried live for one name at a time. A
+        contribution that names no wildcard-facade origin needs no refresh:
+        its snapshot, already present in *layer*'s copied bare tables, stands.
+        """
+        origin = contribution.target.wildcard_facade_origin_node_id
+        if origin is None:
+            return
+        modules = self._facade_modules(contribution, origin)
+        for atom, refs in contribution.bindings.items():
+            stale = {ref for ref in refs if modules is not None and ref.module_id not in modules}
+            if stale:
+                layer.bare_contributions.get(atom, set()).difference_update(stale)
+            layer.bare_contributions.setdefault(atom, set()).update(
+                ref for ref in refs if modules is None or ref.module_id in modules
+            )
+        for atom, constructor_refs in contribution.constructors.items():
+            layer.bare_constructor_contributions.setdefault(atom, set()).update(constructor_refs)
 
     def _local_use_sources(
         self, contribution: LocalUseContribution, name: NameAtom
@@ -4464,8 +4523,12 @@ class _Resolver:
 
     def _is_constructible_type_ref(self, qname: QName) -> bool:
         """Whether *qname* names a type path that qualifies constructors."""
+        return self._constructible_owner(qname) is not None
+
+    def _constructible_owner(self, qname: QName) -> TypeOwner | None:
+        """Return *qname*'s owner when it qualifies constructors, else ``None``."""
         owner = self._type_owners.owner(qname)
-        return owner is not None and owner.constructs
+        return owner if owner is not None and owner.constructs else None
 
     def _reject_type_name_value(
         self, qualifier: QualifierChain | None, name: str, span: SourceSpan, node_id: int

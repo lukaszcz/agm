@@ -269,15 +269,6 @@ def _decl_key(module_id: ModuleId, item: RecordDef | EnumDef | ExceptionDef | Ty
     return (module_id, tuple(segment.name for segment in item.scope_path), item.name)
 
 
-def _hidden_alias_members(resolved: ResolvedProgram) -> dict[DeclKey, frozenset[str]]:
-    """Index every module's alias paths by declaration key to the members their imports hide."""
-    return {
-        (mid, path[:-1], path[-1]): names
-        for mid, rmod in resolved.modules.items()
-        for path, names in rmod.resolved.hidden_alias_members.items()
-    }
-
-
 def _empty_program_tables() -> ModuleTypeInterface:
     """Return the whole-program declaration tables, empty.
 
@@ -586,7 +577,6 @@ def _build_program_type_table(
             if isinstance(item, TypeAlias):
                 alias_decls[_decl_key(mid, item)] = item
     program_alias_keys = frozenset(alias_decls)
-    hidden_alias_members = _hidden_alias_members(resolved)
 
     for interface in interfaces.values():
         tables.types.update(interface.types)
@@ -645,7 +635,6 @@ def _build_program_type_table(
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=shared_type_table,
-            hidden_alias_members=hidden_alias_members,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
             cross_env.seed_from(entry_seed_env)
@@ -745,7 +734,6 @@ def _build_program_func_sig_table(
 
     result: dict[int, FunctionSignatureRecord] = {}
 
-    hidden_alias_members = _hidden_alias_members(resolved)
     for mid, rmod in resolved.modules.items():
         cached = cached_modules.get(mid) if cached_modules is not None else None
         if cached is not None and cached.published_signatures is not None:
@@ -765,7 +753,6 @@ def _build_program_func_sig_table(
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=type_table,
-            hidden_alias_members=hidden_alias_members,
         )
         # The shared table already holds the session's declarations beneath
         # this entry's own (see ``TypeEnvironment.seed_from``).
@@ -1049,7 +1036,6 @@ def _prepare_module_environment(
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
     declared_seed: DeclaredHeaderSeed | None = None,
-    hidden_alias_members: Mapping[DeclKey, frozenset[str]] | None = None,
 ) -> TypeEnvironment:
     """Build one module's environment before program-wide candidate discovery.
 
@@ -1075,7 +1061,6 @@ def _prepare_module_environment(
       whole program, so the constructor copies them instead of this function
       registering them one by one. Absent for a module whose tables cannot
       start from the shared copy -- the REPL entry, seeded from its session env.
-    - ``hidden_alias_members``: every program alias's import-hidden members.
     """
     env = TypeEnvironment(
         program_type_table=tables.types,
@@ -1087,7 +1072,6 @@ def _prepare_module_environment(
         module_id=mid,
         type_table=type_table,
         declared_seed=declared_seed,
-        hidden_alias_members=hidden_alias_members,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
@@ -1292,7 +1276,6 @@ def _prepare_program(
     ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
     declared_seed = _declared_header_seed(declared_func_sig_table)
-    hidden_alias_members = _hidden_alias_members(resolved)
     for mid in ordered_mids:
         module_envs[mid] = _prepare_module_environment(
             mid,
@@ -1306,7 +1289,6 @@ def _prepare_program(
             declared_seed=(
                 None if entry_seed_env is not None and mid == resolved.entry_id else declared_seed
             ),
-            hidden_alias_members=hidden_alias_members,
         )
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}

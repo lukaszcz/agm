@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv, NameAtom, QName, try_resolve_qualified_member
-from agm.agl.scope.symbols import ScopePath
+from agm.agl.scope.symbols import ConstructorRef, ScopePath, TypeOwner
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
@@ -26,8 +26,10 @@ from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 __all__ = [
     "MemberAbsent",
     "MemberHidden",
+    "MemberReferenced",
     "MemberSelected",
     "MemberSelection",
+    "OwnerRoute",
     "TypeContributions",
     "TypeNameSite",
     "bare_type_selection",
@@ -148,12 +150,14 @@ def _routed_selection(
 
 def nominal_selection(
     site: TypeNameSite, type_expr: TypeExpr
-) -> tuple[frozenset[QName], bool] | None:
-    """Return what *type_expr* selects at *site* and whether that was indirect.
+) -> tuple[frozenset[QName], bool, NameT | AppliedT] | None:
+    """Return what *type_expr* selects at *site*, whether indirect, and its narrowed spelling.
 
     ``None`` when *type_expr* is structural: not a type name, or the bare name
     of one of the site's type parameters. See :func:`_type_name_selection` for
-    the second element.
+    the second element. The third element is *type_expr* itself, narrowed to
+    ``NameT | AppliedT``, so a caller holding a non-``None`` result never
+    re-derives this narrowing.
     """
     if not isinstance(type_expr, (NameT, AppliedT)) or (
         isinstance(type_expr, NameT)
@@ -161,7 +165,8 @@ def nominal_selection(
         and type_expr.name in site.type_params
     ):
         return None
-    return _type_name_selection(site, type_expr)
+    targets, indirect = _type_name_selection(site, type_expr)
+    return targets, indirect, type_expr
 
 
 def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
@@ -196,10 +201,23 @@ def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
 
 
 @dataclass(frozen=True, slots=True)
-class MemberSelected:
-    """``owner::member`` is reachable at the site, naming *qname*."""
+class OwnerRoute:
+    """How a use site spells an owner: resolved at *site* through *owner_expr*."""
 
-    qname: QName
+    site: TypeNameSite
+    owner_expr: NameT | AppliedT
+
+
+@dataclass(frozen=True, slots=True)
+class MemberSelected:
+    """``owner::member`` is reachable, naming *constructor*."""
+
+    constructor: ConstructorRef
+
+
+@dataclass(frozen=True, slots=True)
+class MemberReferenced:
+    """*owner*'s enum only references ``member``; it selects nothing at *owner*'s own path."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,23 +230,39 @@ class MemberAbsent:
     """*owner* declares no ``member`` at all."""
 
 
-MemberSelection = MemberSelected | MemberHidden | MemberAbsent
-"""The tri-state verdict for ``owner::member`` at a site: reachable, hidden, or absent."""
+MemberSelection = MemberSelected | MemberReferenced | MemberHidden | MemberAbsent
+"""The verdict for ``owner::member``: reachable, referenced-only, hidden, or absent."""
 
 
 def owner_member_selection(
-    site: TypeNameSite, owner: NameT | AppliedT, member: str, declared: QName | None
+    owner: TypeOwner, member: str, route: OwnerRoute | None
 ) -> MemberSelection:
-    """Return whether ``owner::member`` is reachable at *site*, hidden, or undeclared.
+    """Return what ``owner::member`` selects: *owner* being what the spelling selects, by identity.
 
-    *declared* is the identity *owner*'s own declaration selects for *member*
-    (a direct enum, an alias, an applied ``E[int]``, or a module-qualified
-    ``m::E`` owner alike), or ``None`` when *owner* declares no such member.
-    Reachability is *declared*'s membership in :func:`imported_member_selection`
-    at *site*: the same import surface a value, pattern, or type-position
-    reference of ``owner::member`` resolves through.
+    Declared members come from *owner* alone: ``members`` (inline members, or
+    an alias's already-filtered reachable projection), ``hidden`` (what that
+    projection subtracted), and ``referenced`` (names the enum only
+    references). An alias's ``hidden`` set already encodes its own use-site
+    filter, so it is never re-filtered here. A nominal (non-alias) enum
+    reached indirectly -- through a ``use`` contribution or an import route --
+    carries no such set of its own, so *route*, when given, filters it fresh
+    at the current site through :func:`imported_member_selection`; a direct
+    lexical hit (``route`` reporting no indirection) is never filtered.
     """
-    if declared is None:
+    if member in owner.referenced:
+        return MemberReferenced()
+    if member in owner.hidden:
+        return MemberHidden()
+    constructor = owner.members.get(member)
+    if constructor is None:
         return MemberAbsent()
-    reached = imported_member_selection(site, owner, member)
-    return MemberSelected(declared) if declared in reached else MemberHidden()
+    if route is not None and owner.alias is None:
+        reached = nominal_selection(route.site, route.owner_expr)
+        if (
+            reached is not None
+            and reached[1]
+            and constructor.qname
+            not in imported_member_selection(route.site, route.owner_expr, member)
+        ):
+            return MemberHidden()
+    return MemberSelected(constructor)

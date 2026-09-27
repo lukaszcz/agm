@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     )
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
+    from agm.agl.typecheck.declaration_validation import SessionBuiltinDeclarations
     from agm.agl.typecheck.env import (
         CheckedModule,
         ConstructorSignature,
@@ -368,9 +369,7 @@ class ReplSession:
         # declaration in its module graph (each entry recompiles a fresh entry
         # module), so ``validate_builtin_declaration_uniqueness`` reads this
         # instead to catch a later entry importing the same scoped builtin.
-        self._session_builtin_declarations: dict[
-            tuple[str, ...], tuple[ModuleId, tuple[str, ...]]
-        ] = {}
+        self._session_builtin_declarations: SessionBuiltinDeclarations = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
@@ -722,6 +721,10 @@ class ReplSession:
         except AglSyntaxError:
             return None
 
+        member_error = self._retained_owner_member_error(type_expr)
+        if member_error is not None:
+            return self._fail([member_error.to_diagnostic()], [])
+
         type_envs = [self._type_env]
         program_type_env = self._build_type_entry_program_env()
         if program_type_env is not None:
@@ -746,6 +749,37 @@ class ReplSession:
                 ok=True,
                 type_table=type_env.type_table,
             )
+        return None
+
+    def _retained_owner_member_error(self, type_expr: "TypeExpr") -> AglError | None:
+        """Return the referenced/hidden-member error a bare ``Owner::member`` entry names.
+
+        Handles only a single unqualified owner segment, looked up in the
+        session's retained, declaration-time type-owner snapshot
+        (:attr:`_session_type_paths`) rather than live-rederived against this
+        entry's current imports and uses: this is a REPL-only fallback for a
+        bare type spelling, not a resolver pass, so it is not worth building
+        one just to re-derive an owner scope already resolves for every other
+        entry. ``None`` for any other shape, or when the member is neither
+        referenced nor hidden.
+        """
+        from agm.agl.diagnostics import ReferencedMemberError, hidden_member
+        from agm.agl.syntax.types import NameT
+
+        if not isinstance(type_expr, NameT) or type_expr.qualifier is None:
+            return None
+        qualifier = type_expr.qualifier
+        if qualifier.anchor is not None or len(qualifier.segments) != 1:
+            return None
+        owner_name = qualifier.segments[0].name
+        owner = self._session_type_paths.get((owner_name,))
+        if owner is None:
+            return None
+        member = type_expr.name
+        if member in owner.referenced:
+            return ReferencedMemberError(owner_name, member, span=type_expr.span)
+        if member in owner.hidden:
+            return hidden_member(f"{owner_name}::{member}", type_expr.span)
         return None
 
     def _try_generic_type_entry(
@@ -1285,18 +1319,7 @@ class ReplSession:
             ]
             current_targets = {contribution.target for contribution in promoted_imported_uses}
             for contribution in session_node.imported_use_contributions:
-                for atom, refs in contribution.bindings.items():
-                    retained = session_node.bare_contributions.get(atom)
-                    if retained is not None:
-                        retained.difference_update(refs)
-                        if not retained:
-                            del session_node.bare_contributions[atom]
-                for atom, constructor_refs in contribution.constructors.items():
-                    constructor_retained = session_node.bare_constructor_contributions.get(atom)
-                    if constructor_retained is not None:
-                        constructor_retained.difference_update(constructor_refs)
-                        if not constructor_retained:
-                            del session_node.bare_constructor_contributions[atom]
+                session_node.retract_bare(contribution.bindings, contribution.constructors)
             session_node.imported_use_contributions = [
                 contribution
                 for contribution in session_node.imported_use_contributions
@@ -1319,20 +1342,9 @@ class ReplSession:
                 local_contribution.target for local_contribution in promoted_local_uses
             }
             for local_contribution in session_node.local_use_contributions:
-                for atom, refs in local_contribution.bindings.items():
-                    retained_local = session_node.bare_contributions.get(atom)
-                    if retained_local is not None:
-                        retained_local.difference_update(refs)
-                        if not retained_local:
-                            del session_node.bare_contributions[atom]
-                for atom, constructor_refs in local_contribution.constructors.items():
-                    constructor_retained_local = session_node.bare_constructor_contributions.get(
-                        atom
-                    )
-                    if constructor_retained_local is not None:
-                        constructor_retained_local.difference_update(constructor_refs)
-                        if not constructor_retained_local:
-                            del session_node.bare_constructor_contributions[atom]
+                session_node.retract_bare(
+                    local_contribution.bindings, local_contribution.constructors
+                )
             session_node.local_use_contributions = [
                 (
                     replace(local_contribution, bindings={}, constructors={})

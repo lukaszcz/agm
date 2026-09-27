@@ -64,6 +64,12 @@ ModuleTypeContributions = Callable[
 ]
 """The nearest layer above one module scope contributing a spelling, restricted to types."""
 
+AliasSelection = tuple[frozenset[QName], bool, NameT | AppliedT] | None
+"""What an alias's target selects, whether indirectly, and its narrowed spelling.
+
+See :func:`nominal_selection`.
+"""
+
 
 class TypeOwnerIndex:
     """Memoized :class:`TypeOwner` of every program type path.
@@ -95,7 +101,7 @@ class TypeOwnerIndex:
         self._retained_module = retained_module
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
-        self._alias_targets: dict[QName, tuple[frozenset[QName], bool] | None] = {}
+        self._alias_targets: dict[QName, AliasSelection] = {}
         self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
 
     def with_retained(
@@ -164,29 +170,20 @@ class TypeOwnerIndex:
     def owner(self, qname: QName) -> TypeOwner | None:
         """Return what type path *qname* selects, or ``None`` when it names no type.
 
-        A retained alias's target identity (:attr:`TypeOwner.target`) is
-        never re-selected: it is exactly what its declaring entry resolved,
-        forever, however later entries redeclare or import around it -- a
-        later declaration at the same path is a distinct declaration
-        (:attr:`TypeOwner.decl_node_id`), never mistaken for it. Only when
-        that target is still the same declaration, and it was reached through
-        a ``use`` contribution or an import route (:attr:`TypeOwner.indirect`),
-        does a later entry re-derive the alias's reachable ``members``/``hidden``
-        -- a projection of the target's current owner through the alias's own
-        written spelling, re-evaluated at this entry's site (see
-        :meth:`_rederive_retained_alias`). A retained alias reached by a
-        direct hit never depends on imports, so it is replayed verbatim.
+        A retained alias's own declaration and target identity
+        (:attr:`TypeOwner.target`) are never re-selected: they are exactly
+        what the declaring entry resolved, forever, however later entries
+        redeclare or import around them -- a later declaration at the same
+        path is a distinct declaration (:attr:`TypeOwner.decl_node_id`),
+        never mistaken for it. What a retained alias's spelling selects now
+        follows :meth:`_current_retained_owner`.
         """
         declaration = self._all_public_types.get(qname)
         if declaration is not None:
             return self.declared_owner(qname, declaration)
         retained = self._retained_owner(qname)
         if retained is not None:
-            if retained.indirect and retained.alias is not None and retained.target is not None:
-                return self._rederive_retained_alias(
-                    qname, retained, retained.alias, retained.target
-                )
-            return retained
+            return self._current_retained_owner(qname, retained)
         member = self._member_constructor(qname)
         return (
             None
@@ -194,71 +191,70 @@ class TypeOwnerIndex:
             else TypeOwner(member, member.owner_decl_node_id, frozenset({member.owner_name}))
         )
 
-    def _rederive_retained_alias(
-        self, qname: QName, retained: TypeOwner, alias: TypeAlias, target: TypeTarget
-    ) -> TypeOwner:
-        """Re-derive a retained indirect alias's reachable ``members``/``hidden``.
+    def _current_retained_owner(self, qname: QName, retained: TypeOwner) -> TypeOwner:
+        """What a retained owner selects now.
 
-        Never re-selects *target*: takes its current owner's member set,
-        itself re-derived the same way when it is in turn a retained indirect
-        alias, but only while *target*'s declaration is still what
-        :meth:`owner` resolves at its path -- otherwise a later, unrelated
-        declaration reused the path, and the declaration-time
-        ``members``/``hidden`` in *retained* stand unchanged. When it is
-        still current, that member set is projected through *alias*'s own
-        written target spelling (:meth:`_project_alias_members`), evaluated
-        at this entry's site.
+        Row R0: *retained* is not an alias, or its target is unresolved
+        (record, enum, structural, or a same-entry cycle) -- unchanged.
+        Row R1: the target is gone -- a later entry retired or redeclared its
+        path -- *retained* stands at its declaration-time members/hidden.
+        Row R2: the target is itself an alias -- inherit its current
+        (recursively re-derived) members/hidden unfiltered, exactly as a
+        fresh chain link does.
+        Row R3: *retained* was a direct hit on a non-alias target -- the same
+        declaration has the same members, so it stands.
+        Row R4: *retained* was indirect and its own spelling still selects
+        the target at this entry's site -- re-project the target's current
+        members through that spelling.
+        Row R5: *retained* was indirect but its spelling no longer selects
+        exactly the target (shadowed, ambiguous, or the route is gone) --
+        freeze at its declaration-time members/hidden.
         """
-        target_owner = self.owner(target.qname)
-        if target_owner is None or target_owner.decl_node_id != target.decl_node_id:
+        alias, target = retained.alias, retained.target
+        if alias is None or target is None:
             return retained
-        should_filter = target_owner.alias is None and self._alias_still_selects(
-            qname, alias, target.qname
-        )
+        current = self.owner(target.qname)
+        if current is None or current.decl_node_id != target.decl_node_id:
+            return retained
+        if current.alias is not None:
+            return replace(retained, members=current.members, hidden=current.hidden)
+        if not retained.indirect:
+            return retained
+        selection = self._alias_selection(qname, alias)
+        if selection is None or selection[0] != frozenset({target.qname}):
+            return retained
         module_id, atom = qname
-        reachable, hidden = self._project_alias_members(
-            module_id, _path(atom), alias, should_filter, target_owner
+        reachable, hidden = self._filtered_projection(
+            module_id, _path(atom), selection[2], alias.type_params, current
         )
         return replace(retained, members=reachable, hidden=hidden)
 
-    def _alias_still_selects(self, qname: QName, alias: TypeAlias, target_qname: QName) -> bool:
-        """Whether *alias*'s own written spelling still selects *target_qname*.
-
-        Evaluated at this entry's current site -- ``False`` once a later
-        declaration shadows the spelling, its route becomes ambiguous, or the
-        route it was declared through is gone.
-        """
-        selection = self._alias_selection(qname, alias)
-        current_targets = None if selection is None else selection[0]
-        return current_targets == frozenset({target_qname})
-
-    def _project_alias_members(
+    def _filtered_projection(
         self,
         module_id: ModuleId,
         path: ScopePath,
-        alias: TypeAlias,
-        should_filter: bool,
+        type_expr: NameT | AppliedT,
+        type_params: Iterable[str],
         target_owner: TypeOwner,
     ) -> tuple[Mapping[str, ConstructorRef], frozenset[str]]:
-        """Return an alias's reachable ``members``/``hidden``, projected from *target_owner*.
+        """Return an alias's reachable ``members``/``hidden``, filtered from *target_owner*.
 
-        Takes *target_owner*'s member set unfiltered unless *should_filter*
-        (the target is not itself an alias -- whose own projection, already
-        filtered at its own site, applies unfiltered here -- and the alias's
-        target is a nominal type name): only then is the member set narrowed
-        through that spelling (:func:`imported_member_selection`), evaluated
-        at *path*'s site. Shared by a fresh declaration (:meth:`_resolve`) and
-        a retained alias (:meth:`_rederive_retained_alias`).
+        Narrows *target_owner*'s members through *type_expr* -- the alias's
+        own nominal target spelling, already narrowed by
+        :func:`nominal_selection` -- via :func:`imported_member_selection`
+        evaluated at *path*'s site. Shared by a fresh declaration
+        (:meth:`_resolve`) and a retained alias (:meth:`_current_retained_owner`),
+        both of which call this only when the target is not itself an alias --
+        whose own projection, already filtered at its own site, applies
+        unfiltered instead.
         """
-        reachable = target_owner.members
-        if should_filter and isinstance(alias.type_expr, (NameT, AppliedT)):
-            site = self.site(module_id, path[:-1], alias.type_params)
-            reachable = {
-                name: member
-                for name, member in target_owner.members.items()
-                if (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
-                in imported_member_selection(site, alias.type_expr, name)
-            }
+        site = self.site(module_id, path[:-1], type_params)
+        reachable = {
+            name: member
+            for name, member in target_owner.members.items()
+            if (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
+            in imported_member_selection(site, type_expr, name)
+        }
         hidden = target_owner.hidden | (target_owner.members.keys() - reachable.keys())
         return reachable, hidden
 
@@ -309,7 +305,7 @@ class TypeOwnerIndex:
         selection = self._alias_selection(qname, declaration)
         if selection is None:
             return TypeOwner(None, declaration.node_id, alias=declaration)
-        targets, indirect = selection
+        targets, indirect, type_expr = selection
         target_qname = next(iter(targets)) if len(targets) == 1 else None
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
@@ -317,10 +313,14 @@ class TypeOwnerIndex:
         # A fresh declaration's target spelling trivially "still selects" the
         # target it was just resolved against, so filtering is gated only by
         # indirection and the target not itself being an alias (whose own
-        # projection, filtered at its own site, already applies unfiltered).
-        reachable, hidden = self._project_alias_members(
-            module_id, path, declaration, indirect and target.alias is None, target
-        )
+        # projection, filtered at its own site, already applies unfiltered) --
+        # the same inheritance rule as a retained alias's R2 (see `owner`).
+        if indirect and target.alias is None:
+            reachable, hidden = self._filtered_projection(
+                module_id, path, type_expr, declaration.type_params, target
+            )
+        else:
+            reachable, hidden = target.members, target.hidden
         return TypeOwner(
             constructor,
             declaration.node_id,
@@ -333,13 +333,11 @@ class TypeOwnerIndex:
             target=TypeTarget(target_qname, target.decl_node_id),
         )
 
-    def _alias_selection(
-        self, qname: QName, alias: TypeAlias
-    ) -> tuple[frozenset[QName], bool] | None:
+    def _alias_selection(self, qname: QName, alias: TypeAlias) -> AliasSelection:
         """Return what alias *qname*'s target selects where declared, and whether indirectly.
 
         ``None`` if the target is structural. See :func:`nominal_selection`
-        for the second element of a non-``None`` result.
+        for the second and third elements of a non-``None`` result.
         """
         if qname not in self._alias_targets:
             site = self.site(qname[0], _path(qname[1])[:-1], alias.type_params)

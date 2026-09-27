@@ -141,7 +141,10 @@ def fetch(url: str) -> str:
 Like `runtime.state`, this must be called during an extern invocation; a
 direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
-reference cycle, is replaced by a marker rather than failing the call.
+reference cycle, is replaced by a marker rather than failing the call. A
+mapping nested in the payload whose keys are not all `str` is recorded as an
+array of `{"key": …, "value": …}` objects, so distinct keys never collapse
+into one string.
 
 `runtime.tracing()` reports whether a record would be written, so a companion
 can skip building a payload that tracing, off by default, would discard.

@@ -1,0 +1,99 @@
+{
+  "scenarios": [
+    {
+      "name": "int_key_stringifies",
+      "params": {"mode": 1},
+      "expect": {"stdout": "{\"1\": \"a\", \"-2\": \"b\"}\n"}
+    },
+    {
+      "name": "decimal_key_stringifies_with_exact_number_text",
+      "params": {"mode": 2},
+      "expect": {"stdout": "{\"1.50\": \"a\", \"-2\": \"b\"}\n"}
+    },
+    {
+      "name": "bool_key_stringifies",
+      "params": {"mode": 3},
+      "expect": {"stdout": "{\"true\": \"a\", \"false\": \"b\"}\n"}
+    },
+    {
+      "name": "all_nullary_enum_key_stringifies_by_effective_tag",
+      "params": {"mode": 4},
+      "expect": {"stdout": "{\"Red\": \"r\", \"bleu\": \"b\"}\n"}
+    },
+    {
+      "name": "mixed_enum_key_uses_entries_form",
+      "params": {"mode": 5},
+      "expect": {
+        "stdout": "[{\"key\": {\"$case\": \"Square\"}, \"value\": \"s\"}, {\"key\": {\"$case\": \"Circle\", \"radius\": 1}, \"value\": \"c\"}]\n"
+      }
+    },
+    {
+      "name": "record_key_uses_entries_form",
+      "params": {"mode": 6},
+      "expect": {"stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n"}
+    },
+    {
+      "name": "json_key_uses_entries_form",
+      "params": {"mode": 7},
+      "expect": {"stdout": "[{\"key\": 5, \"value\": \"j\"}]\n"}
+    },
+    {
+      "name": "option_int_key_uses_entries_form",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "[{\"key\": {\"$case\": \"Some\", \"value\": 1}, \"value\": \"s\"}, {\"key\": {\"$case\": \"None\"}, \"value\": \"n\"}]\n"
+      }
+    },
+    {
+      "name": "text_alias_key_unchanged",
+      "params": {"mode": 9},
+      "expect": {"stdout": "{\"/tmp/a\": \"a\"}\n"}
+    },
+    {
+      "name": "dict_nested_in_record_and_array",
+      "params": {"mode": 10},
+      "expect": {"stdout": "[{\"by-int\": {\"1\": \"a\"}}]\n"}
+    },
+    {
+      "name": "empty_dict_encodes_by_its_key_forms_own_shape",
+      "params": {"mode": 11},
+      "expect": {"stdout": "{}\n[]\n"}
+    },
+    {
+      "name": "all_nullary_enum_with_a_method_still_stringifies_by_tag",
+      "params": {"mode": 12},
+      "expect": {"stdout": "{\"Active\": \"active\", \"Done\": \"done\"}\n"}
+    },
+    {
+      "name": "exception_field_uses_entries_form_for_a_record_key",
+      "params": {"mode": 13},
+      "expect": {
+        "stdout": "{\"message\": \"boom\", \"points\": [{\"key\": {\"x\": 1, \"y\": 2}, \"value\": 1}]}\n"
+      }
+    },
+    {
+      "name": "own_type_parameter_deferred_through_compound_key_arguments",
+      "params": {"mode": 14},
+      "expect": {
+        "stdout": "{\"wrapped\": [{\"key\": {\"x\": 1}, \"value\": 1}], \"optional\": [{\"key\": {\"$case\": \"Some\", \"value\": 1}, \"value\": 1}], \"paired\": [{\"key\": {\"first\": 1, \"second\": 2}, \"value\": 1}]}\n"
+      }
+    },
+    {
+      "name": "generic_box_picks_its_wire_form_at_each_instantiation",
+      "params": {"mode": 15},
+      "expect": {
+        "stdout": "{\"d\": {\"1\": 1}}\n{\"d\": {\"Red\": 1}}\n{\"d\": [{\"key\": {\"x\": 1, \"y\": 2}, \"value\": 1}]}\n"
+      }
+    },
+    {
+      "name": "enum_key_stringifies_using_json_name_then_name_then_declared",
+      "params": {"mode": 16},
+      "expect": {"stdout": "{\"x\": \"a\", \"bee\": \"b\", \"C\": \"c\"}\n"}
+    },
+    {
+      "name": "hoisted_nullary_enum_key_still_stringifies_by_tag",
+      "params": {"mode": 17},
+      "expect": {"stdout": "{\"a\": {\"Red\": 1}, \"b\": {\"bleu\": 2}}\n"}
+    }
+  ]
+}

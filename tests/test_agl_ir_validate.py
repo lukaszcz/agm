@@ -280,6 +280,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("left", "right"),
+                field_json_names=("left", "right"),
             )
         },
     )
@@ -332,6 +333,7 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 declared_name="PayloadMember",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             ),
         },
         functions={FN0: _make_fn_desc(fn_sym=SYM0)},
@@ -386,6 +388,7 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             )
         },
     )
@@ -1350,6 +1353,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_json_names=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1357,7 +1361,7 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",), NominalId(100), "some", ("x",)),),
             ),
         ),
     )
@@ -1375,6 +1379,7 @@ class TestIrFieldValidation:
                     "some",
                     NominalKind.RECORD,
                     ("x",),
+                    ("x",),
                 ),
             },
         )
@@ -1390,6 +1395,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_json_names=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1397,7 +1403,7 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",), NominalId(100), "some", ("x",)),),
             ),
         ),
     )
@@ -1425,6 +1431,7 @@ class TestIrFieldValidation:
                     (),
                     "some",
                     NominalKind.RECORD,
+                    ("x",),
                     ("x",),
                 ),
             },
@@ -1457,6 +1464,7 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=nominal_kind,
             fields=("x",),
+            field_json_names=("x",),
             mutable_fields=frozenset({"x"})
             if mutable and nominal_kind is NominalKind.RECORD
             else frozenset(),
@@ -1485,6 +1493,7 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=NominalKind.RECORD,
             fields=("x",),
+            field_json_names=("x",),
             mutable_fields=frozenset({"x"}),
         )
         prog = _make_program(
@@ -2240,8 +2249,16 @@ class TestExternTargetOperands:
         self._validate_tree(self._tree(TypeNode(TypeNodeKind.DICT, "d", "{}", values=items)))
 
     def test_type_tree_unknown_reference_raises(self) -> None:
-        with pytest.raises(InvalidIrError, match="Missing"):
+        with pytest.raises(InvalidIrError):
             self._validate_tree(self._tree(TypeNodeRef("Missing")))
+
+    def test_type_tree_dict_key_unknown_reference_raises(self) -> None:
+        """A dict node's ``keys`` sub-entry is walked too, not only ``values``."""
+        dict_node = TypeNode(
+            TypeNodeKind.DICT, "d", "{}", keys=TypeNodeRef("Missing"), values=TypeNodeRef("Node")
+        )
+        with pytest.raises(InvalidIrError):
+            self._validate_tree(self._tree(dict_node))
 
     def test_type_tree_duplicate_definition_raises(self) -> None:
         tree = self._tree(TypeNodeRef("Node"))

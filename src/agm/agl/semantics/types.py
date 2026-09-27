@@ -12,7 +12,8 @@ Type hierarchy
 - ``IntType`` — the ``int`` primitive (arbitrary-precision integer).
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ArrayType(elem)`` — ``array[T]``.
-- ``DictType(key, value)`` — ``dict[K, V]`` (the parser admits only ``text`` keys).
+- ``DictType(key, value)`` — ``dict[K, V]`` (``K`` must be ``Hashable``, checked
+  where the dict is used, not by the parser).
 - ``RecordType(name, type_args, module_id, decl_id)`` — a ``record`` nominal
   type handle whose identity is ``decl_id``; field shapes live in the shared
   ``TypeTable`` (``semantics.type_table``), keyed by declaration identity.

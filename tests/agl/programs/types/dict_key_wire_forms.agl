@@ -1,0 +1,138 @@
+# `as json` picks a dict's wire shape from its key type: `text` (and text
+# aliases such as `path`) stay a plain object; int/decimal/bool/an
+# all-nullary enum stringify onto an object's keys (honoring `@json-name`
+# and, absent that, `@name`; unaffected by a method the enum also declares);
+# every other hashable key
+# (a mixed enum, a record, `json`, `Option[int]`) instead encodes as a
+# `[{"key": ..., "value": ...}, ...]` array. A dict keeps its chosen form
+# when nested inside a record, an array, or an exception field, and an
+# empty dict still encodes by its key type's own form. A declaration's own
+# type parameter reached only through a compound key argument (`Wrap[T]`,
+# `Option[T]`, `Pair[T, T]`) is deferred to its instantiation exactly like a
+# bare type-parameter key. A generic `Box[K]` picks its wire form the same
+# way at each instantiation.
+
+enum Color
+  | Red
+  | @json-name("bleu") Blue
+
+enum Tag
+  | @json-name("x") A
+  | @name("bee") B
+  | C
+
+enum Shape
+  | Circle(radius: int)
+  | Square
+
+enum Status
+  | Active
+  | Done
+
+def Status::label(self) -> text =
+  case self of
+    | Active => "active"
+    | Done => "done"
+
+record Point
+  x: int
+  y: int
+
+record Box
+  by-int: dict[int, text]
+
+record Wrap[T]
+  x: T
+
+record Pair[A, B]
+  first: A
+  second: B
+
+record Outer[T]
+  wrapped: dict[Wrap[T], int]
+  optional: dict[Option[T], int]
+  paired: dict[Pair[T, T], int]
+
+record Generic[K]
+  d: dict[K, int]
+
+exception Boom extends Exception
+  points: dict[Point, int]
+
+record TwoColorDicts
+  a: dict[Color, int]
+  b: dict[Color, int]
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let d: dict[int, text] = {1: "a", -2: "b"}
+        print(d as json)
+    | 2 =>
+        let d: dict[decimal, text] = {1.50: "a", -2: "b"}
+        print(d as json)
+    | 3 =>
+        let d: dict[bool, text] = {true: "a", false: "b"}
+        print(d as json)
+    | 4 =>
+        let d: dict[Color, text] = {Red: "r", Blue: "b"}
+        print(d as json)
+    | 5 =>
+        let d: dict[Shape, text] = {Square: "s", Circle(radius = 1): "c"}
+        print(d as json)
+    | 6 =>
+        let d: dict[Point, text] = {Point(x = 1, y = 2): "p"}
+        print(d as json)
+    | 7 =>
+        let key: json = 5
+        let d: dict[json, text] = {key: "j"}
+        print(d as json)
+    | 8 =>
+        let some-key: Option[int] = Some(value = 1)
+        let none-key: Option[int] = None
+        let d: dict[Option[int], text] = {some-key: "s", none-key: "n"}
+        print(d as json)
+    | 9 =>
+        let d: dict[path, text] = {"/tmp/a": "a"}
+        print(d as json)
+    | 10 =>
+        let boxes: array[Box] = [Box(by-int = {1: "a"})]
+        print(boxes as json)
+    | 11 =>
+        let empty-int: dict[int, text] = {}
+        print(empty-int as json)
+        let empty-point: dict[Point, text] = {}
+        print(empty-point as json)
+    | 12 =>
+        let status: dict[Status, text] = {Active: Active.label(), Done: Done.label()}
+        print(status as json)
+    | 13 =>
+        let e = Boom(message = "boom", points = {Point(x = 1, y = 2): 1})
+        print(e as json)
+    | 14 =>
+        let some-key: Option[int] = Some(value = 1)
+        let o: Outer[int] = Outer(
+          wrapped = {Wrap(x = 1): 1},
+          optional = {some-key: 1},
+          paired = {Pair(first = 1, second = 2): 1},
+        )
+        print(o as json)
+    | 15 =>
+        let by-int: Generic[int] = Generic(d = {1: 1})
+        print(by-int as json)
+        let color-key: Color = Red
+        let by-color: Generic[Color] = Generic(d = {color-key: 1})
+        print(by-color as json)
+        let by-point: Generic[Point] = Generic(d = {Point(x = 1, y = 2): 1})
+        print(by-point as json)
+    | 16 =>
+        let d: dict[Tag, text] = {A: "a", B: "b", C: "c"}
+        print(d as json)
+    | 17 =>
+        # `Color` occurs twice at the same root (both `a` and `b`), so it
+        # hoists into the plan's own shared definition; each occurrence's key
+        # form still resolves (through the hoisted reference) to stringified.
+        let t: TwoColorDicts = TwoColorDicts(a = {Red: 1}, b = {Blue: 2})
+        print(t as json)
+    | _ =>
+        print(()) # unreachable in scenarios

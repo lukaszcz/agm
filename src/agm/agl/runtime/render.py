@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import assert_never, cast
 
 from agm.agl.ir.program import ValueDescriptors
-from agm.agl.runtime.serialize import AglNonDataValue, dumps_exact, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, JsonShaped, dumps_exact
 from agm.agl.semantics.cycles import enter_value
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -156,7 +156,7 @@ def _render(
         return f"<function: {signature}>"
 
     if isinstance(value, JsonValue):
-        rendered = dumps_exact(value_to_json_obj(value), indent=2 if pretty else None)
+        rendered = dumps_exact(cast(JsonShaped, value.raw), indent=2 if pretty else None)
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ArrayValue):

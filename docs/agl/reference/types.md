@@ -215,8 +215,9 @@ non-empty dict literal `{k: v, …}`, indexing (`d[k]`), indexed assignment
 ([Constraint blocks](generics.md#constraint-blocks)). The other operations —
 the type itself, empty `{}`, `for`, rendering, `copy`/`shallow-copy`, and
 `==` — do not, so `K` may be non-hashable, such as `array[int]`; `==` still
-needs `Eq` on the whole dict type. A dict whose key is not `text` has no JSON
-form; see [Convertibility to `json`](#convertibility-to-json).
+needs `Eq` on the whole dict type. A dict with a `Hashable` key encodes to
+JSON, but only a `text`-keyed dict decodes from it; see [Convertibility to
+`json`](#convertibility-to-json).
 
 A record or enum-member record may mark an individual field with `var`.
 That field is a mutable reference slot: `receiver.field := value` updates the
@@ -1192,6 +1193,7 @@ may raise `CastError`.
 | `dict[K,V]` | identical `dict[K,V]` | total (no-op), for any key type `K` |
 | `dict[text,V]` | `text` | fallible — strict JSON or AgL value syntax parse, then value validation |
 | `dict[text,V]` | `json` | fallible — value validation |
+| `json` | `dict[K,V]` for any `Hashable` `K` | total for conformance — encodes in the key type's [wire form](#convertibility-to-json); only a `text` key decodes back (rows above) |
 | record `R` | same record `R` | total (no-op) |
 | record `R` | `text` | fallible — strict JSON or AgL value syntax parse, then field validation |
 | record `R` | `json` | fallible — field validation |
@@ -1217,24 +1219,18 @@ are all static errors — booleans never convert to or from numbers.
 ### Convertibility to `json`
 
 A type converts to `json` with `as json` iff no **non-data** type — `unit`, a
-function type, or the opaque host-created `Session` — is reachable from it:
+function type, or the opaque host-created `Session` — and no dict with a
+non-`Hashable` key is reachable from it:
 
 - the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
-- `array[E]` converts iff `E` does; `dict[K, V]` converts iff `K` is `text`
-  and `V` does;
-- a record, enum, or exception converts iff no non-data type is reachable
-  from its declaration, transitively through its fields (and, for an
-  exception, through its `extends` ancestors and its catchable descendants,
-  since a value statically typed as a base may hold a descendant at
-  runtime);
+- `array[E]` converts iff `E` does; `dict[K, V]` converts iff `K` is
+  `Hashable` and `V` does;
+- a record, enum, or exception converts iff neither is reachable from its
+  declaration at its type arguments, transitively through its fields (and,
+  for an exception, through its `extends` ancestors and its catchable
+  descendants, since a value statically typed as a base may hold a
+  descendant at runtime);
 - `unit`, function, and `Session` values never convert.
-
-Only a `text` key has a JSON form, so a type that reaches a dict with any
-other key type, at any depth, has no JSON form. Such a type cannot be cast
-to `json`, cast from `text` or `json` or parsed from `text`, decoded from
-agent or `exec` output or from a program or module parameter, or appear in an
-`extern def` signature or as an extern target type argument; each is a static
-error. `as text` still renders it.
 
 This makes `array[R] as json`, `dict[text, R] as json`, nested containers
 (`array[array[R]]`, `dict[text, array[R]]`), and a recursive declaration such
@@ -1246,6 +1242,49 @@ A **free type variable never converts**, so `T as json`, `array[T] as json`,
 and `Box[T] as json` are static errors inside a generic `def`: type
 arguments are erased, so at the point the cast is checked there is no way to
 know whether the eventual instantiation of `T` will carry a non-data value.
+
+A dict's JSON form depends on its static key type `K`, so a generic field
+`dict[K, V]` takes the form of each instantiation's key type:
+
+- `text`, or a text alias such as `path`: a JSON object keyed by the text;
+- `int`, `decimal`, `bool`, or an enum whose members all have no fields: a
+  JSON object keyed by the stringified key — the number text `as json`
+  produces (`"-2"`, `"1.50"`), `"true"`/`"false"`, or the member's effective
+  `$case` tag (see [`@json-name`](attributes.md#name-and-json-name));
+- any other `Hashable` key — a record, an exception, `json`, or an enum with
+  a member that has fields, such as `Option[int]`: a JSON array of
+  `{"key": <key>, "value": <value>}` objects, each key in its own JSON form.
+
+Every form keeps the dict's insertion order.
+
+```agl
+enum Color
+  | Red
+  | @json-name("bleu") Blue
+
+record Point
+  x: int
+  y: int
+
+program def main() -> unit =
+  let by-int: dict[int, text] = {1: "a", -2: "b"}
+  let by-color: dict[Color, int] = {Red: 1, Blue: 2}
+  let by-point: dict[Point, text] = {Point(x = 1, y = 2): "p"}
+  print(by-int as json)    # {"1": "a", "-2": "b"}
+  print(by-color as json)  # {"Red": 1, "bleu": 2}
+  print(by-point as json)  # [{"key": {"x": 1, "y": 2}, "value": "p"}]
+```
+
+Only a `text` key decodes. A type that reaches a dict with any other key
+type, at any depth, cannot be cast from `text` or `json` or parsed from
+`text`, decoded from agent or `exec` output or from a program or module
+parameter, or appear in an `extern def` signature or as an extern target type
+argument; each is a static error. A type that reaches a dict with a
+non-`Hashable` key, such as `array[int]`, cannot be cast to `json` either,
+including one reached through type arguments: if `Outer[T]` has a field of
+type `Box[Wrap[T]]` and `Box[K]` a field of type `dict[K, int]`, then
+`Outer[array[int]]` reaches `dict[Wrap[array[int]], int]`, whose key is not
+`Hashable` when `Wrap[T]` holds a `T`. `as text` renders both.
 
 ### Total vs fallible casts
 
@@ -1309,15 +1348,17 @@ conversion:
   `"$case"` key.
 - **exception** → a JSON object with every field of the value's runtime
   exception type, in declaration order, each keyed by its effective JSON name.
-- **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
-  converting each element/value the same way — so `array[R] as json` is a
-  JSON array of record objects, and a nested `array[array[R]]` or
-  `dict[text, array[R]]` converts to the matching nested JSON shape.
+- **`array[E]`/`dict[K, V]`** → the JSON array, or the dict's key-directed
+  [JSON form](#convertibility-to-json), obtained by converting each
+  element/key/value the same way — so `array[R] as json` is a JSON array of
+  record objects, and a nested `array[array[R]]` or `dict[text, array[R]]`
+  converts to the matching nested JSON shape.
 
-This encoding is exactly what the decode direction (`json as R`, `text as
-array[R]`, and the other record/enum/array/dict rows in the [conversion
-matrix](#conversion-matrix) above) accepts, so a round trip through `json`
-recovers the original value: `(rs as json) as array[R] == rs`.
+For a type with no non-`text`-keyed dict, this encoding is exactly what the
+decode direction (`json as R`, `text as array[R]`, and the other
+record/enum/array/dict rows in the [conversion matrix](#conversion-matrix)
+above) accepts, so a round trip through `json` recovers the original value:
+`(rs as json) as array[R] == rs`.
 
 This is an **explicit cast only**. Nominal values are not JSON-shaped and are
 not implicitly assignable to `json`; `as json` must be written explicitly:

@@ -1,0 +1,22 @@
+# An uncaught exception whose `colors: dict[Color, Option[() -> int]]` field
+# has no JSON form (its value type holds a function), so it reports through
+# the untyped value-directed walk rather than a compiled plan. That walk must
+# still name each nullary member's EFFECTIVE JSON tag (`@json-name` ??
+# `@name` ?? declared name) -- the same tag the typed `c: Color` field
+# (which does have a plan) selects for the same member.
+
+enum Color
+  | Red
+  | @json-name("bleu") Blue
+  | @name("gr") Green
+
+exception Boom extends Exception
+  colors: dict[Color, Option[() -> int]]
+  c: Color
+
+program def main() -> unit =
+  raise Boom(
+    message = "boom",
+    colors = {Red: None, Blue: None, Green: None},
+    c = Blue,
+  )

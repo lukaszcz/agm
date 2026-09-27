@@ -636,6 +636,113 @@ class TestDeriveSchema:
 
 
 # ---------------------------------------------------------------------------
+# 1a2. Dict schema by key form (text object / stringified object / entries array)
+# ---------------------------------------------------------------------------
+
+
+class TestDictKeyFormSchema:
+    def test_int_key_stringifies_with_a_number_pattern(self) -> None:
+        schema = derive_schema(DictType(key=IntType(), value=TextType()), type_table_for())
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] == {"type": "string"}
+        validator = Draft202012Validator({"type": "string", **schema["propertyNames"]})
+        for text in ("0", "-0", "5", "-5", "123456789", "2.0", "1e3", "1.5E-3"):
+            assert validator.is_valid(text), text
+        for text in ("007", "-007", "abc", "", "01", "+1", "1.", ".5"):
+            assert not validator.is_valid(text), text
+
+    def test_decimal_key_stringifies_with_the_encoder_exact_number_text(self) -> None:
+        schema = derive_schema(DictType(key=DecimalType(), value=TextType()), type_table_for())
+        assert schema["type"] == "object"
+        validator = Draft202012Validator({"type": "string", **schema["propertyNames"]})
+        for text in (
+            "0",
+            "-0",
+            "0.001",
+            "100.00",
+            "-1.50",
+            "1E+40",
+            "1.23E+42",
+            "1E-40",
+            "2.0",
+            "1e3",
+            "1.5E-3",
+        ):
+            assert validator.is_valid(text), text
+        for text in ("007", "abc", "", "01", "+1", "1.", ".5"):
+            assert not validator.is_valid(text), text
+
+    def test_bool_key_stringifies_as_true_or_false(self) -> None:
+        schema = derive_schema(DictType(key=BoolType(), value=TextType()), type_table_for())
+        assert schema == {
+            "type": "object",
+            "propertyNames": {"enum": ["true", "false"]},
+            "additionalProperties": {"type": "string"},
+        }
+
+    def test_all_nullary_enum_key_stringifies_by_effective_json_tag(self) -> None:
+        typ, typedef = enum_type("Color", {"Red": {}, "Blue": {}})
+        schema = derive_schema(DictType(key=typ, value=TextType()), type_table_for(typedef))
+        assert schema["type"] == "object"
+        assert schema["propertyNames"] == {"enum": ["Red", "Blue"]}
+
+    def test_all_nullary_enum_key_stringifies_using_json_name(self) -> None:
+        enum_id = next_decl_id()
+        member_id = next_decl_id()
+        member = RecordType(
+            name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id
+        )
+        member_def = TypeDef(
+            kind="record",
+            name="One",
+            module_id=ENTRY_ID,
+            scope_path=("Choice",),
+            external_name=ExternalName(json_name="uno"),
+            decl_node_id=member_id,
+        )
+        choice_def = TypeDef(
+            kind="enum", name="Choice", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+        )
+        typ = EnumType(name="Choice", decl_id=enum_id)
+        schema = derive_schema(
+            DictType(key=typ, value=TextType()), type_table_for(member_def, choice_def)
+        )
+        assert schema["propertyNames"] == {"enum": ["uno"]}
+
+    def test_mixed_enum_key_uses_the_entries_array_form(self) -> None:
+        typ, typedef = enum_type("Shape", {"Circle": {"radius": IntType()}, "Square": {}})
+        schema = derive_schema(DictType(key=typ, value=TextType()), type_table_for(typedef))
+        assert schema["type"] == "array"
+        items = schema["items"]
+        assert items["required"] == ["key", "value"]
+        assert items["additionalProperties"] is False
+        assert items["properties"]["value"] == {"type": "string"}
+        validator = Draft202012Validator(schema)
+        assert validator.is_valid(
+            [
+                {"key": {"$case": "Square"}, "value": "s"},
+                {"key": {"$case": "Circle", "radius": 1}, "value": "c"},
+            ]
+        )
+
+    def test_record_key_uses_the_entries_array_form(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType(), "y": IntType()})
+        schema = derive_schema(DictType(key=point, value=TextType()), type_table_for(point_def))
+        assert schema["type"] == "array"
+        assert schema["items"]["properties"]["key"] == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["x", "y"],
+            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+        }
+
+    def test_json_key_uses_the_entries_array_form(self) -> None:
+        schema = derive_schema(DictType(key=JsonType(), value=TextType()), type_table_for())
+        assert schema["type"] == "array"
+        assert schema["items"]["properties"]["key"] == {}
+
+
+# ---------------------------------------------------------------------------
 # 1b. Recursive `$defs`/`$ref` schema emission
 # ---------------------------------------------------------------------------
 

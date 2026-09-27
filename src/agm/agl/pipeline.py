@@ -2187,7 +2187,7 @@ def exception_value_to_run_error(
     from agm.agl.runtime.serialize import report_exception_fields
     from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
-    fields = report_exception_fields(exc, exception_field_encodes)
+    fields = report_exception_fields(exc, exception_field_encodes, nominals)
     line: int | None = None
     col: int | None = None
     source: str | None = None

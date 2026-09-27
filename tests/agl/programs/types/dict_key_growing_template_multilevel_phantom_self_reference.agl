@@ -1,0 +1,40 @@
+# A dict key self-reference nested several generic wrapper levels deep
+# (`Ph3[T]` wraps `Ph2[T]` wraps `Phantom[T]`, and `T` is irrelevant at
+# every level) inside a growing-template instantiation (`Perfect[K]`), and
+# the same shape recurring inside an ENUM member's own field (`EB`'s
+# `Ph2[dict[E, int]]`) rather than a record's. Pins that relevant-parameter
+# filtering propagates phantom-ness through nested generic wrappers and
+# applies equally to enum member fields.
+
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+
+record Phantom[T]
+  y: int
+
+record Ph2[T]
+  z: Phantom[T]
+
+record Ph3[T]
+  w: Ph2[T]
+  n: int
+
+record K
+  p: Ph3[dict[K, int]]
+
+enum E
+  | EA(x: int)
+  | EB(p: Ph2[dict[E, int]])
+
+program def main() -> unit =
+  let k: K = K(p = Ph3(w = Ph2(z = Phantom(y = 1)), n = 2))
+  let v: Perfect[K] = Single(value = k)
+  print(v as json)
+  let e: E = EB(p = Ph2(z = Phantom(y = 5)))
+  let u: Perfect[E] = Single(value = e)
+  print(u as json)

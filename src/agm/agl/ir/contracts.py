@@ -38,6 +38,7 @@ __all__ = [
     "DecodeSchema",
     "DictDecode",
     "DictEncode",
+    "DictKeyForm",
     "EncodeDefinition",
     "EncodePlan",
     "EncodeSchema",
@@ -71,6 +72,7 @@ __all__ = [
     "TypeTreeEntry",
     "VariantDecode",
     "VariantEncode",
+    "dict_key_form",
     "forwarded_encode_key",
     "resolve_schema_ref",
 ]
@@ -238,6 +240,8 @@ class DecodePlan:
 class ScalarEncode:
     """Encode a scalar or opaque ``json`` value."""
 
+    kind: ScalarKind
+
 
 @dataclass(frozen=True, slots=True)
 class ArrayEncode:
@@ -246,10 +250,39 @@ class ArrayEncode:
     elem: "EncodeSchema"
 
 
+class DictKeyForm(enum.Enum):
+    """Wire shape for a dict's key, decided by :func:`dict_key_form` off its own encode schema.
+
+    ``OBJECT_TEXT``: ``text`` (and text aliases) key directly as a JSON object key.
+    ``OBJECT_STRINGIFIED``: int/decimal/bool/all-nullary-enum keys stringified as a JSON
+    object key. ``ENTRIES``: every other hashable key, as a ``{"key":..., "value":...}``
+    array.
+    """
+
+    OBJECT_TEXT = "object_text"
+    OBJECT_STRINGIFIED = "object_stringified"
+    ENTRIES = "entries"
+
+
 @dataclass(frozen=True, slots=True)
 class DictEncode:
-    """Encode a dict by recursively encoding each value."""
+    """Encode a dict by recursively encoding each key and value.
 
+    ``key_form`` is the key's ``DictKeyForm`` (see :func:`dict_key_form`, the
+    ONE classifier used by plan building, schema derivation, and the runtime
+    for a growing template's key parameters — decoding never consults it),
+    filled once when the plan is built
+    (``type_schema._emit_encode_body``/``_build_template_encode_plan``)
+    — it is ``None`` ONLY when ``key`` is a growing template's own
+    :class:`TypeParameterEncode`, whose concrete key type is not known until
+    the schema is resolved (substituted or followed through a ``$defs``
+    reference) at each call site; there ``runtime.serialize``'s
+    ``_encode_dict`` applies the classifier itself, after resolving the key
+    schema (``_resolve``), at encode time.
+    """
+
+    key_form: "DictKeyForm | None"
+    key: "EncodeSchema"
     value: "EncodeSchema"
 
 
@@ -359,6 +392,29 @@ class EncodePlan:
 
     root: EncodeSchema
     definitions: "tuple[EncodeDefinition, ...]" = ()
+
+
+def dict_key_form(schema: EncodeSchema) -> DictKeyForm:
+    """Classify a dict key's wire shape from its own, already-RESOLVED encode schema.
+
+    *schema* must already be resolved past any ``TypeParameterEncode``/
+    ``RefEncode`` indirection. The main site is plan-build time —
+    ``type_schema``'s own schema-derivation walk and its encode-plan builders
+    (``_emit_encode_body``/``_build_template_encode_plan``), which fill
+    ``DictEncode.key_form`` once; ``runtime.serialize``'s ``_encode_dict``
+    calls this only for a growing template's own key type-parameter, whose
+    concrete shape is not known until encode time. This is the ONE
+    classifier either site consults; see ``DictKeyForm``.
+    """
+    if isinstance(schema, ScalarEncode):
+        if schema.kind is ScalarKind.TEXT:
+            return DictKeyForm.OBJECT_TEXT
+        if schema.kind is ScalarKind.JSON:
+            return DictKeyForm.ENTRIES
+        return DictKeyForm.OBJECT_STRINGIFIED
+    if isinstance(schema, EnumEncode) and all(not variant.fields for variant in schema.variants):
+        return DictKeyForm.OBJECT_STRINGIFIED
+    return DictKeyForm.ENTRIES
 
 
 def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:
@@ -543,7 +599,7 @@ class TypeNode:
     ``doc`` is the declaration's ``@doc``. ``nominal`` identifies a record,
     enum, or member declaration. ``fields`` (records, members) and
     ``members`` (enums, as ``(json_tag, member)``) keep declaration order;
-    ``items``/``values`` are an array's elements and a dict's values.
+    ``items`` is an array's elements, ``keys``/``values`` are a dict's keys and values.
     """
 
     kind: TypeNodeKind
@@ -554,6 +610,7 @@ class TypeNode:
     fields: tuple[TypeNodeField, ...] = ()
     members: "tuple[tuple[str, TypeNode], ...]" = ()
     items: "TypeTreeEntry | None" = None
+    keys: "TypeTreeEntry | None" = None
     values: "TypeTreeEntry | None" = None
 
 

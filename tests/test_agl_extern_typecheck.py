@@ -118,6 +118,12 @@ def reject_extern(source: str, capabilities: HostCapabilities | None = None) -> 
     return exc_info.value
 
 
+def _span_text(source: str, err: AglTypeError) -> str:
+    """The exact source substring *err*'s span covers, to name its culprit structurally
+    (never the error message, which is presentation only)."""
+    return source[err.span.start_offset : err.span.end_offset]
+
+
 def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
     """Build and typecheck a multi-module graph; returns the ``CheckedProgram``."""
     graph = make_graph_from_files(tmp_path, modules)
@@ -270,21 +276,24 @@ class TestExternDictKeyCrossability:
         check_extern("extern def f(d: dict[text, int]) -> int\n0")
 
     def test_non_text_keyed_dict_param_rejected(self) -> None:
-        err = reject_extern("extern def f(d: dict[int, text]) -> int\n0")
-        assert "extern boundary" in str(err).lower()
+        source = "extern def f(d: dict[int, text]) -> int\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "d: dict[int, text]"
 
     def test_non_text_keyed_dict_return_rejected(self) -> None:
-        err = reject_extern("extern def f(x: int) -> dict[int, text]\n0")
-        assert "extern boundary" in str(err).lower()
+        source = "extern def f(x: int) -> dict[int, text]\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "extern def f(x: int) -> dict[int, text]"
 
     def test_non_text_keyed_dict_nested_in_record_field_rejected(self) -> None:
         source = "record Box\n  d: dict[int, text]\nextern def f(b: Box) -> int\n0"
         err = reject_extern(source)
-        assert "extern boundary" in str(err).lower()
+        assert _span_text(source, err) == "b: Box"
 
     def test_non_text_keyed_dict_nested_in_callback_param_rejected(self) -> None:
-        err = reject_extern("extern def f(cb: (dict[int, text]) -> unit) -> int\n0")
-        assert "extern boundary" in str(err).lower()
+        source = "extern def f(cb: (dict[int, text]) -> unit) -> int\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "cb: (dict[int, text]) -> unit"
 
     def test_host_minted_opaque_type_param_permitted(self) -> None:
         check_extern("extern def f(s: Session) -> int\n0")
@@ -300,7 +309,40 @@ class TestExternDictKeyCrossability:
     def test_generic_key_param_instantiated_at_non_text_rejected(self) -> None:
         source = "record Box[K]\n  d: dict[K, int]\nextern def f(b: Box[int]) -> int\n0"
         err = reject_extern(source)
-        assert "extern boundary" in str(err).lower()
+        assert _span_text(source, err) == "b: Box[int]"
+
+    def test_generic_key_param_transitive_through_nominal_argument_rejected(self) -> None:
+        """A key parameter propagates through a nominal field's own type argument:
+        Outer[T] holds Box[T] in a field, so T is a key parameter of Outer too.
+        """
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[T]\n"
+            "extern def f(o: Outer[int]) -> int\n"
+            "0"
+        )
+        err = reject_extern(source)
+        assert _span_text(source, err) == "o: Outer[int]"
+
+    def test_compound_key_argument_rejected_regardless_of_its_own_type_parameter(self) -> None:
+        """``Box[Wrap[T]]`` never has a text key, whatever ``T`` is: ``Wrap[T]`` is a
+        compound argument, so it fails the extern key rule outright (not merely
+        deferred), even instantiated at ``text``.
+        """
+        source = (
+            "record Wrap[T]\n"
+            "  x: T\n"
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[Wrap[T]]\n"
+            "extern def f(o: Outer[text]) -> int\n"
+            "0"
+        )
+        err = reject_extern(source)
+        assert _span_text(source, err) == "o: Outer[text]"
 
     def test_wildcard_receiver_key_slot_rejected(self) -> None:
         """A `_` receiver-prefix wildcard key still rejects for extern crossability.

@@ -739,12 +739,17 @@ def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("None", (), none)),
+        variants=(
+            VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+            VariantDescriptor("None", (), none, "None", ()),
+        ),
     )
     return nominal, synthesize_nominal_classes(
         (
             descriptor,
-            NominalDescriptor(some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",)),
+            NominalDescriptor(
+                some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",), ("value",)
+            ),
             NominalDescriptor(none, ENTRY_ID, ("Choice",), "None", NominalKind.RECORD),
         )
     )[nominal]
@@ -1092,7 +1097,10 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("Gone", (), gone)),
+        variants=(
+            VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+            VariantDescriptor("Gone", (), gone, "Gone", ()),
+        ),
     )
     classes = synthesize_nominal_classes((first,))
     enum_cls = classes[nominal]
@@ -1104,7 +1112,7 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value", "extra"), some),),
+        variants=(VariantDescriptor("Some", ("value", "extra"), some, "Some", ("value", "extra")),),
     )
     reused = synthesize_nominal_classes((second,), classes)
 
@@ -1126,7 +1134,7 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
             (),
             "Left",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Shared", ("value",), record),),
+            variants=(VariantDescriptor("Shared", ("value",), record, "Shared", ("value",)),),
         ),
         NominalDescriptor(
             right,
@@ -1134,7 +1142,7 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
             (),
             "Right",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Shared", ("value",), record),),
+            variants=(VariantDescriptor("Shared", ("value",), record, "Shared", ("value",)),),
         ),
     )
 
@@ -1160,7 +1168,7 @@ def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None
             (),
             "Step",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Go", ("amount",), record),),
+            variants=(VariantDescriptor("Go", ("amount",), record, "Go", ("amount",)),),
         ),
     )
     classes = synthesize_nominal_classes(descriptors)
@@ -1187,13 +1195,15 @@ def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_nam
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some),),
+        variants=(VariantDescriptor("Some", ("value",), some, "Some", ("val",)),),
     )
     classes = synthesize_nominal_classes((descriptor,))
     instance = classes[nominal].Some(value=1)
 
     assert decode_boundary_value(instance) == RecordValue(some, {"value": IntValue(1)})
-    assert getattr(classes[nominal].Some, "_agl_descriptor").display_name == "Choice::Some"
+    member_descriptor = getattr(classes[nominal].Some, "_agl_descriptor")
+    assert member_descriptor.display_name == "Choice::Some"
+    assert member_descriptor.field_json_names == ("val",)
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:

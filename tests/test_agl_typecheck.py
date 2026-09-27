@@ -14187,11 +14187,11 @@ class TestGenericDictKeyParamDeferral:
         source = 'record Box[K]\n  d: dict[K, int]\nlet b: Box[text] = Box(d = {"a": 1})\nb as json'
         accept_type(source)
 
-    def test_own_type_param_key_instantiated_at_int_rejected_as_json(self) -> None:
+    def test_own_type_param_key_instantiated_at_a_non_hashable_type_rejected_as_json(self) -> None:
         err = reject_type(
-            "record Box[K]\n  d: dict[K, int]\nlet b: Box[int] = Box(d = {})\nb as json"
+            "record Box[K]\n  d: dict[K, int]\nlet b: Box[array[int]] = Box(d = {})\nb as json"
         )
-        assert "json" in str(err).lower()
+        assert isinstance(err, AglTypeError)
 
     def test_own_type_param_key_instantiated_at_text_castable_from_json(self) -> None:
         source = (
@@ -14211,7 +14211,7 @@ class TestGenericDictKeyParamDeferral:
             "let b = j as Box[int]\n"
             "b"
         )
-        assert "json" in str(err).lower()
+        assert isinstance(err, AglTypeError)
 
     def test_own_type_param_key_transitive_through_nominal_argument(self) -> None:
         """A key parameter propagates through a nominal field's own type argument:
@@ -14227,17 +14227,28 @@ class TestGenericDictKeyParamDeferral:
         )
         accept_type(source)
 
+    def test_own_type_param_key_transitive_through_nominal_argument_at_int(self) -> None:
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[T]\n"
+            "let o: Outer[int] = Outer(b = Box(d = {1: 1}))\n"
+            "o as json"
+        )
+        accept_type(source)
+
     def test_own_type_param_key_transitive_through_nominal_argument_rejected(self) -> None:
         source = (
             "record Box[K]\n"
             "  d: dict[K, int]\n"
             "record Outer[T]\n"
             "  b: Box[T]\n"
-            "let o: Outer[int] = Outer(b = Box(d = {}))\n"
+            "let o: Outer[array[int]] = Outer(b = Box(d = {}))\n"
             "o as json"
         )
         err = reject_type(source)
-        assert "json" in str(err).lower()
+        assert isinstance(err, AglTypeError)
 
 
 class TestBuiltinCallInGenericSlot:

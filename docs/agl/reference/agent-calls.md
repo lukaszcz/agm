@@ -490,6 +490,9 @@ mechanically from the target type:
 | record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` keyed by effective JSON name |
 | enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name, and `additionalProperties: false` |
 
+A target that reaches a dict with a non-`text` key is a static error: such a
+dict [does not decode](types.md#convertibility-to-json).
+
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a
 top-level `"$defs"` object when it is

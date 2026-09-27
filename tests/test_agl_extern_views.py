@@ -254,7 +254,11 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
             scope_path=(),
             declared_name="Event",
             kind=NominalKind.ENUM,
-            variants=(VariantDescriptor("Changed", ("value", "fixed"), member_nominal),),
+            variants=(
+                VariantDescriptor(
+                    "Changed", ("value", "fixed"), member_nominal, "Changed", ("value", "fixed")
+                ),
+            ),
         ),
         NominalDescriptor(
             nominal=member_nominal,
@@ -263,6 +267,7 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
             declared_name="Changed",
             kind=NominalKind.RECORD,
             fields=("value", "fixed"),
+            field_json_names=("value", "fixed"),
             mutable_fields=frozenset({"value"}),
         ),
     )

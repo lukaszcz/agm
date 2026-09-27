@@ -1,0 +1,23 @@
+{
+  "scenarios": [
+    {
+      "name": "uncaught_exception_untyped_dict_keys_match_typed_field_tags",
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {
+            "colors": [
+              {"key": {"$case": "Red"}, "value": {"$case": "None"}},
+              {"key": {"$case": "bleu"}, "value": {"$case": "None"}},
+              {"key": {"$case": "gr"}, "value": {"$case": "None"}}
+            ],
+            "c": {"$case": "bleu"}
+          },
+          "message_contains": [
+            "boom"
+          ]
+        }
+      }
+    }
+  ]
+}

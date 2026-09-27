@@ -31,7 +31,13 @@ from agm.agl.semantics.analyses import (
 )
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    BadDictKey,
+    BadDictKeyField,
+    BadKeyArgument,
+    FreeTypeVar,
     MethodDef,
+    NonDataField,
+    NonDataLeaf,
     TypeDef,
     TypeTable,
     cast_classification,
@@ -3929,10 +3935,17 @@ class TestIsJsonConvertible:
         )
 
     def test_dict_follows_its_key_type_too(self) -> None:
-        # A non-convertible key disqualifies the dict even with a good value.
+        # A non-Hashable key disqualifies the dict even with a good value; any
+        # Hashable key (not just text) converts, each with its own wire form.
         table = TypeTable()
         assert is_json_convertible(DictType(key=UnitType(), value=IntType()), table) is False
         assert is_json_convertible(DictType(key=TextType(), value=IntType()), table) is True
+        assert is_json_convertible(DictType(key=IntType(), value=IntType()), table) is True
+        # array is itself JSON-convertible as a value, but never Hashable as a key.
+        assert (
+            is_json_convertible(DictType(key=ArrayType(elem=IntType()), value=IntType()), table)
+            is False
+        )
 
     def test_recursive_declaration_converts(self) -> None:
         table = TypeTable()
@@ -4020,15 +4033,14 @@ class TestJsonRepresentationObstacle:
     def test_convertible_type_has_no_obstacle(self) -> None:
         table = _bad_record_table()
         good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030))
-        assert table.json_representation_obstacle(good) is None
+        assert table.json_representation_culprit(good) is None
 
     def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
         table = TypeTable()
-        message = table.json_representation_obstacle(
+        culprit = table.json_representation_culprit(
             DictType(key=TextType(), value=ArrayType(elem=UnitType()))
         )
-        assert message is not None
-        assert "unit" in message
+        assert culprit == NonDataLeaf(UnitType())
 
     def test_culprit_is_reported_through_a_nested_declaration(self) -> None:
         table = _bad_record_table()
@@ -4048,10 +4060,10 @@ class TestJsonRepresentationObstacle:
             )
         )
         outer = RecordType(name="Outer", module_id=ENTRY_ID, decl_id=700033)
-        message = table.json_representation_obstacle(outer)
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
+        culprit = table.json_representation_culprit(outer)
+        assert culprit == NonDataField(
+            table.typedef_of(700029), "a", FunctionType(params=(), result=UnitType())
+        )
 
     def test_culprit_search_visits_a_shared_declaration_once(self) -> None:
         # Two independent paths reach Mid, whose own fields are all clean
@@ -4093,12 +4105,12 @@ class TestJsonRepresentationObstacle:
                 decl_node_id=700034,
             )
         )
-        message = table.json_representation_obstacle(
+        culprit = table.json_representation_culprit(
             RecordType(name="Top", module_id=ENTRY_ID, decl_id=700034)
         )
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
+        assert culprit == NonDataField(
+            table.typedef_of(700029), "a", FunctionType(params=(), result=UnitType())
+        )
 
     def test_enum_variant_field_is_named(self) -> None:
         table = TypeTable()
@@ -4111,10 +4123,12 @@ class TestJsonRepresentationObstacle:
             ),
         )
         holder = EnumType(name="Holder", module_id=ENTRY_ID, decl_id=700023)
-        message = table.json_representation_obstacle(holder)
-        assert message is not None
-        assert "'run'" in message
-        assert "Holder" in message
+        culprit = table.json_representation_culprit(holder)
+        assert culprit is not None
+        assert isinstance(culprit, NonDataField)
+        assert culprit.field_name == "run"
+        assert culprit.field_type == FunctionType(params=(), result=IntType())
+        assert culprit.typedef.name == "Holder"
 
     def test_exception_descendant_poisons_its_ancestor(self) -> None:
         table = TypeTable()
@@ -4139,20 +4153,255 @@ class TestJsonRepresentationObstacle:
         )
         base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
         assert is_json_convertible(base, table) is False
-        message = table.json_representation_obstacle(base)
-        assert message is not None
-        assert "'handler'" in message
-        assert "Child" in message
+        culprit = table.json_representation_culprit(base)
+        assert culprit == NonDataField(
+            table.typedef_of(700012),
+            "handler",
+            FunctionType(params=(IntType(),), result=IntType()),
+        )
 
     def test_type_variable_is_named_when_nothing_else_is_to_blame(self) -> None:
         table = TypeTable()
-        message = table.json_representation_obstacle(ArrayType(elem=TypeVarType("T")))
-        assert message is not None
-        assert "'T'" in message
+        culprit = table.json_representation_culprit(ArrayType(elem=TypeVarType("T")))
+        assert culprit == FreeTypeVar("T")
 
     def test_unresolved_inference_variable_has_no_specific_obstacle(self) -> None:
         table = TypeTable()
-        assert table.json_representation_obstacle(ArrayType(elem=InferenceVarType(1))) is None
+        assert table.json_representation_culprit(ArrayType(elem=InferenceVarType(1))) is None
+
+    def test_non_hashable_dict_key_is_named(self) -> None:
+        table = TypeTable()
+        culprit = table.json_representation_culprit(
+            DictType(key=ArrayType(elem=IntType()), value=TextType())
+        )
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_non_hashable_dict_key_through_a_nested_declaration_is_named(self) -> None:
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=700035,
+            ),
+        )
+        holder = RecordType(
+            name="Holder",
+            module_id=ENTRY_ID,
+            decl_id=700035,
+            type_args=(ArrayType(elem=IntType()),),
+        )
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(700035), "K", ArrayType(elem=IntType())
+        )
+
+    def test_non_hashable_dict_key_through_a_field_argument_is_named(self) -> None:
+        """A field whose own type supplies the bad key argument, rather than the
+        examined type's own handle, is blamed by field name."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=700035,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Outer",
+                module_id=ENTRY_ID,
+                fields=(
+                    (
+                        "b",
+                        RecordType(
+                            name="Holder",
+                            module_id=ENTRY_ID,
+                            decl_id=700035,
+                            type_args=(ArrayType(elem=IntType()),),
+                        ),
+                    ),
+                ),
+                decl_node_id=700036,
+            ),
+        )
+        outer = RecordType(name="Outer", module_id=ENTRY_ID, decl_id=700036)
+        culprit = table.json_representation_culprit(outer)
+        assert culprit == BadKeyArgument(
+            table.typedef_of(700036), "b", table.typedef_of(700035), "K", ArrayType(elem=IntType())
+        )
+
+    def test_non_hashable_dict_key_nested_inside_a_dict_value_is_named(self) -> None:
+        """A dict whose own key is fine still recurses into its value to find a bad key."""
+        table = TypeTable()
+        inner = DictType(key=ArrayType(elem=IntType()), value=TextType())
+        culprit = table.json_representation_culprit(DictType(key=IntType(), value=inner))
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_non_hashable_dict_key_nested_inside_an_array_is_named(self) -> None:
+        """A structural container other than a dict still recurses to find a bad dict key."""
+        table = TypeTable()
+        culprit = table.json_representation_culprit(
+            ArrayType(elem=DictType(key=ArrayType(elem=IntType()), value=TextType()))
+        )
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_bad_dict_key_field_is_named_when_no_argument_supplies_it(self) -> None:
+        """A field whose OWN body (not a type-parameter argument) is a bad dict key,
+        assuming the declaration's own params are Hashable, is a BadDictKeyField."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("d", DictType(key=ArrayType(elem=IntType()), value=IntType())),),
+                decl_node_id=700037,
+            ),
+        )
+        holder = RecordType(name="Holder", module_id=ENTRY_ID, decl_id=700037)
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadDictKeyField(table.typedef_of(700037), "d", ArrayType(elem=IntType()))
+
+    def test_bad_dict_key_field_skips_the_declarations_own_deferred_key_parameter(self) -> None:
+        """A generic ``Holder[K]``'s own key parameter ``K`` is assumed ``Hashable``
+        (deferred to whatever argument a reference supplies) -- ``d: dict[K, int]``
+        must never be wrongly named the culprit; ``e``'s own concrete bad key is."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(
+                    ("d", DictType(key=TypeVarType("K"), value=IntType())),
+                    ("e", DictType(key=ArrayType(elem=IntType()), value=IntType())),
+                ),
+                decl_node_id=800001,
+            ),
+        )
+        holder = RecordType(
+            name="Holder", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=800001
+        )
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadDictKeyField(table.typedef_of(800001), "e", ArrayType(elem=IntType()))
+
+    def test_bad_key_argument_nested_inside_an_array_is_named(self) -> None:
+        """A bad key argument reached only through a nested handle (not *t* itself)
+        is still named -- here ``t`` is an ``array``, and the culprit's own handle
+        (``Box[array[int]]``) is one hop inside its element."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800010,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800010, type_args=(ArrayType(elem=IntType()),)
+        )
+        culprit = table.json_representation_culprit(ArrayType(elem=box))
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(800010), "K", ArrayType(elem=IntType())
+        )
+
+    def test_bad_key_argument_nested_inside_an_enum_wrapper_is_named(self) -> None:
+        """A bad key argument reached through a generic enum's own type argument
+        (not one of the enum's own key parameters) is still named, one hop in."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800011,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800011, type_args=(ArrayType(elem=IntType()),)
+        )
+        register_typedef(
+            table,
+            enum_typedef(
+                "Wrap", {"V": {"v": TypeVarType("T")}}, type_params=("T",), decl_id=800012
+            ),
+        )
+        wrap = EnumType(name="Wrap", module_id=ENTRY_ID, decl_id=800012, type_args=(box,))
+        culprit = table.json_representation_culprit(wrap)
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(800011), "K", ArrayType(elem=IntType())
+        )
+
+    def test_free_type_variable_key_argument_is_named_not_a_bad_argument(self) -> None:
+        """A bare free type variable filling another declaration's key parameter is
+        FreeTypeVar -- its real Hashable-ness is unresolved, not wrongly blamed as a
+        concrete bad argument."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800013,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800013, type_args=(TypeVarType("T"),)
+        )
+        culprit = table.json_representation_culprit(ArrayType(elem=box))
+        assert culprit == FreeTypeVar("T")
+
+    def test_free_type_variable_key_argument_is_named_directly_not_a_bad_argument(self) -> None:
+        """The same free-type-variable key argument, examined directly (``Box[T]``
+        itself is *t*, not reached one hop inside a wrapper) is still FreeTypeVar."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800014,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800014, type_args=(TypeVarType("T"),)
+        )
+        culprit = table.json_representation_culprit(box)
+        assert culprit == FreeTypeVar("T")
+
+    def test_free_type_variable_direct_dict_key_is_named_not_a_bad_key(self) -> None:
+        """A bare free type variable as a dict's own direct key is FreeTypeVar, not
+        wrongly blamed as a concrete non-Hashable BadDictKey."""
+        table = TypeTable()
+        culprit = table.json_representation_culprit(DictType(key=TypeVarType("T"), value=IntType()))
+        assert culprit == FreeTypeVar("T")
 
 
 # ---------------------------------------------------------------------------

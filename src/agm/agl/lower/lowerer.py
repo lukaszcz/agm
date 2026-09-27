@@ -131,15 +131,17 @@ from agm.agl.ir.program import (
     FunctionDescriptor,
     IrFunctionBody,
     NominalDescriptor,
-    NominalKind,
     SourceFile,
     SymbolDescriptor,
-    VariantDescriptor,
 )
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import RecipeCastKind, compile_recipe
-from agm.agl.lower.nominal_descriptors import exception_descriptor
+from agm.agl.lower.nominal_descriptors import (
+    enum_descriptor,
+    exception_descriptor,
+    record_descriptor,
+)
 from agm.agl.matchcompile import (
     BoolConstructor,
     CompiledMatchSite,
@@ -155,7 +157,6 @@ from agm.agl.matchcompile import (
     OccurrenceId,
 )
 from agm.agl.modules.ids import (
-    RESERVED_ID,
     STD_CONFIG_ID,
     STD_ENV_ID,
     ModuleId,
@@ -171,7 +172,6 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     builtin_type_static_kind,
 )
-from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -319,33 +319,14 @@ def _add_builtin_nominals(
             continue
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
-            nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                module_id=RESERVED_ID,
-                scope_path=(),
-                declared_name=name,
-                kind=NominalKind.RECORD,
-                fields=tuple(type_table.record_fields(typ).keys()),
-                mutable_fields=type_table.record_mutable_fields(typ),
-                variants=(),
-                positional_fields=positional_field_names(type_table.field_kinds(typ)),
+            nominals[nominal] = record_descriptor(
+                type_table.typedef_of(typ.decl_id), typ, type_table, bears_name_path=True
             )
             continue
         if isinstance(typ, ExceptionType):
             continue
-        nominals[nominal] = NominalDescriptor(
-            nominal=nominal,
-            module_id=RESERVED_ID,
-            scope_path=(),
-            declared_name=name,
-            kind=NominalKind.ENUM,
-            fields=(),
-            variants=tuple(
-                VariantDescriptor(
-                    vname, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
-                )
-                for vname, member in type_table.enum_member_names(typ).items()
-            ),
+        nominals[nominal] = enum_descriptor(
+            type_table.typedef_of(typ.decl_id), typ, type_table, bears_name_path=True
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():

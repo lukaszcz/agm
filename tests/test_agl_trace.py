@@ -1390,6 +1390,30 @@ class TestCompanionTraceHook:
         assert probe_recs[0]["number"] == "<float has no JSON representation>"
         assert probe_recs[0]["decimal"] == "<Decimal has no JSON representation>"
 
+    def test_companion_trace_nested_non_text_keyed_mapping_uses_entries_form(
+        self, tmp_path: Path
+    ) -> None:
+        """A nested non-str-keyed mapping becomes a ``[{"key": ..., "value": ...}]`` array,
+        not a lossy ``str()``-collapsed object (int ``1`` and text ``"1"`` stay distinct
+        keys); the top-level payload itself stays an ordinary object."""
+        trace_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'nested': {1: 'a', '1': 'b'}})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(trace_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["nested"] == [{"key": 1, "value": "a"}, {"key": "1", "value": "b"}]
+
     def test_companion_trace_direct_call_outside_evaluation_is_a_silent_noop(
         self, tmp_path: Path
     ) -> None:

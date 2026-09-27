@@ -70,8 +70,8 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
             declared_name="Color",
             kind=NominalKind.ENUM,
             variants=(
-                VariantDescriptor("Plain", (), _PLAIN),
-                VariantDescriptor("With", ("value", "unused"), _WITH),
+                VariantDescriptor("Plain", (), _PLAIN, "Plain", ()),
+                VariantDescriptor("With", ("value", "unused"), _WITH, "With", ("value", "unused")),
             ),
         ),
         _PLAIN: NominalDescriptor(_PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD),
@@ -82,6 +82,7 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
             "With",
             NominalKind.RECORD,
             ("value", "unused"),
+            field_json_names=("value", "unused"),
         ),
     }
 
@@ -111,6 +112,7 @@ def test_validation_requires_enum_member_record() -> None:
         "Plain",
         NominalKind.RECORD,
         ("unexpected",),
+        field_json_names=("unexpected",),
     )
     with pytest.raises(InvalidIrError, match="fields"):
         validate_ir(_program(enum_value, nominals=wrong_shape))

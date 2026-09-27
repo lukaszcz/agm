@@ -222,15 +222,57 @@ class LeafPolicy:
     ``non_data_bad`` — whether a function or ``unit`` leaf is bad outright;
     when ``False``, a function leaf is instead evaluated by recursing into
     its parameter and result types (``unit`` is then never bad).
-    ``text_dict_keys_only`` — whether a ``dict`` whose key type is not
-    ``text`` is bad outright (still subject to ``recurse_containers`` for a
-    text-keyed dict's value type).
+    ``dict_key_ok`` — ``None`` when a ``dict``'s key type is never itself bad
+    (its own recursion covers key and value alike); otherwise a per-policy
+    key-form check over a key position (a direct ``dict`` key, or a type
+    argument filling another declaration's own key parameter): the key is bad
+    outright unless the check accepts it (still subject to
+    ``recurse_containers`` for the value type either way). Its third
+    argument is the set of the enclosing declaration's own type parameters
+    to assume satisfy the rule — deferred, like any bare type variable, to
+    whatever concrete argument a later reference supplies for them; empty at
+    a closed, concrete reference site.
     """
 
     recurse_containers: bool
     var_fields_bad: bool
     non_data_bad: bool
-    text_dict_keys_only: bool
+    dict_key_ok: Callable[[Type, "TypeTable", frozenset[str]], bool] | None
+
+
+def _dict_key_is_hashable(
+    key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
+) -> bool:
+    """``JSON_CONVERTIBLE``'s dict-key rule: the key must be ``Hashable``.
+
+    *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`.
+    """
+    bounds = {p: frozenset({ConstraintKind.HASHABLE}) for p in assume_ok}
+    return satisfies(key, ConstraintKind.HASHABLE, table, bounds)
+
+
+def dict_key_is_text_wire_key(
+    key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
+) -> bool:
+    """Return whether *key* has a wire form as a ``dict`` key crossing a decode/extern boundary.
+
+    Only a literal ``text`` key has one (an FFI view has no stringified/
+    entries form) — every other key type, a nominal type filling the
+    position included, fails immediately no matter its own arguments.
+    *assume_ok* (see :attr:`LeafPolicy.dict_key_ok`) defers a bare type
+    variable among them instead of failing outright. Shared by
+    :func:`is_extern_crossable`,
+    ``semantics.analyses.compute_declaration_flags``'s ``EXTERN_CROSSABLE``
+    leaf policy, and the checker's own program-parameter/agent-output
+    wire-serializability walk — all decode-direction or FFI boundaries. The
+    encode direction (JSON schema/``as json``/trace) instead accepts any
+    ``Hashable`` key (see :func:`is_json_convertible`). *table* is unused: a
+    ``text``/type-variable check needs no lookup; it is only part of the
+    signature to match :attr:`LeafPolicy.dict_key_ok`.
+    """
+    if isinstance(key, TypeVarType):
+        return key.name in assume_ok
+    return isinstance(key, TextType)
 
 
 #: Property -> the policy computing its declaration-level "does not satisfy"
@@ -238,36 +280,37 @@ class LeafPolicy:
 #: declaration that unconditionally reaches ``unit``/a function type,
 #: recursing into ``array``/``dict``; HASHABLE flags one that is not deeply
 #: immutable data — a function/unit/``var`` field, or an ``array``/``dict``
-#: outright (never recursed into); JSON_CONVERTIBLE additionally flags a
-#: non-``text``-keyed dict (only a ``text`` key has a wire form);
-#: EXTERN_CROSSABLE is the same as JSON_CONVERTIBLE except a function leaf is
-#: data-crossable (an extern parameter may be a callback), so it recurses
-#: into function types instead of flagging them.
+#: outright (never recursed into); JSON_CONVERTIBLE additionally flags a dict
+#: keyed by a non-``Hashable`` type; EXTERN_CROSSABLE instead requires a
+#: ``text`` key (the only key type with an FFI wire form) and, unlike
+#: JSON_CONVERTIBLE, a function leaf is data-crossable (an extern parameter
+#: may be a callback), so it recurses into function types instead of
+#: flagging them.
 LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
     {
         DataProperty.EQ: LeafPolicy(
             recurse_containers=True,
             var_fields_bad=False,
             non_data_bad=True,
-            text_dict_keys_only=False,
+            dict_key_ok=None,
         ),
         DataProperty.HASHABLE: LeafPolicy(
             recurse_containers=False,
             var_fields_bad=True,
             non_data_bad=True,
-            text_dict_keys_only=False,
+            dict_key_ok=None,
         ),
         DataProperty.JSON_CONVERTIBLE: LeafPolicy(
             recurse_containers=True,
             var_fields_bad=False,
             non_data_bad=True,
-            text_dict_keys_only=True,
+            dict_key_ok=_dict_key_is_hashable,
         ),
         DataProperty.EXTERN_CROSSABLE: LeafPolicy(
             recurse_containers=True,
             var_fields_bad=False,
             non_data_bad=False,
-            text_dict_keys_only=True,
+            dict_key_ok=dict_key_is_text_wire_key,
         ),
     }
 )
@@ -415,6 +458,70 @@ class TypeDef:
             scope_path=self.scope_path,
             decl_id=self.decl_node_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class NonDataLeaf:
+    """A non-data type (``unit`` or function) reached directly in a type's own structure."""
+
+    leaf: Type
+
+
+@dataclass(frozen=True, slots=True)
+class NonDataField:
+    """A declaration field whose own type structurally reaches a non-data leaf."""
+
+    typedef: TypeDef
+    field_name: str
+    field_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadDictKey:
+    """A non-``Hashable`` dict key type reached directly in a type's own structure."""
+
+    key_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadDictKeyField:
+    """A declaration field whose own dict key type is directly not ``Hashable``."""
+
+    typedef: TypeDef
+    field_name: str
+    key_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadKeyArgument:
+    """A reference supplies *argument* for *target*'s own dict-key parameter *param_name*, and
+    *argument* fails the key rule.
+
+    *source*/*field_name* name the field of *source* whose type carries the
+    offending reference, or are both ``None`` when the reference is the
+    examined type's own handle (a generic reference filling its own
+    declaration's key parameter directly, with no enclosing field).
+    """
+
+    source: TypeDef | None
+    field_name: str | None
+    target: TypeDef
+    param_name: str
+    argument: Type
+
+
+@dataclass(frozen=True, slots=True)
+class FreeTypeVar:
+    """A free type variable that may stand for a type with no JSON representation."""
+
+    name: str
+
+
+#: Why a type has no JSON representation, as one tagged structural culprit — see
+#: :meth:`TypeTable.json_representation_culprit`.
+JsonRepresentationCulprit = (
+    NonDataLeaf | NonDataField | BadDictKey | BadDictKeyField | BadKeyArgument | FreeTypeVar
+)
 
 
 class TypeTable:
@@ -1261,6 +1368,10 @@ class TypeTable:
         """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
         return self._defs[handle.decl_id].external_name
 
+    def member_json_tag(self, member: RecordType, name: str) -> str:
+        """An enum member's effective JSON ``$case`` tag (``@json-name`` ?? ``@name`` ?? *name*)."""
+        return self.external_name(member).json(name)
+
     def declaration_doc(self, handle: RecordType | EnumType) -> str | None:
         """Return a record, member, or enum declaration's recognized ``@doc`` prose."""
         return self._defs[handle.decl_id].doc
@@ -1472,7 +1583,7 @@ class TypeTable:
 
         A record and an exception convert to a JSON object of their fields, an
         enum to ``{"$case": variant, …fields}``, so the obstacles are a
-        non-data leaf or a non-``text``-keyed ``dict`` somewhere inside
+        non-data leaf or a non-``Hashable``-keyed ``dict`` somewhere inside
         (:attr:`DataProperty.JSON_CONVERTIBLE`), checked structurally via
         :func:`is_json_convertible` rather than through :func:`satisfies`.
         """
@@ -1511,14 +1622,14 @@ class TypeTable:
         exception carries no ``type_args``, so only its declaration flag
         applies.
 
-        For a ``text_dict_keys_only`` policy (``JSON_CONVERTIBLE``/
+        For a policy with ``dict_key_ok`` set (``JSON_CONVERTIBLE``/
         ``EXTERN_CROSSABLE``), the argument at a KEY parameter position
         (``DeclarationFlags.key_params`` — e.g. ``Box[K]`` with field
-        ``d: dict[K, int]``) must ADDITIONALLY satisfy
-        :func:`dict_key_has_wire_form` directly: a key parameter's own
-        occurrence in the declaration's template never flags it by itself
-        (deferred, like any bare type variable), so this is the only place
-        that check actually happens, at the concrete reference.
+        ``d: dict[K, int]``) must ADDITIONALLY satisfy that policy's own
+        ``dict_key_ok`` check directly: a key parameter's own occurrence in
+        the declaration's template never flags it by itself (deferred, like
+        any bare type variable), so this is the only place that check
+        actually happens, at the concrete reference.
         """
         flags = self._declaration_flags(prop)
         if handle.decl_id in flags.flagged:
@@ -1533,11 +1644,12 @@ class TypeTable:
             if pname in relevant
         ):
             return False
-        if not LEAF_POLICIES[prop].text_dict_keys_only:
+        dict_key_ok = LEAF_POLICIES[prop].dict_key_ok
+        if dict_key_ok is None:
             return True
         key_params = flags.key_params[handle.decl_id]
         return all(
-            dict_key_has_wire_form(arg)
+            dict_key_ok(arg, self, frozenset())
             for pname, arg in zip(typedef.type_params, handle.type_args)
             if pname in key_params
         )
@@ -1600,6 +1712,17 @@ class TypeTable:
         recursively so phantom differences nested inside them are erased too.
         """
         return self._canonical_schema_type(t, self._finite_closure_result().relevant_params)
+
+    def schema_relevant_params(self, decl_id: DeclId) -> frozenset[str]:
+        """Return the subset of *decl_id*'s own type parameters that affect its schema.
+
+        A phantom parameter (absent from this set) never reaches a field or
+        variant position, directly or through another declaration's own
+        relevant parameter, so it cannot affect *decl_id*'s emitted JSON shape;
+        an encode-plan template only takes one parameter per relevant name (see
+        ``type_schema.build_encode_plan``'s growing-template builder).
+        """
+        return self._finite_closure_result().relevant_params[decl_id]
 
     def _canonical_schema_type(
         self, t: Type, relevant_params: Mapping[DeclId, frozenset[str]]
@@ -1720,63 +1843,69 @@ class TypeTable:
     def json_representation_obstacle(self, t: Type) -> str | None:
         """Return why *t* has no JSON representation, as a diagnostic clause.
 
-        ``None`` when *t* converts (:func:`is_json_convertible` is true) or
-        when nothing more specific than "this type does not convert" can be
-        said — an unresolved inference variable, say, whose real problem is
-        inference rather than representation. Otherwise a clause naming the
-        culprit, for a caller to splice into its own sentence: a non-data type
-        reached structurally, the declaration field that carries one, or the
-        type variable that may stand for one. Shaped like
+        Thin formatter over :meth:`json_representation_culprit`: ``None``
+        when *t* converts, otherwise its structural culprit rendered into a
+        clause for a caller to splice into its own sentence. Shaped like
         :meth:`no_finite_schema_message`, whose culprit search this mirrors.
         """
-        if is_json_convertible(t, self):
+        culprit = self.json_representation_culprit(t)
+        if culprit is None:
             return None
-        leaf = _first_non_data_leaf(t)
-        if leaf is not None:
-            return f"'{leaf!r}' has no JSON representation"
-        culprit = self.first_non_data_field(t)
-        if culprit is not None:
-            typedef, field_name, field_type = culprit
-            return (
-                f"field '{field_name}' of '{qualified_decl_name(typedef)}' has type "
-                f"'{field_type!r}', which has no JSON representation"
-            )
-        type_vars = sorted(free_type_vars(t))
-        if type_vars:
-            return (
-                f"type variable '{type_vars[0]}' may stand for a type with no JSON representation"
-            )
-        return None
+        match culprit:
+            case NonDataLeaf(leaf=leaf):
+                return f"'{leaf!r}' has no JSON representation"
+            case NonDataField(typedef=typedef, field_name=field_name, field_type=field_type):
+                return (
+                    f"field '{field_name}' of '{qualified_decl_name(typedef)}' has type "
+                    f"'{field_type!r}', which has no JSON representation"
+                )
+            case BadDictKey(key_type=key_type):
+                return f"'{key_type!r}' is not Hashable, so it cannot be a dict key"
+            case BadDictKeyField(typedef=typedef, field_name=field_name, key_type=key_type):
+                return (
+                    f"field '{field_name}' of '{qualified_decl_name(typedef)}' has a dict key "
+                    f"of type '{key_type!r}', which is not Hashable"
+                )
+            case BadKeyArgument(
+                source=source,
+                field_name=field_name,
+                target=target,
+                param_name=param_name,
+                argument=argument,
+            ):
+                supplier = (
+                    f"field '{field_name}' of '{qualified_decl_name(source)}'"
+                    if source is not None and field_name is not None
+                    else "the type"
+                )
+                return (
+                    f"{supplier} supplies '{argument!r}' for '{qualified_decl_name(target)}'s "
+                    f"key parameter '{param_name}', which is not Hashable"
+                )
+            case FreeTypeVar(name=name):
+                return f"type variable '{name}' may stand for a type with no JSON representation"
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
-    def first_non_data_field(self, t: Type) -> tuple[TypeDef, str, Type] | None:
+    def first_non_data_field(self, t: Type) -> NonDataField | None:
         """Return the declaration field that costs *t* its JSON representation.
 
-        The result is ``(declaration, field name, that field's declared
-        type)``. Breadth-first from *t*'s own nominal references, so the
-        shallowest declaration carrying a non-data field is reported — the
-        most useful culprit for a use-site diagnostic — before one reachable
-        only through further hops. Follows a declaration's affected field
-        references, an exception's ``extends`` base (whose fields are
-        inherited) and its affected descendants (a value statically typed as
-        the ancestor may hold one at runtime). Never expands an instantiation,
-        so it terminates however the declarations recurse. ``None`` when no
+        Breadth-first from *t*'s own nominal references, so the shallowest
+        declaration carrying a non-data field is reported — the most useful
+        culprit for a use-site diagnostic — before one reachable only through
+        further hops. Follows a declaration's affected field references, an
+        exception's ``extends`` base (whose fields are inherited) and its
+        affected descendants (a value statically typed as the ancestor may
+        hold one at runtime). Never expands an instantiation, so it
+        terminates however the declarations recurse. ``None`` when no
         reachable declaration is to blame.
         """
-        from agm.agl.semantics.analyses import nominal_references
 
-        def culprit(decl_id: DeclId) -> tuple[TypeDef, str, Type] | None:
-            direct = self._own_non_data_field(self._defs[decl_id])
-            return None if direct is None else (self._defs[decl_id], *direct)
+        def own_culprit(typedef: TypeDef) -> NonDataField | None:
+            direct = self._own_non_data_field(typedef)
+            return None if direct is None else NonDataField(typedef, *direct)
 
-        def successors(decl_id: DeclId) -> set[DeclId]:
-            return self._affected_successors(decl_id, self._defs[decl_id])
-
-        return bfs_first(
-            (ref.decl_id for ref in nominal_references(t) if self.nominal_reaches_non_data(ref)),
-            successors,
-            culprit,
-            key=self._decl_id_sort_key,
-        )
+        return self._field_culprit(t, DataProperty.EQ, self.nominal_reaches_non_data, own_culprit)
 
     def _own_non_data_field(self, typedef: TypeDef) -> tuple[str, Type] | None:
         """Return *typedef*'s first own field whose type structurally reaches non-data."""
@@ -1787,24 +1916,180 @@ class TypeTable:
                 return field_name, template
         return None
 
-    def _affected_successors(self, decl_id: DeclId, typedef: TypeDef) -> set[DeclId]:
-        """Return the declarations *typedef* reaches non-data through.
+    def _own_dict_key_culprit(self, typedef: TypeDef) -> BadDictKeyField | BadKeyArgument | None:
+        """Return *typedef*'s first own field costing it its JSON representation via a bad key.
 
-        A field reference is a HANDLE, so it is tested with
-        :meth:`nominal_reaches_non_data`, which also consults the concrete
-        type arguments — ``Box[agent]`` is affected while ``Box`` itself is
-        not. An exception's ``extends`` base and its descendants are bare
-        declaration identities carrying no arguments, so for them the
-        declaration-level ``flags`` set is the whole answer. The two idioms
-        below are therefore not interchangeable.
+        Two shapes, tried per field in declaration order: a nominal reference
+        in the field supplying a bad argument for ANOTHER declaration's own
+        key parameter (:meth:`_key_argument_culprit`) — the more specific,
+        pinpointed cause when one applies — or, failing that, the field's own
+        type directly holding a non-``Hashable`` dict key
+        (:func:`_first_bad_dict_key`), with *typedef*'s own type parameters
+        assumed ``Hashable`` (deferred, like any bare type variable, to
+        whatever concrete argument a later reference supplies for them) so a
+        phantom or deferred parameter is never wrongly named the culprit.
         """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
-        flags = self._declaration_flags(DataProperty.EQ).flagged
+        own_params = frozenset(typedef.type_params)
+        for field_name, template in field_templates(typedef, self._defs):
+            for ref in nominal_references(template):
+                argument_culprit = self._key_argument_culprit(ref, typedef, field_name, own_params)
+                if argument_culprit is not None:
+                    return argument_culprit
+            bad_key = _first_bad_dict_key(template, self, own_params)
+            if bad_key is not None:
+                return BadDictKeyField(typedef, field_name, bad_key)
+        return None
+
+    def _key_argument_culprit(
+        self,
+        ref: Type,
+        source: TypeDef | None,
+        field_name: str | None,
+        deferred: frozenset[str],
+    ) -> BadKeyArgument | None:
+        """Return the bad argument *ref* supplies for its own declaration's key parameter, if any.
+
+        *source*/*field_name* name the field of *source* whose type carries
+        *ref* (``None``/``None`` when *ref* is itself the type under
+        examination, filling its own declaration's key parameter directly) —
+        provenance only, no bearing on which arguments are deferred. *ref*'s own
+        type parameters are irrelevant here — only *deferred* (normally
+        *source*'s own declaration parameters, or, at a top-level search with no
+        enclosing field, the examined type's own free type variables) is
+        assumed to satisfy the key rule, exactly as :func:`_key_position_ok`
+        does for any other key position.
+        """
+        if not isinstance(ref, (RecordType, EnumType)):
+            return None
+        target = self._defs[ref.decl_id]
+        key_params = self._declaration_flags(DataProperty.JSON_CONVERTIBLE).key_params[ref.decl_id]
+        for pname, arg in zip(target.type_params, ref.type_args):
+            if pname in key_params and not _dict_key_is_hashable(arg, self, deferred):
+                return BadKeyArgument(source, field_name, target, pname, arg)
+        return None
+
+    def _bad_dict_key_field_culprit(self, t: Type) -> BadDictKeyField | BadKeyArgument | None:
+        """Return the declaration field costing *t* its JSON representation via a bad dict key.
+
+        Mirrors :meth:`first_non_data_field`, hunting a bad dict key
+        (:meth:`_own_dict_key_culprit`) instead of a non-data leaf.
+        """
+
+        def reaches_bad(ref: RecordType | EnumType | ExceptionType) -> bool:
+            return not self.nominal_is_json_convertible(ref)
+
+        return self._field_culprit(
+            t, DataProperty.JSON_CONVERTIBLE, reaches_bad, self._own_dict_key_culprit
+        )
+
+    def json_representation_culprit(self, t: Type) -> JsonRepresentationCulprit | None:
+        """Return why *t* has no JSON representation, as a structural culprit.
+
+        ``None`` when *t* converts (:func:`is_json_convertible` is true) or when
+        nothing more specific than "this type does not convert" can be said — an
+        unresolved inference variable, say, whose real problem is inference
+        rather than representation. Otherwise one tagged culprit, tried in this
+        order: (1) a non-data leaf reached structurally; (2) a bad argument
+        supplied for a dict-key parameter by *t* itself or by any nominal
+        handle nested inside it; (3) the declaration field that carries a
+        non-data leaf; (4) a non-``Hashable`` dict key reached directly in
+        *t*'s own structure; (5) the declaration field that carries a bad
+        dict key, or a bad argument it supplies for a nested declaration's key
+        parameter; (6) the free type variable that may stand for one. Shaped
+        like :meth:`no_finite_schema_message`, whose culprit search this
+        mirrors; :meth:`json_representation_obstacle` formats the result.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        if is_json_convertible(t, self):
+            return None
+        leaf = _first_non_data_leaf(t)
+        if leaf is not None:
+            return NonDataLeaf(leaf)
+        # A free type variable at a key-argument or direct-key position is
+        # deferred here too: its real Hashable-ness depends on whatever concrete
+        # type a later reference supplies, so it must fall through to the
+        # FreeTypeVar culprit below rather than being wrongly named a bad
+        # argument or a bad key outright.
+        deferred = free_type_vars(t)
+        for ref in nominal_references(t):
+            own_argument = self._key_argument_culprit(ref, None, None, deferred)
+            if own_argument is not None:
+                return own_argument
+        field_culprit = self.first_non_data_field(t)
+        if field_culprit is not None:
+            return field_culprit
+        bad_key = _first_bad_dict_key(t, self, deferred)
+        if bad_key is not None:
+            return BadDictKey(bad_key)
+        bad_key_field = self._bad_dict_key_field_culprit(t)
+        if bad_key_field is not None:
+            return bad_key_field
+        type_vars = sorted(deferred)
+        if type_vars:
+            return FreeTypeVar(type_vars[0])
+        return None
+
+    def _field_culprit[R](
+        self,
+        t: Type,
+        prop: DataProperty,
+        reaches_bad: Callable[[RecordType | EnumType | ExceptionType], bool],
+        own_culprit: Callable[[TypeDef], R],
+    ) -> R | None:
+        """Breadth-first search from *t*'s own nominal references for the first declaration
+        *own_culprit* names.
+
+        Shared by :meth:`first_non_data_field` and :meth:`_bad_dict_key_field_culprit`:
+        *prop* selects which declaration-level fixpoint successors follow
+        (:meth:`_affected_successors`), *reaches_bad* which references seed
+        and expand the search, and *own_culprit* what a visited declaration's
+        own fields are checked for (already optional in *R* itself). Breadth-
+        first so the shallowest declaration is reported — the most useful
+        culprit for a use-site diagnostic — before one reachable only through
+        further hops.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        def culprit(decl_id: DeclId) -> R:
+            return own_culprit(self._defs[decl_id])
+
+        def successors(decl_id: DeclId) -> set[DeclId]:
+            return self._affected_successors(decl_id, self._defs[decl_id], prop, reaches_bad)
+
+        return bfs_first(
+            (ref.decl_id for ref in nominal_references(t) if reaches_bad(ref)),
+            successors,
+            culprit,
+            key=self._decl_id_sort_key,
+        )
+
+    def _affected_successors(
+        self,
+        decl_id: DeclId,
+        typedef: TypeDef,
+        prop: DataProperty,
+        reaches_bad: Callable[[RecordType | EnumType | ExceptionType], bool],
+    ) -> set[DeclId]:
+        """Return the declarations *typedef* reaches a *prop*-bad declaration through.
+
+        A field reference is a HANDLE, so it is tested with *reaches_bad*,
+        which also consults the concrete type arguments — ``Box[agent]`` is
+        affected while ``Box`` itself is not. An exception's ``extends`` base
+        and its descendants are bare declaration identities carrying no
+        arguments, so for them the declaration-level *prop* ``flagged`` set is
+        the whole answer. The two idioms below are therefore not
+        interchangeable.
+        """
+        from agm.agl.semantics.analyses import field_templates, nominal_references
+
+        flags = self._declaration_flags(prop).flagged
         result: set[DeclId] = set()
         for _field_name, template in field_templates(typedef, self._defs):
             for ref in nominal_references(template):
-                if self.nominal_reaches_non_data(ref):
+                if reaches_bad(ref):
                     result.add(ref.decl_id)
         if typedef.kind == "exception":
             if typedef.base is not None and typedef.base in flags:
@@ -1932,6 +2217,34 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     return None
 
 
+def _first_bad_dict_key(t: Type, table: TypeTable, assume_ok: frozenset[str]) -> Type | None:
+    """Return the first non-``Hashable`` dict key type reachable through *t*'s own structure.
+
+    Structural only, like :func:`_first_non_data_leaf`: recurses through
+    ``array``/``dict`` but stops at a nominal handle, whose own fields are a
+    declaration-level question answered by
+    :meth:`TypeTable._bad_dict_key_field_culprit` instead. A dict's own
+    (already ``Hashable``) key can never itself embed another dict
+    (``Hashable`` excludes ``array``/``dict`` outright), so only the value
+    recurses further. *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`;
+    passed by a search over one declaration's OWN templates, which assumes
+    the declaration's own type parameters satisfy Hashable (deferred to
+    whatever concrete argument a later reference supplies for them), so a
+    phantom or deferred parameter is never wrongly named the culprit.
+    """
+    if isinstance(t, DictType):
+        if not _dict_key_is_hashable(t.key, table, assume_ok):
+            return t.key
+        return _first_bad_dict_key(t.value, table, assume_ok)
+    if isinstance(t, (RecordType, EnumType, ExceptionType)):
+        return None
+    for child in type_children(t):
+        found = _first_bad_dict_key(child, table, assume_ok)
+        if found is not None:
+            return found
+    return None
+
+
 def satisfies(
     t: Type, kind: ConstraintKind, table: TypeTable, bounds: ConstraintBounds | None
 ) -> bool:
@@ -2009,26 +2322,13 @@ def same_comparison_type(left: Type, right: Type) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def dict_key_has_wire_form(key: Type) -> bool:
-    """Return whether *key* has a wire form as a ``dict`` key.
-
-    Only a ``text`` key has one (a JSON object's own keys) — every other key
-    type, a still-unresolved type variable included, has none. The single
-    predicate shared by :func:`is_json_convertible`, :func:`is_extern_crossable`,
-    ``semantics.analyses.compute_declaration_flags``'s ``JSON_CONVERTIBLE``/
-    ``EXTERN_CROSSABLE`` leaf policies, and the checker's own program-parameter/
-    agent-output wire-serializability walk.
-    """
-    return isinstance(key, TextType)
-
-
 def is_json_convertible(t: Type, table: TypeTable) -> bool:
     """Return ``True`` if ``t`` has a JSON representation.
 
     The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
     directly; an ``array`` converts iff its element type does; a ``dict``
-    converts iff its key is ``text`` (only a ``text`` key has a wire form)
-    and its value type converts; a record or exception
+    converts iff its key is ``Hashable`` and its value type converts; a
+    record or exception
     converts to a JSON object of its fields and an enum
     to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
     type is reachable from its declaration
@@ -2055,9 +2355,13 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
         case ArrayType():
             return is_json_convertible(t.elem, table)
         case DictType():
-            # Only a text key has a wire form, even when the key type
-            # itself would otherwise convert (e.g. int).
-            return dict_key_has_wire_form(t.key) and is_json_convertible(t.value, table)
+            # A hashable key always has a JSON wire form (text/stringified/
+            # entries — chosen at encode/schema time by its DictKeyForm).
+            return (
+                _dict_key_is_hashable(t.key, table)
+                and is_json_convertible(t.key, table)
+                and is_json_convertible(t.value, table)
+            )
         case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
             return False
         case ExceptionType():
@@ -2087,13 +2391,13 @@ def is_extern_crossable(t: Type, table: TypeTable) -> bool:
     (:class:`~agm.agl.semantics.analyses.DataProperty.EXTERN_CROSSABLE`).
 
     Structural over :func:`~agm.agl.semantics.types.type_children`: a
-    ``dict``'s key is checked directly (:func:`dict_key_has_wire_form`) and
+    ``dict``'s key is checked directly (:func:`dict_key_is_text_wire_key`) and
     only its value recurses; a nominal delegates to the table; every other
     constructor (a leaf, an ``array``, or a function's params/result) is
     crossable iff every direct child is.
     """
     if isinstance(t, DictType):
-        return dict_key_has_wire_form(t.key) and is_extern_crossable(t.value, table)
+        return dict_key_is_text_wire_key(t.key, table) and is_extern_crossable(t.value, table)
     if isinstance(t, (RecordType, EnumType, ExceptionType)):
         return table.nominal_is_extern_crossable(t)
     return all(is_extern_crossable(child, table) for child in type_children(t))

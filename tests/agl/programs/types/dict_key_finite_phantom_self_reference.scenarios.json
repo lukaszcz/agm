@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "finite_plan_tolerates_a_dict_key_self_reference_inside_a_phantom_argument",
+      "expect": {"stdout": "{\"p\": {\"y\": 1}}\n"}
+    }
+  ]
+}

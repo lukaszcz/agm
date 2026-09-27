@@ -14,7 +14,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, WalkTags, value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -96,7 +96,7 @@ def test_constructor_render_and_serialization_edges() -> None:
     assert render_value(record, descriptors) == "<constructor Thing>"
     assert render_value(variant, descriptors) == "<constructor Thing::Case>"
     with pytest.raises(AglNonDataValue, match="constructor"):
-        value_to_json_obj(record)
+        value_to_json_obj(record, tags=WalkTags(member_tags={}, field_names={}))
 
 
 def test_param_conversion_direct_success_edges() -> None:

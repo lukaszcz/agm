@@ -603,8 +603,8 @@ def option_nominal_descriptors(
             declared_name="Option",
             kind=NominalKind.ENUM,
             variants=(
-                VariantDescriptor("Some", ("value",), some),
-                VariantDescriptor("None", (), none),
+                VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+                VariantDescriptor("None", (), none, "None", ()),
             ),
         ),
         none: NominalDescriptor(
@@ -621,6 +621,7 @@ def option_nominal_descriptors(
             declared_name="Some",
             kind=NominalKind.RECORD,
             fields=("value",),
+            field_json_names=("value",),
         ),
     }
 

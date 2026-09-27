@@ -531,6 +531,7 @@ def _create_enum(
                 declared_name=variant.name,
                 kind=NominalKind.RECORD,
                 fields=variant.fields,
+                field_json_names=variant.field_json_names,
             )
             variant_cls = _create_nominal(member_descriptor, variant.name)
             variant_classes[variant.member] = variant_cls

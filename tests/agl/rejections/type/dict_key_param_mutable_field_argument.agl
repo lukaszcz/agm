@@ -1,0 +1,9 @@
+record Cell[T]
+  var x: T
+
+record Outer[T]
+  d: dict[Option[T], int]
+
+program def main() -> unit =
+  let o: Outer[Cell[int]] = Outer(d = {})
+  print(o as json)

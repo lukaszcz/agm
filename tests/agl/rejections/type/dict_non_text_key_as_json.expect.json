@@ -1,8 +1,0 @@
-{
-  "diagnostic": {
-    "line": 3,
-    "message_contains": [
-      "cast"
-    ]
-  }
-}

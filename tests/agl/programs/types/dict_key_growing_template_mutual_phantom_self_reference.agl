@@ -1,0 +1,34 @@
+# A dict key whose PHANTOM shielding runs through a MUTUAL pair of
+# declarations (A's phantom field nests `dict[B, int]`, B's nests
+# `dict[A, int]`) rather than a single self-reference. Both A and B feed a
+# growing-template instantiation (`Perfect[A]`, `Perfect[B]`), so either
+# one's definition can still be mid-construction when the other's phantom
+# field is reached. Relevance filtering drops both the `dict[B, int]` and
+# `dict[A, int]` arguments before `emit` ever visits them as keys,
+# regardless of which of the two is compiled first.
+
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+
+record Phantom[T]
+  y: int
+
+record A
+  p: Phantom[dict[B, int]]
+
+record B
+  q: Phantom[dict[A, int]]
+  r: int
+
+program def main() -> unit =
+  let a: A = A(p = Phantom(y = 1))
+  let v: Perfect[A] = Succ(next = Single(value = Pair(first = a, second = a)))
+  print(v as json)
+  let b: B = B(q = Phantom(y = 2), r = 3)
+  let w: Perfect[B] = Single(value = b)
+  print(w as json)

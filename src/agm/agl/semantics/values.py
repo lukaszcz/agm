@@ -252,6 +252,13 @@ class DictValue:
     def __len__(self) -> int:
         return len(self._text) if self._tokens is None else len(self._tokens)
 
+    def is_text_keyed(self) -> bool:
+        """Whether this dict is (still) ``text``-keyed storage.
+
+        True for an undetermined empty dict, which defaults to ``text``-keyed.
+        """
+        return self._tokens is None
+
     def lookup(self, key: Value) -> Value | None:
         """Return the value stored under *key*, or ``None`` if absent."""
         if self._tokens is None:

@@ -826,6 +826,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,
             fields=("message",),
+            field_json_names=("message",),
             variants=(),
         ),
     }
@@ -886,6 +887,7 @@ def test_validate_ir_try_handler_nominal_not_exception() -> None:
             declared_name="Point",
             kind=NominalKind.RECORD,
             fields=("x", "y"),
+            field_json_names=("x", "y"),
             variants=(),
         ),
     }
@@ -917,6 +919,7 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,
             fields=("message",),
+            field_json_names=("message",),
             variants=(),
         ),
     }

@@ -23,13 +23,19 @@ import pytest
 
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
-from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode
+from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode, ScalarKind
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
+from agm.agl.ir.program import (
+    NominalDescriptor,
+    NominalKind,
+    ValueDescriptors,
+    VariantDescriptor,
+)
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
+from agm.agl.runtime.serialize import WalkTags
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import ExceptionValue
 from agm.agl.typecheck import AglTypeError
@@ -45,13 +51,17 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.pipeline import PreparedProgram
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.semantics.values import IrClosureValue
+    from agm.agl.semantics.values import IrClosureValue, Value
 
 # ---------------------------------------------------------------------------
 # Rendering helpers: build a minimal ValueDescriptors for ad-hoc test values.
 # ---------------------------------------------------------------------------
 
 _NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
+
+#: A ``value_to_json_obj`` walk with no enum-tag or field-json-name metadata,
+#: for tests exercising bare untagged serialization.
+_NO_WALK_TAGS = WalkTags(member_tags={}, field_names={})
 
 
 def _named(
@@ -60,6 +70,8 @@ def _named(
     *,
     kind: NominalKind = NominalKind.RECORD,
     positional_fields: tuple[str, ...] = (),
+    fields: tuple[str, ...] = (),
+    field_json_names: tuple[str, ...] = (),
 ) -> NominalDescriptor:
     """A NominalDescriptor whose derived display_name is *name* (accepts "A::B" spellings)."""
     *scope, declared = name.split("::")
@@ -70,7 +82,16 @@ def _named(
         declared_name=declared,
         kind=kind,
         positional_fields=positional_fields,
+        fields=fields,
+        field_json_names=field_json_names,
     )
+
+
+def _walk_tags_for(*named_nominals: NominalDescriptor) -> WalkTags:
+    """Build :class:`WalkTags` from real descriptors, the way a program's own table would."""
+    from agm.agl.runtime.serialize import _walk_tags
+
+    return _walk_tags({d.nominal: d for d in named_nominals})
 
 
 def _descriptors(*named_nominals: NominalDescriptor) -> ValueDescriptors:
@@ -80,13 +101,29 @@ def _descriptors(*named_nominals: NominalDescriptor) -> ValueDescriptors:
     )
 
 
+def _scalar_kind_of(value: Value) -> ScalarKind:
+    """The :class:`ScalarKind` matching *value*'s own scalar runtime type."""
+    from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
+
+    if isinstance(value, TextValue):
+        return ScalarKind.TEXT
+    if isinstance(value, IntValue):
+        return ScalarKind.INT
+    if isinstance(value, DecimalValue):
+        return ScalarKind.DECIMAL
+    if isinstance(value, BoolValue):
+        return ScalarKind.BOOL
+    return ScalarKind.JSON
+
+
 def _scalar_field_encodes(
     exc: ExceptionValue,
 ) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
     """The field-encode table of a hand-built exception whose fields are all scalars."""
     return {
         exc.nominal: tuple(
-            ExceptionFieldEncode(name, name, EncodePlan(ScalarEncode())) for name in exc.fields
+            ExceptionFieldEncode(name, name, EncodePlan(ScalarEncode(_scalar_kind_of(value))))
+            for name, value in exc.fields.items()
         )
     }
 
@@ -1809,29 +1846,35 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import BoolValue
 
-        assert value_to_json_obj(BoolValue(True)) is True
-        assert value_to_json_obj(BoolValue(False)) is False
+        assert value_to_json_obj(BoolValue(True), tags=_NO_WALK_TAGS) is True
+        assert value_to_json_obj(BoolValue(False), tags=_NO_WALK_TAGS) is False
 
     def test_dict_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import DictValue, IntValue
 
-        result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}))
+        result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}), tags=_NO_WALK_TAGS)
         assert result == {"a": 1}
 
     def test_record_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import IntValue, RecordValue
 
-        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={"x": IntValue(5)}))
+        tags = _walk_tags_for(_named(NominalId(1), "R", fields=("x",), field_json_names=("x",)))
+        result = value_to_json_obj(
+            RecordValue(nominal=NominalId(1), fields={"x": IntValue(5)}), tags=tags
+        )
         assert result == {"x": 5}
 
     def test_enum_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import RecordValue, TextValue
 
+        tags = _walk_tags_for(
+            _named(NominalId(1), "E::V", fields=("msg",), field_json_names=("msg",))
+        )
         result = value_to_json_obj(
-            RecordValue(nominal=NominalId(1), fields={"msg": TextValue("hi")})
+            RecordValue(nominal=NominalId(1), fields={"msg": TextValue("hi")}), tags=tags
         )
         assert result == {"msg": "hi"}
 
@@ -1839,18 +1882,29 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import RecordValue
 
-        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={}))
+        tags = _walk_tags_for(_named(NominalId(1), "E::V"))
+        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={}), tags=tags)
         assert result == {}
 
     def test_exception_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
+        tags = _walk_tags_for(
+            _named(
+                NominalId(1),
+                "Boom",
+                kind=NominalKind.EXCEPTION,
+                fields=("message",),
+                field_json_names=("message",),
+            )
+        )
         result = value_to_json_obj(
             ExceptionValue(
                 nominal=NominalId(1),
                 fields={"message": TextValue("oops")},
-            )
+            ),
+            tags=tags,
         )
         assert result == {"message": "oops"}
 
@@ -1863,11 +1917,21 @@ class TestSerialize:
         record.fields["next"] = record
         exception = ExceptionValue(NominalId(2), {})
         exception.fields["cause"] = exception
+        tags = _walk_tags_for(
+            _named(NominalId(1), "Node", fields=("next",), field_json_names=("next",)),
+            _named(
+                NominalId(2),
+                "Problem",
+                kind=NominalKind.EXCEPTION,
+                fields=("cause",),
+                field_json_names=("cause",),
+            ),
+        )
 
         with pytest.raises(AglCyclicValue):
-            value_to_json_obj(record)
+            value_to_json_obj(record, tags=tags)
         with pytest.raises(AglCyclicValue):
-            value_to_json_obj(exception)
+            value_to_json_obj(exception, tags=tags)
 
     def test_record_diamond_serializes_each_shared_child(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -1875,8 +1939,17 @@ class TestSerialize:
 
         shared = RecordValue(NominalId(1), {"value": IntValue(1)})
         pair = RecordValue(NominalId(2), {"left": shared, "right": shared})
+        tags = _walk_tags_for(
+            _named(NominalId(1), "Leaf", fields=("value",), field_json_names=("value",)),
+            _named(
+                NominalId(2), "Pair", fields=("left", "right"), field_json_names=("left", "right")
+            ),
+        )
 
-        assert value_to_json_obj(pair) == {"left": {"value": 1}, "right": {"value": 1}}
+        assert value_to_json_obj(pair, tags=tags) == {
+            "left": {"value": 1},
+            "right": {"value": 1},
+        }
 
     @pytest.mark.parametrize(
         ("obj", "indent", "expected"),
@@ -2087,14 +2160,23 @@ class TestRuntimeErrorPaths:
                 "none_val": JsonValue(None),
             },
         )
+        rec_descriptor = NominalDescriptor(
+            nominal=NominalId(2),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="R",
+            kind=NominalKind.RECORD,
+            fields=("f",),
+            field_json_names=("f",),
+        )
         nominals = {
             d.nominal: d
             for d in (
                 _named(NominalId(1), "AgentParseError"),
-                _named(NominalId(2), "R"),
+                rec_descriptor,
                 _named(NominalId(3), "E::V"),
                 _named(NominalId(4), "Inner"),
-                _named(NominalId(5), "Node"),
+                _named(NominalId(5), "Node", fields=("next",), field_json_names=("next",)),
             )
         }
         # No field of this hand-built exception has a JSON plan, so each is
@@ -2122,6 +2204,80 @@ class TestRuntimeErrorPaths:
         assert error.fields["enum_val"] == {}
         assert error.fields["cyclic_record"] == "<cyclic value>"
         assert isinstance(error.fields["exc_val"], dict)
+
+    def test_exception_value_to_run_error_reports_non_text_keyed_dict_fields_as_entries(
+        self,
+    ) -> None:
+        """A dict field keyed by enum/bool/record/``json`` (no static plan) reports as a
+        ``[{"key": ..., "value": ...}]`` array through the untyped JSON walk -- never a
+        lossy ``str()``-collapsed object, which would silently merge distinct keys.
+        """
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import (
+            BoolValue,
+            DictValue,
+            ExceptionValue,
+            IntValue,
+            JsonValue,
+            RecordValue,
+        )
+
+        flags = DictValue()
+        flags.insert(BoolValue(True), IntValue(1))
+        points = DictValue()
+        points.insert(RecordValue(NominalId(2), {"x": IntValue(1), "y": IntValue(2)}), IntValue(1))
+        colors = DictValue()
+        colors.insert(RecordValue(NominalId(3), {}), IntValue(1))
+        js = DictValue()
+        js.insert(JsonValue(1), IntValue(1))
+        js.insert(JsonValue("1"), IntValue(2))
+
+        exc_val = ExceptionValue(
+            nominal=NominalId(1),
+            fields={"flags": flags, "points": points, "colors": colors, "js": js},
+        )
+        color_enum = NominalDescriptor(
+            nominal=NominalId(4),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="Color",
+            kind=NominalKind.ENUM,
+            variants=(VariantDescriptor("Red", (), NominalId(3), "Red", ()),),
+        )
+        point_descriptor = NominalDescriptor(
+            nominal=NominalId(2),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_json_names=("x", "y"),
+        )
+        nominals = {
+            d.nominal: d
+            for d in (
+                _named(NominalId(1), "Boom"),
+                point_descriptor,
+                _named(NominalId(3), "Color::Red"),
+                color_enum,
+            )
+        }
+        error = exception_value_to_run_error(
+            exc_val,
+            nominals=nominals,
+            exception_field_encodes={
+                NominalId(1): tuple(
+                    ExceptionFieldEncode(name, name, None) for name in exc_val.fields
+                )
+            },
+        )
+        assert error.fields["flags"] == [{"key": True, "value": 1}]
+        assert error.fields["points"] == [{"key": {"x": 1, "y": 2}, "value": 1}]
+        assert error.fields["colors"] == [{"key": {"$case": "Red"}, "value": 1}]
+        assert error.fields["js"] == [
+            {"key": 1, "value": 1},
+            {"key": "1", "value": 2},
+        ]
 
     def test_run_error_source_unset_when_location_source_id_unmapped(self) -> None:
         """A ``Location`` span with no matching ``sources`` entry leaves ``source`` unset.
@@ -2767,7 +2923,7 @@ class TestSerializeOpaqueValues:
         from agm.agl.semantics.values import UnitValue
 
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(UnitValue())
+            value_to_json_obj(UnitValue(), tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "unit"
 
     def test_constructor_value_raises(self) -> None:
@@ -2776,7 +2932,7 @@ class TestSerializeOpaqueValues:
 
         ctor = ConstructorValue(nominal=NominalId(1))
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(ctor)
+            value_to_json_obj(ctor, tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "constructor"
 
     def test_ir_closure_value_raises(self) -> None:
@@ -2787,7 +2943,7 @@ class TestSerializeOpaqueValues:
 
         ir_closure = IrClosureValue(function_id=FunctionId(0), captures=())
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(ir_closure)
+            value_to_json_obj(ir_closure, tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "function"
 
     def test_marker_text_matches_kind(self) -> None:

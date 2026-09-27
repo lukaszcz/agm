@@ -25,7 +25,6 @@ from agm.agl.ir.program import (
     NominalKind,
     SourceFile,
     SymbolDescriptor,
-    VariantDescriptor,
 )
 from agm.agl.ir.static_keys import StaticBindingKey, static_binding_key
 from agm.agl.ir.validate import validate_ir
@@ -38,11 +37,14 @@ from agm.agl.lower.lowerer import (
     builtin_nominals_from_declarations,
     reserved_fallback_superseded,
 )
-from agm.agl.lower.nominal_descriptors import exception_descriptor
+from agm.agl.lower.nominal_descriptors import (
+    enum_descriptor,
+    exception_descriptor,
+    record_descriptor,
+)
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
@@ -75,29 +77,6 @@ def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
     return reserved_fallback_superseded(owner_name, type_table)
 
 
-def _record_descriptor(
-    typedef: TypeDef,
-    handle: RecordType,
-    type_table: TypeTable,
-    *,
-    bears_name_path: bool,
-) -> NominalDescriptor:
-    """Build one record descriptor from its authoritative declaration."""
-    nominal = NominalId(typedef.decl_node_id)
-    return NominalDescriptor(
-        nominal=nominal,
-        module_id=typedef.module_id,
-        scope_path=typedef.scope_path,
-        declared_name=typedef.name,
-        kind=NominalKind.RECORD,
-        fields=tuple(name for name, _ in typedef.fields),
-        mutable_fields=typedef.mutable_fields,
-        variants=(),
-        positional_fields=positional_field_names(type_table.field_kinds(handle)),
-        bears_name_path=bears_name_path,
-    )
-
-
 def _descriptor_for_skipped_identity(
     nominal: NominalId, type_table: TypeTable
 ) -> NominalDescriptor:
@@ -111,7 +90,7 @@ def _descriptor_for_skipped_identity(
     typedef = type_table.typedef_of(nominal.value)
     handle = typedef.handle()
     if isinstance(handle, RecordType):
-        return _record_descriptor(typedef, handle, type_table, bears_name_path=False)
+        return record_descriptor(typedef, handle, type_table, bears_name_path=False)
     return exception_descriptor(
         typedef, cast(ExceptionType, handle), type_table, bears_name_path=False
     )
@@ -363,24 +342,12 @@ def lower_program(
         handle = typedef.handle()
         match handle:
             case RecordType():
-                link.nominals[nominal] = _record_descriptor(
+                link.nominals[nominal] = record_descriptor(
                     typedef, handle, type_table, bears_name_path=bears_name_path
                 )
             case EnumType():
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typedef.module_id,
-                    scope_path=typedef.scope_path,
-                    declared_name=typedef.name,
-                    kind=NominalKind.ENUM,
-                    fields=(),
-                    variants=tuple(
-                        VariantDescriptor(
-                            name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
-                        )
-                        for name, member in type_table.enum_member_names(handle).items()
-                    ),
-                    bears_name_path=bears_name_path,
+                link.nominals[nominal] = enum_descriptor(
+                    typedef, handle, type_table, bears_name_path=bears_name_path
                 )
             case _:
                 link.nominals[nominal] = exception_descriptor(
@@ -407,25 +374,12 @@ def lower_program(
                 generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
             )
             if isinstance(typ, RecordType):
-                link.nominals[nominal] = _record_descriptor(
+                link.nominals[nominal] = record_descriptor(
                     generic_typedef, typ, type_table, bears_name_path=bears_name_path
                 )
             else:
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.ENUM,
-                    variants=tuple(
-                        VariantDescriptor(
-                            vname,
-                            tuple(type_table.record_fields(member)),
-                            NominalId(member.decl_id),
-                        )
-                        for vname, member in type_table.enum_member_names(typ).items()
-                    ),
-                    bears_name_path=bears_name_path,
+                link.nominals[nominal] = enum_descriptor(
+                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
                 )
 
     _add_missing_enum_member_descriptors(link.nominals, type_table)

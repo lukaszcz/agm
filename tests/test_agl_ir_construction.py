@@ -729,7 +729,11 @@ def test_validate_accepts_enum_member_ir_make_record() -> None:
         declared_name="Color",
         kind=NominalKind.ENUM,
         fields=(),
-        variants=(VariantDescriptor(name="Red", fields=(), member=NominalId(2)),),
+        variants=(
+            VariantDescriptor(
+                name="Red", fields=(), member=NominalId(2), json_name="Red", field_json_names=()
+            ),
+        ),
     )
     node = IrMakeRecord(
         location=loc,
@@ -757,12 +761,24 @@ def test_validate_accepts_enum_member_ir_make_record() -> None:
     "variants",
     (
         (
-            VariantDescriptor(name="same", fields=(), member=NominalId(2)),
-            VariantDescriptor(name="same", fields=(), member=NominalId(3)),
+            VariantDescriptor(
+                name="same", fields=(), member=NominalId(2), json_name="same", field_json_names=()
+            ),
+            VariantDescriptor(
+                name="same", fields=(), member=NominalId(3), json_name="same", field_json_names=()
+            ),
         ),
         (
-            VariantDescriptor(name="first", fields=(), member=NominalId(2)),
-            VariantDescriptor(name="second", fields=(), member=NominalId(2)),
+            VariantDescriptor(
+                name="first", fields=(), member=NominalId(2), json_name="first", field_json_names=()
+            ),
+            VariantDescriptor(
+                name="second",
+                fields=(),
+                member=NominalId(2),
+                json_name="second",
+                field_json_names=(),
+            ),
         ),
     ),
     ids=("duplicate-variant-name", "duplicate-member-nominal"),
@@ -820,6 +836,7 @@ def test_validate_accepts_valid_ir_make_record() -> None:
         declared_name="Pt",
         kind=NominalKind.RECORD,
         fields=("x",),
+        field_json_names=("x",),
         variants=(),
     )
     node = IrMakeRecord(
@@ -863,8 +880,20 @@ def test_nominal_descriptor_enum_with_variants() -> None:
     """NominalDescriptor for an enum carries VariantDescriptor objects."""
     nom = NominalId(2)
     variants = (
-        VariantDescriptor(name="Circle", fields=("radius",), member=NominalId(3)),
-        VariantDescriptor(name="Square", fields=("side",), member=NominalId(4)),
+        VariantDescriptor(
+            name="Circle",
+            fields=("radius",),
+            member=NominalId(3),
+            json_name="Circle",
+            field_json_names=("radius",),
+        ),
+        VariantDescriptor(
+            name="Square",
+            fields=("side",),
+            member=NominalId(4),
+            json_name="Square",
+            field_json_names=("side",),
+        ),
     )
     desc = NominalDescriptor(
         nominal=nom,
@@ -960,7 +989,15 @@ def test_validate_non_deep_accepts_unknown_nominal_in_member_ir_make_record() ->
                 (),
                 "Choice",
                 NominalKind.ENUM,
-                variants=(VariantDescriptor(name="first", fields=(), member=member_nominal),),
+                variants=(
+                    VariantDescriptor(
+                        name="first",
+                        fields=(),
+                        member=member_nominal,
+                        json_name="first",
+                        field_json_names=(),
+                    ),
+                ),
             )
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
@@ -1045,6 +1082,7 @@ def test_validate_accepts_ir_make_constructor_for_a_record() -> None:
                 "Point",
                 NominalKind.RECORD,
                 fields=("x",),
+                field_json_names=("x",),
             )
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},

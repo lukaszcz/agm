@@ -163,9 +163,11 @@ offering completion completes it from the filesystem.
 The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
 functions are not valid program-argument types, whether or not the host ever
-supplies a value for the parameter. A [recursive](types.md#recursive-types)
-record or enum parameter decodes normally, subject to the same finite-schema
-restriction as an agent output type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
+supplies a value for the parameter; nor is a type that reaches a
+non-`text`-keyed dict, which does not [decode](types.md#convertibility-to-json).
+A [recursive](types.md#recursive-types) record or enum parameter decodes
+normally, subject to the same finite-schema restriction as an agent output
+type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
 
 A rendered record or enum value (see
 [Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules))
@@ -441,7 +443,13 @@ A run ends in one of three ways:
    effective JSON name, and the source location of the raise site. A field
    holding a value with a reference cycle ([Types](types.md#cycles)), or a
    value of a kind with no JSON representation, is reported as a placeholder
-   marker, so reporting a failure never fails.
+   marker, so reporting a failure never fails. A field whose declared type
+   has no JSON form is reported from its value alone: an enum member carries
+   its effective `$case` tag ([`@json-name`](attributes.md#name-and-json-name),
+   else `@name`, else the declared name), nested record and exception fields
+   are keyed by their effective JSON names as in the typed encoding, and a
+   non-empty dict with non-`text` keys is an array of `{"key": …, "value": …}`
+   objects.
 
 ## Static call inventory
 

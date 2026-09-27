@@ -44,7 +44,11 @@ def _sanitize(value: object, active: frozenset[int]) -> object:
     ``semantics/cycles.py``, but over plain Python containers rather than AgL
     values. ``Decimal`` renders through the DSL's own exact-number convention
     (:func:`agm.agl.runtime.serialize.dumps_exact`); an ``AglJson`` value
-    (JSON already crossed the boundary) unwraps to its raw JSON.
+    (JSON already crossed the boundary) unwraps to its raw JSON. A nested
+    mapping whose keys are not all ``str`` (unlike the top-level payload,
+    a companion's own data may use any hashable key) encodes as a
+    ``[{"key": ..., "value": ...}, ...]`` array instead of collapsing
+    distinct keys through ``str()``.
     """
     if value is None or isinstance(value, (int, bool)):
         return value
@@ -59,7 +63,13 @@ def _sanitize(value: object, active: frozenset[int]) -> object:
     if isinstance(value, Mapping):
         if id(value) in active:
             return CYCLIC_VALUE_MARKER
-        return _sanitize_mapping(value, active | {id(value)})
+        nested = active | {id(value)}
+        if all(isinstance(key, str) for key in value):
+            return _sanitize_mapping(value, nested)
+        return [
+            {"key": _sanitize(key, nested), "value": _sanitize(item, nested)}
+            for key, item in value.items()
+        ]
     if isinstance(value, Sequence) and not isinstance(value, bytes):
         if id(value) in active:
             return CYCLIC_VALUE_MARKER
@@ -71,10 +81,15 @@ def _sanitize(value: object, active: frozenset[int]) -> object:
 def _sanitize_mapping(payload: "Mapping[str, object]", active: frozenset[int]) -> dict[str, object]:
     """Sanitize *payload*'s values into a plain ``dict[str, object]`` (see :func:`_sanitize`).
 
+    Called only where *payload*'s keys are already known to be all ``str``:
+    either the top-level ``companion_record`` payload (the ``runtime.trace``
+    signature's own contract) or a nested mapping :func:`_sanitize` has
+    already checked.
+
     *active* must already include ``id(payload)`` for *payload* itself to be
     caught on re-entry through one of its own values.
     """
-    return {str(key): _sanitize(item, active) for key, item in payload.items()}
+    return {key: _sanitize(item, active) for key, item in payload.items()}
 
 
 class TraceStore:

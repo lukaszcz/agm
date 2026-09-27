@@ -79,7 +79,7 @@ from agm.agl.semantics.type_table import (
     TypeTable,
     cast_classification,
     comparable_types,
-    dict_key_has_wire_form,
+    dict_key_is_text_wire_key,
     is_assignable_in,
     is_extern_crossable,
     json_cast_hint,
@@ -1586,9 +1586,9 @@ class _Checker:
         if isinstance(schema_type, ArrayType):
             return self._wire_type_is_serializable(schema_type.elem, seen=seen, memo=memo)
         if isinstance(schema_type, DictType):
-            return dict_key_has_wire_form(schema_type.key) and self._wire_type_is_serializable(
-                schema_type.value, seen=seen, memo=memo
-            )
+            return dict_key_is_text_wire_key(
+                schema_type.key, self._env.type_table
+            ) and self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
         if isinstance(schema_type, RecordType):
             if schema_type.decl_id in self._env.type_table.host_minted_declaration_ids():
                 return False

@@ -98,15 +98,25 @@ class SymbolDescriptor:
 class VariantDescriptor:
     """Descriptor for one enum variant.
 
-    ``name``   — the variant name.
-    ``fields`` — declared field names in declaration order (names only; no
-                 checker ``Type`` objects — the IR is typeless).
-    ``member`` — nominal identity of the member record declaration.
+    ``name``      — the variant name.
+    ``fields``    — declared field names in declaration order (names only; no
+                    checker ``Type`` objects — the IR is typeless).
+    ``field_json_names`` — each field's effective JSON name (``@json-name`` ??
+                    ``@name`` ?? declared), parallel to ``fields`` — the SAME
+                    tag :class:`FieldEncode`/:class:`FieldDecode` carry for
+                    it; ``len`` matches ``fields``. Also carried by the
+                    member's own ``NominalDescriptor`` in ``program.nominals``.
+    ``member``    — nominal identity of the member record declaration.
+    ``json_name`` — the member's effective JSON ``$case`` tag (``@json-name``
+                    ?? ``@name`` ?? ``name``), the SAME tag a typed
+                    ``EnumEncode``/``EnumDecode`` selects for it.
     """
 
     name: str
     fields: tuple[str, ...]
     member: NominalId
+    json_name: str
+    field_json_names: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +138,11 @@ class NominalDescriptor:
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
                        stores fields per-variant in ``variants``).
+    ``field_json_names`` — each field's effective JSON name (``@json-name``
+                       ?? ``@name`` ?? declared), parallel to ``fields`` —
+                       the SAME tag :class:`FieldEncode`/:class:`FieldDecode`
+                       carry for it. Used for RECORD and EXCEPTION; ``()``
+                       for ENUM.
     ``mutable_fields`` — names of the ``var`` fields a RECORD declares (a
                        subset of ``fields``); always empty for ENUM and
                        EXCEPTION, neither of which admits a mutable field.
@@ -168,6 +183,7 @@ class NominalDescriptor:
     declared_name: str
     kind: NominalKind
     fields: tuple[str, ...] = ()
+    field_json_names: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
     positional_fields: tuple[str, ...] = ()

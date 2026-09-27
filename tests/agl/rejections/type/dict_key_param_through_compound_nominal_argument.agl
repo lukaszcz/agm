@@ -1,0 +1,12 @@
+record Wrap[T]
+  x: T
+
+record Box[K]
+  d: dict[K, int]
+
+record Outer[T]
+  b: Box[Wrap[T]]
+
+program def main() -> unit =
+  let o: Outer[array[int]] = Outer(b = Box(d = {}))
+  print(o as json)

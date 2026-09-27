@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "growing_template_drops_phantom_dict_key_argument_through_nested_wrapper_levels",
+      "expect": {
+        "stdout": "{\"$case\": \"Single\", \"value\": {\"p\": {\"w\": {\"z\": {\"y\": 1}}, \"n\": 2}}}\n{\"$case\": \"Single\", \"value\": {\"$case\": \"EB\", \"p\": {\"z\": {\"y\": 5}}}}\n"
+      }
+    }
+  ]
+}

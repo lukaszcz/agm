@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "growing_template_drops_mutual_phantom_dict_key_arguments",
+      "expect": {
+        "stdout": "{\"$case\": \"Succ\", \"next\": {\"$case\": \"Single\", \"value\": {\"first\": {\"p\": {\"y\": 1}}, \"second\": {\"p\": {\"y\": 1}}}}}\n{\"$case\": \"Single\", \"value\": {\"q\": {\"y\": 2}, \"r\": 3}}\n"
+      }
+    }
+  ]
+}

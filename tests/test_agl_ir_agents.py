@@ -1800,8 +1800,14 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 declared_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
-                    VariantDescriptor("Leaf", (), NominalId(11)),
-                    VariantDescriptor("Node", ("value", "left", "right"), NominalId(12)),
+                    VariantDescriptor("Leaf", (), NominalId(11), "Leaf", ()),
+                    VariantDescriptor(
+                        "Node",
+                        ("value", "left", "right"),
+                        NominalId(12),
+                        "Node",
+                        ("value", "left", "right"),
+                    ),
                 ),
             ),
             NominalId(11): NominalDescriptor(
@@ -1814,6 +1820,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 "Node",
                 NominalKind.RECORD,
                 ("value", "left", "right"),
+                field_json_names=("value", "left", "right"),
             ),
         },
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},

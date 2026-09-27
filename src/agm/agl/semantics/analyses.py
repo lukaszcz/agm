@@ -38,14 +38,17 @@ basis of ``=``/``!=`` (:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_sa
 ``HASHABLE``'s policy flags one that is not deeply immutable data: it has an
 ``array``/``dict``/function/``unit``/``var`` field, transitively (see
 ``semantics.type_table.satisfies``). ``JSON_CONVERTIBLE`` is ``EQ`` plus a
-non-``text``-keyed ``dict`` anywhere (only a ``text`` key has a wire form;
+non-``Hashable``-keyed ``dict`` anywhere (any ``Hashable`` key has a JSON wire
+form — stringified onto an object key or, failing that, an entries array;
 :meth:`~agm.agl.semantics.type_table.TypeTable.nominal_is_json_convertible`)
-— a ``dict`` key filled by the declaration's OWN type parameter is deferred
-rather than flagged (see ``DeclarationFlags.key_params``), since its wire
-form depends on the argument a later concrete reference supplies.
-``EXTERN_CROSSABLE`` is the same, except a function leaf is itself
-data-crossable (an extern parameter may be a callback), so it recurses into
-function types instead of flagging them
+— a ``dict`` key position filled by one of the declaration's OWN type
+parameters, directly or through another declaration's own key parameter, is
+deferred rather than flagged (see ``DeclarationFlags.key_params``), since its
+wire form depends on the argument a later concrete reference supplies.
+``EXTERN_CROSSABLE`` is the same key-position deferral, but its own key rule
+is ``text``-only (the only key type with an FFI wire form), and a function
+leaf is itself data-crossable (an extern parameter may be a callback), so it
+recurses into function types instead of flagging them
 (:func:`~agm.agl.semantics.type_table.is_extern_crossable`).
 
 Finiteness (instantiation-closure) capability
@@ -96,7 +99,6 @@ from agm.agl.semantics.type_table import (
     TypeDefKind,
     TypeTable,
     decl_id_sort_key,
-    dict_key_has_wire_form,
 )
 from agm.agl.semantics.types import (
     ArrayType,
@@ -377,19 +379,23 @@ class DeclarationFlags:
     this replaces: instantiating a phantom parameter with bad evidence cannot
     flag a declaration because the field template never actually mentions it.
     ``key_params`` — for every declaration, the subset of its own type
-    parameters occurring in ``dict``-key position: a bare occurrence directly
-    as a ``dict``'s key, or one passed as the argument at ANOTHER
-    declaration's own key parameter (transitively) — e.g. ``Box[K]`` with
-    field ``d: dict[K, int]`` has key parameter ``K``, so ``Outer[T]`` with
-    field ``b: Box[T]`` has key parameter ``T`` too. Only meaningful for a
-    ``text_dict_keys_only`` policy: a key parameter's own occurrence never
-    flags its declaration by itself (deferred, like any bare type variable),
-    but at a concrete reference the argument filling it must separately
-    satisfy :func:`~agm.agl.semantics.type_table.dict_key_has_wire_form`
-    (:meth:`~agm.agl.semantics.type_table.TypeTable._nominal_satisfies_property`)
-    — a nominal type can never itself have a wire form as a key, so, unlike
-    ``relevant_params``, this never recurses INTO a nominal argument filling
-    a key parameter, only through a bare type variable.
+    parameters that REACH a ``dict``-key POSITION: a direct ``dict`` key, or
+    the argument at ANOTHER declaration's own key parameter (transitively) —
+    e.g. ``Box[K]`` with field ``d: dict[K, int]`` has key parameter ``K``,
+    so ``Outer[T]`` with field ``b: Box[Wrap[T]]`` has key parameter ``T``
+    too, reached through ``Wrap[T]`` filling ``Box``'s key parameter. Only a
+    parameter the position can actually reach (via ``relevant_params``)
+    counts — never a phantom (unused) one. Only meaningful for a policy with
+    ``dict_key_ok`` set. A key position whose
+    template is bad even assuming every one of the declaration's own type
+    parameters satisfies the policy's key rule flags the declaration
+    OUTRIGHT (e.g. ``Box[K]`` with ``d: dict[array[int], int]``, or
+    ``Outer[T]`` with ``b: Box[Wrap[array[int]]]`` when the position
+    evaluates ``Wrap[array[int]]`` rather than a bare parameter); only a key
+    position that PASSES under that assumption contributes its own type
+    parameters here, deferring the real check to whatever concrete argument
+    a later reference supplies for them
+    (:meth:`~agm.agl.semantics.type_table.TypeTable._nominal_satisfies_property`).
     """
 
     flagged: frozenset[DeclId]
@@ -446,7 +452,9 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
                 )
             )
             template_bad = own_var_field_bad or any(
-                _template_is_flagged(t, policy, flagged, relevant, own_params, defs)
+                _template_is_flagged(
+                    t, policy, flagged, relevant, key_params, own_params, defs, table
+                )
                 for t in templates
             )
             inherited_field_bad = (
@@ -467,12 +475,15 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
                 flagged.add(decl_id)
                 changed = True
 
-            gained_keys: set[str] = set()
-            for t in templates:
-                gained_keys |= _template_key_params(t, own_params, key_params, defs)
-            if not gained_keys <= key_params[decl_id]:
-                key_params[decl_id] |= gained_keys
-                changed = True
+            if policy.dict_key_ok is not None:
+                gained_keys: set[str] = set()
+                for t in templates:
+                    gained_keys |= _template_key_params(
+                        t, policy, own_params, key_params, relevant, defs, table
+                    )
+                if not gained_keys <= key_params[decl_id]:
+                    key_params[decl_id] |= gained_keys
+                    changed = True
     return DeclarationFlags(
         flagged=frozenset(flagged),
         relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
@@ -509,49 +520,63 @@ def field_templates(typedef: TypeDef, defs: Mapping[DeclId, TypeDef]) -> list[tu
     return list(typedef.fields)
 
 
+def _key_position_ok(
+    k: Type, policy: LeafPolicy, own_params: frozenset[str], table: TypeTable
+) -> bool:
+    """Whether *k*, filling a ``dict``-key position, passes *policy*'s own key rule.
+
+    Assumes *own_params* (the enclosing declaration's own type parameters, in
+    scope for the whole walk of one declaration's templates) satisfy the
+    rule — deferred, like any bare type variable, to whatever concrete
+    argument a later reference supplies for them (:func:`_template_key_params`,
+    :attr:`DeclarationFlags.key_params`). Vacuously ``True`` when *policy* has
+    no key rule at all (``EQ``/``HASHABLE``, whose ``dict`` fields are
+    unconditionally fine/bad regardless of key shape).
+    """
+    return policy.dict_key_ok is None or policy.dict_key_ok(k, table, own_params)
+
+
 def _template_is_flagged(
     t: Type,
     policy: LeafPolicy,
     flagged: set[DeclId],
     relevant: Mapping[DeclId, set[str]],
+    key_params: Mapping[DeclId, set[str]],
     own_params: frozenset[str],
     defs: Mapping[DeclId, TypeDef],
+    table: TypeTable,
 ) -> bool:
     """Return whether *t* is, or transitively reaches, bad evidence under *policy*.
 
-    *own_params* is the enclosing declaration's own type parameters (fixed
-    for the whole walk of one declaration's templates): a ``dict`` key that
-    is a bare occurrence of one of them is never immediately bad, even under
-    a ``text_dict_keys_only`` policy — deferred to the concrete reference,
-    like any bare type variable, and tracked separately as a key parameter
-    (:func:`_template_key_params`, :attr:`DeclarationFlags.key_params`).
+    A ``dict``-key position — a direct key, or a type argument filling
+    another declaration's own key parameter (``key_params``, transitively) —
+    is checked against *policy*'s own key rule via :func:`_key_position_ok`,
+    which defers a key built from *own_params* rather than flagging it
+    outright; see :attr:`DeclarationFlags.key_params`.
     """
+
+    def walk(u: Type) -> bool:
+        return _template_is_flagged(
+            u, policy, flagged, relevant, key_params, own_params, defs, table
+        )
+
     match t:
         case UnitType():
             return policy.non_data_bad
         case FunctionType():
             if policy.non_data_bad:
                 return True
-            return any(
-                _template_is_flagged(p, policy, flagged, relevant, own_params, defs)
-                for p in t.params
-            ) or _template_is_flagged(t.result, policy, flagged, relevant, own_params, defs)
+            return any(walk(p) for p in t.params) or walk(t.result)
         case ArrayType():
             if not policy.recurse_containers:
                 return True
-            return _template_is_flagged(t.elem, policy, flagged, relevant, own_params, defs)
+            return walk(t.elem)
         case DictType():
             if not policy.recurse_containers:
                 return True
-            if (
-                policy.text_dict_keys_only
-                and not dict_key_has_wire_form(t.key)
-                and not (isinstance(t.key, TypeVarType) and t.key.name in own_params)
-            ):
+            if not _key_position_ok(t.key, policy, own_params, table):
                 return True
-            return _template_is_flagged(
-                t.key, policy, flagged, relevant, own_params, defs
-            ) or _template_is_flagged(t.value, policy, flagged, relevant, own_params, defs)
+            return walk(t.key) or walk(t.value)
         case ExceptionType():
             return t.decl_id in flagged
         case RecordType() | EnumType():
@@ -560,8 +585,12 @@ def _template_is_flagged(
                 return True
             target = defs[decl_id]
             own_relevant = relevant[decl_id]
+            target_key = key_params[decl_id]
+            for pname, arg in zip(target.type_params, t.type_args):
+                if pname in target_key and not _key_position_ok(arg, policy, own_params, table):
+                    return True
             return any(
-                _template_is_flagged(arg, policy, flagged, relevant, own_params, defs)
+                walk(arg)
                 for pname, arg in zip(target.type_params, t.type_args)
                 if pname in own_relevant
             )
@@ -641,38 +670,56 @@ def _template_relevant_params(
 
 def _template_key_params(
     t: Type,
+    policy: LeafPolicy,
     own_params: frozenset[str],
     key_params: Mapping[DeclId, set[str]],
+    relevant: Mapping[DeclId, set[str]],
     defs: Mapping[DeclId, TypeDef],
+    table: TypeTable,
 ) -> set[str]:
-    """Return the subset of *own_params* occurring in *t* in ``dict``-key position.
+    """Return the subset of *own_params* occurring in *t* in a ``dict``-key position that DEFERS.
 
-    A bare occurrence directly as a ``dict`` key counts; so does one reached
-    through another declaration's own key parameter, transitively, via
-    nominal type arguments (``key_params`` — the same growing fixpoint fact
-    this computes, consulted for whatever has already stabilized for the
-    REFERENCED declaration). Recurses into every constructor to find a key
-    position nested arbitrarily deep, EXCEPT a ``dict``'s own key: a nominal
-    type filling it (rather than a bare parameter) can never itself have a
-    wire form no matter its own arguments, so nothing is deferred there.
+    A direct ``dict`` key, and a type argument filling another declaration's
+    own key parameter (``key_params`` — the same growing fixpoint fact this
+    computes, consulted for whatever has already stabilized for the
+    REFERENCED declaration), transitively. A position only contributes the
+    own parameters it can actually REACH — a bare parameter, or (via
+    :func:`_template_relevant_params`) a parameter reaching a field through a
+    nominal argument's own relevant positions, never a phantom one — and only
+    when it PASSES :func:`_key_position_ok`; a position that fails flags the
+    whole declaration outright instead (:func:`_template_is_flagged`), so
+    there is nothing left to defer there. Recurses into every constructor to
+    find a key position nested arbitrarily deep; a ``dict``'s own key never
+    recurses further (``dict`` is excluded from a key's own shape by
+    ``Hashable`` itself).
     """
     match t:
         case TypeVarType() | InferenceVarType():
             return set()
         case ArrayType():
-            return _template_key_params(t.elem, own_params, key_params, defs)
+            return _template_key_params(
+                t.elem, policy, own_params, key_params, relevant, defs, table
+            )
         case DictType():
-            direct = (
-                {t.key.name}
-                if isinstance(t.key, TypeVarType) and t.key.name in own_params
+            direct: set[str] = (
+                _template_relevant_params(
+                    t.key, own_params, relevant, defs, through_containers=True
+                )
+                if _key_position_ok(t.key, policy, own_params, table)
                 else set()
             )
-            return direct | _template_key_params(t.value, own_params, key_params, defs)
+            return direct | _template_key_params(
+                t.value, policy, own_params, key_params, relevant, defs, table
+            )
         case FunctionType():
             result: set[str] = set()
             for p in t.params:
-                result |= _template_key_params(p, own_params, key_params, defs)
-            result |= _template_key_params(t.result, own_params, key_params, defs)
+                result |= _template_key_params(
+                    p, policy, own_params, key_params, relevant, defs, table
+                )
+            result |= _template_key_params(
+                t.result, policy, own_params, key_params, relevant, defs, table
+            )
             return result
         case RecordType() | EnumType():
             decl_id = t.decl_id
@@ -680,9 +727,13 @@ def _template_key_params(
             target_key = key_params[decl_id]
             result = set()
             for pname, arg in zip(target.type_params, t.type_args):
-                if pname in target_key and isinstance(arg, TypeVarType) and arg.name in own_params:
-                    result.add(arg.name)
-                result |= _template_key_params(arg, own_params, key_params, defs)
+                if pname in target_key and _key_position_ok(arg, policy, own_params, table):
+                    result |= _template_relevant_params(
+                        arg, own_params, relevant, defs, through_containers=True
+                    )
+                result |= _template_key_params(
+                    arg, policy, own_params, key_params, relevant, defs, table
+                )
             return result
         case (
             ExceptionType()

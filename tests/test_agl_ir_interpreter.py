@@ -965,7 +965,9 @@ class TestEnumMemberDispatch:
                     (),
                     "Packet",
                     NominalKind.ENUM,
-                    variants=(VariantDescriptor("data", ("payload",), member),),
+                    variants=(
+                        VariantDescriptor("data", ("payload",), member, "data", ("payload",)),
+                    ),
                 ),
                 member: NominalDescriptor(
                     member,
@@ -974,6 +976,7 @@ class TestEnumMemberDispatch:
                     "data",
                     NominalKind.RECORD,
                     fields=("payload",),
+                    field_json_names=("payload",),
                 ),
             },
         )
@@ -1005,7 +1008,11 @@ class TestEnumMemberDispatch:
                     (),
                     "Packet",
                     NominalKind.ENUM,
-                    variants=(VariantDescriptor("data", ("payload",), NominalId(45)),),
+                    variants=(
+                        VariantDescriptor(
+                            "data", ("payload",), NominalId(45), "data", ("payload",)
+                        ),
+                    ),
                 ),
             },
         )
@@ -1205,7 +1212,7 @@ class TestIrField:
                     scope_path=(),
                     declared_name="Wrapper",
                     kind=NominalKind.ENUM,
-                    variants=(VariantDescriptor("wrap", ("value",), member),),
+                    variants=(VariantDescriptor("wrap", ("value",), member, "wrap", ("value",)),),
                 ),
                 member: NominalDescriptor(
                     nominal=member,
@@ -1214,6 +1221,7 @@ class TestIrField:
                     declared_name="wrap",
                     kind=NominalKind.RECORD,
                     fields=("value",),
+                    field_json_names=("value",),
                 ),
             },
         )

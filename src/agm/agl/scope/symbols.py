@@ -459,12 +459,12 @@ class TypeOwner:
     REPL entry retains and never re-selects, however later entries redeclare
     or import around it. ``indirect`` holds, for an alias, whether ``target``
     was reached through a ``use`` contribution or an import route rather than
-    this module's own nearest declaration. ``own_path_referenced`` maps, for a
-    direct (non-alias) enum owner only, each of ``referenced``'s names that is
-    declared directly beneath the owner's own path (``enum Box = ... |
-    Box::Item``) to its constructor: such a name selects like a declared
-    member wherever the owner is spelled, not only locally; an alias never
-    carries this map, so it stays a referenced-member error through one.
+    this module's own nearest declaration. ``own_path_referenced`` holds, for
+    a direct (non-alias) enum owner only, each of ``referenced``'s names that
+    is declared directly beneath the owner's own path (``enum Box = ... |
+    Box::Item``): such a name selects like a declared member wherever the
+    owner is spelled, not only locally; an alias never carries this set, so
+    it stays a referenced-member error through one.
     """
 
     constructor: ConstructorRef | None
@@ -477,7 +477,7 @@ class TypeOwner:
     hidden: frozenset[str] = frozenset()
     indirect: bool = False
     target: TypeTarget | None = None
-    own_path_referenced: Mapping[str, ConstructorRef] = field(default_factory=dict)
+    own_path_referenced: frozenset[str] = frozenset()
 
     @property
     def constructs(self) -> bool:
@@ -605,6 +605,11 @@ class BindingRef:
         Whether a ``let``/``var`` binding carries the ``@param`` attribute.
         This provenance survives imports, re-exports, and REPL retention, so
         a ``@config`` target check never needs a whole-program node-id set.
+    ``is_variant_member``
+        Whether this binding is a bare-exposed enum variant's constructor,
+        injected as a value/pattern convenience by variant expansion (never
+        by a use's or import's own ``members``). Such a binding never
+        contributes a type, whatever else shares its declaration route.
     """
 
     name: str
@@ -618,6 +623,7 @@ class BindingRef:
     is_builtin: bool = False
     is_method: bool = False
     is_param: bool = False
+    is_variant_member: bool = False
 
 
 # ---------------------------------------------------------------------------

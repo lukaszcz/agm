@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
 from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
@@ -1802,3 +1803,183 @@ def test_wildcard_facade_use_hiding_keeps_a_variant_constructor_hidden(tmp_path:
     )
     with pytest.raises((AglScopeError, AglTypeError)):
         check_program(resolve_program(hidden), base_caps())
+
+
+# ---------------------------------------------------------------------------
+# Enum-variant expansion never contributes a bare type (only a constructor and
+# pattern candidate), whatever route bare-exposes the owning enum.
+# ---------------------------------------------------------------------------
+
+_OTHER_MODULE = {"other": "record Rec\n  x: int\n"}
+_LIB_MODULE = {"pk/lib": "import other\n\nenum E = other::Rec | Other\n"}
+_VARIANT_MODULES = {**_OTHER_MODULE, **_LIB_MODULE}
+
+
+@pytest.mark.parametrize(
+    ("modules", "entry"),
+    [
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/* as F\nuse F::*\nlet f = fn(x: Other) => 1\nf\n",
+            id="facade-wildcard-use-inline-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/* as F\nuse F::*\nlet f = fn(x: Rec) => 1\nf\n",
+            id="facade-wildcard-use-reused-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib\nuse pk/lib::*\nlet f = fn(x: Other) => 1\nf\n",
+            id="plain-import-use",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/* as F\nuse F::{E}\nlet f = fn(x: Other) => 1\nf\n",
+            id="selective-use",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib::*\nlet f = fn(x: Other) => 1\nf\n",
+            id="import-star",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib\nlet f = fn(x: pk/lib::Other) => 1\nf\n",
+            id="module-qualified",
+        ),
+        pytest.param(
+            _OTHER_MODULE,
+            "import other\n\nenum E = other::Rec | Other\n\nlet f = fn(x: Other) => 1\nf\n",
+            id="declaring-module-inline-variant",
+        ),
+        pytest.param(
+            _OTHER_MODULE,
+            "import other\n\nenum E = other::Rec | Other\n\nlet f = fn(x: Rec) => 1\nf\n",
+            id="declaring-module-reused-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            (
+                "scope s\n"
+                "  import pk/lib::*\n"
+                "  def check(x: Other) -> int = 1\n"
+                "end s\n"
+                "\n"
+                "let v = 1\n"
+                "v\n"
+            ),
+            id="region-scoped-import",
+        ),
+    ],
+)
+def test_enum_variant_expansion_never_contributes_a_bare_type(
+    tmp_path: Path, modules: dict[str, str], entry: str
+) -> None:
+    """A bare-exposed enum's variant name is unknown in type position, not hidden.
+
+    Variant expansion offers ``Other``/``Rec`` as a constructor and pattern
+    candidate only: a type annotation naming it fails the same way an
+    undeclared type would (plain ``AglTypeError``), never as a
+    :class:`HiddenMemberError`/:class:`ReferencedMemberError` -- those mean a
+    route to a real member exists but is currently blocked, which is not the
+    case here since no route ever contributes the name as a type at all.
+    """
+    graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
+    with pytest.raises(AglTypeError) as raised:
+        check_program(resolve_program(graph), base_caps())
+    assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))
+
+
+@pytest.mark.parametrize(
+    ("modules", "entry"),
+    [
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/* as F\nuse F::*\nlet f = fn(x: E) => 1\nf(Other)\n",
+            id="facade-wildcard-use-inline-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/* as F\nuse F::*\nlet f = fn(x: E) => 1\nf(Rec(x=1))\n",
+            id="facade-wildcard-use-reused-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib\nuse pk/lib::*\nlet f = fn(x: E) => 1\nf(Other)\n",
+            id="plain-import-use",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib::*\nlet f = fn(x: E) => 1\nf(Other)\n",
+            id="import-star",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            "import pk/lib\nlet f = fn(x: pk/lib::E) => 1\nf(pk/lib::Other)\n",
+            id="module-qualified",
+        ),
+        pytest.param(
+            _OTHER_MODULE,
+            "import other\n\nenum E = other::Rec | Other\n\nlet f = fn(x: E) => 1\nf(Other)\n",
+            id="declaring-module-inline-variant",
+        ),
+        pytest.param(
+            _OTHER_MODULE,
+            "import other\n\nenum E = other::Rec | Other\n\nlet f = fn(x: E) => 1\nf(Rec(x=1))\n",
+            id="declaring-module-reused-variant",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            ("import pk/* as F\nuse F::*\nlet v: E = Other\ncase v of | Other => 1 | _ => 0\n"),
+            id="pattern-position",
+        ),
+        pytest.param(
+            _VARIANT_MODULES,
+            ("scope s\n  import pk/lib::*\n  def make() -> E = Other\nend s\n\nlet v = 1\nv\n"),
+            id="region-scoped-import",
+        ),
+    ],
+)
+def test_enum_variant_expansion_still_contributes_a_bare_constructor(
+    tmp_path: Path, modules: dict[str, str], entry: str
+) -> None:
+    """The same bare-exposed variant name resolves fine as a value or pattern.
+
+    Contrasts with :func:`test_enum_variant_expansion_never_contributes_a_bare_type`:
+    only the type-position route is suppressed. A selective ``use`` of the
+    enum alone (``use F::{E}``) never bare-exposes its variants at all -- not
+    even as a value -- so it has no counterpart here.
+    """
+    graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
+
+
+_BOX_ITEM_PRELUDE = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item\ntype B = Box\n"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param(_BOX_ITEM_PRELUDE + "let f = fn(x: B::Item) => 1\nf\n", id="type"),
+        pytest.param(_BOX_ITEM_PRELUDE + "let f = B::Item(n = 1)\nf\n", id="value"),
+        pytest.param(
+            _BOX_ITEM_PRELUDE
+            + "let v = Box::Item(n = 1)\nlet f = case v of\n  | B::Item => 1\n  | _ => 2\nf\n",
+            id="pattern",
+        ),
+        pytest.param(
+            _BOX_ITEM_PRELUDE + "let v = Box::Item(n = 1)\nlet f = v is B::Item\nf\n",
+            id="is",
+        ),
+    ],
+)
+def test_a_referenced_members_own_path_selection_does_not_carry_through_an_alias(
+    tmp_path: Path, entry: str
+) -> None:
+    """``Box::Item`` selects directly at its enum's own declaration path, but
+    an alias of that enum never carries this exception: ``B::Item`` stays a
+    referenced member, rejected in every position."""
+    graph = make_graph_from_files(tmp_path, {"entry": entry})
+    with pytest.raises(ReferencedMemberError):
+        check_program(resolve_program(graph), base_caps())

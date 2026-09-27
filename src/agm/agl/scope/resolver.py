@@ -121,7 +121,6 @@ from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
     MemberHidden,
     MemberReferenced,
-    MemberSelection,
     OwnerRoute,
     nominal_selection,
     owner_member_selection,
@@ -1045,24 +1044,23 @@ class _Resolver:
         member: str,
         span: SourceSpan | None,
         route: OwnerRoute | None,
-    ) -> MemberSelection | None:
-        """Return what ``spelling::member`` selects through *owner*, by identity.
+    ) -> None:
+        """Raise if ``spelling::member`` is currently unreachable through *owner*, by identity.
 
         Raises :class:`ReferencedMemberError` or the hidden-member error for
-        a referenced or hidden member; ``None`` when *owner* itself is
-        unresolved (an unknown or ambiguous owner), left to typecheck's
-        existing diagnostics. *route*, when given, live-filters a nominal
-        (non-alias) owner reached indirectly (see
-        :func:`~agm.agl.scope.type_names.owner_member_selection`).
+        a referenced or hidden member; does nothing when *owner* itself is
+        unresolved (an unknown or ambiguous owner, left to typecheck's
+        existing diagnostics) or when the member selects. *route*, when
+        given, live-filters a nominal (non-alias) owner reached indirectly
+        (see :func:`~agm.agl.scope.type_names.owner_member_selection`).
         """
         if owner is None:
-            return None
+            return
         selection = owner_member_selection(owner, member, route)
         if isinstance(selection, MemberReferenced):
             raise ReferencedMemberError(spelling, member, span=span)
         if isinstance(selection, MemberHidden):
             raise HiddenMemberError(f"{spelling}::{member}", span=span)
-        return selection
 
     def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
         """Return the module's alias scope paths with their declarations, computed once.
@@ -2111,7 +2109,10 @@ class _Resolver:
             variant_qname = (module, _bare_atom((*owner_path, member.name)))
             if variant_qname not in selected_qnames:
                 continue
-            scope.contribute_bare(member.name, self._cross_module_binding_ref(variant_qname))
+            scope.contribute_bare(
+                member.name,
+                replace(self._cross_module_binding_ref(variant_qname), is_variant_member=True),
+            )
             scope.contribute_bare_constructor(
                 member.name, self._cross_module_constructor_refs[variant_qname]
             )
@@ -2129,6 +2130,7 @@ class _Resolver:
                 kind=BinderKind.constructor_binding,
                 module_id=constructor.owner_module_id,
                 scope_path=constructor.owner_path,
+                is_variant_member=True,
             )
             scope.contribute_bare(constructor.owner_name, ref)
             scope.contribute_bare_constructor(constructor.owner_name, constructor)
@@ -4185,6 +4187,18 @@ class _Resolver:
         )
         return frozenset(modules)
 
+    def _use_modules(
+        self, contribution: ImportedUseContribution, origin: int | None
+    ) -> frozenset[ModuleId]:
+        """Return *contribution*'s currently live module set.
+
+        Fixed to *contribution*'s own snapshot unless it is a wildcard-facade
+        use, whose module set is re-derived live (:meth:`_facade_modules`).
+        """
+        if origin is None:
+            return frozenset(qname[0] for qname in contribution.members.values())
+        return self._facade_modules(contribution, origin)
+
     def _facade_refresh(
         self, contribution: ImportedUseContribution, name: NameAtom
     ) -> tuple[set[BindingRef], set[BindingRef], set[ConstructorRef]] | None:
@@ -4202,16 +4216,15 @@ class _Resolver:
         if any(_atom_under_prefix(name, prefix) for prefix in contribution.hidden_prefixes):
             return None
         origin = contribution.target.wildcard_facade_origin_node_id
+        modules = self._use_modules(contribution, origin)
         if origin is None:
             stale: set[BindingRef] = set()
             bindings = set(contribution.bindings.get(name, frozenset()))
             constructors = set(contribution.constructors.get(name, frozenset()))
-            modules = frozenset(qname[0] for qname in contribution.members.values())
         else:
             existing_refs = tuple(ref for refs in contribution.bindings.values() for ref in refs)
             if not existing_refs:
                 return None
-            modules = self._facade_modules(contribution, origin)
             stale = {
                 ref
                 for ref in contribution.bindings.get(name, frozenset())
@@ -4234,6 +4247,50 @@ class _Resolver:
         bindings |= variant_bindings
         constructors |= variant_constructors
         return stale, bindings, constructors
+
+    def _variant_binding_ref(self, constructor: ConstructorRef, span: SourceSpan) -> BindingRef:
+        """Build the bare-exposed variant convenience binding for *constructor*.
+
+        Marked ``is_variant_member`` so no consumer mistakes the injected
+        binding for a type contribution: variant expansion offers a
+        constructor and pattern candidate only, never a re-exported type.
+        """
+        return BindingRef(
+            name=constructor.owner_name,
+            mutable=False,
+            decl_span=span,
+            decl_node_id=constructor.owner_decl_node_id,
+            kind=BinderKind.constructor_binding,
+            module_id=constructor.owner_module_id,
+            scope_path=constructor.owner_path,
+            is_variant_member=True,
+        )
+
+    def _enum_variant_members(
+        self, qname: QName
+    ) -> Iterator[tuple[NameAtom, ConstructorRef, ScopePath]]:
+        """Yield each bare atom, constructor, and hidden-check path an enum expands into.
+
+        Shared by the live overlay (:meth:`_facade_variant_refs`) and its
+        static re-snapshot (:meth:`_refresh_imported_use`): a bare-exposed
+        enum type makes its own variants bare-matchable too, referenced
+        members included. A referenced member's hidden-check path is its own
+        declaration route; an inline member's is its path under the enum's
+        own scope, since hiding always spells the enum-qualified path.
+        """
+        declaration = self._all_public_types.get(qname)
+        if not isinstance(declaration, EnumDef):
+            return
+        module, source = qname
+        owner_path = _bare_path(source)
+        for member in declaration.members:
+            if isinstance(member, VariantRef):
+                for constructor in self._type_owners.referenced_member_refs(module, member):
+                    yield constructor.owner_name, constructor, constructor.owner_path
+                continue
+            variant_qname = (module, _bare_atom((*owner_path, member.name)))
+            variant_constructor = self._cross_module_constructor_refs[variant_qname]
+            yield member.name, variant_constructor, (*owner_path, member.name)
 
     def _facade_variant_refs(
         self, contribution: ImportedUseContribution, modules: frozenset[ModuleId], name: NameAtom
@@ -4259,44 +4316,20 @@ class _Resolver:
         for exposed, qname in contribution.members.items():
             if not isinstance(exposed, str) or qname[0] not in modules:
                 continue
-            declaration = self._all_public_types.get(qname)
-            if not isinstance(declaration, EnumDef):
-                continue
-            module, source = qname
-            owner_path = _bare_path(source)
-            for member in declaration.members:
-                if isinstance(member, VariantRef):
-                    for constructor in self._type_owners.referenced_member_refs(module, member):
-                        if constructor.owner_name != name or hidden(constructor.owner_path):
-                            continue
-                        bindings.add(
-                            BindingRef(
-                                name=constructor.owner_name,
-                                mutable=False,
-                                decl_span=contribution.declaration.span,
-                                decl_node_id=constructor.owner_decl_node_id,
-                                kind=BinderKind.constructor_binding,
-                                module_id=constructor.owner_module_id,
-                                scope_path=constructor.owner_path,
-                            )
-                        )
-                        constructors.add(constructor)
+            for atom, constructor, hidden_path in self._enum_variant_members(qname):
+                if atom != name or hidden(hidden_path):
                     continue
-                if member.name != name or hidden((*owner_path, member.name)):
-                    continue
-                if declares_bare_constructor(
-                    exposures.get(member.name, ()), self._all_public_types
+                # A same-named record or exception exposed bare already owns
+                # the spelling; its own bare contribution stands alone. Only
+                # an inline member can clash this way -- a referenced member
+                # is always a standalone declaration reached under its own
+                # route already.
+                if constructor.inline_enum_owner_decl_node_id is not None and (
+                    declares_bare_constructor(exposures.get(atom, ()), self._all_public_types)
                 ):
                     continue
-                variant_qname = (module, _bare_atom((*owner_path, member.name)))
-                bindings.add(self._cross_module_binding_ref(variant_qname))
-                # An inline member (unlike a referenced one, handled above) is
-                # always keyed in ``_cross_module_constructor_refs`` under its
-                # own owner path -- ``__init__`` indexes it there directly for
-                # every ``EnumDef`` in ``_all_public_types``, which *qname*
-                # already is (see the ``isinstance(declaration, EnumDef)``
-                # check above).
-                constructors.add(self._cross_module_constructor_refs[variant_qname])
+                bindings.add(self._variant_binding_ref(constructor, contribution.declaration.span))
+                constructors.add(constructor)
         return bindings, constructors
 
     def _refresh_imported_use(
@@ -4310,35 +4343,26 @@ class _Resolver:
         contribution's own snapshot or its current facade modules could
         expose -- so a module gained or a member dropped from a still-present
         module is caught the same way a bare name lookup would catch it, not
-        only a whole module's removal. A contribution that does not refresh
-        every member -- a selective use, even of a wildcard-facade alias --
-        needs no refresh either: its snapshot, already present in *layer*'s
-        copied bare tables, stands as declared.
+        only a whole module's removal. Applied to every refreshing use, not
+        only a wildcard facade: a fixed module set can still redeclare an
+        enum's own members between entries. A contribution that does not
+        refresh every member -- a selective use, even of a wildcard-facade
+        alias -- needs no refresh either: its snapshot, already present in
+        *layer*'s copied bare tables, stands as declared.
         """
         if not contribution.refreshes_all_members:
             return contribution
         origin = contribution.target.wildcard_facade_origin_node_id
-        if origin is None:
-            return contribution
         layer.retract_bare(contribution.bindings, contribution.constructors)
-        modules = self._facade_modules(contribution, origin)
+        modules = self._use_modules(contribution, origin)
         atoms = set(contribution.bindings) | set(contribution.constructors)
-        for module in modules:
-            atoms.update(self._import_env.contributions[module].members)
+        if origin is not None:
+            # A fixed module set (below) can only lose or keep its members;
+            # only a wildcard facade's module set itself grows or shrinks.
+            for module in modules:
+                atoms.update(self._import_env.contributions[module].members)
         for qname in contribution.members.values():
-            declaration = self._all_public_types.get(qname)
-            if not isinstance(declaration, EnumDef):
-                continue
-            for member in declaration.members:
-                if isinstance(member, VariantRef):
-                    atoms.update(
-                        constructor.owner_name
-                        for constructor in self._type_owners.referenced_member_refs(
-                            qname[0], member
-                        )
-                    )
-                else:
-                    atoms.add(member.name)
+            atoms.update(atom for atom, _, _ in self._enum_variant_members(qname))
         bindings: dict[NameAtom, frozenset[BindingRef]] = {}
         constructors: dict[NameAtom, frozenset[ConstructorRef]] = {}
         for atom in atoms:

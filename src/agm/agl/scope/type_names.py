@@ -18,7 +18,7 @@ from typing import TypeGuard
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv, NameAtom, QName, try_resolve_qualified_member
-from agm.agl.scope.symbols import ConstructorRef, ScopePath, TypeOwner
+from agm.agl.scope.symbols import ScopePath, TypeOwner
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
@@ -64,18 +64,16 @@ class TypeNameSite:
     type_params: frozenset[str] = frozenset()
 
 
-def bare_type_selection(
-    site: TypeNameSite, name: NameAtom
-) -> tuple[frozenset[QName], frozenset[QName]]:
-    """Return what a bare *name* selects beyond own declarations, and the nearest layer's share."""
+def bare_type_selection(site: TypeNameSite, name: NameAtom) -> frozenset[QName]:
+    """Return what a bare *name* selects beyond own declarations."""
     layer = site.contributions(name)
     contributed = frozenset() if layer is None else layer[1]
     if layer is not None and layer[0]:
-        return contributed, contributed
+        return contributed
     imported = frozenset(
         qname for qname in site.import_env.unqualified.get(name, ()) if site.is_type(qname)
     )
-    return contributed | imported, contributed
+    return contributed | imported
 
 
 def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> frozenset[QName]:
@@ -106,7 +104,7 @@ def _type_name_selection(
             if site.declares(path):
                 return frozenset({(site.module_id, _atom(path))}), False
     if qualifier is None:
-        return bare_type_selection(site, type_expr.name)[0], True
+        return bare_type_selection(site, type_expr.name), True
     if anchor is None:
         layer = site.contributions(_atom((*segments, type_expr.name)))
         if layer is not None:
@@ -217,9 +215,7 @@ class OwnerRoute:
 
 @dataclass(frozen=True, slots=True)
 class MemberSelected:
-    """``owner::member`` is reachable, naming *constructor*."""
-
-    constructor: ConstructorRef
+    """``owner::member`` is reachable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,14 +253,12 @@ def owner_member_selection(
     lexical hit (``route`` reporting no indirection) is never filtered. A
     direct owner's referenced name declared at its own path
     (``owner.own_path_referenced``) selects like a declared member instead;
-    an alias never carries that map, so the same name stays referenced
-    through one.
+    an alias never carries that set (see :class:`~agm.agl.scope.symbols.TypeOwner`),
+    so the same name stays referenced through one.
     """
     if member in owner.referenced:
-        if owner.alias is None:
-            own_path = owner.own_path_referenced.get(member)
-            if own_path is not None:
-                return MemberSelected(own_path)
+        if member in owner.own_path_referenced:
+            return MemberSelected()
         return MemberReferenced()
     if member in owner.hidden:
         return MemberHidden()
@@ -280,4 +274,4 @@ def owner_member_selection(
             not in imported_member_selection(route.site, route.owner_expr, member)
         ):
             return MemberHidden()
-    return MemberSelected(constructor)
+    return MemberSelected()

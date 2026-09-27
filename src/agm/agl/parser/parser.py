@@ -443,6 +443,22 @@ def parse_type_expr(
     AglSyntaxError
         On any lex or parse error.
     """
+    result, _next_id = parse_type_expr_seeded(text, start_id=start_id, source=source)
+    return result
+
+
+def parse_type_expr_seeded(
+    text: str,
+    *,
+    start_id: int,
+    source: SourceId | None = None,
+) -> tuple[syntax.TypeExpr, int]:
+    """Parse *text* as a type expression with node ids starting at *start_id*.
+
+    Like :func:`parse_type_expr` but returns ``(type_expr, next_start_id)`` so a
+    caller that embeds the result in a larger synthetic AST (e.g. the REPL's
+    bare-type-entry fallback) can continue assigning ids past it.
+    """
     tree = _parse_tree(_type_parser(), text, source=source)
-    result, _next_id = _transform_tree(tree, start_id=start_id, source=source)
-    return cast(syntax.TypeExpr, result)
+    result, next_id = _transform_tree(tree, start_id=start_id, source=source)
+    return cast(syntax.TypeExpr, result), next_id

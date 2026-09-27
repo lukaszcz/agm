@@ -63,7 +63,6 @@ if TYPE_CHECKING:
         VarRef,
     )
     from agm.agl.syntax.spans import SourceSpan
-    from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import (
         CheckedModule,
         ConstructorSignature,
@@ -710,47 +709,76 @@ class ReplSession:
 
         This is a REPL-only convenience (the language is unchanged): typing a
         type is not a value expression, so without it the entry would surface
-        ``'X' is not defined.``.  *text* is wrapped as the body of a synthetic
-        ``type <fresh> = text`` declaration and run through the same entry
-        pipeline and session scope as any other entry, so a hidden or
-        referenced-only owner is rejected exactly as it is in ``fn(x: text) =>
-        1`` -- scope is the one place that decides this, for every position.
+        ``'X' is not defined.``.  *text* is parsed standalone as a type
+        expression -- its own spans, throwaway ids -- and wrapped
+        programmatically in a synthetic ``type <fresh> = text`` declaration,
+        run through the same entry pipeline and session scope as any other
+        entry: scope is the one place that decides whether an owner is hidden
+        or referenced-only, for every position, so a bare type entry is
+        rejected exactly as it is in ``fn(x: text) => 1``.
+
+        The synthetic program is the *only* resolution attempted: any error
+        other than a hidden/referenced-member rejection or an unapplied
+        generic reference means *text* is not a valid type entry, full stop
+        -- never a cue to re-resolve it against some other environment. A
+        bare unapplied generic (e.g. ``Option``) cannot be an alias body
+        either, but its selected declaration is already known -- the
+        exception raised while checking the alias carries it directly -- so
+        its definition is displayed from there instead.
+
         Like :meth:`type_of`, this never evaluates, promotes, advances the
         node-id counter, or mutates session state: the synthetic declaration
-        is parsed with throwaway ids and discarded once its resolved type (or
-        generic definition) is read.
+        is discarded once its resolved type (or generic definition) is read.
         """
         from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
+        from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.parser import AglSyntaxError, parse_program_seeded
+        from agm.agl.parser import AglSyntaxError, parse_type_expr_seeded
+        from agm.agl.repl.type_display import format_generic_type_def_for_repl
         from agm.agl.scope import AglScopeError
-        from agm.agl.syntax.nodes import TypeAlias
-        from agm.agl.typecheck import AglTypeError
+        from agm.agl.syntax.nodes import Block, Program, TypeAlias
+        from agm.agl.typecheck import AglTypeError, UnappliedGenericTypeError
 
         host_env = self._runtime.host_environment()
+        with spaced_qualifier_collector() as spaced_sink:
+            try:
+                type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
+            except AglSyntaxError:
+                return None
+        spaced_qualifiers = tuple(spaced_sink)
+
         fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
-        try:
-            program, next_node_id = parse_program_seeded(
-                f"type {fresh_name} = {text}", start_id=self._next_node_id, resolve_infix=False
-            )
-        except AglSyntaxError:
-            return None
-        items = program.body.items
-        if len(items) != 1 or not isinstance(items[0], TypeAlias):
-            return None
-        type_expr = items[0].type_expr
+        alias = TypeAlias(
+            name=fresh_name, type_expr=type_expr, span=type_expr.span, node_id=next_node_id
+        )
+        block = Block(items=(alias,), span=type_expr.span, node_id=next_node_id + 1)
+        program = Program(body=block, span=type_expr.span, node_id=next_node_id + 2)
 
         try:
             checked_program = self._entry_pipeline.resolve_and_check_program(
-                program, next_node_id, host_env
+                program, next_node_id + 3, host_env, spaced_qualifiers=spaced_qualifiers
             )
         except (HiddenMemberError, ReferencedMemberError) as exc:
             return self._fail([exc.to_diagnostic()], [])
+        except UnappliedGenericTypeError as exc:
+            return EntryResult(
+                kind="type",
+                name=None,
+                value=None,
+                value_type=None,
+                type_display=format_generic_type_def_for_repl(
+                    exc.display_name, exc.generic_def, self._type_env.type_table
+                ),
+                diagnostics=[],
+                warnings=[],
+                error=None,
+                ok=True,
+            )
         except (
             AglScopeError,
             AglTypeError,
@@ -759,20 +787,10 @@ class ReplSession:
             ModulePrefixNotFound,
             ImportEntryError,
         ):
-            # Scope already accepted (or never saw) *type_expr*'s owner and
-            # qualifier during the attempt above -- a hiding/referenced
-            # rejection would have raised one of the two errors caught above,
-            # since scope resolves before typecheck ever runs (or, if the
-            # entry's module graph itself could not build, never named an
-            # owner to hide at all). Whatever failed, fall back to every
-            # visible type env: a bare unapplied generic (e.g. ``Option``)
-            # cannot be an alias body, so it is displayed as a generic
-            # definition instead, and a builtin primitive resolves even when
-            # no graph env is available.
-            return self._try_type_entry_in_any_env(type_expr)
+            return None
 
         checked = checked_program.modules[checked_program.entry_id]
-        typ = checked.type_env.resolve_type_expr(type_expr, span=type_expr.span)
+        typ = checked_program.program_type_table[(checked_program.entry_id, (), fresh_name)]
         return EntryResult(
             kind="type",
             name=None,
@@ -784,114 +802,6 @@ class ReplSession:
             ok=True,
             type_table=checked.type_env.type_table,
         )
-
-    def _try_type_entry_in_any_env(self, type_expr: "TypeExpr") -> EntryResult | None:
-        """Return a type-entry result for *type_expr*, trying every visible type env.
-
-        Tries a bare unapplied generic's definition display first, then a
-        plain resolution, in each env in turn: the session's own (which
-        resolves a builtin primitive even without a graph env) and a
-        throwaway program-level one built fresh for std/imported names.
-        """
-        from agm.agl.typecheck import AglTypeError
-
-        type_envs = [self._type_env]
-        program_type_env = self._build_type_entry_program_env()
-        if program_type_env is not None:
-            type_envs.append(program_type_env)
-        for type_env in type_envs:
-            generic_result = self._try_generic_type_entry(type_expr, type_env)
-            if generic_result is not None:
-                return generic_result
-            try:
-                typ = type_env.resolve_type_expr(type_expr)
-            except AglTypeError:
-                continue
-            return EntryResult(
-                kind="type",
-                name=None,
-                value=None,
-                value_type=typ,
-                diagnostics=[],
-                warnings=[],
-                error=None,
-                ok=True,
-                type_table=type_env.type_table,
-            )
-        return None
-
-    def _try_generic_type_entry(
-        self,
-        type_expr: "TypeExpr",
-        type_env: "TypeEnvironment",
-    ) -> EntryResult | None:
-        """Return a type-entry result for a bare unapplied generic, if any."""
-        from agm.agl.repl.type_display import format_generic_type_def_for_repl
-        from agm.agl.syntax.types import NameT
-        from agm.agl.typecheck import AglTypeError
-
-        if not isinstance(type_expr, NameT):
-            return None
-        try:
-            if type_expr.qualifier is None:
-                resolved = type_env.resolve_unapplied_generic_type(
-                    type_expr.name,
-                    span=type_expr.span,
-                )
-            else:
-                resolved = type_env.resolve_qualified_unapplied_generic_type(
-                    type_expr.qualifier,
-                    type_expr.name,
-                    span=type_expr.span,
-                )
-        except AglTypeError:
-            return None
-        if resolved is None:
-            return None
-        display_name, gdef = resolved
-        return EntryResult(
-            kind="type",
-            name=None,
-            value=None,
-            value_type=None,
-            type_display=format_generic_type_def_for_repl(display_name, gdef, type_env.type_table),
-            diagnostics=[],
-            warnings=[],
-            error=None,
-            ok=True,
-        )
-
-    def _build_type_entry_program_env(self) -> "TypeEnvironment | None":
-        """Build a throwaway program-level type env for std/imported type entries."""
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
-        from agm.agl.parser import AglSyntaxError, parse_program_seeded
-        from agm.agl.scope import AglScopeError
-        from agm.agl.typecheck import AglTypeError
-
-        host_env = self._runtime.host_environment()
-        try:
-            program, next_start_id = parse_program_seeded(
-                "()", start_id=self._next_node_id, resolve_infix=False
-            )
-            checked_program = self._entry_pipeline.resolve_and_check_program(
-                program, next_start_id, host_env
-            )
-        except (
-            AglSyntaxError,
-            AglScopeError,
-            AglTypeError,
-            ModuleNotFound,
-            AmbiguousModule,
-            ModulePrefixNotFound,
-            ImportEntryError,
-        ):
-            return None
-        return checked_program.modules[checked_program.entry_id].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.

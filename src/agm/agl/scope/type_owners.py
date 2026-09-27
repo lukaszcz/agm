@@ -294,9 +294,12 @@ class TypeOwnerIndex:
                     if isinstance(member, VariantRef)
                     for constructor in self.referenced_member_refs(module_id, member)
                 ),
-                own_path_referenced=self._own_path_referenced_members(module_id, path, declaration),
+                own_path_referenced=self._own_path_referenced_names(module_id, path, declaration),
             )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
+        # None of an alias's TypeOwner constructions below pass
+        # own_path_referenced, so it stays empty: an alias never selects a
+        # referenced member at its own path, only at its target's.
         # Typecheck judges a target scope selects no declaration for, so the
         # alias is presumed constructible; an alias cycle meets it that way.
         presumed = TypeOwner(
@@ -373,23 +376,23 @@ class TypeOwnerIndex:
             for name in (member.chain.member, *(ref.owner_name for ref in refs))
         )
 
-    def _own_path_referenced_members(
+    def _own_path_referenced_names(
         self, module_id: ModuleId, path: ScopePath, declaration: EnumDef
-    ) -> dict[str, ConstructorRef]:
-        """Return each own-path referenced member's constructor, by its terminal name.
+    ) -> frozenset[str]:
+        """Return each own-path referenced member's terminal name.
 
         ``enum Owner = ... | Owner::Name`` nests ``Name``'s separate
         declaration directly beneath *path*, unlike a member referenced from
         elsewhere: such a name selects through this owner like a declared one
         (see :attr:`TypeOwner.own_path_referenced`).
         """
-        return {
-            ref.owner_name: ref
+        return frozenset(
+            ref.owner_name
             for member in declaration.members
             if isinstance(member, VariantRef)
             for ref in self.referenced_member_refs(module_id, member)
             if ref.owner_module_id == module_id and ref.owner_path == path
-        }
+        )
 
     def _resolve_referenced_member(
         self, module_id: ModuleId, member: VariantRef

@@ -10,6 +10,9 @@ Public API
   plus shared ``program_type_table``.
 - :class:`OutputContractSpec` — per-call codec + target-type record.
 - :class:`AglTypeError` — fatal type error (span-aware ``AglError`` subclass).
+- :class:`UnappliedGenericTypeError` — an ``AglTypeError`` for a bare generic
+  type reference missing its type arguments; carries the resolved
+  ``GenericTypeDef`` and display name.
 """
 
 from agm.agl.semantics.types import (
@@ -47,6 +50,7 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
+    UnappliedGenericTypeError,
     assert_checked_module_closed,
 )
 from agm.agl.typecheck.program import (
@@ -85,6 +89,7 @@ __all__ = [
     "TypeTemplate",
     "TypeTemplateMatch",
     "TypeVarType",
+    "UnappliedGenericTypeError",
     "UnitType",
     "assert_checked_program_closed",
     "assert_checked_module_closed",

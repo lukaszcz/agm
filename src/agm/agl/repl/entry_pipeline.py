@@ -258,7 +258,7 @@ class EntryPipeline:
 
         Shared by REPL call sites that only need a checked program — no match
         compilation, lowering, or evaluation — such as ``type_of`` and the
-        throwaway std/import type-environment builder. Raises the underlying
+        bare-type-entry fallback. Raises the underlying
         ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
         on failure; callers that need diagnostics instead of a raised exception
         must catch these themselves.

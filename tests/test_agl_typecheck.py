@@ -10840,6 +10840,99 @@ class TestResolveTypeExprTypeVars:
         with pytest.raises(AglTypeError, match="outside of a module graph"):
             TypeEnvironment().resolve_type_expr(expr)
 
+    def test_qualified_unapplied_type_requires_graph_context(self) -> None:
+        from agm.agl.syntax import QualifierChain, QualifierSegment
+        from agm.agl.syntax.types import NameT
+
+        sp = mk_span()
+        expr = NameT(
+            name="Box",
+            span=sp,
+            node_id=2,
+            qualifier=QualifierChain(
+                anchor=None,
+                segments=(QualifierSegment("lib", None, sp, 3),),
+                member="Box",
+                span=sp,
+                node_id=3,
+            ),
+        )
+        with pytest.raises(AglTypeError, match="outside of a module graph"):
+            TypeEnvironment().resolve_type_expr(expr)
+
+    def test_bare_named_type_contributed_by_an_unresolvable_alias_key_is_unknown(self) -> None:
+        """``resolve_named_type`` returns ``None`` for a bare name a program table
+        contributes as an alias identity that the environment cannot itself
+        resolve (no resolver): the qualifier/pattern caller then reports its
+        own "not a member" diagnostic instead of a resolved type."""
+        from agm.agl.scope.imports import ImportEnv
+
+        other = ModuleId.from_path("lib")
+        qname = (other, "Foo")
+        import_env = ImportEnv(contributions={}, unqualified={"Foo": frozenset({qname})})
+        env = TypeEnvironment(
+            program_alias_keys=frozenset({(other, (), "Foo")}),
+            import_env=import_env,
+        )
+        assert env.resolve_named_type("Foo") is None
+
+    def test_qualified_type_contributed_by_an_unresolvable_alias_key_does_not_name_a_type(
+        self,
+    ) -> None:
+        """``resolve_qualified_name_type`` reports "does not name a type" for a
+        qualified route the import environment resolves to an alias identity
+        that this environment cannot itself resolve (no resolver): unlike the
+        bare-name path (:func:`_resolve_type_key_as_bare`), a qualified route
+        has no own-module alias name to fall back to, so it raises directly."""
+        from agm.agl.scope.imports import ImportEnv, ModuleContribution
+        from agm.agl.syntax import QualifierChain, QualifierSegment
+
+        sp = mk_span()
+        other = ModuleId.from_path("lib")
+        qname = (other, "Foo")
+        contribution = ModuleContribution(other, {}, True, frozenset(), path_members={"Foo": qname})
+        import_env = ImportEnv(contributions={other: contribution}, unqualified={})
+        env = TypeEnvironment(
+            program_alias_keys=frozenset({(other, (), "Foo")}),
+            import_env=import_env,
+        )
+        qualifier = QualifierChain(
+            anchor=None,
+            segments=(QualifierSegment("lib", None, sp, 3),),
+            member="Foo",
+            span=sp,
+            node_id=3,
+        )
+        with pytest.raises(AglTypeError, match="does not name a type"):
+            env.resolve_qualified_name_type(qualifier, "Foo", span=sp)
+
+    def test_locally_scoped_qualified_type_resolves_outside_of_a_module_graph(self) -> None:
+        """A qualifier that selects a type declared in this env's own scope
+        region resolves directly against that local declaration, without ever
+        consulting an ``ImportEnv``: the route-collision check the qualifier
+        would otherwise need an ``ImportEnv`` for has nothing to collide with
+        when there is none."""
+        from agm.agl.syntax import QualifierChain, QualifierSegment
+        from agm.agl.syntax.types import NameT
+
+        sp = mk_span()
+        env = TypeEnvironment()
+        typ = BUILTIN_PRELUDE_TYPES["ExecResult"]
+        env.register_type("s::Foo", typ)
+        expr = NameT(
+            name="Foo",
+            span=sp,
+            node_id=2,
+            qualifier=QualifierChain(
+                anchor=None,
+                segments=(QualifierSegment("s", None, sp, 3),),
+                member="Foo",
+                span=sp,
+                node_id=3,
+            ),
+        )
+        assert env.resolve_type_expr(expr) is typ
+
     def test_self_qualified_unknown_applied_type_rejected(self) -> None:
         err = reject_type("let x: ::Missing[int] = null\nx")
         assert "'Missing'" in str(err)

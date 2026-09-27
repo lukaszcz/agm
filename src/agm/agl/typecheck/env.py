@@ -270,6 +270,28 @@ class GenericTypeDef(_Record):
     template: RecordType | EnumType
 
 
+class UnappliedGenericTypeError(AglTypeError):
+    """A bare reference to a generic type is missing its type arguments.
+
+    Raised in place of a plain ``AglTypeError`` at the point resolution
+    already holds the unambiguously selected :class:`GenericTypeDef`, so a
+    caller wanting to display it (the REPL's bare-type-entry echo) reads
+    ``generic_def``/``display_name`` off the exception instead of resolving
+    the name a second time.
+    """
+
+    def __init__(
+        self, display_name: str, generic_def: GenericTypeDef, *, span: SourceSpan | None
+    ) -> None:
+        super().__init__(
+            f"Generic type '{display_name}' requires {len(generic_def.type_params)} "
+            f"type argument(s); use '{display_name}[...]' to apply it.",
+            span=span,
+        )
+        self.display_name = display_name
+        self.generic_def = generic_def
+
+
 @_pickles_by_name
 @dataclass(frozen=True, slots=True)
 class GenericAliasDef(_Record):
@@ -1639,10 +1661,9 @@ class TypeEnvironment:
             # Bare contributions from a root ``use`` and import tails share one
             # resolution rank. A contribution from a nearer named region still
             # shadows the module-root rank.
-            resolved = self._bare_type_key(name, span)
-            if resolved is None:
+            key = self._bare_type_key(name, span)
+            if key is None:
                 return None
-            key = resolved[0]
             own_alias = self._own_alias_name_for_key(key)
             if own_alias is None:
                 return self._program_named_type(key, name, span)
@@ -1708,6 +1729,9 @@ class TypeEnvironment:
     ) -> Type | None:
         """Resolve a program-qualified name used as an unapplied type expression."""
         key = self._qname_decl_key(qname)
+        generic = self._program_generic_table.get(key)
+        if generic is not None:
+            raise UnappliedGenericTypeError(exposed_name, generic, span=span)
         typ = self._program_type_table.get(key)
         if typ is not None:
             return typ
@@ -1932,25 +1956,23 @@ class TypeEnvironment:
             name, {self._qname_decl_key(qname) for qname in qnames}, span
         )
 
-    def _bare_type_key(self, name: str, span: SourceSpan | None) -> tuple[DeclKey, bool] | None:
-        """Resolve a bare type across equally ranked root use and import routes.
-
-        Reports alongside the identity whether it came from the nearest
-        region's own contributions, which callers need to choose between an
-        unapplied and a bare resolution. One selection answers both.
-        """
-        selected, contributed = bare_type_selection(self._type_name_site(), name)
-        key = self._unique_bare_type_key(
+    def _bare_type_key(self, name: str, span: SourceSpan | None) -> DeclKey | None:
+        """Resolve a bare type across equally ranked root use and import routes."""
+        selected = bare_type_selection(self._type_name_site(), name)
+        return self._unique_bare_type_key(
             name, {self._qname_decl_key(qname) for qname in selected}, span
-        )
-        return (
-            None
-            if key is None
-            else (key, key in {self._qname_decl_key(qname) for qname in contributed})
         )
 
     def _is_type_contribution(self, ref: BindingRef) -> bool:
-        """Whether a shared bare contribution refers to a type declaration."""
+        """Whether a shared bare contribution refers to a type declaration.
+
+        A bare-exposed enum variant's injected constructor binding
+        (``ref.is_variant_member``) is a constructor/pattern candidate only,
+        never a type contribution, whatever route otherwise shares its
+        declaration -- variant expansion never re-exports a type.
+        """
+        if ref.is_variant_member:
+            return False
         key = (ref.module_id, ref.scope_path, ref.name)
         if key in self._program_type_table or key in self._program_generic_table:
             return True
@@ -1988,27 +2010,16 @@ class TypeEnvironment:
     def _resolve_type_key_unapplied(
         self, key: DeclKey, name: NameAtom, span: SourceSpan | None
     ) -> Type:
-        """Resolve one region-contributed declaration identity, rejecting a bare generic."""
+        """Resolve one deduplicated bare/opened declaration identity, rejecting a bare generic."""
         generic = self._program_generic_table.get(key)
         if generic is not None:
-            rendered = _render_type_atom(name)
-            raise AglTypeError(
-                f"Generic type '{rendered}' requires {len(generic.type_params)} type argument(s); "
-                f"use '{rendered}[...]' to apply it.",
-                span=span,
-            )
-        # A region-contributed key names a declared type.
+            raise UnappliedGenericTypeError(_render_type_atom(name), generic, span=span)
         return cast(Type, self._resolve_type_key_as_bare(key, _render_type_atom(name), span=span))
 
     def _resolve_bare_type(self, name: str, span: SourceSpan | None) -> Type | None:
         """Resolve a bare type across root uses and import tails at the same rank."""
-        resolved = self._bare_type_key(name, span)
-        if resolved is None:
-            return None
-        key, from_region = resolved
-        if from_region:
-            return self._resolve_type_key_unapplied(key, name, span)
-        return self._resolve_type_key_as_bare(key, name, span=span)
+        key = self._bare_type_key(name, span)
+        return None if key is None else self._resolve_type_key_unapplied(key, name, span)
 
     def _resolve_applied_type_key(
         self,
@@ -2096,10 +2107,8 @@ class TypeEnvironment:
         self, name: str, args: tuple[Type, ...], span: SourceSpan | None
     ) -> Type | None:
         """Resolve a bare generic across root uses and import tails at the same rank."""
-        resolved = self._bare_type_key(name, span)
-        if resolved is None:
-            return None
-        return self._resolve_applied_type_key(resolved[0], name, args, span)
+        key = self._bare_type_key(name, span)
+        return None if key is None else self._resolve_applied_type_key(key, name, args, span)
 
     def _lexical_type_name(self, name: str) -> str:
         """Return the nearest scoped spelling of an unqualified type name."""
@@ -2433,11 +2442,7 @@ class TypeEnvironment:
         # Reject a bare reference to a generic type that requires type arguments.
         gdef = self._generic_types.get(name)
         if gdef is not None and len(gdef.type_params) > 0:
-            raise AglTypeError(
-                f"Generic type '{name}' requires {len(gdef.type_params)} type argument(s); "
-                f"use '{name}[...]' to apply it.",
-                span=span,
-            )
+            raise UnappliedGenericTypeError(name, gdef, span=span)
         # Reject a bare reference to a parameterized alias.
         alias_params = self._alias_type_params.get(name, ())
         if name in self._alias_targets and len(alias_params) > 0:
@@ -2523,7 +2528,6 @@ class TypeEnvironment:
             )
             opened_key = self._opened_type_key(opened_atom, span)
             if opened_key is not None:
-                opened = self._resolve_type_key_unapplied(opened_key, opened_atom, span)
                 self._ensure_qualified_type_route_unambiguous(
                     qualifier,
                     name,
@@ -2531,7 +2535,7 @@ class TypeEnvironment:
                     selected_route="use route",
                     span=span,
                 )
-                return opened
+                return self._resolve_type_key_unapplied(opened_key, opened_atom, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None:
@@ -2543,7 +2547,7 @@ class TypeEnvironment:
         qname = self._resolve_import_qname(qualifier, name, span=span)
         if not self._is_program_type_candidate(qname):
             raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
-        typ = self._resolve_program_qname_as_bare_type(qname, name, span=span)
+        typ = self._resolve_program_qname_as_bare_type(qname, f"{rendered}::{name}", span=span)
         if typ is not None:
             return typ
         raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
@@ -2861,90 +2865,6 @@ class TypeEnvironment:
     ) -> GenericTypeDef | None:
         """Look up a cross-module ``GenericTypeDef`` by structured owner identity."""
         return self._program_generic_table.get((module_id, scope_path, name))
-
-    def resolve_unapplied_generic_type(
-        self,
-        name: str,
-        *,
-        span: SourceSpan | None = None,
-    ) -> tuple[str, GenericTypeDef] | None:
-        """Resolve a bare generic type name without applying type arguments.
-
-        This serves REPL type-definition display only. Normal type-expression
-        resolution still rejects unapplied generics because they are not concrete
-        value-level types.
-        """
-        gdef = self._generic_types.get(name)
-        if gdef is not None:
-            return name, gdef
-        resolved = self._bare_type_key(name, span)
-        if resolved is None:
-            return None
-        gdef = self._program_generic_table.get(resolved[0])
-        return None if gdef is None else (name, gdef)
-
-    def resolve_qualified_unapplied_generic_type(
-        self,
-        qualifier: QualifierChain,
-        name: str,
-        *,
-        span: SourceSpan | None = None,
-    ) -> tuple[str, GenericTypeDef] | None:
-        """Resolve a module-qualified generic type name without applying arguments."""
-        if not qualifier.route_segments:
-            gdef = self._generic_types.get(name)
-            if gdef is not None:
-                return name, gdef
-            gdef = self._program_generic_table.get((self._module_id, (), name))
-            return (name, gdef) if gdef is not None else None
-        # A non-empty qualifier may name a local named scope rather than an
-        # import route (e.g. a REPL-retained ``scope A`` generic record
-        # displayed as ``A::Box``).  Try exact local resolution first; a ``/``
-        # route (``QualifierAnchor.MODULE``) is always an import route and is
-        # never probed locally (``_local_qualified_type_name`` enforces this).
-        local_name = self._local_qualified_type_name(qualifier, name)
-        if (
-            local_name is not None
-            and (local_gdef := self._generic_types.get(local_name)) is not None
-        ):
-            local_path, declared_name = _split_scoped_type_name(local_name)
-            self._ensure_qualified_type_route_unambiguous(
-                qualifier,
-                name,
-                (self._module_id, local_path, declared_name),
-                selected_route="type name",
-                span=span,
-            )
-            return local_name, local_gdef
-        if qualifier.anchor is None:
-            opened_atom = to_bare_atom(
-                (*tuple(segment.name for segment in qualifier.segments), name)
-            )
-            opened_key = self._opened_type_key(opened_atom, span)
-            if opened_key is not None:
-                opened_gdef = self._program_generic_table.get(opened_key)
-                if opened_gdef is None:
-                    return None
-                self._ensure_qualified_type_route_unambiguous(
-                    qualifier,
-                    name,
-                    opened_key,
-                    selected_route="use route",
-                    span=span,
-                )
-                rendered = qualifier.render()
-                return f"{rendered}::{name}", opened_gdef
-        if self._import_env is None or not qualifier.segments:
-            return None
-        qname = self._try_resolve_import_qname(qualifier, name)
-        if qname is None:
-            return None
-        gdef = self._program_generic_table.get(self._qname_decl_key(qname))
-        if gdef is None:
-            return None
-        rendered = qualifier.render()
-        qualified_name = f"{rendered}::{name}"
-        return qualified_name, gdef
 
     def all_generic_types(self) -> dict[str, GenericTypeDef]:
         """Return the own-module generic type map (name → GenericTypeDef)."""

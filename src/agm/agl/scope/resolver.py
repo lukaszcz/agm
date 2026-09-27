@@ -1259,8 +1259,8 @@ class _Resolver:
                 node.members = {}
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
-                for contribution in node.imported_use_contributions:
-                    self._refresh_imported_use(node, contribution)
+                # Its use contributions are re-snapshotted later, once for
+                # every layer, by ``_validate_local_use_contributions``.
             nodes[path] = node
         # A replacement type declaration owns fresh constructors: stale enum
         # variants must not survive, while unrelated retained members remain.
@@ -2668,9 +2668,20 @@ class _Resolver:
             self._refresh_layer_contributions(layer)
 
     def _refresh_layer_contributions(self, layer: ScopeNode) -> None:
-        """Make *layer*'s stored bare tables equal its live derivation, re-snapshotting its uses."""
-        for imported_contribution in layer.imported_use_contributions:
+        """Make *layer*'s stored bare tables equal its live derivation, re-snapshotting its uses.
+
+        Only uses declared in the current entry are re-validated below: an
+        earlier entry's use was already validated when it was declared, and
+        re-validating it here would turn a later, unrelated redeclaration
+        into a static error on that old entry instead of on the entry that
+        actually changed. Re-snapshotting is unconditional -- it is not a
+        validity check -- so it runs for every use regardless of which entry
+        declared it.
+        """
+        layer.imported_use_contributions = [
             self._refresh_imported_use(layer, imported_contribution)
+            for imported_contribution in layer.imported_use_contributions
+        ]
         rebuilt: list[LocalUseContribution] = []
         for local_contribution in layer.local_use_contributions:
             layer.retract_bare(local_contribution.bindings, local_contribution.constructors)
@@ -2773,11 +2784,8 @@ class _Resolver:
             contributed_bindings.setdefault(exposed, set()).add(ref)
             contributed_sources.append((exposed, source))
 
-        exposures = {exposed: (qname,) for exposed, qname in selected.items()}
         for exposed, qname in selected.items():
             contribute(exposed, qname)
-            if isinstance(exposed, str):
-                self._contribute_regional_enum_variants(qname, decl.span, exposures=exposures)
         for exposed, source in self._use_renamed_members(decl, members):
             contribute(exposed, source)
         index = len(scope.imported_use_contributions)
@@ -4111,9 +4119,9 @@ class _Resolver:
         for contribution in layer.imported_use_contributions:
             refresh = self._facade_refresh(contribution, name)
             if refresh is not None:
-                stale, qnames, span = refresh
+                stale, refs, _ = refresh
                 bindings.difference_update(stale)
-                bindings.update(self._cross_module_binding_ref(qname) for qname in qnames)
+                bindings.update(refs)
         for local_contribution in layer.local_use_contributions:
             # The static read above carries this contribution's snapshot,
             # taken before a later REPL entry may have redeclared one of its
@@ -4135,11 +4143,7 @@ class _Resolver:
         for contribution in layer.imported_use_contributions:
             refresh = self._facade_refresh(contribution, name)
             if refresh is not None:
-                constructors.update(
-                    constructor
-                    for qname in refresh[1]
-                    if (constructor := self._cross_module_constructor(qname)) is not None
-                )
+                constructors.update(refresh[2])
         for local_contribution in layer.local_use_contributions:
             constructors.difference_update(local_contribution.constructors.get(name, ()))
             candidates = {
@@ -4155,87 +4159,202 @@ class _Resolver:
 
     def _facade_modules(
         self, contribution: ImportedUseContribution, origin: int
-    ) -> frozenset[ModuleId] | None:
+    ) -> frozenset[ModuleId]:
         """Return *contribution*'s current wildcard-facade modules, live at this entry's site.
 
-        ``None`` means "keep the contribution's own snapshot unfiltered",
-        when the union below is empty: an unrelated import replacement can
-        remove a facade alias from this entry's import environment
-        altogether, and the retained contribution then keeps its last
-        resolved surface rather than being erased by an empty refresh.
+        A later declaration importing one of the wildcard's own modules by
+        its exact path -- under any alias -- wins that module's generation
+        slot and so drops it from *origin*'s own tracked set, even though the
+        module itself is still perfectly importable. Such a module is kept
+        anyway: it stays live through the contribution's own prior bindings,
+        each checked against the current import environment rather than
+        against *origin* specifically.
         """
-        modules = frozenset(
+        modules = {
             module
             for declarations in self._import_env.facade_aliases.values()
             for node_id, candidates in declarations.items()
             if node_id == origin
             for module in candidates
-        )
-        # A direct replacement of one member import must not shrink a
-        # retained wildcard facade. Preserve contribution modules that are
-        # still independently importable, then add the facade's current
-        # wildcard members. Removed modules are absent from the import
-        # environment and therefore still disappear.
-        modules |= frozenset(
+        }
+        modules.update(
             ref.module_id
             for refs in contribution.bindings.values()
             for ref in refs
             if ref.module_id in self._import_env.contributions
         )
-        return modules or None
+        return frozenset(modules)
 
     def _facade_refresh(
         self, contribution: ImportedUseContribution, name: NameAtom
-    ) -> tuple[set[BindingRef], list[QName], SourceSpan] | None:
-        """Return a refreshing wildcard facade's stale bindings, current members and span.
+    ) -> tuple[set[BindingRef], set[BindingRef], set[ConstructorRef]] | None:
+        """Return a refreshing use's stale and current bindings/constructors for bare *name*.
 
-        ``None`` when *contribution* does not refresh *name*.
+        ``None`` when *contribution* does not refresh *name*: a selective use
+        naming an explicit tail never refreshes, and a hidden name never
+        does either. A wildcard-facade use additionally re-derives which
+        modules are currently live (:meth:`_facade_modules`); any other
+        ``use ...::*`` names a fixed module set that cannot itself grow or
+        shrink, so only the variant expansion below is live for it.
         """
-        origin = contribution.target.wildcard_facade_origin_node_id
-        if origin is None or not contribution.refreshes_all_members:
+        if not contribution.refreshes_all_members:
             return None
         if any(_atom_under_prefix(name, prefix) for prefix in contribution.hidden_prefixes):
             return None
-        existing_refs = tuple(ref for refs in contribution.bindings.values() for ref in refs)
-        if not existing_refs:
-            return None
-        modules = self._facade_modules(contribution, origin)
-        stale = {
-            ref
-            for ref in contribution.bindings.get(name, frozenset())
-            if modules is not None and ref.module_id not in modules
-        }
-        qnames = [
-            qname
-            for module in modules or frozenset()
-            if (qname := self._import_env.contributions[module].members.get(name)) is not None
-        ]
-        return stale, qnames, existing_refs[0].decl_span
+        origin = contribution.target.wildcard_facade_origin_node_id
+        if origin is None:
+            stale: set[BindingRef] = set()
+            bindings = set(contribution.bindings.get(name, frozenset()))
+            constructors = set(contribution.constructors.get(name, frozenset()))
+            modules = frozenset(qname[0] for qname in contribution.members.values())
+        else:
+            existing_refs = tuple(ref for refs in contribution.bindings.values() for ref in refs)
+            if not existing_refs:
+                return None
+            modules = self._facade_modules(contribution, origin)
+            stale = {
+                ref
+                for ref in contribution.bindings.get(name, frozenset())
+                if ref.module_id not in modules
+            }
+            qnames = [
+                qname
+                for module in modules
+                if (qname := self._import_env.contributions[module].members.get(name)) is not None
+            ]
+            bindings = {self._cross_module_binding_ref(qname) for qname in qnames}
+            constructors = {
+                constructor
+                for qname in qnames
+                if (constructor := self._cross_module_constructor(qname)) is not None
+            }
+        variant_bindings, variant_constructors = self._facade_variant_refs(
+            contribution, modules, name
+        )
+        bindings |= variant_bindings
+        constructors |= variant_constructors
+        return stale, bindings, constructors
+
+    def _facade_variant_refs(
+        self, contribution: ImportedUseContribution, modules: frozenset[ModuleId], name: NameAtom
+    ) -> tuple[set[BindingRef], set[ConstructorRef]]:
+        """Return the bindings/constructors *contribution*'s bare-exposed enums give bare *name*.
+
+        A facade's bare-exposed enum type makes its own variants
+        bare-matchable too, the same expansion
+        :meth:`_contribute_regional_enum_variants`/:meth:`_contribute_referenced_member`
+        perform for a region-scoped import, but derived live here instead of
+        as a declaration-time side effect, so a later entry re-derives it
+        exactly like every other candidate rather than losing it.
+        """
+        bindings: set[BindingRef] = set()
+        constructors: set[ConstructorRef] = set()
+        if not isinstance(name, str):
+            return bindings, constructors
+
+        def hidden(path: ScopePath) -> bool:
+            return any(_atom_under_prefix(path, prefix) for prefix in contribution.hidden_prefixes)
+
+        exposures = {exposed: (qname,) for exposed, qname in contribution.members.items()}
+        for exposed, qname in contribution.members.items():
+            if not isinstance(exposed, str) or qname[0] not in modules:
+                continue
+            declaration = self._all_public_types.get(qname)
+            if not isinstance(declaration, EnumDef):
+                continue
+            module, source = qname
+            owner_path = _bare_path(source)
+            for member in declaration.members:
+                if isinstance(member, VariantRef):
+                    for constructor in self._type_owners.referenced_member_refs(module, member):
+                        if constructor.owner_name != name or hidden(constructor.owner_path):
+                            continue
+                        bindings.add(
+                            BindingRef(
+                                name=constructor.owner_name,
+                                mutable=False,
+                                decl_span=contribution.declaration.span,
+                                decl_node_id=constructor.owner_decl_node_id,
+                                kind=BinderKind.constructor_binding,
+                                module_id=constructor.owner_module_id,
+                                scope_path=constructor.owner_path,
+                            )
+                        )
+                        constructors.add(constructor)
+                    continue
+                if member.name != name or hidden((*owner_path, member.name)):
+                    continue
+                if declares_bare_constructor(
+                    exposures.get(member.name, ()), self._all_public_types
+                ):
+                    continue
+                variant_qname = (module, _bare_atom((*owner_path, member.name)))
+                bindings.add(self._cross_module_binding_ref(variant_qname))
+                # An inline member (unlike a referenced one, handled above) is
+                # always keyed in ``_cross_module_constructor_refs`` under its
+                # own owner path -- ``__init__`` indexes it there directly for
+                # every ``EnumDef`` in ``_all_public_types``, which *qname*
+                # already is (see the ``isinstance(declaration, EnumDef)``
+                # check above).
+                constructors.add(self._cross_module_constructor_refs[variant_qname])
+        return bindings, constructors
 
     def _refresh_imported_use(
         self, layer: ScopeNode, contribution: ImportedUseContribution
-    ) -> None:
-        """Make *layer*'s stored bare tables reflect *contribution*'s current facade, if any.
+    ) -> ImportedUseContribution:
+        """Return *contribution* re-snapshotted against *layer*'s live derivation.
 
-        The static counterpart of :meth:`_facade_refresh`: the same module
-        derivation, applied once across every atom the contribution's own
-        snapshot covers, rather than queried live for one name at a time. A
-        contribution that names no wildcard-facade origin needs no refresh:
-        its snapshot, already present in *layer*'s copied bare tables, stands.
+        The static counterpart of the per-name reads in
+        :meth:`_layer_bare_bindings`/:meth:`_layer_bare_constructors`: the same
+        :meth:`_facade_refresh` derivation, applied once across every atom the
+        contribution's own snapshot or its current facade modules could
+        expose -- so a module gained or a member dropped from a still-present
+        module is caught the same way a bare name lookup would catch it, not
+        only a whole module's removal. A contribution that does not refresh
+        every member -- a selective use, even of a wildcard-facade alias --
+        needs no refresh either: its snapshot, already present in *layer*'s
+        copied bare tables, stands as declared.
         """
+        if not contribution.refreshes_all_members:
+            return contribution
         origin = contribution.target.wildcard_facade_origin_node_id
         if origin is None:
-            return
+            return contribution
+        layer.retract_bare(contribution.bindings, contribution.constructors)
         modules = self._facade_modules(contribution, origin)
-        for atom, refs in contribution.bindings.items():
-            stale = {ref for ref in refs if modules is not None and ref.module_id not in modules}
-            if stale:
-                layer.bare_contributions.get(atom, set()).difference_update(stale)
-            layer.bare_contributions.setdefault(atom, set()).update(
-                ref for ref in refs if modules is None or ref.module_id in modules
-            )
-        for atom, constructor_refs in contribution.constructors.items():
-            layer.bare_constructor_contributions.setdefault(atom, set()).update(constructor_refs)
+        atoms = set(contribution.bindings) | set(contribution.constructors)
+        for module in modules:
+            atoms.update(self._import_env.contributions[module].members)
+        for qname in contribution.members.values():
+            declaration = self._all_public_types.get(qname)
+            if not isinstance(declaration, EnumDef):
+                continue
+            for member in declaration.members:
+                if isinstance(member, VariantRef):
+                    atoms.update(
+                        constructor.owner_name
+                        for constructor in self._type_owners.referenced_member_refs(
+                            qname[0], member
+                        )
+                    )
+                else:
+                    atoms.add(member.name)
+        bindings: dict[NameAtom, frozenset[BindingRef]] = {}
+        constructors: dict[NameAtom, frozenset[ConstructorRef]] = {}
+        for atom in atoms:
+            refresh = self._facade_refresh(contribution, atom)
+            if refresh is None:
+                continue
+            _, refs, constructor_refs = refresh
+            for ref in refs:
+                layer.contribute_bare(atom, ref)
+            if refs:
+                bindings[atom] = frozenset(refs)
+            for constructor in constructor_refs:
+                layer.contribute_bare_constructor(atom, constructor)
+            if constructor_refs:
+                constructors[atom] = frozenset(constructor_refs)
+        return replace(contribution, bindings=bindings, constructors=constructors)
 
     def _local_use_sources(
         self, contribution: LocalUseContribution, name: NameAtom

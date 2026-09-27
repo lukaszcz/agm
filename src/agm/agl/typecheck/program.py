@@ -99,7 +99,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import DeclarationKey, ModuleResolution
+from agm.agl.scope.symbols import DeclarationKey, ModuleResolution, ScopePath
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.persistent import PersistentDict
@@ -534,7 +534,7 @@ def _build_program_type_table(
             scope_nodes=rmod.resolved.scope_nodes,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
-            env.seed_from(entry_seed_env)
+            env.seed_from(entry_seed_env, retired_member_scopes=resolved.retired_member_scopes)
         # The builder is transient: it only collects headers into ``env``
         # (which bootstraps ``program_type_table`` below).  Body resolution
         # uses the cross-module builders built later, not this one.
@@ -636,7 +636,9 @@ def _build_program_type_table(
             type_table=shared_type_table,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
-            cross_env.seed_from(entry_seed_env)
+            cross_env.seed_from(
+                entry_seed_env, retired_member_scopes=resolved.retired_member_scopes
+            )
         # Seed with own type shells so bare-name local refs resolve.
         for name, t in per_module_envs[mid].non_builtin_type_items():
             cross_env.register_type(name, t)
@@ -755,7 +757,11 @@ def _build_program_func_sig_table(
         # The shared table already holds the session's declarations beneath
         # this entry's own (see ``TypeEnvironment.seed_from``).
         if mid == resolved.entry_id and entry_seed_env is not None:
-            env.seed_from(entry_seed_env, merge_type_table=False)
+            env.seed_from(
+                entry_seed_env,
+                merge_type_table=False,
+                retired_member_scopes=resolved.retired_member_scopes,
+            )
         # Seed the module's own types, and its own generic types so bare-name
         # local generic refs in param/return annotations (e.g. `o: Option[T]`)
         # resolve here too.
@@ -1034,6 +1040,7 @@ def _prepare_module_environment(
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
     declared_seed: DeclaredHeaderSeed | None = None,
+    retired_member_scopes: frozenset[ScopePath] = frozenset(),
 ) -> TypeEnvironment:
     """Build one module's environment before program-wide candidate discovery.
 
@@ -1054,7 +1061,10 @@ def _prepare_module_environment(
       in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
     - ``entry_seed_env``: the session type env, seeded first so that prior REPL
-      bindings are available. The caller supplies it for the entry module only.
+      bindings are available. The caller supplies it for the entry module only,
+      with ``retired_member_scopes`` excluding whatever this entry's own
+      redeclarations retire, so a retiring entry's type positions agree with
+      scope's value/pattern/``is`` positions from the start.
     - ``declared_seed``: the declared headers above, already collected for the
       whole program, so the constructor copies them instead of this function
       registering them one by one. Absent for a module whose tables cannot
@@ -1081,7 +1091,9 @@ def _prepare_module_environment(
     # so re-merging its name index now would regress it onto a name this
     # entry just redeclared (see ``TypeEnvironment.seed_from``).
     if entry_seed_env is not None:
-        env.seed_from(entry_seed_env, merge_type_table=False)
+        env.seed_from(
+            entry_seed_env, merge_type_table=False, retired_member_scopes=retired_member_scopes
+        )
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).
@@ -1287,6 +1299,7 @@ def _prepare_program(
             declared_seed=(
                 None if entry_seed_env is not None and mid == resolved.entry_id else declared_seed
             ),
+            retired_member_scopes=resolved.retired_member_scopes,
         )
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}

@@ -63,6 +63,7 @@ from agm.agl.scope.type_names import (
     owner_type_expr,
     type_name_selection,
 )
+from agm.agl.scope.type_owners import beneath
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
@@ -2951,7 +2952,13 @@ class TypeEnvironment:
 
     # --- Seeding support ---
 
-    def seed_from(self, other: TypeEnvironment, *, merge_type_table: bool = True) -> None:
+    def seed_from(
+        self,
+        other: TypeEnvironment,
+        *,
+        merge_type_table: bool = True,
+        retired_member_scopes: frozenset[ScopePath] = frozenset(),
+    ) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.
 
         Used to pre-populate a fresh environment with a session's accumulated
@@ -2981,26 +2988,58 @@ class TypeEnvironment:
         before this entry) again would hand a name this entry redeclared back
         to its superseded owner; every other table this method copies is
         per-environment state the caller still needs.
+
+        *retired_member_scopes* names the inline enum member scopes this
+        entry's own redeclarations retire (see
+        :func:`~agm.agl.scope.type_owners.retired_member_scopes`, the same set
+        scope excludes from what it retains). A name beneath one is never
+        copied in, so the entry's own type-position checks agree with scope's
+        value/pattern/``is`` positions from the start, instead of only once a
+        later entry's promotion unregisters it.
         """
-        incoming_type_names = (
-            {name for name in other._types if name not in _BUILTIN_FALLBACK_TYPE_NAMES}
-            | set(other._alias_targets)
-            | set(other._generic_types)
-            | set(other._alias_type_params)
-        )
+
+        def retired(name: str) -> bool:
+            return bool(retired_member_scopes) and beneath(
+                tuple(name.split("::")), retired_member_scopes
+            )
+
+        incoming_type_names = {
+            name
+            for name in (
+                {name for name in other._types if name not in _BUILTIN_FALLBACK_TYPE_NAMES}
+                | set(other._alias_targets)
+                | set(other._generic_types)
+                | set(other._alias_type_params)
+            )
+            if not retired(name)
+        }
         for name in incoming_type_names:
             self.unregister_name(name)
         if merge_type_table:
             self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
+            if retired(name):
+                continue
             if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
-        self._alias_targets.update(other._alias_targets)
-        self._resolved_aliases.update(other._resolved_aliases)
+        self._alias_targets.update(
+            {name: expr for name, expr in other._alias_targets.items() if not retired(name)}
+        )
+        self._resolved_aliases.update(
+            {
+                name: aliasdef
+                for name, aliasdef in other._resolved_aliases.items()
+                if not retired(name)
+            }
+        )
         self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
-        self._generic_types.update(other._generic_types)
-        self._alias_type_params.update(other._alias_type_params)
+        self._generic_types.update(
+            {name: gdef for name, gdef in other._generic_types.items() if not retired(name)}
+        )
+        self._alias_type_params.update(
+            {name: params for name, params in other._alias_type_params.items() if not retired(name)}
+        )
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
 

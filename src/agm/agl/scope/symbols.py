@@ -749,11 +749,14 @@ class ScopeNode:
         """Copy this layer into a REPL entry's own image.
 
         Mirrors how a retained named-scope layer is copied into a fresh entry
-        node: ``bindings``/``members`` are shared by reference, since they are
-        read-only during resolve, while the bare tables and use contributions
-        are copied so the entry's own re-derivation (see
+        node: ``bindings`` are shared by reference, since they are read-only
+        during resolve, while the bare tables and use contributions are
+        copied so the entry's own re-derivation (see
         ``_Resolver._refresh_layer_contributions``) never mutates the
-        session's own record.
+        session's own record. ``members`` starts shared too, but
+        ``_build_scope_nodes`` immediately replaces it with a fresh dict,
+        re-registering each retained member one at a time, so this entry's
+        own registrations never mutate it either.
         """
         return ScopeNode(
             node_id=self.node_id,
@@ -789,9 +792,30 @@ class ScopeNode:
     ) -> None:
         """Subtract one contribution's snapshot, promoted into a wider entry's own layer."""
         for atom, refs in bindings.items():
-            self.bare_contributions.get(atom, set()).difference_update(refs)
+            remaining = self.bare_contributions.get(atom)
+            if remaining is None:
+                continue
+            remaining.difference_update(refs)
+            if not remaining:
+                del self.bare_contributions[atom]
         for atom, constructor_refs in constructors.items():
-            self.bare_constructor_contributions.get(atom, set()).difference_update(constructor_refs)
+            remaining_constructors = self.bare_constructor_contributions.get(atom)
+            if remaining_constructors is None:
+                continue
+            remaining_constructors.difference_update(constructor_refs)
+            if not remaining_constructors:
+                del self.bare_constructor_contributions[atom]
+
+    def readd_bare(
+        self,
+        bindings: Mapping[BareAtom, Iterable[BindingRef]],
+        constructors: Mapping[BareAtom, Iterable[ConstructorRef]],
+    ) -> None:
+        """Add back one contribution's snapshot -- the inverse of ``retract_bare``."""
+        for atom, refs in bindings.items():
+            self.bare_contributions.setdefault(atom, set()).update(refs)
+        for atom, constructor_refs in constructors.items():
+            self.bare_constructor_contributions.setdefault(atom, set()).update(constructor_refs)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""

@@ -659,6 +659,18 @@ def test_use_aliases_and_hiding_do_not_leak_enum_variants(tmp_path: Path, use_de
         )
 
 
+def test_wildcard_use_of_a_facade_reaches_a_referenced_enum_member(tmp_path: Path) -> None:
+    """A bare-exposed enum's referenced (``::Name``) member is as reachable
+    through a facade's wildcard ``use`` as an inline member already is."""
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::*\ndef selected() -> Rec = Rec(x = 1)",
+            "lib": "record Rec\n  x: int\n\nenum E = ::Rec | Other",
+        },
+    )
+
+
 def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) -> None:
     with pytest.raises(AglScopeError):
         _entry_resolution(

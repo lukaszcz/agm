@@ -64,7 +64,6 @@ if TYPE_CHECKING:
     )
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
-    from agm.agl.typecheck.declaration_validation import SessionBuiltinDeclarations
     from agm.agl.typecheck.env import (
         CheckedModule,
         ConstructorSignature,
@@ -370,7 +369,9 @@ class ReplSession:
         # declaration in its module graph (each entry recompiles a fresh entry
         # module), so ``validate_builtin_declaration_uniqueness`` reads this
         # instead to catch a later entry importing the same scoped builtin.
-        self._session_builtin_declarations: SessionBuiltinDeclarations = {}
+        self._session_builtin_declarations: dict[
+            tuple[str, ...], tuple["ModuleId", tuple[str, ...]]
+        ] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
@@ -1364,12 +1365,7 @@ class ReplSession:
             ]
             session_node.imported_use_contributions.extend(promoted_imported_uses)
             for contribution in session_node.imported_use_contributions:
-                for atom, refs in contribution.bindings.items():
-                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
-                for atom, constructor_refs in contribution.constructors.items():
-                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
-                        constructor_refs
-                    )
+                session_node.readd_bare(contribution.bindings, contribution.constructors)
             promoted_local_uses = [
                 contribution
                 for contribution in node.local_use_contributions
@@ -1396,34 +1392,21 @@ class ReplSession:
                 if source is not None:
                     session_node.contribute_local_use(replace(local_contribution, source=source))
             for local_contribution in session_node.local_use_contributions:
-                for atom, refs in local_contribution.bindings.items():
-                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
-                for atom, constructor_refs in local_contribution.constructors.items():
-                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
-                        constructor_refs
-                    )
+                session_node.readd_bare(
+                    local_contribution.bindings, local_contribution.constructors
+                )
         self._session_type_paths.update(
             (type_path, checked.resolved.type_owners[type_path])
             for type_path in promoted_type_paths
         )
 
-        # A redeclared enum owner's retired inline members (see ``retired_scopes``
-        # above) stay registered in the type namespace across entries: checking
-        # an entry seeds its environment forward from the prior one, which never
-        # removes a name nothing in this entry redeclares. Retire them from the
-        # type namespace too, deriving the set from the same retirement this
-        # promotion already applied to session scope state, rather than a second
-        # accumulation.
-        retired_type_names = frozenset(
-            name
-            for name in checked.type_env.all_declared_type_names()
-            if beneath(tuple(name.split("::")), retired_scopes)
-        )
-
-        if not partial and not retired_type_names:
+        if not partial:
             # The checked environment already includes the prior sealed session
-            # state and is itself sealed at the checked-output boundary. Reuse it
-            # directly instead of copying the accumulated session a second time.
+            # state and is itself sealed at the checked-output boundary -- it
+            # was seeded with the same ``retired_scopes`` this promotion
+            # received, so a redeclared enum owner's retired inline members are
+            # already gone from its type namespace. Reuse it directly instead
+            # of copying the accumulated session a second time.
             self._type_env = checked.type_env
         else:
             # Build the replacement env in a local so a mid-promotion failure
@@ -1433,20 +1416,16 @@ class ReplSession:
             # between them.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
-            if partial:
-                new_type_env.rewind_from(
-                    self._type_env,
-                    type_names=unpromoted_type_names,
-                    binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
-                    functions={
-                        item.node_id: item.name
-                        for item in entry_declarations
-                        if isinstance(item, FuncDef)
-                        and item.node_id not in promoted_declaration_ids
-                    },
-                )
-            for name in retired_type_names:
-                new_type_env.unregister_name(name)
+            new_type_env.rewind_from(
+                self._type_env,
+                type_names=unpromoted_type_names,
+                binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
+                functions={
+                    item.node_id: item.name
+                    for item in entry_declarations
+                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
+                },
+            )
             new_type_env.seal()
             self._type_env = new_type_env
 

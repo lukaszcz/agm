@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Literal, TypeGuard, assert_never
@@ -30,7 +30,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT, TextT
 from agm.agl.typecheck.env import AglTypeError
 
-SessionBuiltinDeclarations = MutableMapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
+SessionBuiltinDeclarations = Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
 """A REPL session's builtin identities from earlier, still-live entries, keyed by scoped name."""
 
 

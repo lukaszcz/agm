@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
 from unittest.mock import patch
@@ -1333,7 +1334,13 @@ _GROUPING_CASES: dict[
             "enum N\n  | ::Color::Red::Extra\n  | Own",
             "enum Color = Blue",
         ),
-        ((2, 2), (3, 1), (1, 1, 2), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
+        # (2, 2) and (1, 1, 2) are excluded: they would put the referenced
+        # member's own reference and the redeclaration retiring it in one
+        # entry, which is a static error in its own right (see
+        # ``test_declaring_an_alias_in_the_same_entry_that_retires_its_target``
+        # ``_fails_every_position``), not a grouping this scenario's
+        # declarations can set up successfully.
+        ((3, 1), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
         (
             ("Extra", None),
             (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", None),
@@ -1372,6 +1379,49 @@ def _all_groupings(n: int) -> tuple[tuple[int, ...], ...]:
 def _grouping_params_for(n: int) -> list[object]:
     """``sizes`` params covering every grouping of *n* declarations into entries."""
     return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in _all_groupings(n)]
+
+
+def _setup_groupings(
+    decls: tuple[str, ...],
+    make_session: Callable[[], ReplSession] = ReplSession,
+    probe: str | None = None,
+) -> list[object]:
+    """``sizes`` params for every grouping of *decls* whose entries all set up.
+
+    Not every way to split a declaration sequence into REPL entries is a
+    legal session -- an entry's header items must precede its non-header
+    ones, and a declaration can't share an entry with one that later retires
+    its own source. Trying each grouping against a fresh session and keeping
+    only the ones every entry accepts -- and, if *probe* is given, that also
+    leave *probe* resolving -- is more robust than hand-enumerating the legal
+    splits.
+    """
+    valid: list[tuple[int, ...]] = []
+    for sizes in _all_groupings(len(decls)):
+        session = make_session()
+        start = 0
+        ok = True
+        for size in sizes:
+            if not session.eval_entry("\n".join(decls[start : start + size])).ok:
+                ok = False
+                break
+            start += size
+        if ok and probe is not None:
+            ok = session.eval_entry(probe).ok
+        if ok:
+            valid.append(sizes)
+    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in valid]
+
+
+def _color_and_n_session() -> ReplSession:
+    """A fresh session over the same ``m``/``n`` modules as
+    ``TestRetainedAliasTargetIdentity._session``, on its own disposable
+    directory, for ``_setup_groupings`` checks that run at collection time,
+    before ``tmp_path`` is available."""
+    tmp_path = Path(tempfile.mkdtemp())
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    return ReplSession(cwd=tmp_path)
 
 
 def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
@@ -1795,6 +1845,142 @@ class TestRetainedAliasTargetIdentity:
         tested = s.eval_entry("c is C::Green")
         assert tested.value == BoolValue(True)
 
+    _LOCALLY_SHADOWED_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "enum Color = X",
+        "import m::*\nlet d: C = C::Green",
+    )
+
+    @pytest.mark.parametrize(
+        "sizes", _setup_groupings(_LOCALLY_SHADOWED_DECLS, _color_and_n_session)
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """An alias declared through a ``hiding`` import keeps that hiding once
+        its own spelling is shadowed by a later, unrelated local declaration,
+        even though a later unrestricted reimport would otherwise have lifted
+        it: the alias no longer selects exactly its original target, so it
+        freezes at its declaration-time projection instead of re-deriving one
+        from a spelling that is now ambiguous."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    def test_a_hiding_alias_frozen_by_shadowing_keeps_its_own_member_reachable(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        assert s.eval_entry("enum Color = X").ok
+        assert s.eval_entry("import m::*").ok
+
+        assert s.eval_entry("C::Green").ok
+        assert not s.eval_entry("C::X").ok
+
+    _REOPENED_UNDER_FRESH_ALIAS_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "enum Color = X",
+        "import m as mm\nuse mm::*\nlet d: C = C::Green",
+    )
+
+    @pytest.mark.parametrize(
+        "sizes", _setup_groupings(_REOPENED_UNDER_FRESH_ALIAS_DECLS, _color_and_n_session)
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_reopened_under_a_fresh_alias(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """The same freeze as a plain unrestricted reimport, but the later
+        step reopens the module under a fresh import alias and ``use``s it,
+        rather than reimporting the bare module path directly."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._REOPENED_UNDER_FRESH_ALIAS_DECLS, sizes)
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    _BECOMES_AMBIGUOUS_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "import n::*\nlet d: C = C::Green",
+    )
+
+    @pytest.mark.parametrize(
+        "sizes", _setup_groupings(_BECOMES_AMBIGUOUS_DECLS, _color_and_n_session)
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_becomes_ambiguous(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """The same freeze, but the later step makes the spelling ambiguous
+        between two imported modules instead of shadowing it with a local
+        declaration."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._BECOMES_AMBIGUOUS_DECLS, sizes)
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+
+class TestScopedRetainedAliasTargetIdentity:
+    """The same freeze-on-shadowed-or-ambiguous-spelling rule (see
+    ``TestRetainedAliasTargetIdentity``), for an alias reached through a
+    named-scope ``use`` rather than an import.
+    """
+
+    _LOCALLY_SHADOWED_DECLS = (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::* hiding E::A",
+        "type C = E",
+        "enum E = Z",
+        "use s::*\nlet d: C = C::B",
+    )
+
+    @pytest.mark.parametrize("sizes", _setup_groupings(_LOCALLY_SHADOWED_DECLS))
+    @pytest.mark.parametrize(
+        "use",
+        ("C::A", "case d of\n  | C::A => 1\n  | _ => 2", "d is C::A", "fn(x: C::A) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
+        self, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        s = ReplSession()
+        _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    def test_a_hiding_alias_frozen_by_shadowing_keeps_its_own_member_reachable(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope s\n  enum E = A | B\nend s").ok
+        assert s.eval_entry("use s::* hiding E::A").ok
+        assert s.eval_entry("type C = E").ok
+        assert s.eval_entry("enum E = Z").ok
+        assert s.eval_entry("use s::*").ok
+
+        assert s.eval_entry("C::B").ok
+        assert not s.eval_entry("C::Z").ok
+
 
 def test_an_indirect_alias_keeps_its_declaration_time_members_once_its_target_is_retired() -> None:
     """A retained alias reached through a ``use`` route falls back to its
@@ -1922,20 +2108,9 @@ def test_alias_rejects_a_member_of_a_same_path_enum_declared_after_its_target_is
     assert not isinstance(excinfo.value, HiddenMemberError)
 
 
-@pytest.mark.parametrize(
-    "use",
-    (
-        "C::A",
-        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
-        "(C::A) is C::A",
-        "fn(x: C::A) => 1",
-    ),
-    ids=("value", "pattern", "is", "type"),
-)
-def test_declaring_an_alias_in_the_same_entry_that_retires_its_target_fails_every_position(
-    use: str,
-) -> None:
-    """A brand-new alias never gets a chance to disagree with its own entry.
+def _assert_alias_fails_in_its_declaring_entry(use: str) -> None:
+    """Shared body: an alias declared in the same entry that retires its
+    target never comes into being, at whichever position *use* probes.
 
     When the ``use`` an alias would be reached through, and the redeclaration
     that retires it, both land in the one entry that also declares the alias,
@@ -1943,8 +2118,6 @@ def test_declaring_an_alias_in_the_same_entry_that_retires_its_target_fails_ever
     already gone before the entry's own declarations are even resolved, so it
     fails to resolve there -- exactly like file mode, where such a
     redeclaration and reference could never coexist in one compilation unit.
-    Value, pattern, ``is`` and type positions must all fail the same way, not
-    let one succeed on a stale reference while the others reject it.
     """
     s = ReplSession()
     for decl in ("enum Foo | Old", "enum Foo::Old::E = A | B", "use Foo::Old::*"):
@@ -1960,6 +2133,55 @@ def test_declaring_an_alias_in_the_same_entry_that_retires_its_target_fails_ever
     # path, untouched by the never-promoted redeclaration.
     assert not s.eval_entry("C::A").ok
     assert s.eval_entry("Foo::Old::E::A").ok
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_value_position() -> None:
+    """The alias's value spelling ``C::A`` never resolves: its target enum is
+    retired before this entry's own declarations are resolved."""
+    _assert_alias_fails_in_its_declaring_entry("C::A")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_pattern_position() -> (
+    None
+):
+    """The alias's constructor pattern ``C::A`` never resolves, for the same
+    reason its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("case (C::A) of\n  | C::A => 1\n  | _ => 2")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_is_position() -> None:
+    """The alias's ``is`` spelling ``C::A`` never resolves, for the same
+    reason its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("(C::A) is C::A")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_position() -> None:
+    """The alias's type spelling ``C::A`` never resolves, for the same reason
+    its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("fn(x: C::A) => 1")
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(3))
+@pytest.mark.parametrize(
+    "probe",
+    ("Foo::Old::E::A", "fn(x: Foo::Old::E::A) => 1", "fn(x: Foo::Old::E) => 1"),
+    ids=("value", "type-member", "type-owner"),
+)
+def test_retired_member_scope_is_rejected_at_every_type_and_value_spelling(
+    probe: str, sizes: tuple[int, ...]
+) -> None:
+    """Once a redeclaration retires ``Foo::Old``'s member scope, every
+    spelling of what it used to hold -- the qualified value, the member's
+    own type, and the retired enum's own type -- is rejected, regardless of
+    how the declarations are split into entries."""
+    s = ReplSession()
+    _eval_grouped(s, ("enum Foo | Old", "enum Foo::Old::E = A | B", "enum Foo | New"), sizes)
+
+    result = s.eval_entry(probe)
+
+    assert not result.ok
+    assert result.diagnostics
+    assert result.error is None
 
 
 @pytest.mark.parametrize(
@@ -2106,30 +2328,58 @@ def test_owner_own_path_referenced_member_is_accepted_through_a_qualified_import
     assert s.eval_entry("v is m::Box::Item").value == BoolValue(True)
 
 
+@pytest.mark.parametrize("sizes", _grouping_params_for(2))
 def test_owner_own_path_referenced_member_is_accepted_through_a_use_alias(
-    tmp_path: Path,
+    tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
     """The same own-path referenced member, spelled through a ``use``-opened import alias.
 
-    The import, its ``use``, and every position are one entry: a bare name a
-    ``use`` opens is not retained as a pattern candidate across a later
-    entry's boundary (a separate, pre-existing REPL gap, not this owner
-    selection), so this case is not grouped like the other three import
-    styles.
+    Mirrors ``test_owner_own_path_referenced_member_is_accepted_through_wildcard_import``:
+    the alias import and its ``use`` may land in one entry or split across
+    two, and every value, pattern, ``is``, and type position must agree
+    either way.
     """
     (tmp_path / "m.agl").write_text(
         "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
     )
     s = ReplSession(cwd=tmp_path)
-    result = s.eval_entry(
-        "import m as mm\n"
-        "use mm::*\n"
-        "let v: Box = Box::Item(n = 1)\n"
-        "case v of | Box::Item(n) => n | Empty => 0"
-    )
-    assert result.value == IntValue(1), result.diagnostics
+    _eval_grouped(s, ("import m as mm", "use mm::*"), sizes)
+
+    value = s.eval_entry("let v: Box = Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
     assert s.eval_entry("fn(i: Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | Box::Item(n) => n | Empty => 0")
+    assert matched.value == IntValue(1)
     assert s.eval_entry("v is Box::Item").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(2))
+def test_bare_enum_variant_from_a_use_alias_is_stable_across_entry_groupings(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """A plain enum's variants stay bare-matchable through a ``use``-opened
+    import alias regardless of whether its import and its ``use`` land in
+    one entry or are split across two.
+
+    A ``use``'s bare enum-variant exposure was previously a declaration-time
+    side effect never recorded in the ``use``'s own snapshot, so promoting it
+    to a later entry silently dropped the variants -- this passed only when
+    the import, the ``use``, and every position below shared one entry. A
+    plain variant has no bare type of its own (only a referenced member
+    does, covered by
+    ``test_owner_own_path_referenced_member_is_accepted_through_a_use_alias``),
+    so only its value, pattern, and ``is`` positions apply here.
+    """
+    (tmp_path / "m.agl").write_text("enum Color = Red(n: int) | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m as mm", "use mm::*"), sizes)
+
+    value = s.eval_entry("let c: Color = Red(n = 1)\nc")
+    assert value.ok, value.diagnostics
+    matched = s.eval_entry("let c: Color = Green\ncase c of | Red(n) => n | Green => 2")
+    assert matched.value == IntValue(2)
+    tested = s.eval_entry("let c: Color = Green\nc is Green")
+    assert tested.value == BoolValue(True), tested.diagnostics
 
 
 def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
@@ -2192,13 +2442,18 @@ def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
         s.type_of(use)
 
 
+@pytest.mark.parametrize(
+    "use",
+    ("D::Red", "case c of\n  | D::Red => 1\n  | _ => 2", "c is D::Red", "fn(x: D::Red) => 1"),
+    ids=("value", "pattern", "is", "type"),
+)
 @pytest.mark.parametrize("sizes", _grouping_params_for(4))
 def test_alias_chain_reaches_a_lifted_import_at_every_link(
-    tmp_path: Path, sizes: tuple[int, ...]
+    tmp_path: Path, sizes: tuple[int, ...], use: str
 ) -> None:
     """A chain of aliases must reach a member a later import lifts back in,
-    at every link of the chain, regardless of how the declarations are split
-    into entries."""
+    at every link of the chain and at every position, regardless of how the
+    declarations are split into entries."""
     (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
     s = ReplSession(cwd=tmp_path)
     _eval_grouped(
@@ -2206,10 +2461,12 @@ def test_alias_chain_reaches_a_lifted_import_at_every_link(
         ("import m::* hiding Color::Red", "type K = Color", "type C = K", "import m::{Color}"),
         sizes,
     )
-    assert s.eval_entry("type D = C").ok
+    assert s.eval_entry("type D = C\nlet c: D = Color::Green").ok
 
     for owner in ("K", "C", "D"):
         assert s.eval_entry(f"{owner}::Red").ok
+
+    s.type_of(use)
 
 
 def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
@@ -2225,6 +2482,33 @@ def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
     assert s.eval_entry("C[int]::A(x = 1)").ok
 
 
+def test_alias_of_a_generic_alias_chain_reaches_a_lifted_member() -> None:
+    """A chain of generic aliases must reach a member a later ``use`` lifts
+    back in, mirroring ``test_alias_chain_reaches_a_lifted_import_at_every_link``
+    for a generic target."""
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E[T] = A(x: T) | B\nend s",
+        "use s::* hiding E::A",
+        "type K[T] = E[T]",
+        "type C[T] = K[T]",
+        "use s::*",
+    ):
+        assert s.eval_entry(decl).ok
+
+    for owner in ("K", "C"):
+        assert s.eval_entry(f"{owner}[int]::A(x = 1)").ok
+
+
+_TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS = (
+    "scope s\n  enum E = A | B\nend s",
+    "use s::*",
+    "type K = E",
+    "type C = K",
+    "use s::* hiding E::A",
+)
+
+
 @pytest.mark.parametrize(
     "use",
     (
@@ -2235,22 +2519,21 @@ def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
     ),
     ids=("value", "pattern", "is", "type"),
 )
-def test_a_two_link_alias_chain_narrows_with_a_later_local_use(use: str) -> None:
+@pytest.mark.parametrize("sizes", _setup_groupings(_TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS))
+def test_a_two_link_alias_chain_narrows_with_a_later_local_use(
+    use: str, sizes: tuple[int, ...]
+) -> None:
     """A local ``use ... hiding`` that narrows an earlier glob ``use`` must
     reach through a two-link alias chain (``C`` of ``K`` of ``E``), not only
-    a single alias."""
+    a single alias, regardless of how the declarations are split into
+    entries -- both links agree, and both hide the narrowed member."""
     s = ReplSession()
-    for decl in (
-        "scope s\n  enum E = A | B\nend s",
-        "use s::*",
-        "type K = E",
-        "type C = K",
-        "use s::* hiding E::A",
-    ):
-        assert s.eval_entry(decl).ok
+    _eval_grouped(s, _TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS, sizes)
 
     assert s.eval_entry("K::B").ok
     assert s.eval_entry("C::B").ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of("K::A")
     with pytest.raises(HiddenMemberError):
         s.type_of(use)
 
@@ -2339,6 +2622,7 @@ class TestUseThenRedeclare:
             assert s.eval_entry(decl).ok
 
         assert s.eval_entry("E::C").ok
+        assert s.eval_entry("fn(x: E::C) => 1").ok
         with pytest.raises(AglError) as excinfo:
             s.type_of("E::B")
         assert not isinstance(excinfo.value, HiddenMemberError)
@@ -2353,6 +2637,7 @@ class TestUseThenRedeclare:
             assert s.eval_entry(decl).ok
 
         assert s.eval_entry("E::C").ok
+        assert s.eval_entry("fn(x: E::C) => 1").ok
 
     def test_a_use_hiding_clause_still_applies_after_the_scope_gains_a_member(self) -> None:
         s = ReplSession()
@@ -2400,6 +2685,42 @@ def test_a_runtime_failed_entrys_redeclaration_before_the_failure_point_is_promo
 
 
 @pytest.mark.parametrize(
+    "use",
+    (
+        "E::C",
+        "case (E::C) of\n  | E::C => 1\n  | _ => 2",
+        "(E::C) is E::C",
+        "fn(x: E::C) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_a_statically_failed_entrys_redeclaration_never_takes_effect(use: str) -> None:
+    """An entry that fails statically never takes effect at all, unlike a
+    runtime failure's completed prefix: the scope's earlier member stays
+    reachable and the new one stays absent, in every position."""
+    s = ReplSession()
+    for decl in ("scope s\n  enum E = A | B\nend s", "use s::*"):
+        assert s.eval_entry(decl).ok
+
+    failed = s.eval_entry('scope s\n  enum E = A | C\nend s\n\nlet bad: int = "x"')
+    assert not failed.ok
+    assert failed.error is None
+
+    assert s.eval_entry("fn(x: E::B) => 1").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(use)
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+_USE_OPENED_SCOPE_REDECLARED_DECLS = (
+    "scope s\n  enum E = A | B\nend s",
+    "use s::*",
+    "type C = E",
+    "scope s\n  enum E = X | Y\nend s",
+)
+
+
+@pytest.mark.parametrize(
     ("works", "fails"),
     (
         ("C::A", "C::X"),
@@ -2411,8 +2732,7 @@ def test_a_runtime_failed_entrys_redeclaration_before_the_failure_point_is_promo
 )
 @pytest.mark.parametrize(
     "sizes",
-    ((1, 1, 1, 1), (1, 2, 1)),
-    ids=("1+1+1+1", "1+2+1"),
+    _setup_groupings(_USE_OPENED_SCOPE_REDECLARED_DECLS, probe="let d: C = C::A"),
 )
 def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
     sizes: tuple[int, ...], works: str, fails: str
@@ -2420,22 +2740,11 @@ def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
     """An alias declared through a use-opened scope keeps naming its own
     declaration once that scope is redeclared with different members, in
     every position, matching file mode, regardless of how the declarations
-    are split into entries -- every grouping that keeps each entry's own
-    header items ahead of its non-header ones and never merges the alias's
-    own declaration with the entry that retires its source, the only ones
-    any module admits.
+    are split into entries -- only groupings that set up successfully are
+    exercised (see ``_setup_groupings``).
     """
     s = ReplSession()
-    _eval_grouped(
-        s,
-        (
-            "scope s\n  enum E = A | B\nend s",
-            "use s::*",
-            "type C = E",
-            "scope s\n  enum E = X | Y\nend s",
-        ),
-        sizes,
-    )
+    _eval_grouped(s, _USE_OPENED_SCOPE_REDECLARED_DECLS, sizes)
     assert s.eval_entry("let d: C = C::A").ok
     s.type_of(works)
     with pytest.raises(AglError) as excinfo:
@@ -7777,6 +8086,34 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_named_scope_retained_wildcard_facade_use_reaches_a_referenced_enum_member(
+        self, tmp_path: Path
+    ) -> None:
+        """A named scope's retained wildcard facade use re-derives a
+        referenced (``::Name``) enum member's bare constructor across entries
+        exactly like an inline member (see
+        ``test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries``)."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text(
+            "record Rec\n  x: int\n\nenum E = ::Rec | Other\n", encoding="utf-8"
+        )
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "  def make() -> Rec = Rec(x = 1)\n"
+            "  def describe(r: Rec) -> int = r.x\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::describe(Outer::make())")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_named_scope_retained_wildcard_facade_use_survives_a_shrinking_import(
         self, tmp_path: Path
     ) -> None:
@@ -7911,6 +8248,153 @@ class TestImports:
         assert session.eval_entry("import beta/* as Facade").ok
 
         assert not session.eval_entry("use Facade::*").ok
+
+    def test_retained_wildcard_facade_use_exposes_a_grown_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        """A type a wildcard facade only later discovers is usable in type
+        position exactly where its value position already is."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        (package / "b.agl").write_text("record Second\n  n: int\n", encoding="utf-8")
+
+        typed = session.eval_entry("fn(x: Second) => 1")
+        valued = session.eval_entry("Second(n = 1)")
+
+        assert typed.ok, typed.diagnostics
+        assert valued.ok, valued.diagnostics
+
+    def test_named_scope_retained_wildcard_facade_use_exposes_a_grown_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+        (package / "b.agl").write_text("record Second\n  n: int\n", encoding="utf-8")
+
+        typed = session.eval_entry("scope Outer\n  def typed(x: Second) -> int = 1\nend Outer")
+        valued = session.eval_entry(
+            "scope Outer\n  def valued() -> Second = Second(n = 1)\nend Outer"
+        )
+
+        assert typed.ok, typed.diagnostics
+        assert valued.ok, valued.diagnostics
+
+    def test_retained_wildcard_facade_use_loses_a_shrunk_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        """A type a wildcard facade's glob stops matching is gone from type
+        position exactly where its value position already is, while an
+        unrelated still-matched type keeps both."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("record Second\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        removed.unlink()
+
+        kept_typed = session.eval_entry("fn(x: First) => 1")
+        kept_valued = session.eval_entry("First(n = 1)")
+        lost_typed = session.eval_entry("fn(x: Second) => 1")
+        lost_valued = session.eval_entry("Second(n = 1)")
+
+        assert kept_typed.ok, kept_typed.diagnostics
+        assert kept_valued.ok, kept_valued.diagnostics
+        assert not lost_typed.ok
+        assert not lost_valued.ok
+
+    def test_named_scope_retained_wildcard_facade_use_loses_a_shrunk_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("record Second\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+        removed.unlink()
+
+        kept_typed = session.eval_entry("scope Outer\n  def typed(x: First) -> int = 1\nend Outer")
+        kept_valued = session.eval_entry(
+            "scope Outer\n  def valued() -> First = First(n = 1)\nend Outer"
+        )
+        lost_typed = session.eval_entry(
+            "scope Outer\n  def typed2(x: Second) -> int = 1\nend Outer"
+        )
+        lost_valued = session.eval_entry(
+            "scope Outer\n  def valued2() -> Second = Second(n = 1)\nend Outer"
+        )
+
+        assert kept_typed.ok, kept_typed.diagnostics
+        assert kept_valued.ok, kept_valued.diagnostics
+        assert not lost_typed.ok
+        assert not lost_valued.ok
+
+    def test_wildcard_facade_use_type_position_survives_alias_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record Old\n  n: int\n", encoding="utf-8")
+        (package / "b.agl").write_text("record New\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as OldAlias\nuse OldAlias::{Old}").ok
+
+        replacement = session.eval_entry("import pkg/* as NewAlias\nuse NewAlias::{New}")
+        assert replacement.ok, replacement.diagnostics
+
+        new_typed = session.eval_entry("fn(x: New) => 1")
+        new_valued = session.eval_entry("New(n = 1)")
+        old_typed = session.eval_entry("fn(x: Old) => 1")
+        old_valued = session.eval_entry("Old(n = 1)")
+
+        assert new_typed.ok, new_typed.diagnostics
+        assert new_valued.ok, new_valued.diagnostics
+        assert not old_typed.ok
+        assert not old_valued.ok
+
+    def test_named_scope_wildcard_facade_use_type_position_survives_alias_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record Old\n  n: int\n", encoding="utf-8")
+        (package / "b.agl").write_text("record New\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as OldAlias\n\nscope Outer\n  use OldAlias::{Old}\nend Outer"
+        ).ok
+
+        replacement = session.eval_entry(
+            "import pkg/* as NewAlias\n\nscope Outer\n  use NewAlias::{New}\nend Outer"
+        )
+        assert replacement.ok, replacement.diagnostics
+
+        new_typed = session.eval_entry("scope Outer\n  def typed(x: New) -> int = 1\nend Outer")
+        new_valued = session.eval_entry(
+            "scope Outer\n  def valued() -> New = New(n = 1)\nend Outer"
+        )
+        old_typed = session.eval_entry("scope Outer\n  def typed2(x: Old) -> int = 1\nend Outer")
+        old_valued = session.eval_entry(
+            "scope Outer\n  def valued2() -> Old = Old(n = 1)\nend Outer"
+        )
+
+        assert new_typed.ok, new_typed.diagnostics
+        assert new_valued.ok, new_valued.diagnostics
+        assert not old_typed.ok
+        assert not old_valued.ok
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
         session = open_session()

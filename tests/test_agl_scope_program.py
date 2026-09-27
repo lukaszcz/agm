@@ -1599,6 +1599,36 @@ class TestScopedImportBareNarrowing:
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
 
+    def test_glob_import_hiding_keeps_the_unhidden_bare_enum_variant(self, tmp_path: Path) -> None:
+        """A scoped glob import's ``hiding`` clause excludes only the named variant."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\n  import lib2::* hiding Color::Red\n"
+                    "  def pick() -> Color = Green\nend A"
+                ),
+                "lib2": "enum Color\n  | Red\n  | Green",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_glob_import_hiding_drops_the_hidden_bare_enum_variant(self, tmp_path: Path) -> None:
+        """A scoped glob import's ``hiding`` clause drops the named variant's own bare spelling."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\n  import lib2::* hiding Color::Red\n"
+                    "  def pick() -> Color = Red\nend A"
+                ),
+                "lib2": "enum Color\n  | Red\n  | Green",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
     def test_enum_variant_expansion_yields_to_a_same_named_top_level_exception(
         self, tmp_path: Path
     ) -> None:

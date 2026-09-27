@@ -243,3 +243,94 @@ def test_ambiguous_qualified_owner_is_rejected_by_scope_in_an_is_test(
     }
 
     assert _program_outcome(tmp_path, modules) == "scope"
+
+
+def test_bare_owner_ambiguity_resolves_by_full_member_path_across_positions(
+    tmp_path: Path,
+) -> None:
+    """A bare owner ambiguous alone still resolves once its member path is unique.
+
+    Both ``m`` and ``n`` wildcard-import a ``Color`` enum; both declare
+    ``Red``, only ``m`` declares ``Green``. ``Color`` alone stays ambiguous,
+    but ``Color::Red`` is rejected everywhere it is written while
+    ``Color::Green`` is accepted everywhere, because scope resolves the full
+    ``owner::member`` spelling rather than the bare owner name in isolation.
+    """
+    modules = {
+        "m": "enum Color\n  | Red\n  | Green",
+        "n": "enum Color\n  | Red\n  | Blue",
+    }
+
+    def program(entry: str) -> dict[str, str]:
+        return {"entry": f"import m::*\nimport n::*\n{entry}", **modules}
+
+    assert _program_outcome(tmp_path / "value-ambiguous", program("Color::Red")) == "scope"
+    assert _program_outcome(tmp_path / "value-unique", program("Color::Green")) == "accepted"
+    assert (
+        _program_outcome(tmp_path / "annotation-ambiguous", program("fn(x: Color::Red) => 1"))
+        == "scope"
+    )
+    assert (
+        _program_outcome(tmp_path / "annotation-unique", program("fn(x: Color::Green) => 1"))
+        == "accepted"
+    )
+    assert (
+        _program_outcome(tmp_path / "alias-ambiguous", program("type CC = Color::Red")) == "scope"
+    )
+    assert (
+        _program_outcome(tmp_path / "alias-unique", program("type CC = Color::Green")) == "accepted"
+    )
+    assert (
+        _program_outcome(
+            tmp_path / "is-ambiguous", program("let v: m::Color = Color::Green\nv is Color::Red")
+        )
+        == "scope"
+    )
+    assert (
+        _program_outcome(
+            tmp_path / "is-unique", program("let v: m::Color = Color::Green\nv is Color::Green")
+        )
+        == "accepted"
+    )
+    assert (
+        _program_outcome(
+            tmp_path / "pattern-ambiguous",
+            program("let v: m::Color = Color::Green\ncase v of | Color::Red => 1 | _ => 2"),
+        )
+        == "scope"
+    )
+    assert (
+        _program_outcome(
+            tmp_path / "pattern-unique",
+            program("let v: m::Color = Color::Green\ncase v of | Color::Green => 1 | _ => 2"),
+        )
+        == "accepted"
+    )
+
+
+def test_applied_generic_owner_ambiguity_resolves_by_full_member_path(tmp_path: Path) -> None:
+    """An applied generic owner (``Box[int]::Member``) resolves like any other owner spelling.
+
+    Both ``gm`` and ``gn`` wildcard-import a generic ``Box`` enum; both
+    declare ``Full``, only ``gm`` declares ``Empty``. ``Box[int]::Full`` stays
+    ambiguous, while ``Box[int]::Empty`` resolves through ``gm`` alone in both
+    a type annotation and a value position.
+    """
+    modules = {
+        "gm": "enum Box[T]\n  | Full(value: T)\n  | Empty",
+        "gn": "enum Box[T]\n  | Full(value: T)\n  | Other",
+    }
+
+    def program(entry: str) -> dict[str, str]:
+        return {"entry": f"import gm::*\nimport gn::*\n{entry}", **modules}
+
+    assert (
+        _program_outcome(tmp_path / "annotation-ambiguous", program("fn(x: Box[int]::Full) => 1"))
+        == "scope"
+    )
+    assert (
+        _program_outcome(tmp_path / "annotation-unique", program("fn(x: Box[int]::Empty) => 1"))
+        == "accepted"
+    )
+    assert _program_outcome(tmp_path / "value-ambiguous", program("Box[int]::Full(1)")) == "scope"
+    assert _program_outcome(tmp_path / "value-unique", program("Box[int]::Empty")) == "accepted"

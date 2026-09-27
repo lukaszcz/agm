@@ -4942,9 +4942,8 @@ class _Checker:
                 )
             ):
                 if same_comparison_type(left_type, right_type):
-                    op_symbol = "==" if op is BinOp.EQ else "!="
                     raise AglTypeError(
-                        f"'{op_symbol}' needs 'Eq' (or 'Hashable') for type '{left_type!r}'.",
+                        f"'{op.symbol}' needs 'Eq' (or 'Hashable') for type '{left_type!r}'.",
                         span=span,
                     )
                 raise AglTypeError(

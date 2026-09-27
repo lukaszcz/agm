@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from typing import TypeGuard
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import ImportEnv, NameAtom, QName, try_resolve_qualified_member
+from agm.agl.scope.imports import (
+    ImportEnv,
+    NameAtom,
+    QName,
+    QualResolutionAmbiguous,
+    QualResolutionFound,
+    resolve_qualified,
+)
 from agm.agl.scope.symbols import ScopePath, TypeOwner
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
@@ -25,7 +32,6 @@ from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
-    "MemberAbsent",
     "MemberHidden",
     "MemberReferenced",
     "MemberSelected",
@@ -39,6 +45,7 @@ __all__ = [
     "nominal_selection",
     "owner_member_selection",
     "owner_type_expr",
+    "routed_qualifier_and_member",
     "type_name_selection",
 ]
 
@@ -133,19 +140,36 @@ def imported_member_selection(
     return _routed_selection(site, qualifier, (owner.name, member))
 
 
+def routed_qualifier_and_member(
+    qualifier: QualifierChain, tail: tuple[str, ...]
+) -> tuple[tuple[str, ...], NameAtom]:
+    """Return the module route and member atom *tail* resolves against the qualifier's lead."""
+    return (
+        tuple(qualifier.segments[0].name.split("/")),
+        _atom((*(segment.name for segment in qualifier.segments[1:]), *tail)),
+    )
+
+
 def _routed_selection(
     site: TypeNameSite, qualifier: QualifierChain, tail: tuple[str, ...]
 ) -> frozenset[QName]:
-    """Return what *qualifier*'s module route selects for *tail* below its later segments."""
+    """Return what *qualifier*'s module route selects for *tail* below its later segments.
+
+    A route and a bare compound spelling of the same path are checked
+    together, as :func:`~agm.agl.scope.imports.resolve_qualified` does for
+    every qualified lookup; a size above one reports ambiguity, matching
+    every other selection this module returns, rather than collapsing it
+    away.
+    """
     if qualifier.anchor is QualifierAnchor.CURRENT_MODULE or not qualifier.segments:
         return frozenset()
-    routed = try_resolve_qualified_member(
-        site.import_env,
-        tuple(qualifier.segments[0].name.split("/")),
-        _atom((*(segment.name for segment in qualifier.segments[1:]), *tail)),
-        anchored=qualifier.anchored,
-    )
-    return frozenset() if routed is None else frozenset({routed})
+    route, member = routed_qualifier_and_member(qualifier, tail)
+    result = resolve_qualified(site.import_env, route, member, anchored=qualifier.anchored)
+    if isinstance(result, QualResolutionFound):
+        return frozenset({result.qname})
+    if isinstance(result, QualResolutionAmbiguous):
+        return frozenset((module, member) for module in result.candidates)
+    return frozenset()
 
 
 def is_nominal_type_expr(type_expr: TypeExpr, site: TypeNameSite) -> TypeGuard[NameT | AppliedT]:
@@ -215,7 +239,11 @@ class OwnerRoute:
 
 @dataclass(frozen=True, slots=True)
 class MemberSelected:
-    """``owner::member`` is reachable."""
+    """``owner::member`` is reachable, or *owner* declares no such member at all.
+
+    Neither raises a route diagnostic here: an absent member is left to
+    typecheck's own "unknown member" reporting.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,13 +256,8 @@ class MemberHidden:
     """*owner* declares ``member``, but no route at the site currently reaches it."""
 
 
-@dataclass(frozen=True, slots=True)
-class MemberAbsent:
-    """*owner* declares no ``member`` at all."""
-
-
-MemberSelection = MemberSelected | MemberReferenced | MemberHidden | MemberAbsent
-"""The verdict for ``owner::member``: reachable, referenced-only, hidden, or absent."""
+MemberSelection = MemberSelected | MemberReferenced | MemberHidden
+"""The verdict for ``owner::member``: reachable (or absent), referenced-only, or hidden."""
 
 
 def owner_member_selection(
@@ -264,7 +287,7 @@ def owner_member_selection(
         return MemberHidden()
     constructor = owner.members.get(member)
     if constructor is None:
-        return MemberAbsent()
+        return MemberSelected()
     if route is not None and owner.alias is None:
         reached = nominal_selection(route.site, route.owner_expr)
         if (

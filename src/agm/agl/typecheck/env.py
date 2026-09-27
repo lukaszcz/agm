@@ -1365,24 +1365,26 @@ class TypeEnvironment:
     def _resolve_import_qname(
         self, qualifier: QualifierChain, name: str, *, span: SourceSpan | None
     ) -> QName:
-        """Resolve a module route followed by one structured type path."""
+        """Resolve a module route followed by one structured type path.
+
+        Scope statically rejects an ambiguous qualifier at every position
+        (value, pattern, ``is``, annotation) before typecheck runs, so the
+        ``ambiguous`` branch is never taken; it still raises the identical
+        :class:`AglScopeError` scope would, rather than assume the invariant
+        away, since nothing here can prove it to the type system.
+        """
         import_env, route, atom = self._import_route_member(qualifier, name)
-
-        def unknown_qualifier(rendered: str) -> AglTypeError:
-            return AglTypeError(f"Unknown module qualifier '{rendered}::'.", span=span)
-
         return resolve_qualified_member(
             import_env,
             route,
             atom,
             anchored=qualifier.anchored,
-            unknown_qualifier=unknown_qualifier,
+            unknown_qualifier=lambda rendered: AglTypeError(
+                f"Unknown module qualifier '{rendered}::'.", span=span
+            ),
             missing_member=lambda rendered: AglTypeError(
                 f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
             ),
-            # An ambiguous qualifier is scope's decision, not typecheck's: every
-            # position (value, pattern, ``is``, annotation) reports the same
-            # class for the identical ``QualResolutionAmbiguous`` condition.
             ambiguous=lambda message: AglScopeError(message, span=span),
         )
 
@@ -1432,7 +1434,7 @@ class TypeEnvironment:
             return None
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, NameT):
-            owner_template = self._enum_owner_template(owner_expr, span)
+            owner_template = self._enum_owner_template(qualifier, member, span)
             if owner_template is None:
                 return None
             enum_template, type_params, alias = owner_template
@@ -1440,7 +1442,13 @@ class TypeEnvironment:
                 return None
             selected = self.owner_inline_member(enum_template, member)
             return None if selected is None else OwnerMember(selected, type_params)
-        owner = self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars)
+        key = self._owner_declaration_key(qualifier, member, span)
+        if key is None:
+            return None
+        resolved_args = tuple(
+            self.resolve_type_expr(arg, span=span, type_vars=type_vars) for arg in owner_expr.args
+        )
+        owner = self._resolve_applied_type_key(key, owner_expr.name, resolved_args, span)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
         selected = self.owner_inline_member(owner, member)
@@ -1456,10 +1464,17 @@ class TypeEnvironment:
         return self.type_table.inline_member(owner, member)
 
     def _enum_owner_template(
-        self, owner: NameT | AppliedT, span: SourceSpan | None
+        self, qualifier: QualifierChain, member: str, span: SourceSpan | None
     ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
-        """Return the enum template *owner* names, its parameters, and the alias naming it."""
-        key = self.type_name_declaration(owner, span=span)
+        """Return the enum template *qualifier*'s owner names, its parameters, and its naming alias.
+
+        The owner is derived from the full ``owner::member`` path, not the
+        bare owner spelling alone: scope has already rejected an ambiguous
+        path there, so an owner spelling that is only ambiguous in isolation
+        (two same-named imports) still selects the one module *member*
+        belongs to.
+        """
+        key = self._owner_declaration_key(qualifier, member, span)
         if key is None:
             return None
         module_id, scope_path, name = key
@@ -1716,6 +1731,34 @@ class TypeEnvironment:
             type_expr.name, {self._qname_decl_key(qname) for qname in selected}, span
         )
 
+    def _owner_declaration_key(
+        self, qualifier: QualifierChain, member: str, span: SourceSpan | None
+    ) -> DeclKey | None:
+        """Return the declaration identity *qualifier*'s owner selects, by its own spelling.
+
+        A lexical or uniquely imported owner selects by that spelling alone,
+        exactly as any other type name does -- a local alias or enum is never
+        reachable through the import machinery a routed selection walks. An
+        owner spelling ambiguous in isolation, always an import collision
+        (same-module duplicates are rejected at declaration), instead
+        resolves by its full ``::member`` path: scope has already rejected an
+        ambiguous one, so the one module contributing *member* through it is
+        the owner to use.
+        """
+        site = self._type_name_site()
+        owner_expr = owner_type_expr(qualifier)
+        owner_selected = type_name_selection(site, owner_expr)
+        if len(owner_selected) == 1:
+            return self._qname_decl_key(next(iter(owner_selected)))
+        if not owner_selected:
+            return None
+        synthetic = NameT(member, qualifier.span, qualifier.node_id, qualifier=qualifier)
+        full_selection = type_name_selection(site, synthetic)
+        if len(full_selection) != 1:
+            return None
+        module_id, path, name = self._qname_decl_key(next(iter(full_selection)))
+        return None if not path else (module_id, path[:-1], path[-1])
+
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
         atom = qname[1]
@@ -1733,7 +1776,7 @@ class TypeEnvironment:
 
     def _ensure_program_alias_resolved(self, key: DeclKey, span: SourceSpan | None) -> Type | None:
         """Resolve a program alias lazily while retaining its declaration path."""
-        if self._program_aliases is None or key not in self._program_aliases.keys:
+        if self._program_aliases is None or not self._is_program_alias_key(key):
             return None
         return self._program_aliases.resolver(key, span)
 
@@ -1979,12 +2022,12 @@ class TypeEnvironment:
     def _is_type_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared bare contribution refers to a type declaration.
 
-        A bare-exposed enum variant's injected constructor binding
-        (``ref.is_variant_member``) is a constructor/pattern candidate only,
+        ``ref.contributes_a_type`` excludes a bare-exposed enum variant's
+        injected constructor binding: a constructor/pattern candidate only,
         never a type contribution, whatever route otherwise shares its
         declaration -- variant expansion never re-exports a type.
         """
-        if ref.is_variant_member:
+        if not ref.contributes_a_type:
             return False
         key = (ref.module_id, ref.scope_path, ref.name)
         if key in self._program_type_table or key in self._program_generic_table:
@@ -2028,9 +2071,6 @@ class TypeEnvironment:
         self, key: DeclKey, name: NameAtom, span: SourceSpan | None
     ) -> Type:
         """Resolve one deduplicated bare/opened declaration identity, rejecting a bare generic."""
-        generic = self._program_generic_table.get(key)
-        if generic is not None:
-            raise UnappliedGenericTypeError(_render_type_atom(name), generic, span=span)
         return self._resolve_type_key_as_bare(key, _render_type_atom(name), span=span)
 
     def _resolve_bare_type(self, name: str, span: SourceSpan | None) -> Type | None:
@@ -2055,9 +2095,14 @@ class TypeEnvironment:
             return self.instantiate_alias(key[2], alias, args, span=span)
         alias_name = self._own_alias_name_for_key(key)
         if alias_name is not None:
-            return self._instantiate_local_alias(
-                alias_name, self._alias_targets[alias_name], args, span
-            )
+            # Header preparation freezes every declared alias before any body
+            # resolves (builder._validate_alias -> freeze_alias), so an own
+            # module alias name always has a frozen template here. Reusing it,
+            # rather than re-walking the raw target expression, keeps a later
+            # redeclaration of a name the template mentions from changing what
+            # an already-declared alias names.
+            frozen = self._resolved_aliases[alias_name]
+            return self.instantiate_alias(alias_name, frozen, args, span=span)
         raise AglTypeError(
             f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
         )
@@ -2551,13 +2596,15 @@ class TypeEnvironment:
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
 
         qname = self._resolve_import_qname(qualifier, name, span=span)
-        if not self._is_program_type_candidate(qname):
-            raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
-        # A program-type candidate always resolves here: candidate selection
-        # and program-table population share one set of conditions.
-        return cast(
-            Type, self._resolve_program_qname_as_bare_type(qname, f"{rendered}::{name}", span=span)
+        exposed_name = f"{rendered}::{name}"
+        resolved = (
+            self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
+            if self._is_program_type_candidate(qname)
+            else None
         )
+        if resolved is None:
+            raise AglTypeError(f"'{exposed_name}' does not name a type.", span=span)
+        return resolved
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return source-owned ``(name, type)`` pairs from the type namespace.

@@ -870,7 +870,7 @@ def resolve_program(
         nearest = resolve_bare_contribution_layer(
             resolved_modules[module_id].resolved.scope_nodes[scope_path],
             name,
-            predicate=lambda ref: is_type(binding_qname(ref)),
+            predicate=lambda ref: ref.contributes_a_type and is_type(binding_qname(ref)),
         )
         return None if nearest is None else contributed_declarations(*nearest)
 

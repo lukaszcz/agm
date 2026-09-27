@@ -243,13 +243,16 @@ _HOST_CONTEXT_VARIABLES = ("PROJ_DIR", "REPO_DIR", "TMUX", "TMUX_PANE")
 
 
 def _git_ceiling_directories(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """Parent of pytest's shared temp root, so git discovery can never climb past it.
+    """Pytest's shared temp root itself, so git discovery can never climb past it.
 
-    A tmp root nested under a git-tracked directory (e.g. a sandboxed ``TMPDIR``
-    under the invoking user's home) would otherwise let git, walking upward from a
-    test's own repository, discover that outer one instead.
+    A tmp root nested under, or coinciding with, a git-tracked directory (e.g. a
+    sandboxed ``TMPDIR`` under the invoking user's home) would otherwise let git,
+    walking upward from a test's own repository, discover that outer one instead.
+    The ceiling directory itself is excluded from discovery, so it must be the
+    root a test's tree hangs from, not that root's parent, or a repository at the
+    root itself would still be found.
     """
-    return str(tmp_path_factory.getbasetemp().resolve().parent)
+    return str(tmp_path_factory.getbasetemp().resolve())
 
 
 @pytest.fixture(autouse=True)

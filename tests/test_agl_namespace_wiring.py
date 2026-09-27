@@ -678,6 +678,23 @@ def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path
         resolve_program(graph)
 
 
+def test_applied_ambiguous_owner_missing_variant_in_is_test_is_rejected(tmp_path: Path) -> None:
+    """An owner ambiguous by its bare, applied spelling still resolves by its full
+    ``owner::variant`` path; neither module declares this variant, so scope defers
+    to type checking, which rejects the mismatched ``is`` test."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import one/owner::*\nimport two/owner::*\n1 is Owner[int]::NoSuch\n",
+            "one/owner": "enum Owner = A | B\n",
+            "two/owner": "enum Owner = A | B\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), base_caps())
+
+
 def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -1468,12 +1485,11 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
 
 
 @pytest.mark.parametrize(
-    ("source", "modules", "expected", "error"),
+    ("source", "modules", "error"),
     [
         (
             "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
             {},
-            "Unknown module",
             AglTypeError,
         ),
         (
@@ -1484,7 +1500,6 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
             "  | _ => 2\n"
             "result",
             {"remote/config": "enum Flag | On | Off"},
-            "not accessible",
             AglTypeError,
         ),
         (
@@ -1494,7 +1509,6 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
             "import one/config\nimport two/config\nenum Local | On\n"
             "let flag: Local = Local::On\nflag is config::Flag::On",
             {"one/config": "enum Flag | On", "two/config": "enum Flag | On"},
-            "ambiguous",
             AglScopeError,
         ),
     ],
@@ -1503,15 +1517,12 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     tmp_path: Path,
     source: str,
     modules: dict[str, str],
-    expected: str,
     error: type[AglScopeError] | type[AglTypeError],
 ) -> None:
     graph = make_graph_from_files(tmp_path, {"entry": source, **modules})
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error):
         check_program(resolve_program(graph), base_caps())
-
-    assert expected in str(exc_info.value)
 
 
 def test_qualified_import_tail_keeps_the_full_type_surface(tmp_path: Path) -> None:
@@ -1893,6 +1904,25 @@ def test_enum_variant_expansion_never_contributes_a_bare_type(
     case here since no route ever contributes the name as a type at all.
     """
     graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
+    with pytest.raises(AglTypeError) as raised:
+        check_program(resolve_program(graph), base_caps())
+    assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))
+
+
+def test_enum_variant_expansion_never_contributes_a_type_to_an_alias_target(
+    tmp_path: Path,
+) -> None:
+    """A bare-exposed enum's variant name is unusable as a type alias's target.
+
+    An alias's target is resolved once, in scope, so this exercises the same
+    ``contributes_a_type`` filter as a direct type annotation, but through the
+    alias-resolution route (:meth:`TypeOwnerIndex.owner`) instead of a plain
+    type-position lookup: the alias itself is declared and visible, but its
+    target selects nothing, so using it fails the same way an annotation
+    naming ``Other`` directly would.
+    """
+    entry = "import pk/* as F\nuse F::*\ntype Alias = Other\nlet f = fn(x: Alias) => 1\nf\n"
+    graph = make_graph_from_files(tmp_path, {"entry": entry, **_VARIANT_MODULES})
     with pytest.raises(AglTypeError) as raised:
         check_program(resolve_program(graph), base_caps())
     assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))

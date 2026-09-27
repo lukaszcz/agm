@@ -78,6 +78,11 @@ class BinOp(enum.Enum):
     MUL = "*"
     DIV = "/"
 
+    @property
+    def symbol(self) -> str:
+        """This operator's source spelling, typed as ``str`` rather than the enum's raw value."""
+        return self.value
+
 
 class InfixAssoc(enum.Enum):
     """Associativity declared for a user-defined infix operator."""

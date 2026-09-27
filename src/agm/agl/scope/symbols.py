@@ -625,6 +625,15 @@ class BindingRef:
     is_param: bool = False
     is_variant_member: bool = False
 
+    @property
+    def contributes_a_type(self) -> bool:
+        """Whether this binding is eligible to contribute a type.
+
+        The one authoritative check for ``is_variant_member``'s invariant,
+        shared by every contribution predicate that must honour it.
+        """
+        return not self.is_variant_member
+
 
 # ---------------------------------------------------------------------------
 # DeclInfo — pre-pass declaration metadata for cross-module BindingRefs

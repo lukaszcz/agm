@@ -64,20 +64,37 @@ def test_git_identity_does_not_depend_on_a_personal_gitconfig() -> None:
     assert not (Path(os.environ["HOME"]) / ".gitconfig").exists()
 
 
-def test_git_discovery_cannot_climb_above_the_pytest_temp_root(tmp_path: Path) -> None:
+def test_git_discovery_cannot_climb_into_a_repository_the_temp_root_sits_inside(
+    tmp_path: Path,
+) -> None:
     """Git run from a directory with no repository of its own must never discover
-    one above the suite's own temp root, wherever that root happens to sit on the
-    host (e.g. a sandboxed ``TMPDIR`` nested under a git-tracked home).
+    one, wherever the suite's own temp root happens to sit on the host -- even a
+    repository rooted exactly at the temp root itself (e.g. a sandboxed ``TMPDIR``
+    that is already a git working tree).
+
+    Git excludes only the ceiling directory itself from discovery, so the ceiling
+    must be the temp root, not its parent: a parent-of-root ceiling still lets a
+    repository rooted at the temp root be found.
     """
-    host_repo = tmp_path / "host"
-    temp_root = host_repo / "outer" / "pytest-tmp"
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            capture_output=True,
+            text=True,
+        ).returncode
+        != 0
+    )
+
+    temp_root = tmp_path / "pytest-tmp"
     case_dir = temp_root / "case"
-    case_dir.mkdir(parents=True)
-    init_repo(host_repo, dict(os.environ))
+    init_repo(temp_root, dict(os.environ))
+    case_dir.mkdir()
 
     unfenced_env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
     assert git_output(case_dir, ["rev-parse", "--show-toplevel"], unfenced_env) == str(
-        host_repo.resolve()
+        temp_root.resolve()
     )
 
     fenced_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(temp_root)}
@@ -89,11 +106,3 @@ def test_git_discovery_cannot_climb_above_the_pytest_temp_root(tmp_path: Path) -
         text=True,
     )
     assert fenced.returncode != 0
-
-
-def test_git_ceiling_directories_is_the_shared_temp_root_parent(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    assert os.environ["GIT_CEILING_DIRECTORIES"] == str(
-        tmp_path_factory.getbasetemp().resolve().parent
-    )

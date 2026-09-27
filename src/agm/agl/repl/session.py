@@ -724,7 +724,11 @@ class ReplSession:
         bare unapplied generic (e.g. ``Option``) cannot be an alias body
         either, but its selected declaration is already known -- the
         exception raised while checking the alias carries it directly -- so
-        its definition is displayed from there instead.
+        its definition is displayed from there instead, but only when the
+        unapplied reference *is* the whole entry (its span equals *text*'s
+        parsed span): a generic nested inside the entry (e.g. a type argument,
+        as in ``Box[Option]``) is not what was asked for, and the original
+        failure stands.
 
         Like :meth:`type_of`, this never evaluates, promotes, advances the
         node-id counter, or mutates session state: the synthetic declaration
@@ -766,6 +770,11 @@ class ReplSession:
         except (HiddenMemberError, ReferencedMemberError) as exc:
             return self._fail([exc.to_diagnostic()], [])
         except UnappliedGenericTypeError as exc:
+            if exc.span != type_expr.span:
+                # The unapplied generic is nested inside the entry (e.g. a type
+                # argument), not the entry's own whole spelling: its definition
+                # is not what was asked for, so the original failure stands.
+                return None
             return EntryResult(
                 kind="type",
                 name=None,

@@ -10259,6 +10259,33 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
 
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            pytest.param("Box[Option]", id="applied-owner-nested-arg"),
+            pytest.param("Option[Box]", id="applied-owner-nested-arg-swapped"),
+            pytest.param("array[Option]", id="array-elem"),
+            pytest.param("dict[text, Box]", id="dict-value"),
+            pytest.param("(int) -> Option", id="function-result"),
+            pytest.param("Result[int, Option]", id="applied-type-arg"),
+        ],
+    )
+    def test_nested_unapplied_generic_keeps_original_failure(self, expr: str) -> None:
+        """A nested unapplied generic must not be echoed as though it were the whole entry.
+
+        Regression: the whole entry's own span was never compared against the
+        raised ``UnappliedGenericTypeError``'s span, so any unapplied generic
+        reached while resolving a *nested* type argument (not the entry's own
+        top-level spelling) was echoed as if it had been asked for directly.
+        """
+        s = open_session()
+        s.eval_entry("record Box[T]\n  v: T")
+
+        r = s.eval_entry(expr)
+
+        assert not r.ok
+        assert r.kind != "type"
+
     def test_use_exposed_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -10473,7 +10500,9 @@ class TestBareTypeEntry:
     def test_ambiguous_bare_generic_entry_keeps_original_failure(self) -> None:
         """Two same-named generics from distinct ``use``s: the bare entry must not
 
-        pick either one arbitrarily -- it fails exactly like ``fn(x: G) => 1``.
+        pick either one arbitrarily -- it fails as an error of the same class
+        ``type_of`` raises for the identical ambiguity in annotation position,
+        ``fn(x: G) => 1``.
         """
         session = open_session()
         assert session.eval_entry("scope s\n  enum G[T] = A(x: T)\nend s").ok
@@ -10481,8 +10510,16 @@ class TestBareTypeEntry:
         assert session.eval_entry("use s::*").ok
         assert session.eval_entry("use t::*").ok
 
-        assert not session.eval_entry("G").ok
-        assert not session.eval_entry("G[int]").ok
+        for entry in ("G", "G[int]"):
+            result = session.eval_entry(entry)
+            assert not result.ok
+            assert result.kind != "type"
+
+        with pytest.raises(AglError) as bare:
+            session.type_of("G")
+        with pytest.raises(AglError) as annotated:
+            session.type_of("fn(x: G) => 1")
+        assert type(bare.value) is type(annotated.value) is AglTypeError
 
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep
@@ -10575,6 +10612,11 @@ class TestBareTypeEntry:
         assert not bare.ok
         with pytest.raises(HiddenMemberError):
             s.type_of("C::Red")
+        # The diagnostic must be pinned to the entry's own span ("C::Red" is
+        # six columns wide), never offset by internal re-parsing.
+        assert [(d.line, d.column, d.end_line, d.end_column) for d in bare.diagnostics] == [
+            (1, 1, 1, 7)
+        ]
 
     def test_bare_referenced_member_query_is_rejected_not_echoed_as_a_type(self) -> None:
         """A bare ``Owner::member`` query for a member the owner only
@@ -10596,6 +10638,11 @@ class TestBareTypeEntry:
         assert not bare.ok
         with pytest.raises(ReferencedMemberError):
             s.type_of("A::Saved")
+        # The diagnostic must be pinned to the entry's own span ("A::Saved" is
+        # eight columns wide), never offset by internal re-parsing.
+        assert [(d.line, d.column, d.end_line, d.end_column) for d in bare.diagnostics] == [
+            (1, 1, 1, 9)
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -122,9 +122,11 @@ from agm.agl.scope.type_names import (
     MemberHidden,
     MemberReferenced,
     OwnerRoute,
-    nominal_selection,
+    TypeNameSite,
+    is_nominal_type_expr,
     owner_member_selection,
     owner_type_expr,
+    routed_qualifier_and_member,
     type_name_selection,
 )
 from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors, root_type_names
@@ -2122,17 +2124,9 @@ class _Resolver:
     ) -> None:
         """Contribute the record constructors a bare-exposed enum's member reference denotes."""
         for constructor in self._type_owners.referenced_member_refs(module, member):
-            ref = BindingRef(
-                name=constructor.owner_name,
-                mutable=False,
-                decl_span=span,
-                decl_node_id=constructor.owner_decl_node_id,
-                kind=BinderKind.constructor_binding,
-                module_id=constructor.owner_module_id,
-                scope_path=constructor.owner_path,
-                is_variant_member=True,
+            scope.contribute_bare(
+                constructor.owner_name, self._variant_binding_ref(constructor, span)
             )
-            scope.contribute_bare(constructor.owner_name, ref)
             scope.contribute_bare_constructor(constructor.owner_name, constructor)
 
     def _contribute_bare_constructor(
@@ -3582,21 +3576,77 @@ class _Resolver:
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
             self._validate_local_scope_chain(chain)
-            if isinstance(node, (NameT, AppliedT)) and chain.segments:
+            if isinstance(node, (NameT, AppliedT, ConstructorPattern, IsTest)) and chain.segments:
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
-                selected = nominal_selection(site, owner_expr)
-                if selected is not None and len(selected[0]) == 1:
-                    owner = self._type_owners.owner(next(iter(selected[0])))
-                    self._select_owner_member(
-                        owner,
-                        render_qualifier_path(chain),
-                        node.name,
-                        chain.span,
-                        OwnerRoute(site, owner_expr),
+                if not is_nominal_type_expr(owner_expr, site):
+                    # A type parameter shadows any declaration this owner spelling
+                    # could otherwise name; typecheck resolves it instead.
+                    return
+                # The owner selects by its own spelling first -- a local alias
+                # or enum is never reachable through the import machinery a
+                # routed selection walks. A uniquely selected owner is used
+                # directly; anything else -- an owner ambiguous in isolation
+                # (always an import collision, since same-module duplicates
+                # are rejected at declaration), or no owner at all, as for a
+                # module route with no separate enum owner between it and
+                # the type it names -- instead resolves by the full
+                # ``owner::member`` path, exactly as a module route does.
+                owner_selection = type_name_selection(site, owner_expr)
+                if len(owner_selection) == 1:
+                    self._select_chain_owner_member(
+                        next(iter(owner_selection)), chain, owner_expr, site
                     )
+                    return
+                full_selection = type_name_selection(
+                    site, NameT(chain.member, chain.span, chain.node_id, qualifier=chain)
+                )
+                if len(full_selection) > 1:
+                    route, member = routed_qualifier_and_member(chain, (chain.member,))
+                    raise AglScopeError(
+                        ambiguous_qualification_message(
+                            route,
+                            member,
+                            tuple(
+                                sorted(
+                                    {qname[0] for qname in full_selection}, key=ModuleId.path_str
+                                )
+                            ),
+                            anchored=chain.anchored,
+                        ),
+                        span=chain.span,
+                    )
+                if len(full_selection) == 1:
+                    owner_qname = self._owner_of_member_qname(next(iter(full_selection)))
+                    if owner_qname is not None:
+                        self._select_chain_owner_member(owner_qname, chain, owner_expr, site)
 
         walk(root, validate)
+
+    def _select_chain_owner_member(
+        self,
+        owner_qname: QName,
+        chain: QualifierChain,
+        owner_expr: NameT | AppliedT,
+        site: TypeNameSite,
+    ) -> None:
+        """Run the hiding/referenced check for ``chain``'s owner, resolved to *owner_qname*."""
+        owner = self._type_owners.owner(owner_qname)
+        if owner is not None:
+            self._select_owner_member(
+                owner,
+                render_qualifier_path(chain),
+                chain.member,
+                chain.span,
+                OwnerRoute(site, owner_expr),
+            )
+
+    @staticmethod
+    def _owner_of_member_qname(qname: QName) -> QName | None:
+        """Return the owner *qname*'s trailing member atom selects beneath, if it has one."""
+        module_id, atom = qname
+        path = _bare_path(atom)
+        return None if len(path) < 2 else (module_id, _bare_atom(path[:-1]))
 
     def _scope_bases(self, chain: QualifierChain) -> list[ScopePath]:
         """Return lexical bases from which an unanchored scope path may start."""
@@ -3881,7 +3931,7 @@ class _Resolver:
         checker can assess it against the type being matched.
         """
         try:
-            owner = self._imported_chain_owner(chain)
+            owner = self._imported_chain_owner(chain, variant)
         except AglScopeError:
             if defer_diagnostics:
                 return None
@@ -3915,15 +3965,16 @@ class _Resolver:
         if chain.anchor is not None:
             return None
         relative_path = tuple(segment.name for segment in chain.segments)
+        # A route contributing more than one candidate here is already an
+        # import collision, and every route that can produce one is rejected
+        # earlier: a use declaration's own target ambiguity
+        # (``_resolve_use_target``), a general bare-value-contribution clash
+        # for any candidate a declared constructor makes visible
+        # (``_lookup_bare_contribution``), or a whole-route import collision
+        # (``_qualified_import_resolution`` below). So *opened*, once
+        # non-empty, is always the single candidate its route selects.
         opened = self._regional_constructor_candidates(_bare_atom((*relative_path, variant)))
         if opened:
-            if len(opened) > 1:
-                rendered = "::".join((*relative_path, variant))
-                raise AglScopeError(
-                    f"'{rendered}' is ambiguous across use routes. "
-                    f"{qualification_repair_guidance()}",
-                    span=chain.span,
-                )
             imported = self._qualified_import_resolution(chain, variant)
             imported_constructor = (
                 self._cross_module_constructor_refs.get(imported.qname)
@@ -4039,7 +4090,7 @@ class _Resolver:
         )
         return owner.select(variant, chain.segments[-1].name)
 
-    def _imported_chain_owner(self, chain: QualifierChain) -> TypeOwner | None:
+    def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> TypeOwner | None:
         """Resolve a constructible type owner reached through imports.
 
         The final chain segment is selected as a normal imported member; any
@@ -4051,9 +4102,33 @@ class _Resolver:
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
         if len(chain.segments) == 1 and not chain.anchored:
-            owner_ref = self._lookup_import_env_unqualified(
-                chain.segments[0].name, chain.span, self._is_type_contribution
-            )
+            segment = chain.segments[0]
+            try:
+                owner_ref = self._lookup_import_env_unqualified(
+                    segment.name, chain.span, self._is_type_contribution
+                )
+            except AglScopeError:
+                if segment.type_args is None:
+                    raise
+                # An owner ambiguous by its bare spelling alone, always an
+                # import collision, still selects the one module declaring
+                # *variant* through it -- exactly as the unapplied owner
+                # does, but type arguments make the bare lookup above raise
+                # before it can try that: resolve the full ``owner::variant``
+                # path instead.
+                result = resolve_qualified(
+                    self._import_env, (), _bare_atom((segment.name, variant)), anchored=False
+                )
+                if isinstance(result, QualResolutionFound):
+                    return self._constructible_owner(result.qname)
+                if isinstance(result, QualResolutionAmbiguous):
+                    raise AglScopeError(
+                        ambiguous_qualification_message(
+                            (segment.name,), variant, result.candidates, anchored=False
+                        ),
+                        span=chain.span,
+                    ) from None
+                return None
             return None if owner_ref is None else self._constructible_owner(_ref_qname(owner_ref))
         if len(chain.segments) > 1:
             route = QualifierChain(
@@ -4341,14 +4416,15 @@ class _Resolver:
         :meth:`_layer_bare_bindings`/:meth:`_layer_bare_constructors`: the same
         :meth:`_facade_refresh` derivation, applied once across every atom the
         contribution's own snapshot or its current facade modules could
-        expose -- so a module gained or a member dropped from a still-present
-        module is caught the same way a bare name lookup would catch it, not
-        only a whole module's removal. Applied to every refreshing use, not
-        only a wildcard facade: a fixed module set can still redeclare an
-        enum's own members between entries. A contribution that does not
-        refresh every member -- a selective use, even of a wildcard-facade
-        alias -- needs no refresh either: its snapshot, already present in
-        *layer*'s copied bare tables, stands as declared.
+        expose -- so a stored table and a live lookup always agree, whether a
+        module was gained or dropped or a member's own variant expansion
+        changed. Applied to every refreshing use, not only a wildcard facade:
+        even a fixed module set, which cannot itself grow or shrink (see
+        :meth:`_facade_refresh`), still needs its variant expansion re-derived
+        the same way. A contribution that does not refresh every member -- a
+        selective use, even of a wildcard-facade alias -- needs no refresh
+        either: its snapshot, already present in *layer*'s copied bare
+        tables, stands as declared.
         """
         if not contribution.refreshes_all_members:
             return contribution
@@ -4400,7 +4476,7 @@ class _Resolver:
         """
         nearest = self._nearest_bare_contribution_layer(
             name,
-            binding_predicate=lambda ref: is_type(_ref_qname(ref)),
+            binding_predicate=lambda ref: ref.contributes_a_type and is_type(_ref_qname(ref)),
             start=self._scope_nodes[scope_path],
         )
         return None if nearest is None else contributed_declarations(nearest[0], nearest[1])

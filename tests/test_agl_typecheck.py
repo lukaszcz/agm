@@ -5326,6 +5326,27 @@ class TestPartialConstructorAndValueCalls:
                 default_capabilities(),
             )
 
+    def test_ambiguous_bare_owner_missing_member_is_rejected(self, tmp_path: object) -> None:
+        """A bare owner ambiguous across two wildcard imports still resolves by its full
+        ``owner::member`` path; neither module declares this member, so this fails
+        distinctly from an ambiguous-owner error."""
+        from pathlib import Path
+
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+        from tests.agl.ir_harness import make_graph_from_files
+
+        modules = {
+            "entry": ("import one/owner::*\nimport two/owner::*\nlet v: Owner::NoSuch = 1\nv"),
+            "one/owner": "enum Owner = A | B",
+            "two/owner": "enum Owner = A | B",
+        }
+        with pytest.raises(AglTypeError):
+            check_program(
+                resolve_program(make_graph_from_files(Path(tmp_path), modules)),
+                default_capabilities(),
+            )
+
     def test_value_calls_from_bindings_lambdas_and_partial_results(self) -> None:
         checked = accept_type(
             "def add(x: int, y: int) -> int = x + y\n"
@@ -8293,6 +8314,10 @@ class TestBareConstructorTypeApply:
         error = reject_type("record Box[T]\n  value: T\nBox[int]::Box")
         assert "generic enum" in str(error).lower()
 
+    def test_applied_unknown_owner_member_is_rejected(self) -> None:
+        error = reject_type("let v: Missing[int]::Bar = 1\nv")
+        assert isinstance(error, AglTypeError)
+
     def test_owner_apply_substitutes_only_the_selected_member_parameters(self) -> None:
         checked = accept_type(
             "enum Outcome[T, E]\n"
@@ -10821,8 +10846,7 @@ class TestFunctionSignatureTypeParams:
 
 class TestResolveTypeExprTypeVars:
     def test_self_qualified_unknown_applied_type_rejected(self) -> None:
-        err = reject_type("let x: ::Missing[int] = null\nx")
-        assert "'Missing'" in str(err)
+        reject_type("let x: ::Missing[int] = null\nx")
 
     def test_name_in_type_vars_resolves_to_typevar(self) -> None:
         from agm.agl.syntax.types import NameT

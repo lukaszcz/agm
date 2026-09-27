@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeGuard
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv, NameAtom, QName, try_resolve_qualified_member
@@ -34,6 +35,7 @@ __all__ = [
     "TypeNameSite",
     "bare_type_selection",
     "imported_member_selection",
+    "is_nominal_type_expr",
     "nominal_selection",
     "owner_member_selection",
     "owner_type_expr",
@@ -148,25 +150,30 @@ def _routed_selection(
     return frozenset() if routed is None else frozenset({routed})
 
 
-def nominal_selection(
-    site: TypeNameSite, type_expr: TypeExpr
-) -> tuple[frozenset[QName], bool, NameT | AppliedT] | None:
-    """Return what *type_expr* selects at *site*, whether indirect, and its narrowed spelling.
+def is_nominal_type_expr(type_expr: TypeExpr, site: TypeNameSite) -> TypeGuard[NameT | AppliedT]:
+    """Whether *type_expr* is a type name :func:`nominal_selection` can select at *site*.
 
-    ``None`` when *type_expr* is structural: not a type name, or the bare name
-    of one of the site's type parameters. See :func:`_type_name_selection` for
-    the second element. The third element is *type_expr* itself, narrowed to
-    ``NameT | AppliedT``, so a caller holding a non-``None`` result never
-    re-derives this narrowing.
+    False for anything structural: not a type name, or the bare name of one
+    of *site*'s type parameters.
     """
-    if not isinstance(type_expr, (NameT, AppliedT)) or (
+    return isinstance(type_expr, (NameT, AppliedT)) and not (
         isinstance(type_expr, NameT)
         and type_expr.qualifier is None
         and type_expr.name in site.type_params
-    ):
+    )
+
+
+def nominal_selection(
+    site: TypeNameSite, type_expr: TypeExpr
+) -> tuple[frozenset[QName], bool] | None:
+    """Return what *type_expr* selects at *site*, and whether indirectly.
+
+    ``None`` when *type_expr* is not :func:`is_nominal_type_expr`. See
+    :func:`_type_name_selection` for the elements of a non-``None`` result.
+    """
+    if not is_nominal_type_expr(type_expr, site):
         return None
-    targets, indirect = _type_name_selection(site, type_expr)
-    return targets, indirect, type_expr
+    return _type_name_selection(site, type_expr)
 
 
 def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
@@ -247,9 +254,17 @@ def owner_member_selection(
     reached indirectly -- through a ``use`` contribution or an import route --
     carries no such set of its own, so *route*, when given, filters it fresh
     at the current site through :func:`imported_member_selection`; a direct
-    lexical hit (``route`` reporting no indirection) is never filtered.
+    lexical hit (``route`` reporting no indirection) is never filtered. A
+    direct owner's referenced name declared at its own path
+    (``owner.own_path_referenced``) selects like a declared member instead;
+    an alias never carries that map, so the same name stays referenced
+    through one.
     """
     if member in owner.referenced:
+        if owner.alias is None:
+            own_path = owner.own_path_referenced.get(member)
+            if own_path is not None:
+                return MemberSelected(own_path)
         return MemberReferenced()
     if member in owner.hidden:
         return MemberHidden()

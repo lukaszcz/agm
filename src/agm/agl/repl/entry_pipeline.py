@@ -333,7 +333,6 @@ class EntryPipeline:
 
         return resolve_program(
             graph,
-            entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,

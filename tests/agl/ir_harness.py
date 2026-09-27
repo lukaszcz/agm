@@ -446,7 +446,7 @@ def make_repl_graph_from_files(
 def resolve_repl_graph(graph: ModuleGraph):
     """Resolve a graph whose entry is an incremental REPL snippet."""
     return resolve_program(
-        graph, entry_parent_scope=ScopeNode(node_id=-1, parent=None, scope_path=())
+        graph, entry_repl_session_scope=ScopeNode(node_id=-1, parent=None, scope_path=())
     )
 
 

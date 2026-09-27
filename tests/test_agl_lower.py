@@ -190,7 +190,7 @@ def _repl_entry(
     )
     resolved = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     checked_program = check_program(resolved, _caps(), entry_seed_env=seed_env)
     result = compile_program_matches(checked_program)

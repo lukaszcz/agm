@@ -77,6 +77,13 @@ _LIBRARIES = {
         "  enum Status = ::shapes::Saved | Fresh(n: int)\n"
         "end shapes"
     ),
+    "m": (
+        "record Box::Item\n"
+        "  n: int\n"
+        "\n"
+        "enum Box = Empty | Box::Item\n"
+        "enum Bin = ::Box::Item | Blank\n"
+    ),
 }
 
 _LOCAL = (
@@ -282,6 +289,56 @@ def _check(tmp_path: Path, entry: str, *, stdlib: bool = False) -> None:
             "Saved",
             id="method-imported-owner",
         ),
+        # A member referenced from an enum *other* than the one that declares it
+        # (``Bin::Item`` -- ``Item``'s own path is ``Box``, not ``Bin``) stays a
+        # referenced-member error through every import style and position.
+        pytest.param("import m::*\nBin::Item(n = 1)", "Item", id="value-other-path-wildcard"),
+        pytest.param("import m\nm::Bin::Item(n = 1)", "Item", id="value-other-path-qualified"),
+        pytest.param(
+            "import m as mm\nuse mm::*\nBin::Item(n = 1)", "Item", id="value-other-path-use-alias"
+        ),
+        pytest.param(
+            "import m::*\ndef f(i: Bin::Item) -> int = i.n", "Item", id="type-other-path-wildcard"
+        ),
+        pytest.param(
+            "import m\ndef f(i: m::Bin::Item) -> int = i.n", "Item", id="type-other-path-qualified"
+        ),
+        pytest.param(
+            "import m as mm\nuse mm::*\ndef f(i: Bin::Item) -> int = i.n",
+            "Item",
+            id="type-other-path-use-alias",
+        ),
+        pytest.param(
+            "import m::*\nlet b: Bin = Blank\ncase b of | Bin::Item(n) => n | Blank => 0",
+            "Item",
+            id="pattern-other-path-wildcard",
+        ),
+        pytest.param(
+            "import m\nlet b: m::Bin = m::Blank\ncase b of | m::Bin::Item(n) => n | m::Blank => 0",
+            "Item",
+            id="pattern-other-path-qualified",
+        ),
+        pytest.param(
+            (
+                "import m as mm\nuse mm::*\nlet b: Bin = Blank\n"
+                "case b of | Bin::Item(n) => n | Blank => 0"
+            ),
+            "Item",
+            id="pattern-other-path-use-alias",
+        ),
+        pytest.param(
+            "import m::*\nlet b: Bin = Blank\nb is Bin::Item", "Item", id="is-other-path-wildcard"
+        ),
+        pytest.param(
+            "import m\nlet b: m::Bin = m::Blank\nb is m::Bin::Item",
+            "Item",
+            id="is-other-path-qualified",
+        ),
+        pytest.param(
+            "import m as mm\nuse mm::*\nlet b: Bin = Blank\nb is Bin::Item",
+            "Item",
+            id="is-other-path-use-alias",
+        ),
     ],
 )
 def test_owner_qualified_referenced_member_is_a_focused_error(
@@ -321,6 +378,31 @@ def test_owner_qualified_referenced_member_is_a_focused_error(
             "def f(i: Box::Item) -> int = i.n\n"
             "def Box::Item::g(self) -> int = self.n",
             id="referenced-member-declared-in-enum-scope",
+        ),
+        pytest.param(
+            "import m::*\n"
+            "Box::Item(n = 1)\n"
+            "def x(b: Box) -> int = case b of | Box::Item(n) => n | Empty => 0\n"
+            "def y(b: Box) -> bool = b is Box::Item\n"
+            "def f(i: Box::Item) -> int = i.n",
+            id="referenced-member-declared-in-enum-scope-wildcard-import",
+        ),
+        pytest.param(
+            "import m\n"
+            "m::Box::Item(n = 1)\n"
+            "def x(b: m::Box) -> int = case b of | m::Box::Item(n) => n | m::Empty => 0\n"
+            "def y(b: m::Box) -> bool = b is m::Box::Item\n"
+            "def f(i: m::Box::Item) -> int = i.n",
+            id="referenced-member-declared-in-enum-scope-qualified-import",
+        ),
+        pytest.param(
+            "import m as mm\n"
+            "use mm::*\n"
+            "Box::Item(n = 1)\n"
+            "def x(b: Box) -> int = case b of | Box::Item(n) => n | Empty => 0\n"
+            "def y(b: Box) -> bool = b is Box::Item\n"
+            "def f(i: Box::Item) -> int = i.n",
+            id="referenced-member-declared-in-enum-scope-use-alias-import",
         ),
         pytest.param(
             "import library\n"

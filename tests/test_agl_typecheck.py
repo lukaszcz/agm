@@ -8887,7 +8887,6 @@ class TestTypeDeclarations:
             _TypeBuilder(
                 TypeEnvironment(),
                 attributes=_AttributeFacts(param_zones=_standard_zones(program)),
-                referenced_member_names={},
             ).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
@@ -10543,7 +10542,6 @@ def _method_header(
     _TypeBuilder(
         env,
         attributes=resolved.attributes,
-        referenced_member_names=resolved.referenced_member_names,
     ).collect(resolved.program)
     with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(

@@ -542,7 +542,6 @@ def _build_program_type_table(
             env,
             module_id=mid,
             attributes=rmod.resolved.attributes,
-            referenced_member_names=rmod.resolved.referenced_member_names,
         ).collect_shells_only(rmod.resolved.program)
         per_module_envs[mid] = env
 
@@ -649,7 +648,6 @@ def _build_program_type_table(
             cross_env,
             module_id=mid,
             attributes=rmod.resolved.attributes,
-            referenced_member_names=rmod.resolved.referenced_member_names,
         )
         builder.collect_shells_only(rmod.resolved.program)
         cross_builders[mid] = builder

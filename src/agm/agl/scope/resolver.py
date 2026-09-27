@@ -53,8 +53,8 @@ from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import (
     AglError,
+    HiddenMemberError,
     ReferencedMemberError,
-    hidden_member,
     static_root_message,
     type_name_not_a_value,
 )
@@ -381,10 +381,11 @@ class _Resolver:
     :meth:`resolve`. Header diagnostics of every module therefore precede
     body diagnostics of any module.
 
-    When *parent_scope* is given, the entry's root scope is parented to it so
-    name lookups fall through to session bindings (incremental REPL
-    sessions). New declarations live in the entry's own root scope and shadow
-    parent bindings without a duplicate-declaration error.
+    When *repl_session_scope* is given, the entry's root scope is parented to
+    it so name lookups fall through to session bindings (incremental REPL
+    sessions), and ``::name`` self-references fall back to it too. New
+    declarations live in the entry's own root scope and shadow parent
+    bindings without a duplicate-declaration error.
 
     *ambient_type_names* carries type names from prior entries so that
     qualified constructor access (``Owner::variant``) resolves for types
@@ -404,7 +405,6 @@ class _Resolver:
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef],
         cross_module_type_owners: Mapping[QName, ReceiverOwner],
         *,
-        parent_scope: ScopeNode | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
         allow_root_statements: bool = False,
@@ -418,8 +418,8 @@ class _Resolver:
         # The REPL session layer is copied into this entry's own image, exactly
         # as a retained named layer already is (see ``_build_scope_nodes``), so
         # this entry's contribution re-derivation never mutates session state.
-        if repl_session_scope is not None and parent_scope is repl_session_scope:
-            parent_scope = repl_session_scope = repl_session_scope.entry_copy()
+        if repl_session_scope is not None:
+            repl_session_scope = repl_session_scope.entry_copy()
         # Program parameters. One _Resolver is built per module of a whole
         # program (see scope/program.py::resolve_program); the import
         # environment and whole-program public-type table are always real,
@@ -525,7 +525,9 @@ class _Resolver:
         self._program = program
         # The module's root ScopeNode; used by _lookup_own_root to bypass
         # lexical shadows introduced by nested scopes for ::name.
-        self._root_scope = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
+        self._root_scope = ScopeNode(
+            node_id=program.node_id, parent=repl_session_scope, scope_path=()
+        )
         # The current lexical scope.
         self._scope = self._root_scope
         # Whether we are at the program root (for root-only checks).
@@ -751,11 +753,6 @@ class _Resolver:
             reachable_declarations=self._reachable_declarations(),
             attributes=attribute_facts,
             type_owners=type_owners if self._allow_root_statements else {},
-            referenced_member_names={
-                declaration.node_id: type_owners[(*path, declaration.name)].referenced
-                for declaration, path in self._type_declarations
-                if isinstance(declaration, EnumDef)
-            },
         )
 
     # ------------------------------------------------------------------
@@ -1064,7 +1061,7 @@ class _Resolver:
         if isinstance(selection, MemberReferenced):
             raise ReferencedMemberError(spelling, member, span=span)
         if isinstance(selection, MemberHidden):
-            raise hidden_member(f"{spelling}::{member}", span)
+            raise HiddenMemberError(f"{spelling}::{member}", span=span)
         return selection
 
     def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
@@ -3574,21 +3571,8 @@ class _Resolver:
                 raise AglScopeError(
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
-            local_path = self._validate_local_scope_chain(chain)
-            if (
-                isinstance(node, (NameT, AppliedT))
-                and chain.segments
-                # A spelling that is itself a locally declared nested type's
-                # own path (e.g. a record ``Box::Item`` an enum ``Box``
-                # references at that same path) names that declaration
-                # directly, agreeing with the value/pattern/is-test
-                # constructor paths (``_local_owner_constructor``), never
-                # going through owner-member selection at all.
-                and not (
-                    local_path is not None
-                    and self._scoped_constructor_candidates.get((local_path, node.name))
-                )
-            ):
+            self._validate_local_scope_chain(chain)
+            if isinstance(node, (NameT, AppliedT)) and chain.segments:
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
                 selected = nominal_selection(site, owner_expr)

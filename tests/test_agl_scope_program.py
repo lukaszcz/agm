@@ -2148,7 +2148,7 @@ class TestTypeDeclarationsInModules:
             tmp_path,
             {"entry": "enum Color\n  | Red\n\ntype Palette = Color\n\nprint(Color::Red)"},
         )
-        result = resolve_program(graph, entry_parent_scope=session_scope)
+        result = resolve_program(graph, entry_repl_session_scope=session_scope)
         assert ENTRY_ID in result.modules
 
 
@@ -2969,11 +2969,7 @@ class TestReachableDeclarations:
         prior = resolve_repl_entry("def saved() -> int = 1\nsaved()", default_stdlib=False)
         graph = _make_graph_from_files(tmp_path, {"entry": "()"}, default_stdlib=False)
         current = (
-            resolve_program(
-                graph,
-                entry_parent_scope=prior.root_scope,
-                entry_repl_session_scope=prior.root_scope,
-            )
+            resolve_program(graph, entry_repl_session_scope=prior.root_scope)
             .modules[ENTRY_ID]
             .resolved
         )
@@ -3000,13 +2996,13 @@ class TestReachableDeclarations:
 
 
 # ---------------------------------------------------------------------------
-# Test: resolve_program REPL seams — ambient_agents, entry_parent_scope, warnings
+# Test: resolve_program REPL seams — ambient_agents, entry_repl_session_scope, warnings
 # ---------------------------------------------------------------------------
 
 
 class TestResolveGraphReplSeams:
-    def test_entry_parent_scope_binding_visible_in_entry(self, tmp_path: Path) -> None:
-        """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
+    def test_entry_repl_session_scope_binding_visible_in_entry(self, tmp_path: Path) -> None:
+        """entry_repl_session_scope: a name pre-bound in the parent scope is visible in entry."""
         # Build a prior session that binds "x" as a let binding.
         prior_source = "let x = 42\nx"
         prior_resolved = resolve_repl_entry(prior_source)
@@ -3014,7 +3010,7 @@ class TestResolveGraphReplSeams:
 
         # New entry references "x" — which is only in the parent scope.
         graph = _make_graph_from_files(tmp_path, {"entry": "x"})
-        result = resolve_program(graph, entry_parent_scope=session_scope)
+        result = resolve_program(graph, entry_repl_session_scope=session_scope)
         assert ENTRY_ID in result.modules
 
         entry_program = graph.modules[ENTRY_ID].program
@@ -3024,8 +3020,8 @@ class TestResolveGraphReplSeams:
         assert ref.name == "x"
         assert ref.kind == BinderKind.let_binding
 
-    def test_entry_parent_scope_not_applied_to_non_entry(self, tmp_path: Path) -> None:
-        """entry_parent_scope is only injected into the entry module, not library modules.
+    def test_entry_repl_session_scope_not_applied_to_non_entry(self, tmp_path: Path) -> None:
+        """entry_repl_session_scope is only injected into the entry module, not library modules.
 
         ``helper`` is bound only in the prior session scope.  A non-entry module that
         references it must fail to resolve — if the parent scope leaked into library
@@ -3044,7 +3040,7 @@ class TestResolveGraphReplSeams:
             },
         )
         with pytest.raises(AglScopeError, match="helper"):
-            resolve_program(graph, entry_parent_scope=session_scope)
+            resolve_program(graph, entry_repl_session_scope=session_scope)
 
 
 # ---------------------------------------------------------------------------

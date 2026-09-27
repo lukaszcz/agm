@@ -6964,7 +6964,6 @@ def prepare_module_headers(
         env,
         module_id=module_id,
         attributes=resolved.attributes,
-        referenced_member_names=resolved.referenced_member_names,
     ).collect(resolved.program)
     header_checker = _Checker(
         env=env,

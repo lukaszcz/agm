@@ -268,11 +268,6 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
     )
 
 
-def hidden_member(spelling: str, span: SourceSpan | None) -> "HiddenMemberError":
-    """Return the diagnostic for owner-qualified *spelling* naming a member no route reaches."""
-    return HiddenMemberError(spelling, span=span)
-
-
 class HiddenMemberError(AglTypeError):
     """An owner spelling that names a member no route at its site currently reaches.
 
@@ -290,13 +285,10 @@ class ReferencedMemberError(AglTypeError):
 
     Only an enum's inline members are in its scope; a referenced member keeps
     its own declaration path, so ``Owner::member`` or a module qualifier
-    (``mylib::member``) names nothing. Scope raises it wherever owner
-    selection fails -- values, patterns, ``is`` tests, method receivers, and
-    type annotations naming a single resolved owner -- and typecheck raises
-    it as a backstop for an owner form scope leaves to it (an applied owner
-    it resolves itself, or one reached only through a receiver's own type).
-    ``owner`` is the owner as spelled and ``member`` the referenced member's
-    name.
+    (``mylib::member``) names nothing. Scope is the one place that decides
+    this, identically wherever an owner is spelled: values, patterns, ``is``
+    tests, method receivers, and type annotations alike. ``owner`` is the
+    owner as spelled and ``member`` the referenced member's name.
     """
 
     def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:

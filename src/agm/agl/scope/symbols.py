@@ -459,7 +459,12 @@ class TypeOwner:
     REPL entry retains and never re-selects, however later entries redeclare
     or import around it. ``indirect`` holds, for an alias, whether ``target``
     was reached through a ``use`` contribution or an import route rather than
-    this module's own nearest declaration.
+    this module's own nearest declaration. ``own_path_referenced`` maps, for a
+    direct (non-alias) enum owner only, each of ``referenced``'s names that is
+    declared directly beneath the owner's own path (``enum Box = ... |
+    Box::Item``) to its constructor: such a name selects like a declared
+    member wherever the owner is spelled, not only locally; an alias never
+    carries this map, so it stays a referenced-member error through one.
     """
 
     constructor: ConstructorRef | None
@@ -472,6 +477,7 @@ class TypeOwner:
     hidden: frozenset[str] = frozenset()
     indirect: bool = False
     target: TypeTarget | None = None
+    own_path_referenced: Mapping[str, ConstructorRef] = field(default_factory=dict)
 
     @property
     def constructs(self) -> bool:
@@ -1000,10 +1006,6 @@ class ModuleResolution:
     ``type_owners``
         For a REPL entry, the :class:`TypeOwner` each type it declares resolved
         to, keyed by type path; the session retains them for later entries.
-    ``referenced_member_names``
-        Maps each enum declaration's node id to :attr:`TypeOwner.referenced`:
-        the names spelling the members it only references. Typecheck records
-        these, so an owner spelling of one is rejected alike in every position.
     """
 
     program: Program
@@ -1034,7 +1036,6 @@ class ModuleResolution:
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
-    referenced_member_names: dict[int, frozenset[str]] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

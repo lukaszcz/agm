@@ -265,7 +265,7 @@ def resolve_entry(
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
     *parent_scope* and *retained_type_owners* forward to that function's
-    ``entry_parent_scope`` and ``entry_repl_session_type_paths``
+    ``entry_repl_session_scope`` and ``entry_repl_session_type_paths``
     respectively; *origin_path* forwards to ``build_repl_graph``'s ``path``.
 
     *default_stdlib* controls whether ``std/prelude`` is imported into the
@@ -284,7 +284,7 @@ def resolve_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     resolved = resolved_program.modules[graph.entry_id].resolved
     return _without_synthetic_import(resolved, import_node_id)
@@ -315,7 +315,7 @@ def resolve_inline_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     resolved = _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
@@ -340,7 +340,7 @@ def resolve_repl_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     return _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
@@ -366,7 +366,7 @@ def resolve_and_check_repl_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -396,7 +396,7 @@ def resolve_and_check_inline_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -438,7 +438,7 @@ def resolve_and_check_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -553,7 +553,7 @@ def resolve_program_ast(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
 
@@ -572,7 +572,7 @@ def resolve_inline_program_ast(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
 

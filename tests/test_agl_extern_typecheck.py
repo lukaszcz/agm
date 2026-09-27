@@ -503,7 +503,6 @@ class TestExternCallSiteRecording:
         _TypeBuilder(
             env,
             attributes=resolved.attributes,
-            referenced_member_names=resolved.referenced_member_names,
         ).collect(resolved.program)
         checker = _Checker(env, resolved, _CAPS)
         definitions = [item for item in resolved.program.body.items if isinstance(item, FuncDef)]

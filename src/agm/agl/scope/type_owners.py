@@ -33,6 +33,7 @@ from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.scope.type_names import (
     TypeNameSite,
     imported_member_selection,
+    is_nominal_type_expr,
     nominal_selection,
 )
 from agm.agl.syntax.nodes import (
@@ -194,21 +195,20 @@ class TypeOwnerIndex:
     def _current_retained_owner(self, qname: QName, retained: TypeOwner) -> TypeOwner:
         """What a retained owner selects now.
 
-        Row R0: *retained* is not an alias, or its target is unresolved
-        (record, enum, structural, or a same-entry cycle) -- unchanged.
-        Row R1: the target is gone -- a later entry retired or redeclared its
-        path -- *retained* stands at its declaration-time members/hidden.
-        Row R2: the target is itself an alias -- inherit its current
-        (recursively re-derived) members/hidden unfiltered, exactly as a
-        fresh chain link does.
-        Row R3: *retained* was a direct hit on a non-alias target -- the same
-        declaration has the same members, so it stands.
-        Row R4: *retained* was indirect and its own spelling still selects
-        the target at this entry's site -- re-project the target's current
-        members through that spelling.
-        Row R5: *retained* was indirect but its spelling no longer selects
-        exactly the target (shadowed, ambiguous, or the route is gone) --
-        freeze at its declaration-time members/hidden.
+        A non-alias *retained*, or one whose target cannot be resolved
+        (record, enum, structural, or a same-entry cycle), stands unchanged.
+        Otherwise its target is looked up fresh: if it is gone (a later entry
+        retired or redeclared its path), *retained* stands at its
+        declaration-time members/hidden. If the target is itself an alias,
+        its current (recursively re-derived) members/hidden are inherited
+        unfiltered, exactly as a fresh chain link does. Otherwise, a direct
+        hit on the (non-alias) target stands as-is -- the same declaration
+        has the same members -- while an indirect hit is re-checked: if its
+        own spelling still selects the target at this entry's site, the
+        target's current members are re-projected through that spelling;
+        if the spelling no longer selects exactly the target (shadowed,
+        ambiguous, or the route is gone), *retained* freezes at its
+        declaration-time members/hidden.
         """
         alias, target = retained.alias, retained.target
         if alias is None or target is None:
@@ -294,6 +294,7 @@ class TypeOwnerIndex:
                     if isinstance(member, VariantRef)
                     for constructor in self.referenced_member_refs(module_id, member)
                 ),
+                own_path_referenced=self._own_path_referenced_members(module_id, path, declaration),
             )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
         # Typecheck judges a target scope selects no declaration for, so the
@@ -314,7 +315,8 @@ class TypeOwnerIndex:
         # target it was just resolved against, so filtering is gated only by
         # indirection and the target not itself being an alias (whose own
         # projection, filtered at its own site, already applies unfiltered) --
-        # the same inheritance rule as a retained alias's R2 (see `owner`).
+        # the same rule ``_current_retained_owner`` applies when the target
+        # it re-checks turns out to be an alias itself.
         if indirect and target.alias is None:
             reachable, hidden = self._filtered_projection(
                 module_id, path, type_expr, declaration.type_params, target
@@ -337,11 +339,18 @@ class TypeOwnerIndex:
         """Return what alias *qname*'s target selects where declared, and whether indirectly.
 
         ``None`` if the target is structural. See :func:`nominal_selection`
-        for the second and third elements of a non-``None`` result.
+        for the second element of a non-``None`` result; the third is the
+        target spelling itself, narrowed to ``NameT | AppliedT``.
         """
         if qname not in self._alias_targets:
             site = self.site(qname[0], _path(qname[1])[:-1], alias.type_params)
-            self._alias_targets[qname] = nominal_selection(site, alias.type_expr)
+            type_expr = alias.type_expr
+            selection = nominal_selection(site, type_expr)
+            self._alias_targets[qname] = (
+                (*selection, type_expr)
+                if selection is not None and is_nominal_type_expr(type_expr, site)
+                else None
+            )
         return self._alias_targets[qname]
 
     def _enum_members(
@@ -363,6 +372,24 @@ class TypeOwnerIndex:
             and (refs := self.referenced_member_refs(module_id, member))
             for name in (member.chain.member, *(ref.owner_name for ref in refs))
         )
+
+    def _own_path_referenced_members(
+        self, module_id: ModuleId, path: ScopePath, declaration: EnumDef
+    ) -> dict[str, ConstructorRef]:
+        """Return each own-path referenced member's constructor, by its terminal name.
+
+        ``enum Owner = ... | Owner::Name`` nests ``Name``'s separate
+        declaration directly beneath *path*, unlike a member referenced from
+        elsewhere: such a name selects through this owner like a declared one
+        (see :attr:`TypeOwner.own_path_referenced`).
+        """
+        return {
+            ref.owner_name: ref
+            for member in declaration.members
+            if isinstance(member, VariantRef)
+            for ref in self.referenced_member_refs(module_id, member)
+            if ref.owner_module_id == module_id and ref.owner_path == path
+        }
 
     def _resolve_referenced_member(
         self, module_id: ModuleId, member: VariantRef

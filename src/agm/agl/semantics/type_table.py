@@ -606,9 +606,6 @@ class TypeTable:
         # them a phase before the enum's body registers (see
         # :meth:`declare_inline_member`); a superseded enum keeps its own.
         self._inline_members: dict[DeclId, dict[str, tuple[tuple[str, ...], RecordType]]] = {}
-        # Enum identity -> the terminal names of its referenced members,
-        # declared with its shell like its inline members.
-        self._referenced_members: dict[DeclId, frozenset[str]] = {}
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef* under its own declaration identity.
@@ -678,14 +675,6 @@ class TypeTable:
         registers, so :meth:`inline_member` answers while bodies are resolved.
         """
         self._inline_members.setdefault(enum_id, {})[member.name] = (type_params, member)
-
-    def declare_referenced_members(self, enum_id: DeclId, names: frozenset[str]) -> None:
-        """Record the terminal names of enum *enum_id*'s referenced members."""
-        self._referenced_members[enum_id] = names
-
-    def references_member(self, owner: EnumType, name: str) -> bool:
-        """Whether *owner* references, rather than declares, a member named *name*."""
-        return name in self._referenced_members.get(owner.decl_id, frozenset())
 
     def inline_member(self, owner: EnumType, name: str) -> RecordType | None:
         """Return *owner*'s inline member *name* at *owner*'s type arguments, if declared."""
@@ -2144,7 +2133,6 @@ class TypeTable:
             self._name_index[name_key] = decl_id
         for enum_id, members in other._inline_members.items():
             self._inline_members.setdefault(enum_id, {}).update(members)
-        self._referenced_members.update(other._referenced_members)
         # Orphan status travels with the declaration: a session seeds a fresh
         # table from its accumulated one on every entry, so a declaration
         # orphaned once must stay orphaned for the rest of the session.

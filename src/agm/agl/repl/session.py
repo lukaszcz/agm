@@ -18,6 +18,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 
 from __future__ import annotations
 
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -703,33 +704,100 @@ class ReplSession:
 
         Returns a ``kind == "type"`` :class:`EntryResult` echoing the resolved
         type when *text* parses as a single type expression AND resolves to a
-        known type in the session type environment; returns ``None`` otherwise
-        so the caller keeps the original failure result.
+        known type; returns ``None`` otherwise so the caller keeps the
+        original failure result.
 
         This is a REPL-only convenience (the language is unchanged): typing a
         type is not a value expression, so without it the entry would surface
-        ``'X' is not defined.``.  Like :meth:`type_of`, this never evaluates,
-        promotes, advances the node-id counter, or mutates session state.  The parse uses
-        throwaway node ids; only the resolved :class:`Type` or generic type
-        definition display is kept.
+        ``'X' is not defined.``.  *text* is wrapped as the body of a synthetic
+        ``type <fresh> = text`` declaration and run through the same entry
+        pipeline and session scope as any other entry, so a hidden or
+        referenced-only owner is rejected exactly as it is in ``fn(x: text) =>
+        1`` -- scope is the one place that decides this, for every position.
+        Like :meth:`type_of`, this never evaluates, promotes, advances the
+        node-id counter, or mutates session state: the synthetic declaration
+        is parsed with throwaway ids and discarded once its resolved type (or
+        generic definition) is read.
         """
-        from agm.agl.parser import AglSyntaxError, parse_type_expr
+        from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
+        from agm.agl.modules.errors import (
+            AmbiguousModule,
+            ImportEntryError,
+            ModuleNotFound,
+            ModulePrefixNotFound,
+        )
+        from agm.agl.parser import AglSyntaxError, parse_program_seeded
+        from agm.agl.scope import AglScopeError
+        from agm.agl.syntax.nodes import TypeAlias
         from agm.agl.typecheck import AglTypeError
 
+        host_env = self._runtime.host_environment()
+        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
         try:
-            type_expr = parse_type_expr(text, start_id=self._next_node_id)
+            program, next_node_id = parse_program_seeded(
+                f"type {fresh_name} = {text}", start_id=self._next_node_id, resolve_infix=False
+            )
         except AglSyntaxError:
             return None
+        items = program.body.items
+        if len(items) != 1 or not isinstance(items[0], TypeAlias):
+            return None
+        type_expr = items[0].type_expr
 
-        member_error = self._retained_owner_member_error(type_expr)
-        if member_error is not None:
-            return self._fail([member_error.to_diagnostic()], [])
+        try:
+            checked_program = self._entry_pipeline.resolve_and_check_program(
+                program, next_node_id, host_env
+            )
+        except (HiddenMemberError, ReferencedMemberError) as exc:
+            return self._fail([exc.to_diagnostic()], [])
+        except (
+            AglScopeError,
+            AglTypeError,
+            ModuleNotFound,
+            AmbiguousModule,
+            ModulePrefixNotFound,
+            ImportEntryError,
+        ):
+            # Scope already accepted (or never saw) *type_expr*'s owner and
+            # qualifier during the attempt above -- a hiding/referenced
+            # rejection would have raised one of the two errors caught above,
+            # since scope resolves before typecheck ever runs (or, if the
+            # entry's module graph itself could not build, never named an
+            # owner to hide at all). Whatever failed, fall back to every
+            # visible type env: a bare unapplied generic (e.g. ``Option``)
+            # cannot be an alias body, so it is displayed as a generic
+            # definition instead, and a builtin primitive resolves even when
+            # no graph env is available.
+            return self._try_type_entry_in_any_env(type_expr)
+
+        checked = checked_program.modules[checked_program.entry_id]
+        typ = checked.type_env.resolve_type_expr(type_expr, span=type_expr.span)
+        return EntryResult(
+            kind="type",
+            name=None,
+            value=None,
+            value_type=typ,
+            diagnostics=[],
+            warnings=[],
+            error=None,
+            ok=True,
+            type_table=checked.type_env.type_table,
+        )
+
+    def _try_type_entry_in_any_env(self, type_expr: "TypeExpr") -> EntryResult | None:
+        """Return a type-entry result for *type_expr*, trying every visible type env.
+
+        Tries a bare unapplied generic's definition display first, then a
+        plain resolution, in each env in turn: the session's own (which
+        resolves a builtin primitive even without a graph env) and a
+        throwaway program-level one built fresh for std/imported names.
+        """
+        from agm.agl.typecheck import AglTypeError
 
         type_envs = [self._type_env]
         program_type_env = self._build_type_entry_program_env()
         if program_type_env is not None:
             type_envs.append(program_type_env)
-
         for type_env in type_envs:
             generic_result = self._try_generic_type_entry(type_expr, type_env)
             if generic_result is not None:
@@ -749,37 +817,6 @@ class ReplSession:
                 ok=True,
                 type_table=type_env.type_table,
             )
-        return None
-
-    def _retained_owner_member_error(self, type_expr: "TypeExpr") -> AglError | None:
-        """Return the referenced/hidden-member error a bare ``Owner::member`` entry names.
-
-        Handles only a single unqualified owner segment, looked up in the
-        session's retained, declaration-time type-owner snapshot
-        (:attr:`_session_type_paths`) rather than live-rederived against this
-        entry's current imports and uses: this is a REPL-only fallback for a
-        bare type spelling, not a resolver pass, so it is not worth building
-        one just to re-derive an owner scope already resolves for every other
-        entry. ``None`` for any other shape, or when the member is neither
-        referenced nor hidden.
-        """
-        from agm.agl.diagnostics import ReferencedMemberError, hidden_member
-        from agm.agl.syntax.types import NameT
-
-        if not isinstance(type_expr, NameT) or type_expr.qualifier is None:
-            return None
-        qualifier = type_expr.qualifier
-        if qualifier.anchor is not None or len(qualifier.segments) != 1:
-            return None
-        owner_name = qualifier.segments[0].name
-        owner = self._session_type_paths.get((owner_name,))
-        if owner is None:
-            return None
-        member = type_expr.name
-        if member in owner.referenced:
-            return ReferencedMemberError(owner_name, member, span=type_expr.span)
-        if member in owner.hidden:
-            return hidden_member(f"{owner_name}::{member}", type_expr.span)
         return None
 
     def _try_generic_type_entry(

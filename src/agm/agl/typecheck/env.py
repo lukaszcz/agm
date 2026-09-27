@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic, ReferencedMemberError
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
@@ -101,7 +101,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, render_qualifier_path
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 from agm.agl.zones import ParamZone
 
 #: Every built-in name a module's type namespace carries a reserved fallback
@@ -1406,45 +1406,22 @@ class TypeEnvironment:
             enum_template, type_params, alias = owner_template
             if alias is None:
                 return None
-            selected = self.owner_inline_member(
-                enum_template, render_qualifier_path(qualifier), member, span=span
-            )
+            selected = self.owner_inline_member(enum_template, member)
             return None if selected is None else OwnerMember(selected, type_params)
         owner = self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
-        selected = self.owner_inline_member(
-            owner, render_qualifier_path(qualifier), member, span=span
-        )
+        selected = self.owner_inline_member(owner, member)
         return None if selected is None else OwnerMember(selected, ())
 
-    def owner_inline_member(
-        self, owner: EnumType, spelling: str, member: str, *, span: SourceSpan | None
-    ) -> RecordType | None:
-        """Return the member an owner spelled *spelling* selects from enum *owner*, if declared.
+    def owner_inline_member(self, owner: EnumType, member: str) -> RecordType | None:
+        """Return the member *member* selects from enum *owner*'s scope, if declared there.
 
-        Only inline members are in the enum's scope; spelling a member *owner*
-        only references is a :class:`ReferencedMemberError`.
+        A member *owner* only references (:class:`ReferencedMemberError`) is
+        rejected by scope, the one place that decides owner-member selection,
+        for every position; a caller here has already passed that check.
         """
-        selected = self.type_table.inline_member(owner, member)
-        if selected is None and self.type_table.references_member(owner, member):
-            raise ReferencedMemberError(spelling, member, span=span)
-        return selected
-
-    def _reject_referenced_owner_member(
-        self, qualifier: QualifierChain, name: str, span: SourceSpan | None
-    ) -> None:
-        """Raise when ``qualifier::name``, naming no declaration, spells a referenced member."""
-        if not qualifier.segments:
-            return
-        owner_expr = owner_type_expr(qualifier)
-        if not isinstance(owner_expr, NameT):
-            return
-        owner_template = self._enum_owner_template(owner_expr, span)
-        if owner_template is not None:
-            self.owner_inline_member(
-                owner_template[0], render_qualifier_path(qualifier), name, span=span
-            )
+        return self.type_table.inline_member(owner, member)
 
     def _enum_owner_template(
         self, owner: NameT | AppliedT, span: SourceSpan | None
@@ -2412,7 +2389,6 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
         rendered = qualifier.render()
-        self._reject_referenced_owner_member(qualifier, name, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None:
@@ -2555,7 +2531,6 @@ class TypeEnvironment:
                     span=span,
                 )
                 return opened
-        self._reject_referenced_owner_member(qualifier, name, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None:

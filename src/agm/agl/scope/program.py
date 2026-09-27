@@ -691,7 +691,6 @@ def _reusable(
 def resolve_program(
     graph: ModuleGraph,
     *,
-    entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
@@ -703,13 +702,10 @@ def resolve_program(
     ----------
     graph:
         A loaded module graph from :func:`~agm.agl.modules.loader.build_repl_graph`.
-    entry_parent_scope:
-        When given, the entry module's root scope is parented to this scope
-        so name lookups fall through to session bindings (REPL incremental
-        mode).
     entry_repl_session_scope:
-        When given, passed to the entry resolver so ``::name`` self-references
-        can fall back to prior session bindings (REPL program context).
+        When given, the entry module's root scope is parented to this scope
+        so name lookups fall through to session bindings, and ``::name``
+        self-references fall back to it too (REPL incremental mode).
     entry_repl_session_scope_nodes:
         Named scope layers promoted by prior REPL entries. They are copied into
         the entry's resolver so qualified members remain available.
@@ -930,14 +926,13 @@ def resolve_program(
                 if is_entry and retained_type_owners is not None
                 else type_owners
             ),
-            allow_root_statements=is_entry and entry_parent_scope is not None,
+            allow_root_statements=is_entry and entry_repl_session_scope is not None,
             is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=retained_scope_nodes if is_entry else None,
             repl_session_type_paths=retained_type_owners if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
-            parent_scope=entry_parent_scope if is_entry else None,
             ambient_type_names=type_names,
         )
 

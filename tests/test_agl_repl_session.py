@@ -2064,6 +2064,74 @@ def test_retained_alias_of_an_imported_alias_reaches_members(
     assert s.eval_entry("x is C::Green").value == BoolValue(True)
 
 
+@pytest.mark.parametrize("sizes", _grouping_params_for(1))
+def test_owner_own_path_referenced_member_is_accepted_through_wildcard_import(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """``Box::Item`` (``Item``'s own path is ``Box``) selects like a declared member.
+
+    Mirrors ``referenced-member-declared-in-enum-scope-wildcard-import`` in
+    ``test_agl_enum_owner_selection.py`` for the REPL, across every value,
+    pattern, ``is``, and type position.
+    """
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m::*",), sizes)
+
+    value = s.eval_entry("let v: Box = Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
+    assert s.eval_entry("fn(i: Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | Box::Item(n) => n | Empty => 0")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("v is Box::Item").value == BoolValue(True)
+
+
+def test_owner_own_path_referenced_member_is_accepted_through_a_qualified_import(
+    tmp_path: Path,
+) -> None:
+    """The same own-path referenced member, spelled through a module-qualified import."""
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import m").ok
+
+    value = s.eval_entry("let v: m::Box = m::Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
+    assert s.eval_entry("fn(i: m::Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | m::Box::Item(n) => n | m::Empty => 0")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("v is m::Box::Item").value == BoolValue(True)
+
+
+def test_owner_own_path_referenced_member_is_accepted_through_a_use_alias(
+    tmp_path: Path,
+) -> None:
+    """The same own-path referenced member, spelled through a ``use``-opened import alias.
+
+    The import, its ``use``, and every position are one entry: a bare name a
+    ``use`` opens is not retained as a pattern candidate across a later
+    entry's boundary (a separate, pre-existing REPL gap, not this owner
+    selection), so this case is not grouped like the other three import
+    styles.
+    """
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    result = s.eval_entry(
+        "import m as mm\n"
+        "use mm::*\n"
+        "let v: Box = Box::Item(n = 1)\n"
+        "case v of | Box::Item(n) => n | Empty => 0"
+    )
+    assert result.value == IntValue(1), result.diagnostics
+    assert s.eval_entry("fn(i: Box::Item) => 1").ok
+    assert s.eval_entry("v is Box::Item").value == BoolValue(True)
+
+
 def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
     tmp_path: Path,
 ) -> None:
@@ -9313,6 +9381,18 @@ class TestBareTypeEntry:
         assert isinstance(r.value_type, ArrayType)
         assert isinstance(r.value_type.elem, IntType)
 
+    def test_multi_statement_entry_is_not_mistaken_for_a_type_entry(self) -> None:
+        """A failed entry spanning more than one statement keeps its own failure.
+
+        The type-entry fallback wraps the whole failed entry as a synthetic
+        alias body; a multi-statement entry parses into more than one item,
+        so the fallback declines and the original failure surfaces.
+        """
+        s = open_session()
+        r = s.eval_entry("int\nlet x = 1")
+        assert not r.ok
+        assert r.kind != "type"
+
     def test_bare_generic_enum_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -9646,6 +9726,37 @@ class TestBareTypeEntry:
             no_generic_env.resolve_qualified_unapplied_generic_type(
                 qualified_expr.qualifier,
                 "Box",
+            )
+            is None
+        )
+
+        from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
+
+        region = ScopeNode(node_id=901)
+        region.contribute_bare(
+            ("Nested", "Status"),
+            BindingRef(
+                name="Status",
+                mutable=False,
+                decl_span=SourceSpan(1, 1, 1, 1, 0, 0),
+                decl_node_id=902,
+                kind=BinderKind.constructor_binding,
+                scope_path=("Nested",),
+            ),
+        )
+        opened_non_generic_expr = parse_type_expr("Nested::Status")
+        assert isinstance(opened_non_generic_expr, NameT)
+        assert opened_non_generic_expr.qualifier is not None
+        opened_non_generic_env = TypeEnvironment(
+            program_type_table={
+                (ENTRY_ID, ("Nested",), "Status"): RecordType(name="Status", scope_path=("Nested",))
+            },
+            scope_nodes={(): region},
+        )
+        assert (
+            opened_non_generic_env.resolve_qualified_unapplied_generic_type(
+                opened_non_generic_expr.qualifier,
+                "Status",
             )
             is None
         )

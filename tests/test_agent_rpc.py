@@ -558,6 +558,7 @@ def test_idle_timeout_waits_for_explicit_child_readiness(
 ) -> None:
     stub = RpcStub(tmp_path, monkeypatch, {"prompt": "wait"})
     backend = open_backend(timeout=0.5)
+    pid = cast(int, stub.wait_for("starts.jsonl")[0]["pid"])
     done = threading.Event()
     errors: list[Exception] = []
 
@@ -579,6 +580,8 @@ def test_idle_timeout_waits_for_explicit_child_readiness(
     with pytest.raises(SessionHostError):
         backend.stats()
     backend.close()
+    # Regression: an idle timeout must not leave the stuck child running.
+    assert_exited(pid)
 
 
 def test_idle_timeout_covers_blocked_rpc_stdin_write(

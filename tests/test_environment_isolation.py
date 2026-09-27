@@ -10,6 +10,7 @@ project directory or a workspace shell must not inherit either.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import httpx2
@@ -18,6 +19,7 @@ import pytest
 from agm.config.context import current_config_context
 from agm.config.home import agm_home_dir
 from agm.packages.activation import load_activation_index
+from tests._git_helpers import git_output, init_repo
 from tests.conftest import LAUNCH_ENVIRONMENT
 
 
@@ -60,3 +62,38 @@ def test_git_identity_does_not_depend_on_a_personal_gitconfig() -> None:
     assert os.environ["GIT_AUTHOR_NAME"]
     assert os.environ["GIT_COMMITTER_EMAIL"]
     assert not (Path(os.environ["HOME"]) / ".gitconfig").exists()
+
+
+def test_git_discovery_cannot_climb_above_the_pytest_temp_root(tmp_path: Path) -> None:
+    """Git run from a directory with no repository of its own must never discover
+    one above the suite's own temp root, wherever that root happens to sit on the
+    host (e.g. a sandboxed ``TMPDIR`` nested under a git-tracked home).
+    """
+    host_repo = tmp_path / "host"
+    temp_root = host_repo / "outer" / "pytest-tmp"
+    case_dir = temp_root / "case"
+    case_dir.mkdir(parents=True)
+    init_repo(host_repo, dict(os.environ))
+
+    unfenced_env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
+    assert git_output(case_dir, ["rev-parse", "--show-toplevel"], unfenced_env) == str(
+        host_repo.resolve()
+    )
+
+    fenced_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(temp_root)}
+    fenced = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=case_dir,
+        env=fenced_env,
+        capture_output=True,
+        text=True,
+    )
+    assert fenced.returncode != 0
+
+
+def test_git_ceiling_directories_is_the_shared_temp_root_parent(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    assert os.environ["GIT_CEILING_DIRECTORIES"] == str(
+        tmp_path_factory.getbasetemp().resolve().parent
+    )

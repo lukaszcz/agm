@@ -677,6 +677,15 @@ class TestGenericEqualityOnTypeVariableBounds:
     def test_bare_type_variable_needs_a_bound_for_not_equal(self) -> None:
         reject_type("def f[T](a: T, b: T) -> bool = a != b")
 
+    def test_bare_type_variable_equality_rejection_is_a_type_error_for_both_operators(
+        self,
+    ) -> None:
+        """The shared 'needs Eq' diagnostic must fire as a type error for '==' and '!='."""
+        eq_error = reject_type("def f[T](a: T, b: T) -> bool = a == b")
+        ne_error = reject_type("def f[T](a: T, b: T) -> bool = a != b")
+        assert isinstance(eq_error, AglTypeError)
+        assert isinstance(ne_error, AglTypeError)
+
     def test_lambda_closing_over_bounded_type_variable_accepted(self) -> None:
         accept_type("def f[T]{Eq T}(a: T, b: T) -> bool = (fn(x: T, y: T) -> bool => x == y)(a, b)")
 

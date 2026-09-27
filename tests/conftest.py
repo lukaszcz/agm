@@ -242,6 +242,16 @@ GIT_IDENTITY: Mapping[str, str] = MappingProxyType(
 _HOST_CONTEXT_VARIABLES = ("PROJ_DIR", "REPO_DIR", "TMUX", "TMUX_PANE")
 
 
+def _git_ceiling_directories(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Parent of pytest's shared temp root, so git discovery can never climb past it.
+
+    A tmp root nested under a git-tracked directory (e.g. a sandboxed ``TMPDIR``
+    under the invoking user's home) would otherwise let git, walking upward from a
+    test's own repository, discover that outer one instead.
+    """
+    return str(tmp_path_factory.getbasetemp().resolve().parent)
+
+
 @pytest.fixture(autouse=True)
 def isolate_host_environment(
     clear_workspace_shell_env: None,
@@ -270,6 +280,7 @@ def isolate_host_environment(
     monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
     for name, value in GIT_IDENTITY.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", _git_ceiling_directories(tmp_path_factory))
     for name in _HOST_CONTEXT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     for name in tuple(os.environ):
@@ -407,7 +418,7 @@ def python_installer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PythonI
 
 
 @pytest.fixture()
-def env(tmp_path: Path) -> dict[str, str]:
+def env(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     """Environment dict with git identity and a home of its own.
 
     A separate home from the one :func:`isolate_host_environment` installs, so a
@@ -416,6 +427,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     """
     e = os.environ.copy()
     e.update(GIT_IDENTITY)
+    e["GIT_CEILING_DIRECTORIES"] = _git_ceiling_directories(tmp_path_factory)
     e["SHELL"] = shutil.which("bash") or "/bin/sh"
     for name in _HOST_CONTEXT_VARIABLES:
         e.pop(name, None)

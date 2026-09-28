@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
+from agm.agl.runtime.engine_config import raw_option_str, validate_engine_leaf_value
 from agm.agl.runtime.option import option_text
 from agm.agl.semantics.values import RecordValue
 from agm.config.engine_keys import (
@@ -111,25 +111,6 @@ def _configured_value(
     return configured_value
 
 
-def _validate_cli_timeout(raw: str) -> None:
-    """Reject an unparsable ``--timeout`` value eagerly, before anything runs.
-
-    ``convert_config_value`` only checks ``--timeout``'s value decodes as
-    ``Option[text]``, never that it is a valid duration — that conversion
-    happens once at its use site (:func:`~agm.core.parse.parse_timeout`).
-    Validating it here, alongside every other CLI decode failure, keeps a
-    malformed flag from surfacing only after the static pipeline has already
-    run.
-    """
-    from agm.core.parse import parse_timeout
-
-    try:
-        parse_timeout(raw)
-    except ValueError as exc:
-        print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
-
 def _decode_engine_value(
     key_name: str, raw: object, origin: str, type_table: "TypeTable"
 ) -> "Value":
@@ -137,11 +118,13 @@ def _decode_engine_value(
 
     Shared by the ordinary per-key seeding loop and the derived ``trace`` rule,
     so both go through one decode-failure contract (message and exit code).
+    Decoding — including ``timeout``'s duration-syntax check — is
+    :func:`~agm.agl.runtime.engine_config.validate_engine_leaf_value`'s rule,
+    so a CLI flag, a config-file entry, and a package manifest leaf fail
+    identically.
     """
-    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
-
     try:
-        return convert_config_value(key_name, raw, ENGINE_KEY_TYPES[key_name], type_table)
+        return validate_engine_leaf_value(key_name, raw, type_table)
     except ValueError as exc:
         print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -281,9 +264,9 @@ def build_host_engine_seeds(
     implication and any caller-supplied middle tier are folded in.
 
     Every key, ``default-agent`` included, decodes through
-    :func:`~agm.agl.runtime.engine_config.convert_config_value` against one
-    shared seeded ``TypeTable``. A decode failure prints an error naming the
-    offending key and its origin (``--<name>`` for a CLI flag, otherwise
+    :func:`~agm.agl.runtime.engine_config.validate_engine_leaf_value` against
+    one shared seeded ``TypeTable``. A decode failure prints an error naming
+    the offending key and its origin (``--<name>`` for a CLI flag, otherwise
     ``configuration key <name>``) to stderr and exits 1 here, before anything
     runs.
     """
@@ -297,8 +280,6 @@ def build_host_engine_seeds(
     lower: dict[str, Value] = {}
     for spec in ENGINE_KEYS:
         if spec.name in cli_values:
-            if spec.name == "timeout" and cli_values["timeout"] is not None:
-                _validate_cli_timeout(cast(str, cli_values["timeout"]))
             cli[spec.name] = _decode_engine_value(
                 spec.name, cli_values[spec.name], f"--{spec.name}", type_table
             )

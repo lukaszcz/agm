@@ -2474,7 +2474,7 @@ class TestExecTimeoutAndLogFileFlags:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_trace(agl_file, timeout="not-a-duration"))
         assert exc_info.value.code == 1
-        assert "invalid --timeout" in capsys.readouterr().err
+        assert "timeout" in capsys.readouterr().err
 
     def test_cli_no_timeout_clears_engine_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

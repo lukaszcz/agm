@@ -63,8 +63,8 @@ import only their own tree, packages declared in `[dependencies]`, and `std`.
 
 ## Manifest
 
-`package.toml` supports `[package]` (required), `[dependencies]`, `[python]`, `[commands]`, and
-`[aliases]`.
+`package.toml` supports `[package]` (required), `[dependencies]`, `[python]`, `[commands]`,
+`[aliases]`, and `[config]`.
 `pkg check`, `pkg create`, and `pkg install` reject a key the schema does not define, so a
 misspelled field is an error rather than silently ignored.
 
@@ -208,6 +208,29 @@ spellings of an exact table. A command's own table also feeds every registered c
 it — `[devel.sub]` feeds `devel sub review` when `devel sub` is itself a command — and a key it
 sets is never reported as an unconsumed argument on that ancestor command, since the descendant
 command may be the one that consumes it.
+
+### `[config]`
+
+```toml
+[config]                          # root leaves: defaults for every program the package owns
+trace = true
+"std.http.http-timeout" = "30s"   # module parameter, bare or dotted spelling
+
+[config.devel]                    # a registered command, group, or alias path: `devel`
+timeout = "1h"
+
+[config.devel.review]             # command `devel review`
+default-agent = "claude/opus"
+```
+
+Package-author defaults: root leaves apply to every program the package owns, and each nested
+table names one of the package's own registered command, group, or alias paths
+(`@command`-registered paths included). A leaf is an engine setting or a `@param` binding's bare
+or dotted spelling — never a program signature argument — and must be reachable from the
+package's own import graph: a dependency or `std` module the package never imports contributes no
+spelling. `pkg check`/`create`/`install` reject an unregistered nested table, an unknown leaf, an
+engine value that fails to decode, and a word that is ambiguously both a registered subcommand and
+a setting spelling.
 
 ## Registered commands
 

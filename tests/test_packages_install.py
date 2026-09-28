@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import math
 import re
 import shutil
 import zipfile
@@ -3441,6 +3442,82 @@ def test_install_and_uninstall_use_dry_run_filesystem_primitives(tmp_path: Path)
     uninstall_package("alpha", home=home, env={})
 
     assert (home / ".agm" / "packages" / "alpha" / "1.0.0").exists()
+
+
+def test_install_directory_round_trips_manifest_config(tmp_path: Path) -> None:
+    """A directory install's staged manifest carries ``[config]`` unchanged."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nstart = { program = "alpha/main::main" }\n\n'
+        "[config]\ntrace = true\n\n[config.start]\nverbose = true\n",
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    installed = install_directory(source, home=home, env={})
+
+    assert installed.manifest.config == {"trace": True, "start": {"verbose": True}}
+
+
+def test_install_directory_accepts_a_nan_valued_config_leaf(tmp_path: Path) -> None:
+    """A ``[config]`` leaf's value is never decoded unless it is an engine key.
+
+    A ``nan`` value must not trip the staged-manifest equality gate: comparing
+    ``PackageManifest`` dataclasses directly would fail since ``nan != nan``,
+    even though the staged manifest is byte-identical to the source's.
+    """
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nstart = { program = "alpha/main::main" }\n\n'
+        "[config]\np = nan\n",
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "@param let p: decimal = 0.0\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    installed = install_directory(source, home=home, env={})
+
+    value = installed.manifest.config["p"]
+    assert isinstance(value, float) and math.isnan(value)
+
+
+def test_reinstalling_a_directory_with_a_nan_config_leaf_succeeds(tmp_path: Path) -> None:
+    """A manifest ``[config]`` leaf holding NaN must not trip the re-install gate.
+
+    Installing the same source directory twice into one home hits
+    ``_verify_existing_install``'s manifest-unchanged check (the store tree
+    already exists at the destination); the old dataclass-equality check
+    would treat this as changed content since ``nan != nan``.
+    """
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nstart = { program = "alpha/main::main" }\n\n'
+        "[config]\np = nan\n",
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "@param let p: decimal = 0.0\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    first = install_directory(source, home=home, env={})
+    second = install_directory(source, home=home, env={})
+
+    assert second.root == first.root
 
 
 def test_installing_a_directory_parses_each_module_once(

@@ -16,8 +16,10 @@ import shutil
 import stat
 from pathlib import Path, PurePosixPath
 
+import tomlkit
 from pathspec import PathSpec
 
+from agm.core.toml import TomlDict
 from agm.packages.manifest import PackageManifest
 from agm.packages.record import (
     RECORD_NAME,
@@ -173,7 +175,41 @@ def normalized_manifest(manifest: PackageManifest) -> bytes:
             f"{_toml_key(alias)} = {_toml_string(target)}"
             for alias, target in sorted(manifest.aliases.items())
         )
+    if manifest.config:
+        lines.extend(("", _normalized_config_toml(manifest.config)))
     return ("\n".join(lines) + "\n").encode()
+
+
+def manifests_equivalent(a: PackageManifest, b: PackageManifest) -> bool:
+    """Return whether two manifests carry the same schema-defined content.
+
+    Compares normalized renderings rather than dataclass equality, so a
+    ``[config]`` leaf holding a float that is unequal to itself (``nan``)
+    does not make an otherwise identical manifest compare as changed.
+    ``unknown_fields`` is schema, not content -- :func:`normalized_manifest`
+    never renders it -- so it is compared separately: a manifest a newer
+    build wrote with fields this schema does not define still counts as
+    different, preserving dataclass equality's behavior for that field.
+    """
+    return normalized_manifest(a) == normalized_manifest(b) and a.unknown_fields == b.unknown_fields
+
+
+def _normalized_config_toml(config: TomlDict) -> str:
+    """Render ``[config]`` deterministically: recursively sorted keys, tomlkit values."""
+    doc = tomlkit.document()
+    doc["config"] = _sorted_toml_value(config)
+    return tomlkit.dumps(doc).rstrip("\n")
+
+
+def _sorted_toml_value(value: object) -> object:
+    """Recursively sort dict keys so equal manifest data always renders identically."""
+    if isinstance(value, dict):
+        items: dict[str, object] = value
+        return {key: _sorted_toml_value(items[key]) for key in sorted(items)}
+    if isinstance(value, list):
+        elements: list[object] = value
+        return [_sorted_toml_value(item) for item in elements]
+    return value
 
 
 def _toml_string(value: str) -> str:

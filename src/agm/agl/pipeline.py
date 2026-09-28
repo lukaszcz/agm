@@ -1709,13 +1709,7 @@ def _module_param_infos(
     *aliases* is the caller's shared alias index when it also discovers
     programs from the same checked program; ``None`` builds one for this call.
     """
-    from agm.agl.syntax.nodes import (
-        LetDecl,
-        VarDecl,
-        static_binding_name,
-        static_binding_node_id,
-        static_items,
-    )
+    from agm.agl.syntax.nodes import VarDecl, static_binding_name
 
     alias_index = _TypeAliasIndex(checked) if aliases is None else aliases
     module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
@@ -1723,32 +1717,26 @@ def _module_param_infos(
         attributes = checked_module.resolved.attributes
         type_table = checked_module.type_env.type_table
         params: list[ParamBindingInfo] = []
-        for item in static_items(checked_module.resolved.program.body.items):
-            if not isinstance(item, (LetDecl, VarDecl)):
-                continue
-            binding_node_id = static_binding_node_id(item)
-            cli = attributes.params.get(binding_node_id)
-            if cli is None:
-                continue
-            name = static_binding_name(item)
-            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
+        for binding in checked_module.resolved.param_bindings():
+            name = static_binding_name(binding.item)
+            binding_type = checked_module.type_env.get_binding_type(binding.node_id)
             assert binding_type is not None
             params.append(
                 ParamBindingInfo(
                     module=module_id,
-                    scope_path=tuple(segment.name for segment in item.scope_path),
+                    scope_path=binding.scope_path,
                     name=name,
-                    node_id=binding_node_id,
-                    span=item.span,
+                    node_id=binding.node_id,
+                    span=binding.item.span,
                     type=binding_type,
-                    mutable=isinstance(item, VarDecl),
-                    cli=cli,
-                    doc=attributes.docs.get(item.node_id),
+                    mutable=isinstance(binding.item, VarDecl),
+                    cli=binding.cli,
+                    doc=attributes.docs.get(binding.item.node_id),
                     is_path=_annotates_path(
                         checked,
                         module_id,
-                        tuple(segment.name for segment in item.scope_path),
-                        item.type_ann,
+                        binding.scope_path,
+                        binding.item.type_ann,
                         binding_type,
                         alias_index,
                     ),

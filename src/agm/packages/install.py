@@ -43,6 +43,7 @@ from agm.packages.distribution import (
     distribution_entries,
     distribution_files,
     is_cache_or_vcs_path,
+    manifests_equivalent,
     materialize_distribution,
 )
 from agm.packages.errors import DisciplineError as DisciplineError
@@ -559,11 +560,11 @@ def _stage_directory_package(
         materialize_distribution(source_root, distribution, staging)
         staged = PackageInfo(staging, load_manifest(staging / MANIFEST_NAME))
         validate_staged_distribution(resolution, staged)
-        if (
-            canonical_package_identity(staged.manifest.name, staged.manifest.version)
-            != canonical_package_identity(package.manifest.name, package.manifest.version)
-            or staged.manifest != distribution
-        ):
+        if canonical_package_identity(
+            staged.manifest.name, staged.manifest.version
+        ) != canonical_package_identity(
+            package.manifest.name, package.manifest.version
+        ) or not manifests_equivalent(staged.manifest, distribution):
             raise PackageInstallError("staged package manifest changed after source validation")
         write_record(staging)
         return staging
@@ -1126,11 +1127,11 @@ def _verify_existing_install(
 ) -> None:
     try:
         installed = load_manifest(root / "package.toml")
-        if (
-            canonical_package_identity(installed.name, installed.version)
-            != canonical_package_identity(manifest.name, manifest.version)
-            or installed != manifest
-        ):
+        if canonical_package_identity(
+            installed.name, installed.version
+        ) != canonical_package_identity(
+            manifest.name, manifest.version
+        ) or not manifests_equivalent(installed, manifest):
             raise _already_installed_error(manifest)
         entries = verify_record(root)
         if package_hash is not None and content_hash(entries) != package_hash:

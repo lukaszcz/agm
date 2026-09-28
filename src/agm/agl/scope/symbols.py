@@ -21,7 +21,7 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
@@ -38,11 +38,15 @@ from agm.agl.syntax.nodes import (
     ExportItem,
     FuncDef,
     ImportItem,
+    LetDecl,
     Program,
     QualifierChain,
     RecordDef,
     TypeAlias,
     UseDecl,
+    VarDecl,
+    static_binding_node_id,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT
@@ -801,6 +805,21 @@ class AttributeFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class ParamBinding:
+    """One ``@param``-marked static binding, paired with its attribute payload.
+
+    Yielded by :meth:`ModuleResolution.param_bindings`, the one scan for
+    marked bindings shared by CLI/config projection, IR lowering, and package
+    manifest ``[config]`` validation.
+    """
+
+    item: LetDecl | VarDecl
+    node_id: int
+    scope_path: ScopePath
+    cli: ProgramOptionSpec
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleResolution:
     """Output of the scope resolution pass.
 
@@ -919,6 +938,22 @@ class ModuleResolution:
         return self.method_declarations.get(
             (module_id, tuple(segment.name for segment in node.scope_path), node.name)
         )
+
+    def param_bindings(self) -> Iterator[ParamBinding]:
+        """Yield every ``@param``-marked static binding here, in source order."""
+        for item in static_items(self.program.body.items):
+            if not isinstance(item, (LetDecl, VarDecl)):
+                continue
+            node_id = static_binding_node_id(item)
+            cli = self.attributes.params.get(node_id)
+            if cli is None:
+                continue
+            yield ParamBinding(
+                item=item,
+                node_id=node_id,
+                scope_path=tuple(segment.name for segment in item.scope_path),
+                cli=cli,
+            )
 
 
 # ---------------------------------------------------------------------------

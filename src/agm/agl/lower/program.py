@@ -45,10 +45,7 @@ from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     FuncDef,
-    LetDecl,
-    VarDecl,
     static_binding_name,
-    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -248,22 +245,16 @@ def _param_tables(
     decoders: dict[StaticBindingKey, ParamDecoder] = {}
     spans: dict[StaticBindingKey, SourceSpan] = {}
     for module_id, checked_module in modules.items():
-        attributes = checked_module.resolved.attributes
-        for item in static_items(checked_module.resolved.program.body.items):
-            if not isinstance(item, (LetDecl, VarDecl)):
-                continue
-            name = static_binding_name(item)
-            binding_node_id = static_binding_node_id(item)
-            if binding_node_id not in attributes.params:
-                continue
-            key = static_binding_key(module_id, (segment.name for segment in item.scope_path), name)
-            bindings[key] = decl_to_sym[binding_node_id]
-            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
+        for binding in checked_module.resolved.param_bindings():
+            name = static_binding_name(binding.item)
+            key = static_binding_key(module_id, binding.scope_path, name)
+            bindings[key] = decl_to_sym[binding.node_id]
+            binding_type = checked_module.type_env.get_binding_type(binding.node_id)
             assert binding_type is not None, (
                 f"compiler bug: parameter binding {name!r} has no checked type"
             )
             decoders[key] = build_param_decoder(binding_type, type_table)
-            spans[key] = item.span
+            spans[key] = binding.item.span
     return bindings, decoders, spans
 
 

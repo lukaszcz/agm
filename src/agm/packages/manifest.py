@@ -81,6 +81,7 @@ class PackageManifest:
     commands: dict[str, CommandSpec] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)
     python_dependencies: tuple[str, ...] = ()
+    config: TomlDict = field(default_factory=dict)
     unknown_fields: tuple[UnknownField, ...] = ()
 
 
@@ -164,6 +165,17 @@ def validate_command_set(manifest: PackageManifest) -> None:
             added.add(path)
 
 
+def registered_command_paths(manifest: PackageManifest) -> frozenset[tuple[str, ...]]:
+    """Return every command, group, and alias path *manifest* registers, as word tuples.
+
+    Includes each canonical command's implicit group prefixes and every alias
+    path (also expanded to its own descendants), matching
+    :func:`validate_command_set`'s view of the command tree. Assumes
+    *manifest* is already complete, as :func:`expanded_commands` does.
+    """
+    return frozenset(tuple(path.split()) for path in _canonical_paths(expanded_commands(manifest)))
+
+
 def _canonical_paths(commands: dict[str, CommandSpec]) -> set[str]:
     """Return every command path plus each of its ancestor group prefixes."""
     canonical_paths = set(commands)
@@ -231,7 +243,7 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
 
 def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> PackageManifest:
     unknown = _unknown_keys(
-        raw, {"package", "dependencies", "commands", "aliases", "python"}, "manifest"
+        raw, {"package", "dependencies", "commands", "aliases", "python", "config"}, "manifest"
     )
     package = _required_table(raw, "package")
     unknown += _unknown_keys(
@@ -255,6 +267,7 @@ def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> Package
         commands=_commands(_optional_table(raw, "commands"), unknown),
         aliases=alias_map,
         python_dependencies=_python_dependencies(_optional_table(raw, "python"), unknown),
+        config=_optional_table(raw, "config"),
         unknown_fields=tuple(unknown),
     )
     if commands_complete:

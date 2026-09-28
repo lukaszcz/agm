@@ -832,3 +832,382 @@ class TestPackageCheckCommand:
             check_command.run(PkgCheckArgs(directory=str(package.root)))
 
         assert exc_info.value.code == 1
+
+
+class TestManifestConfigDiscipline:
+    """The manifest ``[config]`` table: registered command tables and leaves."""
+
+    @staticmethod
+    def _write(root: Path, manifest: str, module_source: str) -> PackageInfo:
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(manifest, encoding="utf-8")
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(module_source, encoding="utf-8")
+        return package_info(root)
+
+    def test_accepts_a_root_engine_leaf_and_a_bare_param_spelling(self, tmp_path: Path) -> None:
+        """A module-level binding that is not a ``@param`` contributes no spelling."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\ntrace = true\nverbose = false\n",
+            "let internal = 1\n@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_a_group_and_command_table(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            '[config.devel]\ntimeout = "1h"\n\n'
+            "[config.devel.review]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_an_alias_path_table(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            '[aliases]\nrev = "devel review"\n\n'
+            "[config.rev]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_a_source_registered_command_table(self, tmp_path: Path) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            "[config.devel.review]\nverbose = true\n",
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "@param let verbose: bool = false\n"
+            '@command("devel review")\n'
+            "program def review() -> unit = ()\n",
+            encoding="utf-8",
+        )
+        package = PackageInfo(
+            root=root, manifest=load_manifest(root / "package.toml", commands_complete=False)
+        )
+        merged = package_with_source_commands(package)
+
+        validate_package(merged)
+
+    def test_accepts_an_inline_table_leaf_naming_a_param(self, tmp_path: Path) -> None:
+        """A dict-shaped leaf is not mistaken for a nested command table."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\noptions = { retries = 3 }\n",
+            "@param let options: json = {}\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_a_dependency_or_std_param_spelling(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\n"http-timeout" = "30s"\n"http.http-timeout" = "30s"\n'
+            '"std.http.http-timeout" = "30s"\n',
+            "import std/http\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_the_documented_config_example(self, tmp_path: Path) -> None:
+        """The ``[config]`` example in ``docs/commands/pkg.md`` validates as written."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            "[config]\n"
+            "trace = true\n"
+            '"std.http.http-timeout" = "30s"\n\n'
+            "[config.devel]\n"
+            'timeout = "1h"\n\n'
+            "[config.devel.review]\n"
+            'default-agent = "claude/opus"\n',
+            "import std/http\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_rejects_an_unregistered_nested_table(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config.missing]\ntimeout = "1h"\n',
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_a_word_that_is_both_a_command_and_an_engine_key(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.timeout]\ndoc = "Timeout tools"\n\n'
+            '[commands."timeout run"]\nprogram = "custom/main::main"\n\n'
+            '[config]\ntimeout = "1h"\n',
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_a_bad_timeout_value(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\ntimeout = "not-a-duration"\n',
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_accepts_numeric_and_blank_timeout_values(self, tmp_path: Path) -> None:
+        """A manifest ``timeout`` leaf follows the host's config-file normalization.
+
+        A positive int/float is a duration in seconds; a blank string, like a
+        non-positive number, is treated as absent -- neither is an error.
+        """
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\ntimeout = 60\n",
+            "program def main() -> unit = ()\n",
+        )
+        validate_package(package)
+
+        package = self._write(
+            tmp_path / "package_float",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\ntimeout = 1.5\n",
+            "program def main() -> unit = ()\n",
+        )
+        validate_package(package)
+
+        package = self._write(
+            tmp_path / "package_blank",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\ntimeout = ""\n',
+            "program def main() -> unit = ()\n",
+        )
+        validate_package(package)
+
+    def test_rejects_a_bad_default_agent_value(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\ndefault-agent = { agent = "claude" }\n',
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_an_unknown_leaf(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\nnot-a-known-setting = 1\n",
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_a_signature_argument_name(self, tmp_path: Path) -> None:
+        """A program value parameter is not a manifest config spelling."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            "[config]\nvalue = 1\n",
+            "program def main(value: int) -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_a_word_that_is_both_a_command_and_a_param_spelling(
+        self, tmp_path: Path
+    ) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands."verbose sub"]\nprogram = "custom/main::main"\n\n'
+            "[config]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_accepts_the_packages_own_dotted_param_spellings(self, tmp_path: Path) -> None:
+        """A package's own module addresses its ``@param`` bindings by dotted spelling too."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\n"main.verbose" = true\n"custom.main.verbose" = true\n',
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_an_implicit_group_table(self, tmp_path: Path) -> None:
+        """A group with no manifest entry of its own, implied by a descendant command."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            "[config.devel]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_accepts_an_alias_to_a_group_descendant_table(self, tmp_path: Path) -> None:
+        """An alias to a group addresses that group's descendants too."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            '[aliases]\ndev = "devel"\n\n'
+            "[config.dev.review]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        validate_package(package)
+
+    def test_rejects_an_unregistered_table_nested_under_a_registered_group(
+        self, tmp_path: Path
+    ) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
+            '[commands."devel review"]\nprogram = "custom/main::main"\n\n'
+            "[config.devel.missing]\nverbose = true\n",
+            "@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_a_registered_command_word_with_a_non_table_value(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\ndevel = { program = "custom/main::main" }\n\n'
+            "[config]\ndevel = true\n",
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_an_unimported_std_modules_param_spelling(self, tmp_path: Path) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            '[config]\n"http-timeout" = "30s"\n',
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_archive_validation_rejects_a_bad_config_leaf(self) -> None:
+        modules = {f"{MODULE_TREE_DIRNAME}/main.agl": "program def main() -> unit = ()\n"}
+        manifest = PackageManifest(
+            "custom",
+            semver.Version.parse("1.0.0"),
+            commands={"start": CommandSpec("custom/main::main")},
+            config={"not-a-known-setting": 1},
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_archive_package(
+                manifest,
+                archive_paths=modules,
+                read_module=modules.__getitem__,
+            )
+
+
+class TestManifestConfigCheckCommand:
+    """``agm pkg check`` applies ``[config]`` discipline end to end."""
+
+    @staticmethod
+    def _use_temp_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(
+            check_command,
+            "current_config_context",
+            lambda: ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path),
+        )
+
+    def test_accepts_a_package_with_valid_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/main::main" }\n\n'
+            "[config]\ntrace = true\n",
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        check_command.run(PkgCheckArgs(directory=str(root)))
+
+    def test_rejects_a_package_with_an_unknown_config_leaf(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/main::main" }\n\n'
+            "[config]\nnot-a-known-setting = 1\n",
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(root)))
+
+        assert exc_info.value.code == 1

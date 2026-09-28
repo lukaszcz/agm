@@ -257,6 +257,35 @@ def configured_leaf_table_candidates(
     return {name: frozenset(paths_seen) for name, paths_seen in tables.items()}
 
 
+def param_spellings_for(
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...],
+    name: str,
+    *,
+    is_entry: bool,
+) -> tuple[str, ...]:
+    """Return every unique spelling addressing a ``@param`` binding, bare name first.
+
+    The bare name, then one dotted spelling per non-anchor
+    :func:`route_table_paths` entry (module-suffix or command-path routes
+    only — anchor routes contain a slash and have no config-table use here),
+    shortest route first. An entry-module binding has no dotted spellings.
+    Shared by CLI/config projection (:mod:`agm.cli_support.param_surface`)
+    and package manifest ``[config]`` leaf validation.
+    """
+    spellings = [name]
+    if not is_entry:
+        spellings.extend(
+            ".".join((*path, name))
+            for path in route_table_paths(module_segments, scope_path)
+            if all("/" not in segment for segment in path)
+        )
+    unique: dict[str, None] = {}
+    for spelling in spellings:
+        unique[spelling] = None
+    return tuple(unique)
+
+
 def route_table_paths(
     module_segments: tuple[str, ...],
     scope_path: tuple[str, ...] = (),

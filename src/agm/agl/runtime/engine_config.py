@@ -25,6 +25,7 @@ __all__ = [
     "engine_default_settings",
     "raw_option_str",
     "restamp_engine_setting",
+    "validate_engine_leaf_value",
 ]
 
 
@@ -43,6 +44,9 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
 _ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
     spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
 }
+
+#: Engine key name -> kind, built once from ``ENGINE_KEYS``.
+_ENGINE_KEY_KINDS_BY_NAME: dict[str, EngineKeyKind] = {spec.name: spec.kind for spec in ENGINE_KEYS}
 
 
 def _restamp_value_tree(
@@ -132,6 +136,28 @@ def restamp_engine_setting(
     )
 
 
+def _normalize_option_text_value(value: object) -> str | None:
+    """Normalize one raw ``Option[text]`` engine value the way a config-file entry is read.
+
+    A non-blank string passes through verbatim (e.g. ``"30s"``); a positive
+    int/float becomes its string spelling (e.g. ``60`` -> ``"60"``); a blank
+    string, a non-positive number, or anything else is treated as absent.
+    Shared by :func:`raw_option_str` (config-file tables) and
+    :func:`validate_engine_leaf_value` (CLI flags and package manifest
+    ``[config]`` leaves), so all three read an ``Option[text]``-kind engine
+    value — ``timeout``, ``trace-file`` — by the identical rule.
+    """
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return str(value)
+    if isinstance(value, float) and value > 0:
+        from agm.core.parse import format_timeout
+
+        return format_timeout(value)
+    return None
+
+
 def raw_option_str(
     primary: "Mapping[str, object]",
     fallback: "Mapping[str, object]",
@@ -139,25 +165,17 @@ def raw_option_str(
 ) -> str | None:
     """Return the raw TOML value for *key* as a string, checking primary then fallback.
 
-    Preserves the exact string written in the config file (e.g. ``"30s"``).
-    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``),
-    but only when the value is positive (a zero/negative numeric config value is
-    treated as absent).
-    Returns ``None`` when the key is absent or empty/invalid in both tables.
+    Each table's value is normalized by :func:`_normalize_option_text_value`;
+    returns ``None`` when the key is absent or normalizes to absent in both
+    tables.
 
     Used by ``commands/exec.py`` and ``commands/repl.py`` to extract the raw
     timeout/trace-file strings before passing them to :func:`convert_config_value`.
     """
     for table in (primary, fallback):
-        val = table.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
-            return str(val)
-        if isinstance(val, float) and val > 0:
-            from agm.core.parse import format_timeout
-
-            return format_timeout(val)
+        normalized = _normalize_option_text_value(table.get(key))
+        if normalized is not None:
+            return normalized
     return None
 
 
@@ -294,3 +312,32 @@ def convert_config_value(
             return none_value(nominals=NO_BUILTIN_DECLARATIONS)
         return convert_host_value(name, OptionSome(raw), key_type, table)
     return convert_host_value(name, raw, key_type, table)
+
+
+def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
+    """Decode one named engine setting's raw value, raising ``ValueError`` on any failure.
+
+    An ``Option[text]``-kind key (``timeout``, ``trace-file``) is first
+    normalized by :func:`_normalize_option_text_value`, exactly as a
+    config-file entry is (:func:`raw_option_str`): a positive int/float
+    becomes its string spelling, a blank or non-positive value is absent.
+    Looks up *name*'s type in ``ENGINE_KEY_TYPES`` and decodes through
+    :func:`convert_config_value`; ``timeout`` additionally must parse as a
+    duration (:func:`~agm.core.parse.parse_timeout`). The one rule a CLI
+    flag, a config-file entry, and a package manifest ``[config]`` leaf are
+    all held to.
+    """
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
+
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
+        raw = _normalize_option_text_value(raw)
+    value = convert_config_value(name, raw, ENGINE_KEY_TYPES[name], type_table)
+    if name == "timeout" and isinstance(value, RecordValue):
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from agm.agl.runtime.option import option_text
+        from agm.core.parse import parse_timeout
+
+        text = option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
+        if text is not None:
+            parse_timeout(text)
+    return value

@@ -558,6 +558,87 @@ program = "review_tools/main::review"
             load_manifest(_write_manifest(tmp_path, manifest), commands_complete=False)
 
 
+class TestPackageConfig:
+    """The manifest ``[config]`` table: package-author defaults, stored raw."""
+
+    _HEADER = '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+
+    def test_absent_table_declares_nothing(self) -> None:
+        assert load_manifest_text(self._HEADER).config == {}
+
+    def test_loads_root_group_and_command_tables(self) -> None:
+        manifest = load_manifest_text(
+            self._HEADER
+            + """[config]
+trace = true
+"std.http.http-timeout" = "30s"
+
+[config.devel]
+timeout = "1h"
+
+[config.devel.review]
+default-agent = { agent = "claude", model = "opus" }
+"""
+        )
+
+        assert manifest.config == {
+            "trace": True,
+            "std.http.http-timeout": "30s",
+            "devel": {
+                "timeout": "1h",
+                "review": {"default-agent": {"agent": "claude", "model": "opus"}},
+            },
+        }
+
+    def test_rejects_a_non_table_config_entry(self) -> None:
+        with pytest.raises(ManifestError):
+            load_manifest_text("config = 'trace'\n" + self._HEADER)
+
+    def test_normalized_manifest_round_trips_config(self) -> None:
+        manifest = load_manifest_text(
+            self._HEADER
+            + """[config]
+"std.http.http-timeout" = "30s"
+trace = true
+tags = ["fast", "slow"]
+
+[config.devel.review]
+default-agent = { agent = "claude", model = "opus" }
+"""
+        )
+
+        rendered = normalized_manifest(manifest).decode()
+
+        assert load_manifest_text(rendered).config == manifest.config
+        assert normalized_manifest(load_manifest_text(rendered)).decode() == rendered
+
+    def test_normalized_manifest_renders_config_keys_in_sorted_order(self) -> None:
+        manifest = load_manifest_text(
+            self._HEADER + '[config]\nb = 1\na = 2\n[config.devel]\nz = "x"\n'
+        )
+
+        rendered = normalized_manifest(manifest).decode()
+
+        assert rendered.index("a = 2") < rendered.index("b = 1")
+
+    def test_archive_round_trips_config(self, tmp_path: Path) -> None:
+        root = tmp_path / "review_tools"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        (root / "package.toml").write_text(
+            self._HEADER + '[config]\ntrace = true\n[config.devel]\ntimeout = "1h"\n',
+            encoding="utf-8",
+        )
+        archive = tmp_path / "review_tools.agmpkg"
+        write_archive(root, archive)
+
+        extracted = extract_archive(archive, tmp_path / "extracted")
+
+        assert extracted.manifest.config == {"trace": True, "devel": {"timeout": "1h"}}
+
+
 class TestManifestRejectsLoneSurrogateEscapes:
     """A manifest value must be valid Unicode; tomlkit's 8-digit ``\\U0000Dxxx``
     escape can spell the same lone surrogate its 4-digit ``\\uDxxx`` form is

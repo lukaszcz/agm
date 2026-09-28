@@ -9,7 +9,7 @@ from types import MappingProxyType
 from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
 from agm.agl.zones import ParamZone
 from agm.cli_support.program_options import ProjectedOption, param_spellings, project_option
-from agm.config.qualified_keys import route_table_paths
+from agm.config.qualified_keys import param_spellings_for
 
 __all__ = ["ParamSurface", "ParamSurfaceEntry", "build_param_surface"]
 
@@ -64,17 +64,9 @@ def _freeze_claims(claims: dict[str, list[_Claimant]]) -> _Claims:
 
 def _param_routes(param: ParamBindingInfo) -> _ParamRoutes:
     """Project *param*'s logical long-option names, shortest route first."""
-    spellings = [param.cli.name]
-    if not param.module.is_entry:
-        spellings.extend(
-            ".".join((*path, param.cli.name))
-            for path in route_table_paths(param.module.segments, param.scope_path)
-            if all("/" not in segment for segment in path)
-        )
-    unique_spellings: dict[str, None] = {}
-    for spelling in spellings:
-        unique_spellings[spelling] = None
-    names = tuple(unique_spellings)
+    names = param_spellings_for(
+        param.module.segments, param.scope_path, param.cli.name, is_entry=param.module.is_entry
+    )
     return _ParamRoutes(
         param=param,
         spellings=names,

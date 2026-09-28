@@ -72,6 +72,7 @@ from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
+from tests.agl.qualifier_support import all_groupings, eval_grouped_final
 
 # ---------------------------------------------------------------------------
 # Session construction
@@ -1376,16 +1377,9 @@ def _grouping_params() -> list[object]:
     ]
 
 
-def _all_groupings(n: int) -> tuple[tuple[int, ...], ...]:
-    """Every way to split *n* declarations, in order, into one or more entries."""
-    if n == 0:
-        return ((),)
-    return tuple((first, *rest) for first in range(1, n + 1) for rest in _all_groupings(n - first))
-
-
 def _grouping_params_for(n: int) -> list[object]:
     """``sizes`` params covering every grouping of *n* declarations into entries."""
-    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in _all_groupings(n)]
+    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in all_groupings(n)]
 
 
 def _setup_groupings(expected: frozenset[tuple[int, ...]]) -> list[object]:
@@ -1419,7 +1413,7 @@ def _grouping_legality(
     that is otherwise perfectly legal.
     """
     valid: list[tuple[int, ...]] = []
-    for sizes in _all_groupings(len(decls)):
+    for sizes in all_groupings(len(decls)):
         session = make_session()
         start = 0
         ok = True
@@ -1445,26 +1439,7 @@ def _color_and_n_session(tmp_path: Path) -> ReplSession:
 
 def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
     """Evaluate *decls* on *session* as one entry per *sizes*; every entry must succeed."""
-    _eval_grouped_final(session, decls, sizes)
-
-
-def _eval_grouped_final(
-    session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]
-) -> EntryResult:
-    """Evaluate *decls* as one entry per *sizes*; every entry but the last must succeed.
-
-    Returns the last entry's result unchecked, for a caller that expects it to
-    fail depending on how the grouping combines declarations into entries.
-    """
-    start = 0
-    result: EntryResult | None = None
-    for size in sizes:
-        result = session.eval_entry("\n".join(decls[start : start + size]))
-        if start + size < len(decls):
-            assert result.ok, result.diagnostics
-        start += size
-    assert result is not None
-    return result
+    eval_grouped_final(session, decls, sizes)
 
 
 class TestBareConstructorVisibilityAcrossEntries:
@@ -3676,7 +3651,7 @@ class TestBuiltinIdentityAcrossEntries:
 
         decls = (declaration, "import lib::{ExecResult}")
         sizes = (2,) if grouping == "single-entry" else (1, 1)
-        result = _eval_grouped_final(session, decls, sizes)
+        result = eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics
@@ -3761,7 +3736,7 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
 
         decls = ("builtin type path = text", "import libp")
         sizes = (2,) if grouping == "single-entry" else (1, 1)
-        result = _eval_grouped_final(session, decls, sizes)
+        result = eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics
@@ -3779,7 +3754,7 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
 
         decls = (declaration, "import libs")
         sizes = (2,) if grouping == "single-entry" else (1, 1)
-        result = _eval_grouped_final(session, decls, sizes)
+        result = eval_grouped_final(session, decls, sizes)
 
         assert not result.ok
         assert result.diagnostics

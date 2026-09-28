@@ -11,6 +11,7 @@ from agm.agl.parser import parse_program
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.scope.symbols import (
     AglScopeError,
+    AmbiguousQualificationError,
     RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
@@ -535,7 +536,7 @@ class TestAmbiguityRepairsAreSpellable:
             self._AMBIGUOUS_SCOPE_USES + "\nlet f: X::Flag = X::Flag::Good\nlet g: Flag = f\n",
         )
 
-        with pytest.raises(AglScopeError) as raised:
+        with pytest.raises(AmbiguousQualificationError) as raised:
             resolve_repl_graph(graph)
 
         diagnostic = str(raised.value)

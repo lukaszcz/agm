@@ -101,26 +101,11 @@ def _module_outcome(source: str) -> Outcome:
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
-    """A phase-accurate verdict: which call raised, not which class.
+    """A phase-accurate verdict: which call raised, not which class."""
+    from tests.agl.qualifier_support import file_verdict
 
-    Reuses scope's own resolution for the type-check call, so nothing here
-    re-resolves the program: ``check_program`` never raises ``AglScopeError``
-    itself (only ``AglTypeError``, on the first static type violation).
-    """
-    from agm.agl.typecheck import AglTypeError
-    from agm.agl.typecheck.program import check_program
-    from tests.agl.ir_harness import base_caps, make_graph_from_files
-
-    graph = make_graph_from_files(tmp_path, modules)
-    try:
-        resolved = resolve_program(graph)
-    except AglScopeError:
-        return "scope"
-    try:
-        check_program(resolved, base_caps())
-    except AglTypeError:
-        return "typecheck"
-    return "accepted"
+    phase, _cls, _span = file_verdict(tmp_path, modules)
+    return phase
 
 
 @pytest.mark.parametrize(

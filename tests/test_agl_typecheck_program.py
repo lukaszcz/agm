@@ -18,6 +18,7 @@ from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AglScopeError,
+    AmbiguousQualificationError,
     RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
@@ -692,7 +693,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
         "libA": ("enum Color\n  | Red\n  | Blue"),
         "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         check_agl_program(tmp_path, modules)
 
 
@@ -3660,7 +3661,7 @@ def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
         "b": "record Box[T]\n  value: T",
         "entry": "import a::*\nimport b::*\nlet x: Box[int] = null\nx",
     }
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         check_agl_program(tmp_path, modules)
 
 

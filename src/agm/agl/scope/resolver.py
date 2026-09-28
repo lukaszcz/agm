@@ -70,7 +70,6 @@ from agm.agl.scope.imports import (
     QualResolutionFound,
     declares_bare_constructor,
     qualifier_candidates,
-    qualifier_contributes,
     qualifier_members,
     qualifier_scope_paths,
     render_qualifier,
@@ -131,7 +130,6 @@ from agm.agl.scope.type_names import (
     MemberReferenced,
     OwnerRoute,
     TypeNameSite,
-    bare_type_selection,
     nominal_selection,
     owner_member_selection,
     owner_type_expr,
@@ -592,7 +590,21 @@ class _Resolver:
         self._scope_node_ids: dict[ScopePath, int] = {
             path: node.node_id for path, node in self._repl_session_scope_nodes.items() if path
         }
-        self._type_paths: set[ScopePath] = set(self._repl_session_type_paths)
+        # Retained type-owned paths cover only a redeclarable type's own
+        # path; its inline members (enum variants) are never separately
+        # promoted (see session.py's ``promoted_type_name_paths``), so they
+        # are reconstructed here from each retained owner's own ``members``,
+        # exactly as a fresh declaration registers them within one entry
+        # (below): a variant scope path is a decisive local reading whether
+        # its owner was declared this entry or retained from an earlier one.
+        self._type_paths: set[ScopePath] = {
+            *self._repl_session_type_paths,
+            *(
+                (*path, member_name)
+                for path, owner in self._repl_session_type_paths.items()
+                for member_name in owner.members
+            ),
+        }
         self._type_declarations: list[
             tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
         ] = []
@@ -3670,7 +3682,7 @@ class _Resolver:
             ):
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
-                if local_path is not None and self._is_decisive_local_path(local_path):
+                if local_path is not None and self._is_decisive_local_path(chain, local_path):
                     # An exact local scope-region or nominal-type match takes
                     # precedence over any import route or use contribution
                     # sharing its spelling, exactly as it does for a value
@@ -3747,8 +3759,8 @@ class _Resolver:
                 ):
                     # A direct lexical hit (the nearest layer's own
                     # declaration, ``full_indirect`` false) is final: the
-                    # settled rule resolves the leading segment at the
-                    # nearest level only, so a local declaration is never
+                    # leading segment resolves at the nearest level only, so
+                    # a local declaration is never
                     # diluted by a same-spelled module route. An indirect hit
                     # -- a contribution's own layer, which stops short of
                     # trying a module route sharing the same spelling (a
@@ -3856,17 +3868,18 @@ class _Resolver:
     def _validate_bare_type_name(self, node: NameT | AppliedT, type_params: Iterable[str]) -> None:
         """Decide a bare (unqualified) type name's ambiguity, here in scope.
 
-        Uses the same layered bare-type lookup typecheck resolves a single
-        surviving candidate through (``bare_type_selection``), so an
-        ambiguous name -- more than one equally ranked route contributing it
-        -- raises the settled :class:`AmbiguousQualificationError` here,
-        identically in every position and independent of REPL entry
-        grouping, instead of typecheck's own later, position-specific raise.
-        A name with at most one candidate is left to typecheck's resolution
-        unchanged.
+        Uses the same layered type-name lookup typecheck resolves a single
+        surviving candidate through (``type_name_selection``), which tries
+        this module's own nearest declaration first, so a local declaration
+        is never diluted by a same-spelled import contribution. An ambiguous
+        name -- more than one equally ranked route contributing it -- raises
+        the :class:`AmbiguousQualificationError` here, identically in every
+        position and independent of REPL entry grouping, instead of
+        typecheck's own later, position-specific raise. A name with at most
+        one candidate is left to typecheck's resolution unchanged.
         """
         site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
-        selected = bare_type_selection(site, node.name)
+        selected = type_name_selection(site, node)
         if len(selected) > 1:
             raise AmbiguousQualificationError.for_origins(
                 (),
@@ -3933,10 +3946,13 @@ class _Resolver:
         member set never falls back to a module route or ``use``
         contribution sharing only its leading spelling. The full relative
         path having already missed every local scope above means this walk
-        never completes without raising. A leading segment resolving to no
-        local scope region -- absent altogether, a nominal type, or a
-        method-owner namespace -- is deliberately left for module-route and
-        owner-member resolution.
+        never completes without raising. A def-created leading segment (a
+        method-owner namespace, not a scope region) walks the same way too,
+        UNLESS it also resolves, below local scope, to a declared type:
+        that makes it that owner's method namespace instead, left for
+        module-route and owner-member resolution (D1). A leading segment
+        resolving to no local scope path at all is always left for that
+        resolution.
         """
         if chain.anchor is QualifierAnchor.MODULE or not chain.segments:
             return None
@@ -3980,8 +3996,12 @@ class _Resolver:
         # or not -- have no such exhaustive local surface to walk: their
         # single-hop owner/member reading belongs to the ordinary owner
         # resolution below instead, which already knows a referenced or
-        # hidden member from a genuinely missing one.
-        if leading is None or leading not in self._scope_region_paths:
+        # hidden member from a genuinely missing one. A def-created leading
+        # segment resolving, below local scope, to a declared type is the
+        # same owner's method namespace, left to that same resolution; one
+        # resolving to no type there has no owner to defer to, so it walks
+        # exhaustively too (D1).
+        if leading is None or self._defers_to_owner_resolution(chain, leading):
             return None
         prefixes = [leading]
         for segment in chain.segments[1:]:
@@ -3996,25 +4016,69 @@ class _Resolver:
             index for index in range(1, len(prefixes)) if prefixes[index] not in self._scope_paths
         )
         segment = chain.segments[missing]
-        raise _unknown_scope_member(segment.name, prefixes[missing - 1], segment.span)
+        raise _unknown_scope_member(segment.name, prefixes[missing - 1], chain.span)
 
-    def _is_decisive_local_path(self, path: ScopePath) -> bool:
-        """Whether *path* is a final local reading: a scope region, or a non-alias type.
+    def _is_local_scope_path(self, chain: QualifierChain, path: ScopePath) -> bool:
+        """Whether *path* is genuinely local: a scope region, or a locally declared type.
 
-        Either owns a member set of its own, so a member it lacks is a
-        decided miss, never merged with a same-spelled import route or
-        ``use`` contribution. Any other local path -- a method-owner
-        namespace instead (a ``def Owner::method`` receiver path extending
-        an imported or undeclared owner) -- has no member set of its own to
+        Either owns a member set of its own (an alias's own, transparently,
+        is its target's), so a member it lacks is a decided miss, never
+        merged with a same-spelled import route or ``use`` contribution. A
+        path only ambiently in ``_type_paths`` -- a wildcard import's own
+        shortcut, never a local declaration -- a def-created path declaring
+        no member of its own (a pure prefix kept only for a deeper ``def
+        Owner::Inner::method`` on the same route, never itself a ``def``'s
+        own receiver) -- or a def-created path whose leading segment
+        resolves, below local scope, to a declared type owner, is a
+        method-owner namespace instead, with no member set of its own to
         decide against, so every position defers it to ordinary owner
-        resolution.
+        resolution (D1).
         """
         if path in self._scope_region_paths:
             return True
-        if path not in self._type_paths:
+        if path in self._type_paths:
+            return self._type_owners.owner((self._module_id, _bare_atom(path))) is not None
+        if not self._scope_nodes[path].members:
             return False
+        return not self._leading_segment_type_owner(chain.segments[0].name, chain.span)
+
+    def _is_decisive_local_path(self, chain: QualifierChain, path: ScopePath) -> bool:
+        """Whether *path* is a final local reading for a type-position walk.
+
+        As :meth:`_is_local_scope_path`, but an alias's members are its
+        target's own projection, not its own nested path, so it is never
+        decisive for a type-qualifier walk -- always deferred to the
+        ordinary owner resolution that walks the alias instead.
+        """
+        if not self._is_local_scope_path(chain, path):
+            return False
+        if path not in self._type_paths:
+            return True
         owner = self._type_owners.owner((self._module_id, _bare_atom(path)))
-        return owner is None or owner.alias is None
+        return owner is not None and owner.alias is None
+
+    def _leading_segment_type_owner(self, name: str, span: SourceSpan) -> bool:
+        """Whether bare *name* resolves, below local scope, to a declared type (D1)."""
+        ref = self._lookup_import_env_unqualified(name, span, self._is_type_contribution)
+        return ref is not None
+
+    def _defers_to_owner_resolution(self, chain: QualifierChain, path: ScopePath) -> bool:
+        """Whether *path*, a leading local reading, has no exhaustive member set to walk.
+
+        Shared by :meth:`_validate_local_scope_chain`'s own multi-segment
+        walk and :meth:`_resolve_local_scope_member`: a nominal type's
+        members are always the ordinary owner resolution's to decide (it
+        alone knows a referenced or hidden member from a genuinely missing
+        one), and so is a def-created path's, whenever it declares no member
+        of its own (a pure prefix kept only for a deeper ``def`` on the same
+        route) or its leading segment also resolves, below local scope, to a
+        declared type owner (D1). A plain scope region never defers.
+        """
+        return path not in self._scope_region_paths and (
+            path in self._type_paths
+            or not self._scope_nodes[path].members
+            or self._leading_segment_type_owner(chain.segments[0].name, chain.span)
+        )
 
     def _check_local_scope_route_ambiguity(
         self, chain: QualifierChain, name: str, path: ScopePath
@@ -4022,26 +4086,54 @@ class _Resolver:
         """Reject *chain* naming both local scope or type *path* and a module route for *name*.
 
         Shared by values, assignments, patterns, and ``is`` tests, so every
-        position reports one spelling alike: an unanchored leading segment is
-        ambiguous when it is also a module route contributing *name* --
-        declared on the route's surface or injected as a root enum's inline
-        member -- or, for a plain scope not declaring *name*, any module route.
+        position reports one spelling alike, at any chain length: the
+        longest leading run of segments that also names a real route (an
+        alias or module path, never merely a wildcard- or prelude-opened
+        bare member coincidentally sharing its spelling) is ambiguous once
+        that route resolves the rest of the qualified path -- every segment
+        after it, plus *name* -- to a declaration other than *path*'s own,
+        declared on the route's surface, reached as a bare compound name, or
+        (when the route consumes the whole chain) injected as a root enum's
+        inline member -- or, for a plain scope not declaring *name*, any
+        such route at all. A route can span more than one qualifier segment
+        (``alpha::beta`` naming ``import alpha/beta`` outright) or fewer
+        than the local path's own segments (``pkg/Foo`` naming only
+        ``Foo``, with a further local ``E`` nested beneath it), so every
+        leading run is tried, longest first.
         """
         if chain.anchor is not None:
             return
-        relative_path = tuple(segment.name for segment in chain.segments)
+        segments = tuple(segment.name for segment in chain.segments)
+        route_length = next(
+            (
+                length
+                for length in range(len(segments), 0, -1)
+                if qualifier_candidates(
+                    self._import_env,
+                    tuple(part for segment in segments[:length] for part in segment.split("/")),
+                    anchored=False,
+                )
+            ),
+            0,
+        )
+        if route_length == 0:
+            return
+        route, rest = segments[:route_length], segments[route_length:]
+        local_qname = (self._module_id, _bare_atom((*path, name)))
+        resolved = resolve_qualified(
+            self._import_env,
+            tuple(part for segment in route for part in segment.split("/")),
+            _bare_atom((*rest, name)),
+        )
         if (
-            qualifier_contributes(self._import_env, relative_path, name)
-            or (len(relative_path) == 1 and self._route_injected_members(chain, name))
-            or (
-                path not in self._type_paths
-                and name not in self._scope_nodes[path].members
-                and qualifier_candidates(self._import_env, relative_path[:1], anchored=False)
-            )
+            (isinstance(resolved, QualResolutionFound) and resolved.qname != local_qname)
+            or isinstance(resolved, QualResolutionAmbiguous)
+            or (not rest and self._route_injected_members(chain, name))
+            or (path not in self._type_paths and name not in self._scope_nodes[path].members)
         ):
             local_kind = "a type name" if path in self._type_paths else "a local scope"
             raise RouteClashError(
-                f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+                f"Qualifier '{segments[0]}' is both {local_kind} and a module route for "
                 f"'{name}'. {qualification_repair_guidance()}",
                 span=chain.span,
             )
@@ -4098,16 +4190,11 @@ class _Resolver:
             return False
 
         ref = self._scope_nodes[path].members.get(node.name)
-        if ref is None and path not in self._scope_region_paths:
-            # Neither a nominal type (whose constructor-chain resolver below
-            # owns the alias-aware decision) nor a plain scope region
-            # declared here (whose own member set is final) -- a
-            # method-owner namespace instead, with no member set of its own,
-            # left to ordinary owner resolution.
+        if ref is None and self._defers_to_owner_resolution(chain, path):
             return False
         self._check_local_scope_route_ambiguity(chain, node.name, path)
         if ref is None:
-            raise _unknown_scope_member(node.name, path, node.span)
+            raise _unknown_scope_member(node.name, path, chain.span)
         self._require_textually_visible(ref, node.span)
         if ref.kind is BinderKind.constructor_binding:
             # One declaration owns each scoped spelling, so it has at most one constructor.
@@ -4140,10 +4227,13 @@ class _Resolver:
             return
         direct_error: AglScopeError | None = None
         local_type_path = self._validate_local_scope_chain(chain)
+        decisive_local_type = local_type_path is not None and self._is_local_scope_path(
+            chain, local_type_path
+        )
         if (
             chain.anchor is not QualifierAnchor.CURRENT_MODULE
             and chain.segments
-            and local_type_path not in self._type_paths
+            and not decisive_local_type
         ):
             try:
                 self._resolve_varref_qualified(node, chain)
@@ -4270,7 +4360,12 @@ class _Resolver:
             rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
             raise _use_route_unknown_member(rendered, chain.span)
         local_path = self._validate_local_scope_chain(chain)
-        if local_path in self._type_paths:
+        if local_path is not None and self._is_local_scope_path(chain, local_path):
+            # Reaching here with a decisive local path means it was already
+            # decisive at the caller (`_resolve_qualified_chain`'s
+            # ``decisive_local_type``), which is only true for a type path
+            # (D1: a plain local namespace's ``defers_to_owner_resolution``
+            # is the exact complement of its decisiveness).
             self._check_local_scope_route_ambiguity(chain, variant, local_path)
             self._constructor_refs[node_id] = self._local_owner_constructor(
                 chain, local_path, variant
@@ -5511,16 +5606,16 @@ class _Resolver:
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
             self._check_local_scope_route_ambiguity(chain, name, local_path)
-        if local_path in self._type_paths:
-            return (self._local_owner_constructor(chain, local_path, name),)
-        if local_path is not None and self._is_decisive_local_path(local_path):
-            # A scope-region member miss is already scope's own verdict,
-            # raised by ``_validate_qualifier_chains`` for every position
-            # before pattern/``is`` candidates are ever collected: reaching
-            # here means *name* is a real member of the scope.
-            # The scope's selection is complete; typecheck never reads it as a module route.
-            self._scope_qualified_spellings.add(node_id)
-            return tuple(self._scoped_constructor_candidates.get((local_path, name), ()))
+            if self._is_local_scope_path(chain, local_path):
+                if local_path in self._type_paths:
+                    return (self._local_owner_constructor(chain, local_path, name),)
+                # A scope-region member miss is already scope's own verdict,
+                # raised by ``_validate_qualifier_chains`` for every position
+                # before pattern/``is`` candidates are ever collected: reaching
+                # here means *name* is a real member of the scope.
+                # The scope's selection is complete; typecheck never reads it as a module route.
+                self._scope_qualified_spellings.add(node_id)
+                return tuple(self._scoped_constructor_candidates.get((local_path, name), ()))
         module_qualifier = self._is_module_qualifier(chain)
         if module_qualifier:
             # A module qualifier's selection is complete, as a local scope's is.

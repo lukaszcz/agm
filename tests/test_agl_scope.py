@@ -22,7 +22,14 @@ from agm.agl.scope import (
     BuiltinKind,
     ModuleResolution,
 )
-from agm.agl.scope.symbols import BinderKind, BindingRef, ReceiverOwner, ScopeNode
+from agm.agl.scope.symbols import (
+    AmbiguousQualificationError,
+    BinderKind,
+    BindingRef,
+    ReceiverOwner,
+    ScopeNode,
+    UnknownMemberError,
+)
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
@@ -906,7 +913,7 @@ class TestMissingLocalScopeMember:
             f"let c: Paint::Col = Paint::Col::Red\n{use}\n"
         )
 
-        assert type(error) is AglScopeError
+        assert type(error) is UnknownMemberError
 
 
 class TestConstructorCandidateDeduplication:
@@ -1853,6 +1860,7 @@ class TestParseTryParseNonReservedClassification:
         reserved bare-name override (which would resolve silently to
         ``std/value::parse`` with no ambiguity at all)."""
         err = reject_scope('import std/json\nuse std/json::*\nlet x = parse("{}")\nx')
+        assert type(err) is AmbiguousQualificationError
         message = str(err)
         assert "ambiguous" in message
         assert "std/json::parse" in message

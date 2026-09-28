@@ -10,7 +10,15 @@ from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError, RouteClashError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousQualificationError,
+    ImportedModuleOrigin,
+    RouteClashError,
+    UnknownMemberError,
+    UnknownQualifierError,
+    UseDeclarationOrigin,
+)
 from agm.agl.semantics.types import RecordType
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
@@ -173,7 +181,7 @@ def test_ambiguous_whole_use_alias_constructor_qualifier_is_rejected(tmp_path: P
         },
     )
 
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AmbiguousQualificationError):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -342,7 +350,7 @@ def test_inner_type_only_use_preserves_outer_value_ambiguity(tmp_path: Path) -> 
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
 
 
@@ -552,7 +560,7 @@ def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
 
 
@@ -567,7 +575,7 @@ def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
 
 
@@ -591,7 +599,7 @@ def test_qualified_use_collision_preserves_ambiguous_import_verdict(tmp_path: Pa
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
 
 
@@ -630,8 +638,64 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
+
+
+def test_qualified_constructor_use_and_import_routes_deduplicate_same_origin(
+    tmp_path: Path,
+) -> None:
+    """A ``use`` route reopening the same module an ``import`` already
+    qualifies selects the identical constructor at a value spelling, so the
+    two routes agree and the call is accepted rather than ambiguous."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse /lib as lib\n\nlib::X(value = 1)\n",
+            "lib": "record X\n  value: int\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_constructor_pattern_use_and_import_routes_deduplicate_same_origin(
+    tmp_path: Path,
+) -> None:
+    """The same deduplication applies to a pattern spelling."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use /lib as lib\n"
+                "\n"
+                "let item = lib::X(value = 1)\n"
+                "case item of\n"
+                "  | lib::X(value) => value\n"
+            ),
+            "lib": "record X\n  value: int\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_constructor_is_use_and_import_routes_deduplicate_same_origin(
+    tmp_path: Path,
+) -> None:
+    """The same deduplication applies to an ``is`` spelling."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\nuse /lib as lib\n\nlet item: lib::E = lib::E::A\nitem is lib::E::A\n"
+            ),
+            "lib": "enum E | A\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
 
 
 def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
@@ -645,8 +709,44 @@ def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
+
+
+def test_constructor_pattern_route_ambiguous_among_imports_and_a_use_declaration(
+    tmp_path: Path,
+) -> None:
+    """A route two imports alias identically, and a ``use`` declares too, carries one
+    :class:`ImportedModuleOrigin` per import plus a :class:`UseDeclarationOrigin`,
+    at an ``is`` spelling (never a value spelling, which resolves first)."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib1 as lib\n"
+                "import lib2 as lib\n"
+                "use S as lib\n"
+                "\n"
+                "scope S\n"
+                "  enum E | A\n"
+                "end S\n"
+                "\n"
+                "let x: S::E = S::E::A\n"
+                "x is lib::E::A\n"
+            ),
+            "lib1": "enum E | A\n",
+            "lib2": "enum E | A\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        UseDeclarationOrigin((entry_id, ("S", "E", "A"))),
+        ImportedModuleOrigin(ModuleId.from_path("lib1")),
+        ImportedModuleOrigin(ModuleId.from_path("lib2")),
+    }
 
 
 def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path) -> None:
@@ -671,7 +771,7 @@ def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(graph)
 
 
@@ -689,7 +789,7 @@ def test_applied_ambiguous_owner_missing_variant_in_is_test_is_rejected(tmp_path
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(UnknownMemberError):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -713,7 +813,7 @@ def test_applied_ambiguous_owner_missing_variant_in_expression_is_rejected(
         },
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(UnknownMemberError):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -737,6 +837,79 @@ def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Pa
 
     with pytest.raises(AglTypeError, match="both"):
         check_program(resolve_program(graph), base_caps())
+
+
+def test_ambiguous_qualification_reports_two_module_origins(tmp_path: Path) -> None:
+    """A bare name two imported modules both expose carries one
+    :class:`ImportedModuleOrigin` per module, never a use-declaration origin."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import one/config::*\nimport two/config::*\nshared()\n",
+            "one/config": "def shared() -> int = 1\n",
+            "two/config": "def shared() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin(ModuleId.from_path("one/config")),
+        ImportedModuleOrigin(ModuleId.from_path("two/config")),
+    }
+
+
+def test_ambiguous_qualification_reports_two_use_declaration_origins(tmp_path: Path) -> None:
+    """A bare name two local ``use`` declarations both expose carries one
+    :class:`UseDeclarationOrigin` per declaration, naming each's own scope."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use A::*\n"
+                "use B::*\n"
+                "\n"
+                "scope A\n  def shared() -> int = 1\nend A\n"
+                "\n"
+                "scope B\n  def shared() -> int = 2\nend B\n"
+                "\n"
+                "shared()\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        UseDeclarationOrigin((entry_id, ("A", "shared"))),
+        UseDeclarationOrigin((entry_id, ("B", "shared"))),
+    }
+
+
+def test_ambiguous_qualification_reports_mixed_module_and_use_origins(tmp_path: Path) -> None:
+    """A bare name one import and one local ``use`` both expose carries one
+    origin of each kind."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib::*\nuse S::*\n\nscope S\n  def shared() -> int = 2\nend S\n\nshared()\n"
+            ),
+            "lib": "def shared() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin(ModuleId.from_path("lib")),
+        UseDeclarationOrigin((entry_id, ("S", "shared"))),
+    }
 
 
 def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
@@ -1233,12 +1406,15 @@ def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> No
         },
     )
 
-    with pytest.raises(AglScopeError) as exc_info:
+    with pytest.raises(AmbiguousQualificationError) as exc_info:
         resolve_program(graph)
 
-    diagnostic = str(exc_info.value)
-    for repair in ("hiding", "longer suffix", "/-anchored", "as"):
-        assert repair in diagnostic
+    modules = {
+        origin.module
+        for origin in exc_info.value.origins
+        if isinstance(origin, ImportedModuleOrigin)
+    }
+    assert modules == {ModuleId.from_path("one/config"), ModuleId.from_path("two/config")}
 
 
 def test_typecheck_routes_qualified_types_patterns_and_is_tests(tmp_path: Path) -> None:
@@ -1425,7 +1601,7 @@ def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Pat
         {"entry": "import lib::Alias\nAlias::value", "lib": "type Alias = int"},
     )
 
-    with pytest.raises(AglScopeError):
+    with pytest.raises(UnknownQualifierError):
         resolve_program(graph)
 
 
@@ -1466,7 +1642,7 @@ def test_current_module_anchor_does_not_qualify_an_imported_enum_owner_in_patter
     [
         ("case flag of | ::Unknown::On => 1 | _ => 2", AglScopeError),
         ("flag is ::Unknown::On", AglScopeError),
-        ("flag is ::Unknown::Deep::On", AglScopeError),
+        ("flag is ::Unknown::Deep::On", UnknownQualifierError),
         ("flag is /Unknown::Flag::On", AglTypeError),
     ],
 )
@@ -1524,11 +1700,11 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
         (
             # A qualifier ambiguous across two imported modules is scope's
             # decision, the same class as the identical value-position
-            # ambiguity: AglScopeError, never AglTypeError.
+            # ambiguity: AmbiguousQualificationError, never AglTypeError.
             "import one/config\nimport two/config\nenum Local | On\n"
             "let flag: Local = Local::On\nflag is config::Flag::On",
             {"one/config": "enum Flag | On", "two/config": "enum Flag | On"},
-            AglScopeError,
+            AmbiguousQualificationError,
         ),
     ],
 )
@@ -1718,10 +1894,8 @@ def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: P
         },
     )
 
-    with pytest.raises(AglScopeError, match="qualifier") as raised:
+    with pytest.raises(UnknownQualifierError):
         resolve_program(graph)
-
-    assert "'/C'" in str(raised.value)
 
 
 def test_spec_suffixes_anchor_and_two_line_bare_full_idiom(tmp_path: Path) -> None:
@@ -1771,7 +1945,7 @@ def test_hiding_repairs_a_suffix_ambiguity_and_new_import_makes_it_loud(tmp_path
         tmp_path,
         {"entry": "import one/config\nimport two/config\nconfig::opt()", **modules},
     )
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_program(ambiguous)
 
 

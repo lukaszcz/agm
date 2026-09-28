@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import UnknownMemberError
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
@@ -39,11 +39,9 @@ __all__ = [
     "ScopeOrigins",
     "SingleTarget",
     "WildcardTarget",
-    "ambiguous_qualification_message",
     "build_import_env",
     "contribution_routes",
     "matching_atoms",
-    "qualification_repair_guidance",
     "qualifier_candidates",
     "qualifier_contributes",
     "qualifier_members",
@@ -104,30 +102,6 @@ class WildcardTarget:
 
 
 ImportTarget = SingleTarget | WildcardTarget
-
-
-def qualification_repair_guidance() -> str:
-    """Return the common, source-level repairs for a qualifier ambiguity."""
-    return (
-        "Use a :: anchor to select the current module, hiding to remove a conflicting member, "
-        "a longer suffix or a /-anchored path to select a module, or as to give one import "
-        "a distinct name."
-    )
-
-
-def ambiguous_qualification_message(
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    candidates: tuple[ModuleId, ...],
-    *,
-    anchored: bool = False,
-) -> str:
-    """Render the common repair-oriented diagnostic for a shared verdict."""
-    rendered = render_qualifier(qualifier, anchored=anchored)
-    paths = ", ".join(module.display() for module in candidates)
-    name = "::".join(_path(member))
-    message = f"'{rendered}::{name}' is ambiguous across imported modules: {paths}."
-    return f"{message} {qualification_repair_guidance()}"
 
 
 def _frozen_routes(
@@ -369,7 +343,7 @@ def _selected_public_atoms(
         scopes = matching_atoms(scope_exports, prefix)
         if not declarations and not scopes:
             rendered = "::".join(prefix)
-            raise AglScopeError(
+            raise UnknownMemberError(
                 f"name {rendered!r} is not exported by module {module.display()!r}", span=span
             )
         for atom in declarations:
@@ -710,7 +684,7 @@ def resolve_qualified_member(
     anchored: bool = False,
     unknown_qualifier: Callable[[str], Exception],
     missing_member: Callable[[str], Exception],
-    ambiguous: Callable[[str], Exception],
+    ambiguous: Callable[[tuple[ModuleId, ...]], Exception],
 ) -> QName:
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     if isinstance(result, QualResolutionFound):
@@ -720,9 +694,7 @@ def resolve_qualified_member(
         raise unknown_qualifier(rendered)
     if isinstance(result, QualResolutionMissingMember):
         raise missing_member(rendered)
-    raise ambiguous(
-        ambiguous_qualification_message(qualifier, member, result.candidates, anchored=anchored)
-    )
+    raise ambiguous(result.candidates)
 
 
 def resolve_qualified(

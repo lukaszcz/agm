@@ -30,7 +30,15 @@ from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import ParamBindingInfo
-from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError, RouteClashError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    NoVisibleConstructorError,
+    RouteClashError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -1726,7 +1734,7 @@ class TestScopeQualifiedConstructorsAcrossEntries:
     @pytest.mark.parametrize(
         ("member", "qualified_error"),
         [
-            ("Missing", AglScopeError),
+            ("Missing", UnknownMemberError),
             ("Palette", AglTypeError),
             ("Pixel", AglTypeError),
             ("Px", AglTypeError),
@@ -2279,16 +2287,16 @@ def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_p
 @pytest.mark.parametrize(
     ("probe", "expected_error"),
     (
-        ("Foo::Old::E::A", (AglScopeError,)),
+        ("Foo::Old::E::A", (UnknownQualifierError,)),
         ("fn(x: Foo::Old::E::A) => 1", (AglTypeError,)),
         # A grouping whose combined setup entry fails to redeclare ``Foo``
         # (name-clash inside one entry) leaves ``Old`` declared but never
         # nested with ``E`` at all, rather than genuinely retired: scope
-        # itself then reports the same unified unknown-member verdict
-        # (``AglScopeError``) it reports for a live owner missing a member
-        # anywhere else, alongside the genuinely-retired groupings' plain
-        # unknown-scope-path ``AglTypeError``.
-        ("fn(x: Foo::Old::E) => 1", (AglTypeError, AglScopeError)),
+        # itself then reports the same unknown-member verdict
+        # (``UnknownMemberError``) it reports for a live owner missing a
+        # member anywhere else, alongside the genuinely-retired groupings'
+        # plain ``AglTypeError``.
+        ("fn(x: Foo::Old::E) => 1", (AglTypeError, UnknownMemberError)),
     ),
     ids=("value", "type-member", "type-owner"),
 )
@@ -5062,7 +5070,7 @@ enum Agent
         assert s.eval_entry("enum A = Red | Green").ok
         assert s.eval_entry("enum B = Red | Blue\nlet a: A = A::Green").ok
 
-        with pytest.raises(AglScopeError):
+        with pytest.raises(AmbiguousConstructorError):
             s.type_of(entry)
 
     def test_current_module_member_follows_enum_supersession(self) -> None:
@@ -8655,7 +8663,7 @@ class TestImports:
         with pytest.raises(AglTypeError) as typed_error:
             session.type_of("fn(x: Outer::Second) => 1")
         assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
-        with pytest.raises(AglScopeError):
+        with pytest.raises(UnknownMemberError):
             session.type_of("Outer::Second(n = 1)")
 
     def test_wildcard_facade_use_type_position_survives_alias_replacement(
@@ -8719,7 +8727,7 @@ class TestImports:
         with pytest.raises(AglTypeError) as typed_error:
             session.type_of("fn(x: Outer::Old) => 1")
         assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
-        with pytest.raises(AglScopeError):
+        with pytest.raises(UnknownMemberError):
             session.type_of("Outer::Old(n = 1)")
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
@@ -9629,8 +9637,8 @@ class TestImports:
 # ---------------------------------------------------------------------------
 # A qualifier ambiguous across two facade-imported modules (both matching the
 # same route) is one condition -- ``QualResolutionAmbiguous`` -- regardless of
-# where it is written. Every position reports it alike: ``AglScopeError``,
-# never a position-specific class.
+# where it is written. Every position reports it alike:
+# ``AmbiguousQualificationError``, never a position-specific class.
 # ---------------------------------------------------------------------------
 
 
@@ -9659,7 +9667,7 @@ class TestAmbiguousQualifierClassAgreement:
         self, tmp_path: Path, expr: str
     ) -> None:
         session = self._session(tmp_path)
-        with pytest.raises(AglScopeError):
+        with pytest.raises(AmbiguousQualificationError):
             session.type_of(expr)
 
     def test_ambiguous_qualifier_reports_scope_error_at_a_bare_type_entry(
@@ -10373,7 +10381,7 @@ class TestBareTypeEntry:
         (
             (
                 "use S as a\n\nscope S\n  record Box[T]\n    value: T\nend S",
-                AglScopeError,
+                AmbiguousQualificationError,
             ),
             ("scope a\n  record Box[T]\n    value: T\nend a", RouteClashError),
         ),

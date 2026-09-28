@@ -30,7 +30,13 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
+from agm.agl.scope.symbols import (
+    BinderKind,
+    BindingRef,
+    BuiltinKind,
+    ScopeNode,
+    UnknownMemberError,
+)
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -7534,7 +7540,7 @@ class TestExceptionIsTest:
             "d is Lib::Unknown"
         )
         err = reject_type(src)
-        assert type(err) is AglScopeError
+        assert type(err) is UnknownMemberError
         assert err.span is not None
         assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Unknown"
 

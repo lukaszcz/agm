@@ -30,6 +30,7 @@ from agm.agl.repl import ReplSession
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import (
     AglScopeError,
+    AmbiguousQualificationError,
     BinderKind,
     ImmutableAssignmentError,
     ReceiverOwner,
@@ -755,7 +756,7 @@ class TestClashDeferred:
                 "libB": "def foo() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="ambiguous"):
+        with pytest.raises(AmbiguousQualificationError):
             resolve_program(graph)
 
     def test_clash_error_points_at_the_use_site(self, tmp_path: Path) -> None:
@@ -768,7 +769,7 @@ class TestClashDeferred:
                 "libB": "def foo() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError) as exc_info:
+        with pytest.raises(AmbiguousQualificationError) as exc_info:
             resolve_program(graph)
         span = exc_info.value.span
         assert span is not None
@@ -1886,7 +1887,7 @@ class TestWildcardImports:
                 "bar/sub": "def common() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="ambiguous|common"):
+        with pytest.raises(AmbiguousQualificationError):
             resolve_program(graph)
 
 

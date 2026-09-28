@@ -18,6 +18,7 @@ from agm.agl.scope.imports import (
     resolve_qualified,
 )
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import AmbiguousQualificationError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
@@ -75,10 +76,10 @@ def _module_outcome(source: str) -> Outcome:
     Resolves *source* once for its own scope-phase verdict, then separately
     for the full type-checked verdict -- a second, independent parse and
     resolve of the same tiny inline snippet, since :func:`resolve_and_check_inline_entry`
-    does not expose its intermediate resolution for reuse. A class alone
-    cannot tell the phases apart: the second call re-resolves scope on its
-    own path before type-checking, so its ``AglScopeError`` is still caught
-    there defensively, even though typecheck itself never raises one.
+    does not expose its intermediate resolution for reuse. The second call
+    re-resolves scope deterministically over the same source the first call
+    already resolved without raising, so it cannot raise ``AglScopeError``
+    either; only ``AglTypeError`` is a genuine typecheck-phase verdict.
     """
     from agm.agl.typecheck import AglTypeError
     from tests.agl.ir_harness import base_caps
@@ -90,7 +91,7 @@ def _module_outcome(source: str) -> Outcome:
         return "scope"
     try:
         resolve_and_check_inline_entry(source, base_caps())
-    except (AglScopeError, AglTypeError):
+    except AglTypeError:
         return "typecheck"
     return "accepted"
 
@@ -99,8 +100,8 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     """A phase-accurate verdict: which call raised, not which class.
 
     Reuses scope's own resolution for the type-check call, so nothing here
-    re-resolves the program -- ``check_program`` never raises ``AglScopeError``
-    itself, but the catch stays defensive rather than assuming it never will.
+    re-resolves the program: ``check_program`` never raises ``AglScopeError``
+    itself (only ``AglTypeError``, on the first static type violation).
     """
     from agm.agl.typecheck import AglTypeError
     from agm.agl.typecheck.program import check_program
@@ -113,7 +114,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
         return "scope"
     try:
         check_program(resolved, base_caps())
-    except (AglScopeError, AglTypeError):
+    except AglTypeError:
         return "typecheck"
     return "accepted"
 
@@ -410,7 +411,7 @@ def _ambiguity_span(tmp_path: Path, modules: dict[str, str]) -> SourceSpan:
     from tests.agl.ir_harness import base_caps, make_graph_from_files
 
     graph = make_graph_from_files(tmp_path, modules)
-    with pytest.raises(AglScopeError) as excinfo:
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
         check_program(resolve_program(graph), base_caps())
     span = excinfo.value.span
     assert span is not None

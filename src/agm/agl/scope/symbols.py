@@ -15,7 +15,10 @@ Data model
 - ``ModuleResolution`` — the output of the scope pass: the original
   ``Program`` plus side tables.
 - ``BuiltinKind`` — enum classifying a built-in Call node.
-- ``AglScopeError`` — fatal scope error raised by the resolver.
+- ``AglScopeError`` — fatal scope error raised by the resolver; structured
+  subclasses distinguish an ambiguous spelling (``AmbiguousQualificationError``,
+  ``AmbiguousConstructorError``) from an unresolved one (``UnknownQualifierError``,
+  ``UnknownMemberError``).
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
 from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
@@ -341,6 +344,15 @@ def duplicate_binder_message(name: str) -> str:
     lives here and is identical whichever pass reports it.
     """
     return f"Name '{name}' is bound more than once in this pattern."
+
+
+def qualification_repair_guidance() -> str:
+    """Return the common, source-level repairs for a qualifier ambiguity or clash."""
+    return (
+        "Use a :: anchor to select the current module, hiding to remove a conflicting member, "
+        "a longer suffix or a /-anchored path to select a module, or as to give one import "
+        "a distinct name."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1112,10 +1124,14 @@ class AglScopeError(AglError):
 
 
 class AmbiguousConstructorError(AglScopeError):
-    """A constructor spelling that selects several constructors.
+    """A constructor spelling declared by several distinct *types*.
 
-    ``repair`` is one qualified spelling that selects a single candidate,
-    written through the same module qualifier when the ambiguous spelling has one.
+    Distinct from :class:`AmbiguousQualificationError`: this verdict comes
+    from ``TypeOwnerIndex`` finding the same bare or module-surface spelling
+    a constructor in more than one type, never from an imported module or a
+    ``use`` declaration contributing conflicting routes. ``repair`` is one
+    qualified spelling that selects a single candidate, written through the
+    same module qualifier when the ambiguous spelling has one.
     """
 
     def __init__(self, message: str, *, repair: str, span: SourceSpan) -> None:
@@ -1129,6 +1145,105 @@ class NoVisibleConstructorError(AglScopeError):
 
 class RouteClashError(AglScopeError):
     """A qualifier whose leading segment is both a local scope or type and a module route."""
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedModuleOrigin:
+    """An ambiguity candidate that an imported module's route directly contributes."""
+
+    module: ModuleId
+
+
+@dataclass(frozen=True, slots=True)
+class UseDeclarationOrigin:
+    """An ambiguity candidate a ``use`` declaration contributes, naming its declaration."""
+
+    declaration: QName
+
+
+QualificationOrigin: TypingTypeAlias = ImportedModuleOrigin | UseDeclarationOrigin
+
+
+class AmbiguousQualificationError(AglScopeError):
+    """A qualified or bare spelling that selects more than one declaration.
+
+    ``origins`` are the contributing imported modules or ``use``
+    declarations, kept as structured data -- never as message text -- so a
+    caller can tell a module-module collision from a use-use or mixed one.
+    Built only through :meth:`for_origins`, the one place in scope that
+    renders this verdict, origin-accurately, for every ambiguity site.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        spelling: str,
+        origins: tuple[QualificationOrigin, ...],
+        span: SourceSpan,
+    ) -> None:
+        super().__init__(message, span=span)
+        self.spelling = spelling
+        self.origins = origins
+
+    @classmethod
+    def for_origins(
+        cls,
+        spelling: str,
+        origins: Iterable[QualificationOrigin],
+        *,
+        span: SourceSpan,
+        local_to: ModuleId,
+        bare: bool = False,
+    ) -> "AmbiguousQualificationError":
+        """Build from *origins*, rendering one message naming their actual kind(s).
+
+        *local_to* is the reading module, used to spell each ``use``
+        declaration's own path the way that module's reader would type it
+        (see :func:`~agm.agl.modules.ids.spell_declaration`) -- a concrete,
+        pastable repair, not just the module it names.
+
+        *bare* is set only when *spelling* itself carries no written
+        qualifier (an unqualified name, not merely an unqualified route to a
+        qualified one): each module is then spelled ``module::spelling``, the
+        route a reader would actually write, since the bare module name
+        alone repeats no part of what was written.
+        """
+        ordered = tuple(origins)
+        modules = sorted(
+            {origin.module for origin in ordered if isinstance(origin, ImportedModuleOrigin)},
+            key=ModuleId.path_str,
+        )
+        use_spellings = sorted(
+            spell_declaration(
+                origin.declaration[0], to_bare_path(origin.declaration[1]), local_to=local_to
+            )
+            for origin in ordered
+            if isinstance(origin, UseDeclarationOrigin)
+        )
+        clauses = []
+        if modules:
+            module_spellings = (
+                [f"{module.display()}::{spelling}" for module in modules]
+                if bare
+                else [module.display() for module in modules]
+            )
+            clauses.append("across imported modules: " + ", ".join(module_spellings))
+        if use_spellings:
+            clauses.append("contributed by multiple use declarations: " + ", ".join(use_spellings))
+        message = (
+            f"'{spelling}' is ambiguous " + " and ".join(clauses) + f". "
+            f"{qualification_repair_guidance()}"
+        )
+        return cls(message, spelling=spelling, origins=ordered, span=span)
+
+
+class UnknownQualifierError(AglScopeError):
+    """A qualifier naming no module route, scope region, or type owner."""
+
+
+class UnknownMemberError(AglScopeError):
+    """A qualifier that resolves, but whose full spelling selects no member."""
 
 
 class ImmutableAssignmentError(AglScopeError):

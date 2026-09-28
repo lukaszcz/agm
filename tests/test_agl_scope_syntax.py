@@ -11,6 +11,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.pipeline import RunResult
 from agm.agl.scope import AglScopeError
+from agm.agl.scope.symbols import AmbiguousQualificationError
 from agm.agl.syntax import (
     BuiltinVarDecl,
     EnumDef,
@@ -455,7 +456,7 @@ def test_used_scope_members_clash_at_their_use_site() -> None:
         "scope Vector\n  def distance() -> int = 2\nend Vector\n\ndistance()"
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_inline_entry(source)
 
 

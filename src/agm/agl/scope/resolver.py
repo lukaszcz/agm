@@ -68,9 +68,7 @@ from agm.agl.scope.imports import (
     QualResolution,
     QualResolutionAmbiguous,
     QualResolutionFound,
-    ambiguous_qualification_message,
     declares_bare_constructor,
-    qualification_repair_guidance,
     qualifier_candidates,
     qualifier_contributes,
     qualifier_members,
@@ -86,6 +84,7 @@ from agm.agl.scope.symbols import (
     BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     AmbiguousConstructorError,
+    AmbiguousQualificationError,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -94,11 +93,13 @@ from agm.agl.scope.symbols import (
     DeclarationKey,
     DeclInfo,
     ImmutableAssignmentError,
+    ImportedModuleOrigin,
     ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
     NoVisibleConstructorError,
     PatternSlot,
+    QualificationOrigin,
     ReceiverOwner,
     ResolvedUseTarget,
     RouteClashError,
@@ -106,12 +107,16 @@ from agm.agl.scope.symbols import (
     ScopePath,
     SlotCandidate,
     TypeOwner,
+    UnknownMemberError,
+    UnknownQualifierError,
+    UseDeclarationOrigin,
     builtin_call_kind,
     builtin_type_static_kind,
     contributed_declarations,
     duplicate_binder_message,
     is_builtin_type_static_owner,
     is_qualified_function_member,
+    qualification_repair_guidance,
     undefined_name_message,
 )
 from agm.agl.scope.symbols import binding_qname as _ref_qname
@@ -355,9 +360,18 @@ def _is_root_inline_member(constructor: ConstructorRef) -> bool:
     )
 
 
-def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> AglScopeError:
+def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> UnknownMemberError:
     """Return the error for local scope *path* declaring no member *name*."""
-    return AglScopeError(f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span)
+    return UnknownMemberError(
+        f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span
+    )
+
+
+def _use_route_unknown_member(rendered: str, span: SourceSpan) -> UnknownMemberError:
+    """Return the error for a use route that resolves but selects no constructor *rendered*."""
+    return UnknownMemberError(
+        f"Constructor '{rendered}' is not visible through this use route.", span=span
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1073,9 +1087,11 @@ class _Resolver:
             raise HiddenMemberError(f"{spelling}::{member}", span=span)
 
     @staticmethod
-    def _unknown_owner_member(spelling: str, member: str, span: SourceSpan | None) -> AglScopeError:
+    def _unknown_owner_member(
+        spelling: str, member: str, span: SourceSpan | None
+    ) -> UnknownMemberError:
         """The one verdict for a resolved owner declaring no ``member`` at all, in any position."""
-        return AglScopeError(f"'{member}' is not a member of '{spelling}'.", span=span)
+        return UnknownMemberError(f"'{member}' is not a member of '{spelling}'.", span=span)
 
     def _select_owner_member_or_raise(
         self,
@@ -3692,18 +3708,16 @@ class _Resolver:
                 )
                 if len(full_selection) > 1:
                     route, member = routed_qualifier_and_member(chain, (chain.member,))
-                    raise AglScopeError(
-                        ambiguous_qualification_message(
-                            route,
-                            member,
-                            tuple(
-                                sorted(
-                                    {qname[0] for qname in full_selection}, key=ModuleId.path_str
-                                )
-                            ),
-                            anchored=chain.anchored,
-                        ),
+                    modules = sorted({qname[0] for qname in full_selection}, key=ModuleId.path_str)
+                    spelling = (
+                        f"{render_qualifier(route, anchored=chain.anchored)}::"
+                        f"{'::'.join(_bare_path(member))}"
+                    )
+                    raise AmbiguousQualificationError.for_origins(
+                        spelling,
+                        (ImportedModuleOrigin(module) for module in modules),
                         span=chain.span,
+                        local_to=self._module_id,
                     )
                 if len(full_selection) == 1:
                     # The full path independently names a real declaration --
@@ -3976,9 +3990,9 @@ class _Resolver:
         ) or AglScopeError(undefined_name_message(segment.name, in_module=True), span=segment.span)
 
     @staticmethod
-    def _unknown_scope_path(chain: QualifierChain) -> AglScopeError:
+    def _unknown_scope_path(chain: QualifierChain) -> UnknownQualifierError:
         """Return the error for *chain* spelling no scope path."""
-        return AglScopeError(
+        return UnknownQualifierError(
             f"Unknown scope path '{'::'.join(segment.name for segment in chain.segments)}'.",
             span=chain.span,
         )
@@ -4000,11 +4014,16 @@ class _Resolver:
         if opened is None:
             return None
         imported = self._qualified_import_resolution(chain, name)
+        spelling = f"{chain.render()}::{name}"
         if isinstance(imported, QualResolutionAmbiguous):
-            raise AglScopeError(
-                f"'{chain.render()}::{name}' is ambiguous across use and import routes. "
-                f"{qualification_repair_guidance()}",
+            raise AmbiguousQualificationError.for_origins(
+                spelling,
+                (
+                    UseDeclarationOrigin(_ref_qname(opened)),
+                    *(ImportedModuleOrigin(module) for module in imported.candidates),
+                ),
                 span=span,
+                local_to=self._module_id,
             )
         if isinstance(imported, QualResolutionFound):
             imported_ref = self._cross_module_binding_ref(imported.qname)
@@ -4021,10 +4040,14 @@ class _Resolver:
                 imported_ref.kind,
             )
             if opened_identity != imported_identity:
-                raise AglScopeError(
-                    f"'{chain.render()}::{name}' is ambiguous between a use contribution "
-                    f"and an import route. {qualification_repair_guidance()}",
+                raise AmbiguousQualificationError.for_origins(
+                    spelling,
+                    (
+                        UseDeclarationOrigin(_ref_qname(opened)),
+                        ImportedModuleOrigin(imported.qname[0]),
+                    ),
                     span=span,
+                    local_to=self._module_id,
                 )
         return opened
 
@@ -4036,10 +4059,7 @@ class _Resolver:
                 self._constructor_refs[node_id] = next(iter(opened))
                 return True
             rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
-            raise AglScopeError(
-                f"Constructor '{rendered}' is not visible through this use route.",
-                span=chain.span,
-            )
+            raise _use_route_unknown_member(rendered, chain.span)
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
             self._check_local_scope_route_ambiguity(chain, variant, local_path)
@@ -4115,19 +4135,27 @@ class _Resolver:
         opened = self._regional_constructor_candidates(_bare_atom((*relative_path, variant)))
         if opened:
             imported = self._qualified_import_resolution(chain, variant)
-            imported_constructor = (
-                self._cross_module_constructor_refs.get(imported.qname)
-                if isinstance(imported, QualResolutionFound)
-                else None
-            )
-            if isinstance(imported, QualResolutionAmbiguous) or (
-                isinstance(imported, QualResolutionFound) and opened != {imported_constructor}
-            ):
+            extra_origins: list[QualificationOrigin] | None = None
+            if isinstance(imported, QualResolutionAmbiguous):
+                extra_origins = [ImportedModuleOrigin(module) for module in imported.candidates]
+            elif isinstance(imported, QualResolutionFound):
+                imported_constructor = self._cross_module_constructor_refs.get(imported.qname)
+                if opened != {imported_constructor}:
+                    extra_origins = [ImportedModuleOrigin(imported.qname[0])]
+            if extra_origins is not None:
                 rendered = "::".join((*relative_path, variant))
-                raise AglScopeError(
-                    f"'{rendered}' is ambiguous between a use contribution and an import "
-                    f"route. {qualification_repair_guidance()}",
-                    span=chain.span,
+                candidate = next(iter(opened))
+                origins: list[QualificationOrigin] = [
+                    UseDeclarationOrigin(
+                        (
+                            candidate.owner_module_id,
+                            _bare_atom((*candidate.owner_path, candidate.owner_name)),
+                        )
+                    ),
+                    *extra_origins,
+                ]
+                raise AmbiguousQualificationError.for_origins(
+                    rendered, origins, span=chain.span, local_to=self._module_id
                 )
         if opened is not None:
             return opened
@@ -4283,11 +4311,11 @@ class _Resolver:
                     owner = self._constructible_owner(result.qname)
                     return None if owner is None else (self._qname_decl_key(result.qname), owner)
                 if isinstance(result, QualResolutionAmbiguous):
-                    raise AglScopeError(
-                        ambiguous_qualification_message(
-                            (segment.name,), variant, result.candidates, anchored=False
-                        ),
+                    raise AmbiguousQualificationError.for_origins(
+                        f"{segment.name}::{variant}",
+                        (ImportedModuleOrigin(module) for module in result.candidates),
                         span=chain.span,
+                        local_to=self._module_id,
                     ) from None
                 # No candidate declares *variant* either: the same unknown-member
                 # verdict every other owner-member miss raises, not the bare
@@ -4693,36 +4721,37 @@ class _Resolver:
     ) -> BindingRef | None:
         """Resolve one region's bare contributions satisfying *binding_predicate*.
 
-        Clashes are deferred to use sites.
+        Clashes are deferred to use sites. A root-position tailed import's
+        contribution is an :class:`ImportedModuleOrigin`; everything else this
+        region's own bare table exposes (a ``use`` declaration, or a
+        region-scoped import tail) is a :class:`UseDeclarationOrigin`, since
+        both add bare names the same way (see the imports/`use` docs).
         """
         nearest = self._nearest_bare_contribution_layer(name, binding_predicate=binding_predicate)
         if nearest is None:
             return None
-        selected_layer, resolved = nearest
+        selected_layer, region_refs = nearest
+        root_refs: set[BindingRef] = set()
         if selected_layer is self._root_scope:
-            resolved.update(
+            root_refs = {
                 ref
                 for qname in self._import_env.unqualified.get(name, frozenset())
                 if binding_predicate(ref := self._cross_module_binding_ref(qname))
-            )
+            }
+        resolved = region_refs | root_refs
         distinct = {
             (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
         }
         if len(distinct) == 1:
             return next(iter(distinct.values()))
-        qualifiers = ", ".join(
-            sorted(
-                spell_declaration(
-                    ref.module_id, (*ref.scope_path, ref.name), local_to=self._module_id
-                )
-                for ref in distinct.values()
-            )
+        origins = tuple(
+            ImportedModuleOrigin(ref.module_id)
+            if ref in root_refs
+            else UseDeclarationOrigin(_ref_qname(ref))
+            for ref in distinct.values()
         )
-        rendered = "::".join(_bare_path(name))
-        raise AglScopeError(
-            f"'{rendered}' is ambiguous: contributed by multiple use declarations. "
-            f"Use a qualified reference to disambiguate: {qualifiers}",
-            span=span,
+        raise AmbiguousQualificationError.for_origins(
+            "::".join(_bare_path(name)), origins, span=span, local_to=self._module_id, bare=True
         )
 
     def _lookup_import_env_unqualified(
@@ -4732,9 +4761,9 @@ class _Resolver:
 
         Only declarations satisfying *binding_predicate* are candidates.
         Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
-        ``AglScopeError`` on ambiguity (clash-on-use). Returns ``None`` if no
-        tailed import contributes a candidate. Shared by bare value
-        references, bare assignment targets, and type owners.
+        :class:`AmbiguousQualificationError` on ambiguity (clash-on-use).
+        Returns ``None`` if no tailed import contributes a candidate. Shared
+        by bare value references, bare assignment targets, and type owners.
         """
         qnames = {
             qname
@@ -4745,15 +4774,12 @@ class _Resolver:
             return None
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
-            qualifiers = sorted(
-                qn[0].display() + "::" + "::".join((qn[1],) if isinstance(qn[1], str) else qn[1])
-                for qn in qnames
-            )
-            hint = ", ".join(qualifiers)
-            raise AglScopeError(
-                f"'{name}' is ambiguous: imported from multiple modules. "
-                f"Use a qualified reference to disambiguate: {hint}",
+            raise AmbiguousQualificationError.for_origins(
+                name,
+                (ImportedModuleOrigin(qname[0]) for qname in qnames),
                 span=span,
+                local_to=self._module_id,
+                bare=True,
             )
         # Exactly one QName.
         qname = next(iter(qnames))
@@ -4814,19 +4840,27 @@ class _Resolver:
                     span=segment.span,
                 )
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
+        spelling = (
+            f"{render_qualifier(route, anchored=qualifier.anchored)}::{'::'.join(_bare_path(atom))}"
+        )
         return resolve_qualified_member(
             self._import_env,
             route,
             atom,
             anchored=qualifier.anchored,
-            unknown_qualifier=lambda rendered: AglScopeError(
+            unknown_qualifier=lambda rendered: UnknownQualifierError(
                 f"No module imported under qualifier '{rendered}'.", span=span
             ),
-            missing_member=lambda rendered: AglScopeError(
+            missing_member=lambda rendered: UnknownMemberError(
                 f"'{name}' is not a public member of imported module '{rendered}' or is hidden.",
                 span=span,
             ),
-            ambiguous=lambda message: AglScopeError(message, span=span),
+            ambiguous=lambda candidates: AmbiguousQualificationError.for_origins(
+                spelling,
+                (ImportedModuleOrigin(module) for module in candidates),
+                span=span,
+                local_to=self._module_id,
+            ),
         )
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:
@@ -5192,10 +5226,7 @@ class _Resolver:
         if opened is not None:
             if not opened:
                 rendered = "::".join((*(segment.name for segment in chain.segments), name))
-                raise AglScopeError(
-                    f"Constructor '{rendered}' is not visible through this use route.",
-                    span=chain.span,
-                )
+                raise _use_route_unknown_member(rendered, chain.span)
             return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
@@ -5309,11 +5340,12 @@ class _Resolver:
                 return None
             resolution = self._qualified_import_resolution(chain, name)
             if isinstance(resolution, QualResolutionAmbiguous):
-                raise AglScopeError(
-                    ambiguous_qualification_message(
-                        route, name, resolution.candidates, anchored=chain.anchored
-                    ),
+                spelling = f"{render_qualifier(route, anchored=chain.anchored)}::{name}"
+                raise AmbiguousQualificationError.for_origins(
+                    spelling,
+                    (ImportedModuleOrigin(module) for module in resolution.candidates),
                     span=chain.span,
+                    local_to=self._module_id,
                 )
             injected = self._route_injected_members(chain, name)
             roots = (

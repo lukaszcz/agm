@@ -41,7 +41,6 @@ from agm.agl.scope.imports import (
     QName,
     QualResolutionFound,
     contribution_routes,
-    qualification_repair_guidance,
     qualifier_candidates,
     qualifier_contributes,
     resolve_qualified,
@@ -54,6 +53,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     contributed_declarations,
+    qualification_repair_guidance,
     resolve_bare_contribution_layer,
     to_bare_atom,
 )

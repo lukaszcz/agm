@@ -16,10 +16,10 @@ from agm.agl.scope.imports import (
     QualResolutionFound,
     SingleTarget,
     build_import_env,
-    qualification_repair_guidance,
     resolve_qualified,
 )
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import AmbiguousQualificationError, qualification_repair_guidance
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -622,7 +622,7 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
         "pkg/b": "def common() -> int = 2\n",
     }
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _entry_resolution(tmp_path, modules)
 
 
@@ -851,7 +851,7 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
 
 
 def test_local_use_rename_collision_is_ambiguous_when_used() -> None:
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _resolve_without_loader(
             {
                 "entry": (

@@ -2345,3 +2345,227 @@ def test_parameter_fixture_runs_by_installed_reference_and_file(
     file_result = invoke(CliRunner(), ["exec", str(source_file)])
     assert file_result.exit_code == 0
     assert file_result.stdout == "6\nfalse\nfalse\nfile\n"
+
+
+def _write_group_table_package(root: Path) -> None:
+    """Write a ``devel review`` package (aliased ``dev``) with one of each config value.
+
+    ``strict-json`` is an engine setting, ``label`` a defaulted signature
+    argument, and ``verbose`` a module parameter — the three kinds of value a
+    group table must feed exactly as its command's own table does.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        '\n[aliases]\ndev = "devel"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\nimport tools/logging\n\n"
+        'program def main(label: text = "none") -> unit =\n'
+        "  print std/config::strict-json\n"
+        "  print label\n"
+        "  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_registered_command_reads_engine_signature_and_module_values_from_its_group_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text(
+        '[devel]\nstrict-json = true\nlabel = "grouped"\nverbose = true\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\ngrouped\ntrue\n"
+
+
+def test_a_nearer_command_table_beats_a_group_table_set_in_a_later_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact command route wins even set in an earlier, less-specific layer.
+
+    ``verbose`` is a control key the group table alone sets, proving the cwd
+    layer is actually read even though its ``label`` loses to the home
+    layer's exact table.
+    """
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[devel.review]\nlabel = "exact"\n', encoding="utf-8"
+    )
+    cwd_config = tmp_path / ".agm"
+    cwd_config.mkdir()
+    (cwd_config / "config.toml").write_text(
+        '[devel]\nlabel = "group"\nverbose = true\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\nexact\ntrue\n"
+
+
+def test_an_alias_prefix_table_feeds_the_canonical_command_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A group table under an alias's own word inherits down just like the canonical one."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text('[dev]\nlabel = "aliased"\n', encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\naliased\nfalse\n"
+
+
+def test_an_unconsumed_group_table_leaf_draws_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel]\nunrelated = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+
+
+def test_a_same_depth_conflict_via_an_alias_errors_even_in_one_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[dev]`` and ``[devel]`` are the same-depth alias/canonical prefixes of one
+    command; both setting one key in one config layer is an error, not a pick."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text(
+        '[dev]\nlabel = "a"\n\n[devel]\nlabel = "b"\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 1
+
+
+def _write_config_attribute_package(root: Path) -> None:
+    """Write a ``devel review`` package whose program's ``@config`` defaults its
+    own imported module parameter, for testing @config's rank against inherited tables.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "@config(logging::verbose = false)\n"
+        "program def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_an_inherited_group_table_beats_the_programs_own_config_attribute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_config_attribute_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\n"
+
+
+def _write_nested_command_package(root: Path) -> None:
+    """Write two registered commands, one a prefix of the other: ``devel sub`` and
+    ``devel sub review``. ``devel sub``'s own program never reads ``verbose``, so
+    ``[devel.sub]`` setting it is really an inherited default for ``devel sub review``.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel sub" = { program = "tools/a::main" }\n'
+        '"devel sub review" = { program = "tools/b::main" }\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "a.agl").write_text(
+        'program def main() -> unit =\n  print "a"\n', encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "b.agl").write_text(
+        "import tools/logging\n\nprogram def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_a_commands_own_table_feeds_a_registered_descendant_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[devel.sub]`` is ``devel sub``'s own exact table and ``devel sub review``'s
+    inherited group table at once; the deeper command reads it either way."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_nested_command_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel.sub]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "sub", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\n"
+
+
+def test_a_commands_own_table_draws_no_warning_for_a_descendants_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``devel sub`` never reads ``verbose`` itself, but must not warn about it
+    either: it is a registered descendant command's inherited default."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_nested_command_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel.sub]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "sub"])
+
+    assert result.exit_code == 0
+    assert result.output == "a\n"
+    assert "unrelated" not in result.output

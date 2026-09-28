@@ -18,6 +18,7 @@ from agm.config.general import GeneralConfig
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    configured_leaf_table_candidates,
     configured_leaf_tables,
     display_table_path,
     resolve_qualified_values,
@@ -58,7 +59,32 @@ class _RouteReport(NamedTuple):
     positional_only: frozenset[str]
 
 
-def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_RouteReport]) -> None:
+def _tables_with_registered_descendants(
+    command_paths: tuple[tuple[str, ...], ...],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> frozenset[tuple[str, ...]]:
+    """Return which of *command_paths* is a proper prefix of another registered command.
+
+    Such a table's own leaves may be inherited defaults meant for that
+    descendant command (see the group-table inheritance in
+    :func:`agm.config.qualified_keys.resolve_qualified_values`), so a warning
+    on this command must leave them alone — a sibling command may be the one
+    that actually consumes them.
+    """
+    return frozenset(
+        path
+        for path in command_paths
+        if any(
+            len(other) > len(path) and other[: len(path)] == path for other in package_command_paths
+        )
+    )
+
+
+def _report_undeclared_config_keys(
+    config: GeneralConfig,
+    routes: Iterable[_RouteReport],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> None:
     """Warn for configured route leaves that no host input consumes.
 
     Each route carries its own declaration set because one config table can
@@ -73,8 +99,14 @@ def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_Rout
             route.scope_path,
             route.command_paths,
         )
+        exempt_tables = _tables_with_registered_descendants(
+            route.command_paths, package_command_paths
+        )
         for leaf in sorted(leaf_tables):
-            table_name = display_table_path(leaf_tables[leaf])
+            table_path = leaf_tables[leaf]
+            if table_path in exempt_tables:
+                continue
+            table_name = display_table_path(table_path)
             if leaf in route.positional_only:
                 print(
                     f"warning: config key '{leaf}' in the '{table_name}' configuration table "
@@ -100,6 +132,7 @@ def resolve_param_values(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
+    package_command_paths: frozenset[tuple[str, ...]] = frozenset(),
 ) -> ParamValueTiers:
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
@@ -113,7 +146,10 @@ def resolve_param_values(
     values not already covered by that tier form :attr:`ParamValueTiers.lower`.
 
     Configured leaves on those routes that no host input consumes are reported
-    as warnings here, where the routes are known.
+    as warnings here, where the routes are known. *package_command_paths* is
+    every command path the owning package registers (aliases expanded), used
+    to exempt a command's own table from that warning when one of its leaves
+    is really an inherited default for a registered descendant command.
     """
     supplied = frozenset(params)
     entries = surface.entries
@@ -132,7 +168,9 @@ def resolve_param_values(
     lower = {key: value for key, value in module_values.items() if key not in upper}
 
     _report_undeclared_config_keys(
-        config, _route_reports(program, entry_segments, command_paths, entries, program_routes)
+        config,
+        _route_reports(program, entry_segments, command_paths, entries, program_routes),
+        package_command_paths,
     )
     return ParamValueTiers(upper=upper, lower=lower)
 
@@ -142,14 +180,22 @@ def _reject_configured_cross_route_ambiguities(
     module_routes: Sequence[tuple[ParamBindingInfo, QualifiedConfigKey]],
     program_routes: Sequence[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
 ) -> None:
-    """Reject a configured table leaf that resolves to distinct route kinds."""
+    """Reject a configured table leaf that resolves to distinct route kinds.
+
+    The program side includes tables inherited from a command path's group
+    prefixes, since a leaf set there is just as ambiguous against a module
+    route as one set on the exact route.
+    """
     if not program_routes:
         return
     # Every program route addresses the same table route, so its leaves are
     # read once; module routes repeat per declaration module and scope.
     _entry, shared_key = program_routes[0]
-    program_leaves = configured_leaf_tables(
-        config, shared_key.module_segments, shared_key.scope_path, shared_key.command_paths
+    program_leaves = configured_leaf_table_candidates(
+        config,
+        shared_key.module_segments,
+        shared_key.scope_path,
+        shared_key.command_paths,
     )
     module_leaves_by_route: dict[_RouteKey, dict[str, tuple[str, ...]]] = {}
     for module_param, module_key in module_routes:
@@ -171,7 +217,7 @@ def _reject_configured_cross_route_ambiguities(
             for entry, program_key in program_routes
             if module_param.key != entry.param.key
             and module_key.leaf == program_key.leaf
-            and program_leaves.get(program_key.leaf) == module_table
+            and module_table in program_leaves.get(program_key.leaf, frozenset())
         )
         if peers:
             _reject_configured_ambiguity(module_leaves, {module_key.leaf: (module_param, *peers)})

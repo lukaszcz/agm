@@ -397,7 +397,13 @@ path too: `agm dev review`, registered for `review-tools/review::main`, reads
 spelling of the same address, so it applies however the program is run — as
 the command, by installed reference, or by file path — and setting one leaf
 through two spellings in the same config layer is an error, exactly as two
-module suffixes are.
+module suffixes are. Every proper prefix of a command path is also an
+inherited group table (`[dev]` for `dev review`), a lower-specificity tier
+below the exact route: a deeper prefix wins over a shallower one and the
+program's own exact table always wins over any of them, regardless of config
+layer; a leaf an inherited table sets still joins cross-route ambiguity
+checks, but is exempt from undeclared-key warnings, since a descendant
+command may be the one that consumes it.
 
 A config-table string value must be valid Unicode, the same requirement a
 CLI token or `@opt-env` variable is held to above; a value holding a

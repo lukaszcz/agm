@@ -661,3 +661,105 @@ def test_supplied_and_program_route_tiers_combine_over_module_route() -> None:
 
     assert tiers.upper == {program_routed.key: True}
     assert tiers.lower == {module_only.key: True}
+
+
+def test_a_group_table_supplies_a_module_parameter_via_the_program_route() -> None:
+    """``[devel]`` feeds a program registered under ``devel review``."""
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = resolve_param_values(
+        _config({"devel": {"verbose": True}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert tiers.upper == {binding.key: True}
+
+
+def test_a_nearer_command_table_beats_an_inherited_group_table() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = resolve_param_values(
+        _config({"devel": {"review": {"verbose": True}, "verbose": False}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert tiers.upper == {binding.key: True}
+
+
+def test_an_unconsumed_group_table_leaf_draws_no_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    resolve_param_values(
+        _config({"devel": {"unrelated": True}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert capsys.readouterr().err == ""
+
+
+def test_rejects_a_group_table_leaf_ambiguous_with_a_module_route() -> None:
+    """A leaf an inherited table sets is ambiguous against a same-named module route."""
+    own = _binding("app/main", "x")
+    imported = _binding("devel", "x")
+    program = _program(closure=(own.module, imported.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config({"devel": {"x": True}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (own, imported)),
+        )
+
+    assert own.declaration_path in str(exc_info.value)
+    assert imported.declaration_path in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "layers",
+    [
+        ({"devel": {"x": True}}, {"devel": {"review": {"x": True}}}),
+        ({"devel": {"review": {"x": True}}}, {"devel": {"x": True}}),
+        ({"devel": {"x": True, "review": {"x": True}}},),
+    ],
+    ids=["inherited_then_exact", "exact_then_inherited", "both_in_one_layer"],
+)
+def test_rejects_a_group_table_ambiguity_regardless_of_layer_order(
+    layers: tuple[Mapping[str, object], ...],
+) -> None:
+    """The exact route also setting the leaf must not hide the inherited-table ambiguity."""
+    own = _binding("app/main", "x")
+    imported = _binding("devel", "x")
+    program = _program(closure=(own.module, imported.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config(*layers),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (own, imported)),
+        )
+
+    assert own.declaration_path in str(exc_info.value)
+    assert imported.declaration_path in str(exc_info.value)

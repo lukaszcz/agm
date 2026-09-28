@@ -119,7 +119,7 @@ from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.process import terminating_signals_exit
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
-from agm.packages.manifest import command_paths_for_program
+from agm.packages.manifest import command_paths_for_program, expanded_commands
 from agm.packages.model import owning_package
 from agm.sandbox.prepare import lazy_sandbox_context
 
@@ -167,6 +167,7 @@ def _bind_host_inputs(
     config: "GeneralConfig",
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
+    package_command_paths: frozenset[tuple[str, ...]],
 ) -> tuple[ProgramArguments, ParamValueTiers]:
     """Bind one selected program's CLI, environment, and config host inputs.
 
@@ -216,6 +217,7 @@ def _bind_host_inputs(
             entry_segments=entry_segments,
             command_paths=command_paths,
             surface=program_command.surface,
+            package_command_paths=package_command_paths,
         )
     except QualifiedConfigLookupError as exc:
         print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
@@ -275,6 +277,21 @@ def _registered_command_paths(
         return ()
     reference = "::".join(("/".join(module_segments), *program_path))
     return command_paths_for_program(package.manifest, reference)
+
+
+def _registered_package_command_paths(
+    entry_path: Path, roots: RootSet
+) -> frozenset[tuple[str, ...]]:
+    """Return every command path the entry's own package registers, aliases expanded.
+
+    Used to tell whether a command's own config table also feeds a registered
+    descendant command, which exempts its leaves from that command's own
+    undeclared-key warnings.
+    """
+    package = owning_package(entry_path, roots.packages)
+    if package is None:
+        return frozenset()
+    return frozenset(tuple(path.split()) for path in expanded_commands(package.manifest))
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:
@@ -451,6 +468,7 @@ def run(
     )
     engine_program_table: dict[str, object] = {}
     command_paths: tuple[tuple[str, ...], ...] = ()
+    package_command_paths: frozenset[tuple[str, ...]] = frozenset()
     if entry_path is not None and selected_parsed_program is not None:
         program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
             selected_parsed_program.name,
@@ -458,6 +476,7 @@ def run(
         command_paths = _registered_command_paths(
             entry_path, exec_roots.roots, config_entry_segments, program_path
         )
+        package_command_paths = _registered_package_command_paths(entry_path, exec_roots.roots)
         engine_keys = tuple(
             QualifiedConfigKey(config_entry_segments, program_path, key, command_paths)
             for key in ENGINE_KEY_NAMES
@@ -574,6 +593,7 @@ def run(
         config=config_view,
         entry_segments=config_entry_segments,
         command_paths=command_paths,
+        package_command_paths=package_command_paths,
     )
 
     # Program arguments are validated against the lowered program, so this
@@ -788,8 +808,6 @@ def run_registered(
     target = _resolve_installed_reference_or_exit(program, context=context, package_name=package)
 
     if package is not None and command_path is not None:
-        from agm.packages.manifest import expanded_commands
-
         command = expanded_commands(target.package.manifest).get(command_path)
         if command is None or command.program is None:
             _registered_command_mismatch(command_path)

@@ -197,7 +197,17 @@ address the same program route (signature arguments, engine settings, and resolv
 parameters, bare or dotted-qualified), even via `agm exec`. Different keys in these tables
 combine; setting the same key
 through multiple spellings in one layer is an ambiguity error, and a later config layer overrides
-an earlier one. CLI flags still take precedence. Group tables do not supply inherited defaults.
+an earlier one. CLI flags still take precedence.
+
+A group table also supplies defaults to every command beneath it: `[devel]` and, through the
+`dev = "devel"` alias, `[dev]` both feed `devel review`, however it is invoked. Its own command's
+exact table always wins over an inherited group table, regardless of which config layer set either
+one; among group tables, a deeper one wins, and a same-depth pair (an alias and its canonical, or
+two sibling group tables) setting one key in one config layer is an ambiguity error, just like two
+spellings of an exact table. A command's own table also feeds every registered command beneath
+it — `[devel.sub]` feeds `devel sub review` when `devel sub` is itself a command — and a key it
+sets is never reported as an unconsumed argument on that ancestor command, since the descendant
+command may be the one that consumes it.
 
 ## Registered commands
 
@@ -223,7 +233,9 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   the program's qualified table (e.g. `[review-tools.main.review]` for
   `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`
   for command `dev review`). Both name the same program regardless of how it runs, so setting
-  one key through both in one config layer is an error. The program's own
+  one key through both in one config layer is an error. Below either, an inherited group table —
+  a proper prefix of a command path, such as `[dev]` for `dev review` (see
+  [Aliases](#aliases)) — supplies further defaults. The program's own
   [`@config`](../agl/reference/attributes.md#config) entries rank below the program route: an
   engine setting falls through to `@config` before `[exec]`, and a module parameter falls
   through to `@config` before its declaring module's module route. A resolving program-route

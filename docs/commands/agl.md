@@ -349,10 +349,17 @@ config-file route, but its `@config` entries still apply to its own module param
 they resolve as CLI > `@opt-env` > `@config` > initializer; its imported modules retain
 their module routes and may still be seeded by `@config`.
 
+A [registered command](pkg.md#registered-commands)'s program route also inherits from its
+[group tables](pkg.md#registered-commands): a table named for a proper prefix of the command's
+path — its own or an alias's — feeds every command beneath it, deepest prefix first, below the
+program's own tables but above `@config`.
+
 A key in the selected program's table naming neither a name-addressable parameter nor an engine
 setting (typically a misspelling) is reported on stderr and ignored; one naming a
 positional-only parameter is reported with a distinct message (supply it positionally). Either
-way the program runs on its declared defaults.
+way the program runs on its declared defaults. A key an inherited group table sets is exempt from
+this warning, and so is a key in a registered command's own table that a registered descendant
+command consumes instead — either may be another command's default rather than this one's typo.
 
 A TOML value is already host-native, unlike a CLI token or `@opt-env` variable, which are always
 text: a native TOML string for any parameter type other than `json` or `Option[json]` is read the

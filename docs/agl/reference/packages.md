@@ -132,7 +132,11 @@ A program the manifest registers as a command gains that command path as an
 equivalent address: with `"dev review"` registered for
 `review-tools/review::main`, `[dev.review]` configures the same program as
 `[review-tools.review.review.main]` does, whether it is run as `agm dev
-review`, by reference, or by file path.
+review`, by reference, or by file path. Every proper prefix of a command path
+is also an inherited group table: `[dev]` supplies defaults for `dev review`
+and any other command beneath it, ranking below the command's own exact
+table. See [`[aliases]`](../../commands/pkg.md#aliases) for how it layers and
+its undeclared-key warning exemption.
 
 The command's closure module parameters retain their declaring-module
 **module routes**. For example, a root parameter in `review-tools/logging`

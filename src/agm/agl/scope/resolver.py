@@ -3604,7 +3604,9 @@ class _Resolver:
 
         def validate(node: object) -> None:
             chain = (
-                node.qualifier
+                node.chain
+                if isinstance(node, VariantRef)
+                else node.qualifier
                 if isinstance(
                     node, (VarRef, NameTarget, ConstructorPattern, IsTest, NameT, AppliedT)
                 )
@@ -3632,18 +3634,20 @@ class _Resolver:
                     span=chain.segments[0].span,
                 )
             self._validate_local_scope_chain(chain)
-            if isinstance(node, (NameT, AppliedT, ConstructorPattern, IsTest)) and chain.segments:
+            if (
+                isinstance(node, (NameT, AppliedT, ConstructorPattern, IsTest, VariantRef))
+                and chain.segments
+            ):
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
-                # The owner selects by its own spelling first -- a local alias
-                # or enum is never reachable through the import machinery a
-                # routed selection walks. A uniquely selected owner is used
-                # directly; anything else -- an owner ambiguous in isolation
-                # (always an import collision, since same-module duplicates
-                # are rejected at declaration), or no owner at all, as for a
-                # module route with no separate enum owner between it and
-                # the type it names -- instead resolves by the full
-                # ``owner::member`` path, exactly as a module route does.
+                # The full ``owner::member`` path is tried first: it can only
+                # match a real declaration at that exact nested identity, so
+                # it never mistakes a same-named, unrelated declaration (a
+                # plain alias coincidentally sharing its module's own route
+                # name, say) for the member's true owner. The owner's own
+                # spelling is a fallback for what the full path's import
+                # machinery cannot walk on its own -- a local alias or enum
+                # never reachable through a routed selection.
                 owner_selection = type_name_selection(site, owner_expr)
                 # The full path also settles whether *chain.member* exists at
                 # all: an inline member the owner alone would not find (a
@@ -3668,16 +3672,12 @@ class _Resolver:
                         ),
                         span=chain.span,
                     )
-                if len(owner_selection) == 1:
-                    self._select_chain_owner_member(
-                        next(iter(owner_selection)),
-                        chain,
-                        owner_expr,
-                        site,
-                        exists=bool(full_selection),
-                    )
-                    return
                 if len(full_selection) == 1:
+                    # The full path independently names a real declaration --
+                    # more reliable than an owner-selected spelling, which can
+                    # coincidentally match an unrelated same-named plain type
+                    # (e.g. a scalar alias sharing its module's own route
+                    # name) incapable of owning any member at all.
                     (only,) = full_selection
                     owner_qname = self._owner_of_member_qname(only)
                     if owner_qname is None:
@@ -3690,7 +3690,13 @@ class _Resolver:
                         self._select_chain_owner_member(
                             owner_qname, chain, owner_expr, site, exists=True
                         )
-                elif len(owner_selection) > 1:
+                    return
+                if len(owner_selection) == 1:
+                    self._select_chain_owner_member(
+                        next(iter(owner_selection)), chain, owner_expr, site, exists=False
+                    )
+                    return
+                if len(owner_selection) > 1:
                     # An owner ambiguous in isolation, and a full path that
                     # names no declaration at all through any candidate: no
                     # single candidate could ever supply *chain.member*, so

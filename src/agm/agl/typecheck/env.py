@@ -44,11 +44,9 @@ from agm.agl.scope.imports import (
     qualifier_candidates,
     qualifier_contributes,
     resolve_qualified,
-    resolve_qualified_member,
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
-    AglScopeError,
     BindingRef,
     ConstructorRef,
     ModuleResolution,
@@ -1368,31 +1366,24 @@ class TypeEnvironment:
         import_env, route, atom = self._import_route_member(qualifier, name)
         return try_resolve_qualified_member(import_env, route, atom, anchored=qualifier.anchored)
 
-    def _resolve_import_qname(
-        self, qualifier: QualifierChain, name: str, *, span: SourceSpan | None
-    ) -> QName:
-        """Resolve a module route followed by one structured type path.
+    def _recorded_type_key(self, qualifier: QualifierChain, name: str) -> DeclKey | None:
+        """Return the declaration identity a qualified type reference names.
 
-        Scope statically rejects an ambiguous qualifier at every position
-        (value, pattern, ``is``, annotation) before typecheck runs, so the
-        ``ambiguous`` branch is never taken; it still raises the identical
-        :class:`AglScopeError` scope would, rather than assume the invariant
-        away, since nothing here can prove it to the type system.
+        Unpeeled: scope records the full path it selected for ``qualifier``'s
+        member by suffix resolution (see ``ModuleResolution.owner_declarations``)
+        whenever type-name selection alone can find an owner or a full path --
+        whether the member is a plain module-routed type or an unapplied
+        enum's own inline member, both under this same dotted identity in the
+        type table. Type-name selection never walks a plain wildcard module
+        import's own nested scope regions, so a qualifier reaching one (an
+        opened, unrouted ``import`` exposing a scoped record or enum by its
+        nested path) falls back to the import environment directly.
         """
-        import_env, route, atom = self._import_route_member(qualifier, name)
-        return resolve_qualified_member(
-            import_env,
-            route,
-            atom,
-            anchored=qualifier.anchored,
-            unknown_qualifier=lambda rendered: AglTypeError(
-                f"Unknown module qualifier '{rendered}::'.", span=span
-            ),
-            missing_member=lambda rendered: AglTypeError(
-                f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
-            ),
-            ambiguous=lambda message: AglScopeError(message, span=span),
-        )
+        recorded = self._owner_declarations.get(qualifier.node_id)
+        if recorded is not None:
+            return recorded
+        imported = self._try_resolve_import_qname(qualifier, name)
+        return None if imported is None else self._qname_decl_key(imported)
 
     def resolve_owner_applied_inline_member_type(
         self,
@@ -1440,14 +1431,13 @@ class TypeEnvironment:
             return None
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, NameT):
-            owner_template = self._enum_owner_template(qualifier, member, span)
+            owner_template = self._enum_owner_template(qualifier)
             if owner_template is None:
                 return None
             enum_template, type_params, alias = owner_template
             if alias is None:
                 return None
-            selected = self.owner_inline_member(enum_template, member)
-            return None if selected is None else OwnerMember(selected, type_params)
+            return OwnerMember(self.owner_inline_member(enum_template, member), type_params)
         key = self._owner_declaration_key(qualifier)
         if key is None:
             return None
@@ -1457,11 +1447,10 @@ class TypeEnvironment:
         owner = self._resolve_applied_type_key(key, owner_expr.name, resolved_args, span)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
-        selected = self.owner_inline_member(owner, member)
-        return None if selected is None else OwnerMember(selected, ())
+        return OwnerMember(self.owner_inline_member(owner, member), ())
 
-    def owner_inline_member(self, owner: EnumType, member: str) -> RecordType | None:
-        """Return the member *member* selects from enum *owner*'s scope, if declared there.
+    def owner_inline_member(self, owner: EnumType, member: str) -> RecordType:
+        """Return the member *member* selects from enum *owner*'s scope.
 
         A member *owner* only references (:class:`ReferencedMemberError`) is
         rejected by scope, the one place that decides owner-member selection,
@@ -1470,22 +1459,22 @@ class TypeEnvironment:
         return self.type_table.inline_member(owner, member)
 
     def _enum_owner_template(
-        self, qualifier: QualifierChain, member: str, span: SourceSpan | None
+        self, qualifier: QualifierChain
     ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
         """Return the enum template *qualifier*'s owner names, its parameters, and its naming alias.
 
         The owner is the identity scope recorded for *qualifier* (see
         :meth:`_owner_declaration_key`), not the bare owner spelling
-        re-resolved here.
+        re-resolved here. Scope only ever records a declared type's own
+        identity there, so the template is always found once a key is
+        recorded; ``None`` only reports a non-enum owner (a record or
+        exception cannot own an inline member).
         """
         key = self._owner_declaration_key(qualifier)
         if key is None:
             return None
         module_id, scope_path, name = key
-        self._ensure_program_alias_resolved(key, span)
-        template = self.source_type_template_qname(module_id, name, scope_path=scope_path)
-        if template is None:
-            return None
+        template = self.declared_type_template(module_id, name, scope_path=scope_path)
         enum_type = template.template
         if not isinstance(enum_type, EnumType):
             return None
@@ -1750,6 +1739,32 @@ class TypeEnvironment:
             return None
         module_id, scope_path, _name = full_key
         return None if not scope_path else (module_id, scope_path[:-1], scope_path[-1])
+
+    def owner_type_for_qualifier(
+        self,
+        qualifier: QualifierChain,
+        *,
+        span: SourceSpan | None,
+        type_vars: frozenset[str] = frozenset(),
+    ) -> tuple[Type, tuple[str, ...]] | None:
+        """Return the type and open parameters *qualifier* names as an owner.
+
+        Reads the identity scope recorded for *qualifier* (see
+        :meth:`_owner_declaration_key`), never a bare re-resolution by name:
+        an applied owner (``Owner[T]``) resolves like the same type
+        expression and leaves no parameter open; an unapplied owner is its
+        template over its own parameters. ``None`` when scope recorded no
+        separate owner for *qualifier*.
+        """
+        key = self._owner_declaration_key(qualifier)
+        if key is None:
+            return None
+        module_id, scope_path, name = key
+        owner_expr = owner_type_expr(qualifier)
+        if isinstance(owner_expr, AppliedT):
+            return self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars), ()
+        template = self.declared_type_template(module_id, name, scope_path=scope_path)
+        return template.template, template.type_params
 
     def register_owner_declarations(self, entries: Mapping[int, DeclKey]) -> None:
         """Merge *entries* into this environment's owner-declaration table.
@@ -2467,8 +2482,9 @@ class TypeEnvironment:
         rendered = qualifier.render()
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
-        qname = self._resolve_import_qname(qualifier, name, span=span)
-        key = self._qname_decl_key(qname)
+        key = self._recorded_type_key(qualifier, name)
+        if key is None:
+            raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
         source_name = key[2]
         gdef = self._program_generic_table.get(key)
         if gdef is not None:
@@ -2565,8 +2581,8 @@ class TypeEnvironment:
         """Resolve a module-qualified type reference ``QUALIFIER::Name``.
 
         Falls back to the local type namespace (prelude / built-ins) when the
-        qualifier is empty (``::Name`` self-reference to the current module)
-        and no program context exists.
+        qualifier is empty (``::Name`` self-reference to the current module):
+        scope records no route for it, since it names none.
         """
         rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
@@ -2600,16 +2616,11 @@ class TypeEnvironment:
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
 
-        qname = self._resolve_import_qname(qualifier, name, span=span)
         exposed_name = f"{rendered}::{name}"
-        resolved = (
-            self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
-            if self._is_program_type_candidate(qname)
-            else None
-        )
-        if resolved is None:
+        key = self._recorded_type_key(qualifier, name)
+        if key is None:
             raise AglTypeError(f"'{exposed_name}' does not name a type.", span=span)
-        return resolved
+        return self._resolve_type_key_as_bare(key, exposed_name, span=span)
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return source-owned ``(name, type)`` pairs from the type namespace.
@@ -2755,25 +2766,6 @@ class TypeEnvironment:
         expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
         key = (self._module_id, (), owner_name)
         return self._enum_owner_form(kind, owner_name, expected_qualifier, key)
-
-    def resolve_imported_enum_owner_form(
-        self, module_qualifier: QualifierChain, owner_name: str, *, span: SourceSpan | None
-    ) -> EnumOwnerForm | None:
-        """Resolve a module-routed enum-owner source form through checked visibility.
-
-        A qualified enum spelling preserves the shared resolver's verdict: an
-        unknown route or ambiguity raises rather than reading as "not an enum".
-        """
-        qname = self._resolve_import_qname(module_qualifier, owner_name, span=span)
-        if not self._is_program_type_candidate(qname):
-            return None
-        return self._enum_owner_form(
-            EnumOwnerFormKind.QUALIFIED_IMPORT,
-            owner_name,
-            module_qualifier.route_segments,
-            self._qname_decl_key(qname),
-            qualifier_anchored=module_qualifier.anchored,
-        )
 
     def _enum_owner_form(
         self,

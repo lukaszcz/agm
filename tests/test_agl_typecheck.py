@@ -2462,6 +2462,25 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
 
+def test_catch_names_a_bare_own_scoped_alias_reached_through_a_wildcard_use() -> None:
+    """A bare ``catch`` name reached only through a wildcard ``use`` of its
+    declaring scope still resolves to that scope's own exception alias."""
+    r = accept_type(
+        "use s::*\n"
+        "\n"
+        "scope s\n"
+        "  exception Boom\n"
+        "  type MyExc = Boom\n"
+        "end s\n"
+        "\n"
+        "try\n"
+        '  raise Boom(message = "boom")\n'
+        "catch MyExc as e =>\n"
+        "  1\n"
+    )
+    assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
+
 class TestBuiltinPreludeTypes:
     """The prelude tables name the types and exceptions every program starts
     with, and describe the shapes the checker seeds for them.

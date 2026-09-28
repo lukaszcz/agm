@@ -71,7 +71,6 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_assignment_message,
 )
-from agm.agl.scope.type_names import owner_type_expr
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
     OPTION_TYPE_DEF,
@@ -167,7 +166,6 @@ from agm.agl.syntax.nodes import (
     Pattern,
     Placeholder,
     Program,
-    QualifierAnchor,
     QualifierChain,
     Raise,
     RecordDef,
@@ -193,9 +191,9 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
-    AppliedT,
     TypeExpr,
     render_qualified_name,
+    render_qualifier_path,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_constructor_args, bind_pattern_args
@@ -5230,83 +5228,42 @@ class _Checker:
     ) -> AglTypeError:
         """Return why owner-qualified ``qualifier::variant`` selects no member of *enum_type*.
 
-        Scope selects every member a module qualifier or a matching owner
-        names and rejects an owner that is also a module route, so the owner
-        here is no enum, or another enum or other arguments of it: identity
+        Scope selects every member a qualified spelling can name; a qualifier
+        reaching here always names some owner (else scope itself rejects the
+        spelling), but that owner need not be an enum, nor this one: identity
         is the declaration, never the name, so two declarations sharing one
         name path (a REPL redeclaration) are unrelated enums.
         """
-        local_match = self._local_qualified_owner(qualifier, span)
-        if local_match is None:
-            # A module route, then the owning enum's path within that module.
-            route = replace(qualifier, segments=qualifier.segments[:-1])
-            enum_name = qualifier.segments[-1].name
-            owner = f"{route.render()}::{enum_name}"
-            form = self._env.resolve_imported_enum_owner_form(route, enum_name, span=span)
-            if form is None:
-                return AglTypeError(f"'{owner}' is not a known enum type.", span=span)
-            return self._enum_owner_error(form.type_template.template, enum_type, owner, span)
-        local_owner, resolved, _type_params = local_match
-        return self._enum_owner_error(resolved, enum_type, local_owner, span)
+        local_owner = render_qualifier_path(qualifier)
+        owner_type, _type_params = self._owner_type_or_error(qualifier, local_owner, span)
+        if not isinstance(owner_type, EnumType):
+            return AglTypeError(f"'{local_owner}' is not an enum type.", span=span)
+        return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
 
-    def _owner_inline_member(self, variant: str, enum_type: EnumType) -> RecordType:
-        """Return the inline member *variant* of *enum_type*, which its owner selects.
-
-        Scope's unified verdict accepts only a genuine ``owner::variant``
-        path, so a resolved local owner reaching here always declares
-        *variant* inline.
-        """
-        member = self._env.type_table.inline_member(enum_type, variant)
-        assert member is not None
-        return member
+    def _owner_type_or_error(
+        self, qualifier: QualifierChain, rendered_owner: str, span: SourceSpan
+    ) -> tuple[Type, tuple[str, ...]]:
+        """Resolve *qualifier*'s owner by scope's recorded identity, or raise it is unknown."""
+        owner = self._env.owner_type_for_qualifier(
+            qualifier, span=span, type_vars=self._current_type_vars
+        )
+        if owner is None:
+            raise AglTypeError(f"'{rendered_owner}' is not a known type.", span=span)
+        return owner
 
     def _local_qualified_enum(
         self, qualifier: QualifierChain, span: SourceSpan
     ) -> tuple[str, EnumType, tuple[str, ...]] | None:
-        """Resolve a non-module enum qualifier to its owner and the parameters it leaves open."""
-        local_match = self._local_qualified_owner(qualifier, span)
-        if local_match is None:
-            return None
-        local_owner, owner, type_params = local_match
-        if not isinstance(owner, EnumType):
-            return None
-        return local_owner, owner, type_params
-
-    def _local_qualified_owner(
-        self, qualifier: QualifierChain, span: SourceSpan
-    ) -> tuple[str, Type, tuple[str, ...]] | None:
-        """Resolve a non-module type qualifier to its owner and the parameters it leaves open.
-
-        An unapplied owner is its template over its own parameters; an applied
-        owner resolves like the same type expression and leaves none open.
-        """
-        if qualifier.anchor is QualifierAnchor.MODULE:
-            return None
-        local_owner = "::".join(segment.name for segment in qualifier.segments)
-        owner = self._env.resolve_named_type(local_owner, span=span)
+        """Resolve a qualifier to its owner and open parameters, when its owner is an enum."""
+        owner = self._env.owner_type_for_qualifier(
+            qualifier, span=span, type_vars=self._current_type_vars
+        )
         if owner is None:
             return None
-        owner_expr = owner_type_expr(qualifier)
-        type_params: tuple[str, ...] = ()
-        if isinstance(owner_expr, AppliedT):
-            owner = self._env.resolve_type_expr(
-                owner_expr, span=span, type_vars=self._current_type_vars
-            )
-        else:
-            type_params = tuple(sorted(free_type_vars(owner)))
-        return local_owner, owner, type_params
-
-    @staticmethod
-    def _enum_owner_error(
-        owner_type: Type, enum_type: EnumType, rendered_owner: str, span: SourceSpan
-    ) -> AglTypeError:
-        """Return the error for owner *rendered_owner*, of *owner_type*, not owning *enum_type*.
-
-        A qualifier reaching here always names an enum: scope's unified
-        verdict accepts only an owner declaring the qualified member somewhere.
-        """
-        assert isinstance(owner_type, EnumType)
-        return _enum_owner_mismatch(rendered_owner, owner_type, enum_type, span)
+        owner_type, type_params = owner
+        if not isinstance(owner_type, EnumType):
+            return None
+        return render_qualifier_path(qualifier), owner_type, type_params
 
     # --- member access ---
 
@@ -6321,7 +6278,7 @@ class _Checker:
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
                     ):
-                        named = self._owner_inline_member(pattern.name, enum_type)
+                        named = self._env.owner_inline_member(enum_type, pattern.name)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
                 elif (
                     applied_member := self._applied_member(

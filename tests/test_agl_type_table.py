@@ -158,28 +158,6 @@ def test_record_matches_enum_member_rejects_a_different_named_member() -> None:
     )
 
 
-def test_record_matches_enum_member_rejects_a_same_named_unrelated_record() -> None:
-    """A record whose own name coincides with a different enum's member name is no match.
-
-    ``record_matches_enum_member``'s name check only short-circuits absence;
-    a coinciding name still requires the owner to declare *that* record
-    inline, exercising ``inline_member``'s own miss instead.
-    """
-    table = TypeTable()
-    other_enum = TypeDef(
-        kind="enum",
-        name="Other",
-        module_id=ENTRY_ID,
-        members=(RecordType("Q", (), module_id=ENTRY_ID, decl_id=20),),
-        decl_node_id=12,
-    )
-    table.register(other_enum)
-
-    assert not table.record_matches_enum_member(
-        other_enum.handle(), (), "Box", RecordType("Box", (IntType(),), decl_id=10)
-    )
-
-
 def test_owning_enums_for_selection_includes_an_inline_member_with_its_bindings() -> None:
     table = TypeTable()
     outcome = TypeDef(

@@ -47,6 +47,7 @@ EXTERNALLY_USED = (
     "set_self_validation_enabled",
     "close_detached_state",
     "loaded_companion",
+    "source_type_template_qname",
     # requests.Session hook, called by its own redirect handling
     "rebuild_auth",
 )

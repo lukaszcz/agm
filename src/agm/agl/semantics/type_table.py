@@ -676,12 +676,14 @@ class TypeTable:
         """
         self._inline_members.setdefault(enum_id, {})[member.name] = (type_params, member)
 
-    def inline_member(self, owner: EnumType, name: str) -> RecordType | None:
-        """Return *owner*'s inline member *name* at *owner*'s type arguments, if declared."""
-        declared = self._inline_members.get(owner.decl_id, {}).get(name)
-        if declared is None:
-            return None
-        type_params, member = declared
+    def inline_member(self, owner: EnumType, name: str) -> RecordType:
+        """Return *owner*'s inline member *name* at *owner*'s type arguments.
+
+        Scope decides owner-member selection for every position and rejects
+        any spelling naming no such member before this is ever called, so
+        *name* always names a declared member of *owner* here.
+        """
+        type_params, member = self._inline_members[owner.decl_id][name]
         return substitute(member, dict(zip(type_params, owner.type_args, strict=True)))
 
     def is_inline_member(self, owner: EnumType, record: RecordType) -> bool:
@@ -1192,12 +1194,16 @@ class TypeTable:
 
         This is what the owner-qualified spelling ``Enum::member_name`` selects.
         The owner's own *type_params* are inferred; every other owner argument
-        must match exactly.
+        must match exactly. A name mismatch is rejected directly, without
+        consulting :meth:`inline_member`: this compares a matched pattern's
+        declared member name against a checked subject's own record type,
+        which may be an unrelated record sharing no member with *enum*.
         """
-        member = self.inline_member(enum, member_name) if record.name == member_name else None
+        if record.name != member_name:
+            return False
+        member = self.inline_member(enum, member_name)
         return (
-            member is not None
-            and member.decl_id == record.decl_id
+            member.decl_id == record.decl_id
             and match_nominal_owner_template(TypeTemplate(member, type_params), record) is not None
         )
 

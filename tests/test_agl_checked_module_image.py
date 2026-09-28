@@ -283,9 +283,9 @@ class TestRehydrationParity:
                 with cm.type_env.type_scope(scope_path):
                     cm_named = cm.type_env.resolve_named_type(item.name)
                 assert re_named == cm_named
-                assert rehydrated_module.type_env.source_type_template_qname(
+                assert rehydrated_module.type_env.declared_type_template(
                     mid, item.name, scope_path=scope_path
-                ) == cm.type_env.source_type_template_qname(mid, item.name, scope_path=scope_path)
+                ) == cm.type_env.declared_type_template(mid, item.name, scope_path=scope_path)
 
     def test_static_let_and_var_binding_types_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

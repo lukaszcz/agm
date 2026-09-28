@@ -534,9 +534,9 @@ def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
         with cm.type_env.type_scope(scope_path):
             cm_named = cm.type_env.resolve_named_type(item.name)
         assert re_named == cm_named
-        assert rehydrated.type_env.source_type_template_qname(
+        assert rehydrated.type_env.declared_type_template(
             lib_id, item.name, scope_path=scope_path
-        ) == cm.type_env.source_type_template_qname(lib_id, item.name, scope_path=scope_path)
+        ) == cm.type_env.declared_type_template(lib_id, item.name, scope_path=scope_path)
 
     # enum forms / generic types: registries populated by the same header loop.
     assert rehydrated.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()

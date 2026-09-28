@@ -76,9 +76,9 @@ def _module_outcome(source: str) -> Outcome:
     for the full type-checked verdict -- a second, independent parse and
     resolve of the same tiny inline snippet, since :func:`resolve_and_check_inline_entry`
     does not expose its intermediate resolution for reuse. A class alone
-    cannot tell the phases apart: typecheck's few remaining unreachable
-    ``AglScopeError`` constructions would otherwise mislabel a typecheck-phase
-    raise as scope-phase.
+    cannot tell the phases apart: the second call re-resolves scope on its
+    own path before type-checking, so its ``AglScopeError`` is still caught
+    there defensively, even though typecheck itself never raises one.
     """
     from agm.agl.typecheck import AglTypeError
     from tests.agl.ir_harness import base_caps
@@ -99,9 +99,8 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     """A phase-accurate verdict: which call raised, not which class.
 
     Reuses scope's own resolution for the type-check call, so nothing here
-    re-resolves the program -- an ``AglScopeError`` from ``check_program``
-    (typecheck's few remaining unreachable constructions) still counts as
-    typecheck-phase, since scope itself already passed.
+    re-resolves the program -- ``check_program`` never raises ``AglScopeError``
+    itself, but the catch stays defensive rather than assuming it never will.
     """
     from agm.agl.typecheck import AglTypeError
     from agm.agl.typecheck.program import check_program
@@ -210,6 +209,30 @@ def test_type_parameter_shadowing_a_real_module_route_is_rejected(
     }
 
     assert _program_outcome(tmp_path, modules) == "scope"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import one/types\ndef f[one](x: one/types::Color) -> int = 1",
+        "import one/types\ndef f[one](x: int) -> one/types::Color = one/types::Color::Red",
+    ),
+    ids=("annotation", "value"),
+)
+def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry: str) -> None:
+    """A ``/``-containing qualifier segment always names a module route.
+
+    ``one/types::Color`` spells the imported ``one/types`` module's route, not
+    the type parameter ``one`` -- a route segment can only ever coincide with a
+    type parameter's bare name, never with its own ``/``-joined spelling, so
+    the type-parameter shadowing rule must not reject it.
+    """
+    modules = {
+        "entry": entry,
+        "one/types": "enum Color\n  | Red",
+    }
+
+    assert _program_outcome(tmp_path, modules) == "accepted"
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:

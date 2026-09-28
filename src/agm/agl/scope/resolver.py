@@ -623,6 +623,11 @@ class _Resolver:
         # Function-body flag: True only while resolving a def/fn body (not parameter
         # defaults). Used to reject `return` outside the nearest function boundary.
         self._in_function: bool = False
+        # The enclosing ``def``'s type parameters, active while resolving its body
+        # (params/return type validate against ``node.type_params`` directly; the
+        # body validates each item's qualifier chains as it resolves, so this is
+        # how that per-item validation keeps seeing the same shadowing set).
+        self._type_param_set: frozenset[str] = frozenset()
         # The inline wrapper moves static bindings ahead of its synthetic
         # entry. While resolving that entry, source offsets preserve the
         # bindings' original textual visibility despite the AST partition.
@@ -1854,6 +1859,21 @@ class _Resolver:
         finally:
             self._in_loop, self._in_function = previous
 
+    @contextmanager
+    def _type_param_scope_ctx(self, type_params: Iterable[str]) -> Iterator[None]:
+        """Make *type_params* the active qualifier-shadowing set for a nested resolution.
+
+        Body items validate their own qualifier chains as they resolve (see
+        ``_resolve_block_items``); this is how they see the enclosing ``def``'s
+        type parameters without the declaration's header being walked twice.
+        """
+        previous = self._type_param_set
+        self._type_param_set = frozenset(type_params)
+        try:
+            yield
+        finally:
+            self._type_param_set = previous
+
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
 
@@ -1977,12 +1997,13 @@ class _Resolver:
             seen_non_import_item = True
             # Named declarations switch to their declaration's lexical scope
             # in their own handlers. Every other item belongs to the current
-            # layer, so validate its qualifier chains here.
+            # layer, so validate its qualifier chains here -- against the
+            # enclosing ``def``'s type parameters, if any (``_type_param_set``).
             if not isinstance(
                 item,
                 (ScopeRegion, FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias),
             ):
-                self._validate_qualifier_chains(item)
+                self._validate_qualifier_chains(item, self._type_param_set)
             if isinstance(item, ScopeRegion):
                 self._resolve_scope_region(item)
             elif isinstance(item, FuncDef):
@@ -2930,9 +2951,10 @@ class _Resolver:
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
                 self._classify_method_declaration(node)
-                self._validate_qualifier_chains(node, node.type_params)
+                self._validate_qualifier_chains_header(node)
                 self._resolve_program_config(node)
-                self._resolve_params_and_body(node)
+                with self._type_param_scope_ctx(node.type_params):
+                    self._resolve_params_and_body(node)
             return
         if not self._at_root:
             raise AglScopeError(
@@ -2943,7 +2965,7 @@ class _Resolver:
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
         self._classify_method_declaration(node)
-        self._validate_qualifier_chains(node, node.type_params)
+        self._validate_qualifier_chains_header(node)
         self._resolve_program_config(node)
         previous_synthetic_entry = self._in_synthetic_entry
         previous_entry_items = self._synthetic_entry_items
@@ -2951,10 +2973,25 @@ class _Resolver:
         if node.is_synthetic and isinstance(node.body, Block):
             self._synthetic_entry_items = node.body.items
         try:
-            self._resolve_params_and_body(node)
+            with self._type_param_scope_ctx(node.type_params):
+                self._resolve_params_and_body(node)
         finally:
             self._in_synthetic_entry = previous_synthetic_entry
             self._synthetic_entry_items = previous_entry_items
+
+    def _validate_qualifier_chains_header(self, node: FuncDef) -> None:
+        """Validate qualifier chains in *node*'s attributes, params, and return type.
+
+        The body is validated separately, once, as each of its items resolves
+        (see ``_resolve_block_items``, guided by ``_type_param_set``) --
+        walking it here too would visit every one of its chains twice.
+        """
+        for attribute in node.attributes:
+            self._validate_qualifier_chains(attribute, node.type_params)
+        for param in node.params:
+            self._validate_qualifier_chains(param, node.type_params)
+        if node.return_type is not None:
+            self._validate_qualifier_chains(node.return_type, node.type_params)
 
     def _resolve_program_config(self, node: FuncDef) -> None:
         """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
@@ -3623,11 +3660,7 @@ class _Resolver:
                 raise AglScopeError(
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
-            if (
-                chain.anchor is None
-                and chain.segments
-                and chain.segments[0].name.split("/")[0] in type_param_set
-            ):
+            if chain.anchor is None and chain.segments and chain.segments[0].name in type_param_set:
                 raise AglScopeError(
                     f"'{chain.segments[0].name}' is a type parameter here and cannot be used "
                     "as a qualifier route.",

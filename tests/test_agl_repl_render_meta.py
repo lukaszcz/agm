@@ -829,6 +829,40 @@ class TestInfo:
         assert applied is not None
         assert selected.replace(spelling, "N") == applied.replace(owner, "N")
 
+    def test_info_does_not_retain_state_a_later_query_could_collide_with(
+        self, tmp_path: Path
+    ) -> None:
+        """An ``:info`` query never mutates the session's retained type environment.
+
+        Regression test: ``:info`` resolves an ad-hoc parse seeded at the
+        session's current node-id counter without advancing it, so a query
+        used to record its own qualifiers' resolved identities directly into
+        the retained environment -- under node ids a later query's own
+        identically-shaped ad-hoc parse would reuse. Querying two differently
+        owned members shaped alike (so their qualifiers land on the same
+        ad-hoc ids) must resolve each to its own owner, repeatably, and the
+        retained environment a real entry would build on must come back
+        exactly as it was.
+        """
+        (tmp_path / "lib.agl").write_text(
+            "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA\n\n"
+            "enum SlotB[T]\n  | FilledB(value: T)\n  | EmptyB\n"
+        )
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry("import lib").ok
+
+        before = dict(session._type_env._owner_declarations)
+
+        first = session.info_of("lib::SlotA[int]::FilledA")
+        second = session.info_of("lib::SlotB[text]::FilledB")
+        first_again = session.info_of("lib::SlotA[int]::FilledA")
+
+        assert first is not None and "FilledA" in first and "int" in first
+        assert second is not None and "FilledB" in second and "text" in second
+        assert first_again == first
+        assert dict(session._type_env._owner_declarations) == before
+
     @pytest.mark.parametrize("name", ("lib::P", "lib::Point"))
     def test_info_reports_a_qualified_imported_record_or_alias(
         self, tmp_path: Path, name: str

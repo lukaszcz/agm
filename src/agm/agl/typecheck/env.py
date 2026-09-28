@@ -17,6 +17,7 @@ environment.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -101,7 +102,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, render_qualified_name
 from agm.agl.zones import ParamZone
 
 #: Every built-in name a module's type namespace carries a reserved fallback
@@ -1766,16 +1767,23 @@ class TypeEnvironment:
         template = self.declared_type_template(module_id, name, scope_path=scope_path)
         return template.template, template.type_params
 
-    def register_owner_declarations(self, entries: Mapping[int, DeclKey]) -> None:
-        """Merge *entries* into this environment's owner-declaration table.
+    def with_owner_declarations(self, entries: Mapping[int, DeclKey]) -> "TypeEnvironment":
+        """Return a read-only view of this environment with *entries* merged in.
 
         A retained environment is built from an earlier entry's own scope
         resolution; an ad-hoc parse resolved separately against it (REPL
         introspection) records its own qualifiers' identities under its own
-        node ids, which this environment does not otherwise hold.
+        node ids, which this environment does not otherwise hold. The view is
+        a shallow copy sharing every other table, for a query that reads
+        those identities without retaining them: an ad-hoc parse's node ids
+        are not reserved, so merging them into this environment itself could
+        collide with a later entry's own.
         """
-        if entries:
-            self._owner_declarations = {**self._owner_declarations, **entries}
+        if not entries:
+            return self
+        derived = copy.copy(self)
+        derived._owner_declarations = {**self._owner_declarations, **entries}
+        return derived
 
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
@@ -2059,10 +2067,15 @@ class TypeEnvironment:
             or local_name in self._alias_targets
         )
 
+    @staticmethod
+    def _scoped_alias_name(path: ScopePath, source_name: str) -> str:
+        """Join a declaration's scope path and name into its stored alias key."""
+        return "::".join((*path, source_name))
+
     def _own_alias_name_for_key(self, key: DeclKey) -> str | None:
         """Return the root-stored name for an own-module alias identity."""
         module, path, source_name = key
-        local_name = "::".join((*path, source_name))
+        local_name = self._scoped_alias_name(path, source_name)
         if module == self._module_id and local_name in self._alias_targets:
             return local_name
         return None
@@ -2084,7 +2097,7 @@ class TypeEnvironment:
             return resolved
         # Not program-tracked, so by this method's invariant *key* names this
         # module's own alias directly -- its stored name, not a re-derivation.
-        alias_name = "::".join((*path, source_name))
+        alias_name = self._scoped_alias_name(path, source_name)
         return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
 
     def _resolve_type_key_unapplied(
@@ -2479,12 +2492,12 @@ class TypeEnvironment:
         span: SourceSpan | None,
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
-        rendered = qualifier.render()
+        rendered = render_qualified_name(qualifier, name)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         key = self._recorded_type_key(qualifier, name)
         if key is None:
-            raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
+            raise AglTypeError(f"'{rendered}' does not name a type.", span=span)
         source_name = key[2]
         gdef = self._program_generic_table.get(key)
         if gdef is not None:
@@ -2497,10 +2510,10 @@ class TypeEnvironment:
             return self.instantiate_alias(source_name, alias_def, args, span=span)
         if key in self._program_type_table:
             raise AglTypeError(
-                f"Type '{rendered}::{name}' does not take type arguments.",
+                f"Type '{rendered}' does not take type arguments.",
                 span=span,
             )
-        raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
+        raise AglTypeError(f"'{rendered}' does not name a type.", span=span)
 
     def _resolve_name_type(
         self,
@@ -2584,7 +2597,6 @@ class TypeEnvironment:
         qualifier is empty (``::Name`` self-reference to the current module):
         scope records no route for it, since it names none.
         """
-        rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
         if local_name is not None:
             local_path, declared_name = _split_scoped_type_name(local_name)
@@ -2616,7 +2628,7 @@ class TypeEnvironment:
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
 
-        exposed_name = f"{rendered}::{name}"
+        exposed_name = render_qualified_name(qualifier, name)
         key = self._recorded_type_key(qualifier, name)
         if key is None:
             raise AglTypeError(f"'{exposed_name}' does not name a type.", span=span)
@@ -2666,18 +2678,6 @@ class TypeEnvironment:
         selected = self._resolve_bare_type(name, span)
         return typ if selected is None else selected
 
-    def source_type_template_qname(
-        self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
-    ) -> TypeTemplate | None:
-        """Return immutable checked template data for one source type QName."""
-        key = (module_id, scope_path, name)
-        if self._in_program_type_tables(key):
-            return self._program_table_template(key)
-        local_name = "::".join((*scope_path, name))
-        if module_id != self._module_id or not self._declares_local_type(local_name):
-            return None
-        return self._own_local_template(local_name)
-
     def declared_type_template(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
     ) -> TypeTemplate:
@@ -2704,14 +2704,6 @@ class TypeEnvironment:
         if generic_def is not None:
             return TypeTemplate(generic_def.template, generic_def.type_params)
         return TypeTemplate(self._program_type_table[key])
-
-    def _declares_local_type(self, local_name: str) -> bool:
-        return (
-            local_name in self._generic_types
-            or local_name in self._resolved_aliases
-            or local_name in self._alias_targets
-            or local_name in self._types
-        )
 
     def _own_local_template(self, local_name: str) -> TypeTemplate:
         """Return the template of *local_name*, a type this module declares locally."""

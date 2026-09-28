@@ -133,10 +133,12 @@ def _record_register_alias(env: TypeEnvironment) -> None:
 
 
 def _query_register_alias(env: TypeEnvironment) -> object:
-    return (
-        env.source_type_template_qname(ENTRY_ID, "Alias"),
-        env.resolve_named_type("Alias"),
-    )
+    resolved = env.resolve_named_type("Alias")
+    # ``declared_type_template`` assumes the caller already knows the type is
+    # declared; a never-mutated comparison environment has no "Alias" at all,
+    # which ``resolve_named_type`` reports back as ``None``.
+    template = env.declared_type_template(ENTRY_ID, "Alias") if resolved is not None else None
+    return (template, resolved)
 
 
 def _setup_unregister_name(env: TypeEnvironment) -> None:
@@ -160,7 +162,7 @@ def _record_freeze_alias(env: TypeEnvironment) -> None:
 
 
 def _query_freeze_alias(env: TypeEnvironment) -> object:
-    return env.source_type_template_qname(ENTRY_ID, "Frozen")
+    return env.declared_type_template(ENTRY_ID, "Frozen")
 
 
 def _record_register_method_def(env: TypeEnvironment) -> None:
@@ -412,7 +414,7 @@ class TestAliasReplaySkip:
 
         target.replay(facts)
 
-        assert target.source_type_template_qname(ENTRY_ID, "A") == TypeTemplate(IntType())
+        assert target.declared_type_template(ENTRY_ID, "A") == TypeTemplate(IntType())
 
     @pytest.mark.parametrize(
         "differing_target_expr,differing_type_params",

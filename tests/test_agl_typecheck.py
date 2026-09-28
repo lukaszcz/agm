@@ -1200,16 +1200,14 @@ class TestTypeEnvironment:
         )
         assert current.get_type("Restored") == restored
         assert current.has_alias_registration("Restored", IntT(span=mk_span(), node_id=1), ("T",))
-        assert current.source_type_template_qname(ENTRY_ID, "Alias") == TypeTemplate(
-            IntType(), ("T",)
-        )
+        assert current.declared_type_template(ENTRY_ID, "Alias") == TypeTemplate(IntType(), ("T",))
         assert current.get_generic_type("Restored") == previous.get_generic_type("Restored")
 
     def test_source_type_template_resolves_an_unfrozen_alias(self) -> None:
         environment = TypeEnvironment()
         environment.register_alias("Alias", IntT(span=mk_span(), node_id=1))
 
-        assert environment.source_type_template_qname(ENTRY_ID, "Alias") == TypeTemplate(IntType())
+        assert environment.declared_type_template(ENTRY_ID, "Alias") == TypeTemplate(IntType())
 
     def test_unregister_name(self) -> None:
         env = TypeEnvironment()

@@ -36,7 +36,7 @@ from agm.agl.scope.symbols import (
     ImportedModuleOrigin,
     ReceiverOwner,
 )
-from agm.agl.semantics.values import IntValue
+from agm.agl.semantics.values import BoolValue, IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
@@ -603,30 +603,31 @@ class TestQualifiedAccess:
         with pytest.raises(AglScopeError, match="both a local scope and a module route"):
             resolve_program(graph)
 
-    def test_nested_scope_and_complete_import_route_clash_requires_anchor(
+    def test_nested_scope_sharing_only_a_run_of_segments_with_an_import_route_is_not_a_clash(
         self, tmp_path: Path
     ) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "import alpha/beta\n"
-                    "\n"
-                    "scope alpha\n"
-                    "\n"
-                    "  scope beta\n"
-                    "    def member() -> int = 1\n"
-                    "  end beta\n"
-                    "end alpha\n"
-                    "\n"
-                    "alpha::beta::member()"
-                ),
-                "alpha/beta": "def member() -> int = 2",
-            },
+        """The route is the leading segment alone, so ``alpha::beta`` naming ``import alpha/beta``
+
+        only through a two-segment run is not a route at all: the local nested scope wins outright.
+        """
+        entry_source = (
+            "import alpha/beta\n"
+            "\n"
+            "scope alpha\n"
+            "\n"
+            "  scope beta\n"
+            "    def member() -> int = 1\n"
+            "  end beta\n"
+            "end alpha\n"
+            "\n"
+            "let result = alpha::beta::member()"
         )
 
-        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
-            resolve_program(graph)
+        result = evaluate_ir_graph(
+            entry_source, {"alpha/beta": "def member() -> int = 2"}, tmp_path
+        )
+
+        assert result["result"] == IntValue(1)
 
     def test_import_route_is_not_a_suffix_matched_local_scope(self, tmp_path: Path) -> None:
         entry_source = (
@@ -670,31 +671,34 @@ class TestQualifiedAccess:
 
         assert resolve_program(graph).entry_id == ENTRY_ID
 
-    def test_constructor_path_and_complete_import_route_clash_requires_anchor(
+    def test_constructor_path_sharing_only_a_run_of_segments_with_an_import_route_is_not_a_clash(
         self, tmp_path: Path
     ) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "import alpha/beta/Color\n"
-                    "\n"
-                    "scope alpha\n"
-                    "\n"
-                    "  scope beta\n"
-                    "    enum Color\n"
-                    "      | red\n"
-                    "  end beta\n"
-                    "end alpha\n"
-                    "\n"
-                    "alpha::beta::Color::red"
-                ),
-                "alpha/beta/Color": "def red() -> int = 2",
-            },
+        """As the value case, a three-segment run naming ``import alpha/beta/Color`` is not a route.
+
+        The local enum constructor is selected outright, never merged with the imported function.
+        """
+        entry_source = (
+            "import alpha/beta/Color\n"
+            "\n"
+            "scope alpha\n"
+            "\n"
+            "  scope beta\n"
+            "    enum Color\n"
+            "      | red\n"
+            "  end beta\n"
+            "end alpha\n"
+            "\n"
+            "let value = alpha::beta::Color::red\n"
+            "let result = case value of\n"
+            "  | alpha::beta::Color::red => true"
         )
 
-        with pytest.raises(AglScopeError, match="module route"):
-            resolve_program(graph)
+        result = evaluate_ir_graph(
+            entry_source, {"alpha/beta/Color": "def red() -> int = 2"}, tmp_path
+        )
+
+        assert result["result"] == BoolValue(True)
 
     def test_anchor_repairs_constructor_path_and_complete_import_route_clash(
         self, tmp_path: Path

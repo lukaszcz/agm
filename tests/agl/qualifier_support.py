@@ -1,11 +1,15 @@
 """Shared REPL-grouping and qualifier-verdict helpers.
 
 A qualifier verdict is which phase, if any, rejected a program -- ``"scope"``
-(:class:`~agm.agl.scope.AglScopeError`), ``"typecheck"``
-(:class:`~agm.agl.typecheck.AglTypeError`), or ``"accepted"`` -- plus the
-raised exception's class and span, obtained by running the real
-``resolve_program``/``check_program`` phases directly and catching what they
-raise, never by monkeypatching an internal to observe it.
+(the resolve phase, which can raise either
+:class:`~agm.agl.scope.AglScopeError` or, for a type-name-as-value mistake
+caught while resolving, :class:`~agm.agl.typecheck.AglTypeError`),
+``"typecheck"`` (the check phase, :class:`~agm.agl.typecheck.AglTypeError`),
+or ``"accepted"`` -- plus the raised exception's class and span, obtained by
+running the real ``resolve_program``/``check_program`` phases directly and
+catching what they raise, never by monkeypatching an internal to observe it.
+Classification is by which phase raised, never by the exception's class
+alone, since either phase can raise either error class.
 
 :func:`file_verdict` does this for a file-mode module graph.
 :func:`repl_verdict_all_groupings` does the REPL equivalent, but a REPL
@@ -23,6 +27,10 @@ fallback use to classify one entry without lowering, evaluating or promoting
 it -- so its verdict is obtained the same way :func:`file_verdict` obtains a
 file-mode one.
 
+Both helpers take one ``stdlib`` flag: whether the module graph or session
+loads the standard library (``std/prelude``), so a caller need not track two
+separate defaults for file and REPL mode.
+
 :func:`all_groupings` and :func:`eval_grouped_final` are the general-purpose
 entry-grouping helpers shared with ``tests/test_agl_repl_session.py``.
 """
@@ -31,11 +39,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
-from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 
@@ -68,43 +75,55 @@ def eval_grouped_final(
     return result
 
 
-def file_verdict(tmp_path: Path, modules: dict[str, str]) -> Verdict:
-    """Resolve and type-check *modules* as files; report which phase, if any, raised."""
-    graph = make_graph_from_files(tmp_path, modules)
+def file_verdict(tmp_path: Path, modules: dict[str, str], *, stdlib: bool = True) -> Verdict:
+    """Resolve and type-check *modules* as files; report which phase, if any, raised.
+
+    Classifies by which call raised, not by the exception's class: scope
+    resolution can itself raise ``AglTypeError`` for a type-name-as-value
+    mistake caught while resolving, so only a genuine typecheck-phase
+    rejection -- one the (successfully resolved) second call raises --
+    is reported as ``"typecheck"``.
+    """
+    graph = make_graph_from_files(tmp_path, modules, default_stdlib=stdlib)
     try:
         resolved = resolve_program(graph)
-    except AglScopeError as exc:
+    except AglError as exc:
         return "scope", type(exc), exc.span
     try:
         check_program(resolved, base_caps())
-    except AglTypeError as exc:
+    except AglError as exc:
         return "typecheck", type(exc), exc.span
     return "accepted", type(None), None
 
 
 def _final_entry_verdict(session: ReplSession, text: str) -> Verdict:
-    """Resolve and type-check *text* against *session*'s accumulated state; report the verdict."""
-    from agm.agl.lexer import spaced_qualifier_collector
-    from agm.agl.parser import parse_program_seeded
+    """Resolve and type-check *text* against *session*'s accumulated state; report the verdict.
 
-    host_env = session._runtime.host_environment()
-    with spaced_qualifier_collector() as spaced_sink:
-        program, next_node_id = parse_program_seeded(
-            text, start_id=session._next_node_id, resolve_infix=False
-        )
+    As :func:`file_verdict`, classifies by which call raised: a lone
+    :meth:`~agm.agl.repl.session.ReplSession.resolve_entry` re-resolves the
+    same text deterministically against the same, already-committed session
+    state, so it raises only when the full
+    :meth:`~agm.agl.repl.session.ReplSession.resolve_and_check_entry` call
+    would raise at the identical, scope-phase point.
+    """
     try:
-        session._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
-        )
-    except AglScopeError as exc:
+        session.resolve_entry(text)
+    except AglError as exc:
         return "scope", type(exc), exc.span
-    except AglTypeError as exc:
+    try:
+        session.resolve_and_check_entry(text)
+    except AglError as exc:
         return "typecheck", type(exc), exc.span
     return "accepted", type(None), None
 
 
 def _repl_grouping_verdict(
-    session_dir: Path, modules: dict[str, str], decls: tuple[str, ...], sizes: tuple[int, ...]
+    session_dir: Path,
+    modules: dict[str, str],
+    decls: tuple[str, ...],
+    sizes: tuple[int, ...],
+    *,
+    stdlib: bool,
 ) -> tuple[Verdict, str] | None:
     """Evaluate *decls* as one entry per *sizes* on a fresh session.
 
@@ -121,7 +140,7 @@ def _repl_grouping_verdict(
         path = session_dir / f"{name}.agl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
-    session = ReplSession(cwd=session_dir, default_stdlib=False)
+    session = ReplSession(cwd=session_dir, default_stdlib=stdlib)
     session.open()
     start = 0
     for size in sizes[:-1]:
@@ -134,7 +153,7 @@ def _repl_grouping_verdict(
 
 
 def repl_verdict_all_groupings(
-    tmp_path: Path, modules: dict[str, str], decls: tuple[str, ...]
+    tmp_path: Path, modules: dict[str, str], decls: tuple[str, ...], *, stdlib: bool = False
 ) -> Verdict:
     """Evaluate *decls* over every legal way to group them into REPL entries.
 
@@ -153,7 +172,7 @@ def repl_verdict_all_groupings(
     for index, sizes in enumerate(all_groupings(len(decls))):
         session_dir = tmp_path / str(index)
         session_dir.mkdir()
-        outcome = _repl_grouping_verdict(session_dir, modules, decls, sizes)
+        outcome = _repl_grouping_verdict(session_dir, modules, decls, sizes, stdlib=stdlib)
         if outcome is None:
             continue
         legal_groupings += 1

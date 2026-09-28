@@ -1593,6 +1593,47 @@ class ReplSession:
 
         return format_type_for_repl(typ, checked.type_env.type_table)
 
+    def resolve_entry(self, text: str) -> None:
+        """Resolve *text* as a throwaway entry against the session's state, without checking it.
+
+        As :meth:`resolve_and_check_entry`, but stops after scope resolution:
+        raises the underlying ``AglSyntaxError``/``AglScopeError`` (or, for a
+        type-name-as-value mistake caught while resolving, ``AglTypeError``)
+        on failure and returns normally on success.
+        """
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_program_seeded
+
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, resolve_infix=False
+            )
+        self._entry_pipeline.resolve_program(
+            program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
+        )
+
+    def resolve_and_check_entry(self, text: str) -> None:
+        """Resolve and type-check *text* as a throwaway entry against the session's state.
+
+        Unlike :meth:`type_of`, accepts any program body (a binding,
+        declaration, or statement, not only a single expression) and reports
+        no result: raises the underlying
+        ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on failure and
+        returns normally on success. Never lowers, evaluates, promotes, or
+        advances the node-id counter.
+        """
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_program_seeded
+
+        host_env = self._runtime.host_environment()
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, resolve_infix=False
+            )
+        self._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
+        )
+
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------

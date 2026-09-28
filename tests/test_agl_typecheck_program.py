@@ -180,20 +180,284 @@ def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
     assert _binding_value_type(checked, ENTRY_ID, "extracted") == IntType()
 
 
-def test_nested_imported_receiver_annotations_resolve(tmp_path: Path) -> None:
+def test_nested_receiver_owner_over_a_plain_imported_scope_region_is_unknown_member(
+    tmp_path: Path,
+) -> None:
+    """``Geo`` is a mere opened scope region here, never a type owner.
+
+    A def-created ``Geo::Point`` receiver path is then a plain local namespace, not
+    that region's method namespace, so its own annotations never reach the region's
+    ``Point`` transparently -- even though ``import shapes::*`` opens one by that name.
+    """
+    with pytest.raises(UnknownMemberError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes::*\n\n"
+                    "def Geo::Point::choose("
+                    "self: Geo::Point, other: Geo::Point"
+                    ") -> Geo::Point = other"
+                ),
+                "shapes": "scope Geo\n  record Point\nend Geo",
+            },
+            default_stdlib=False,
+        )
+
+
+def test_nested_receiver_owner_over_an_imported_type_resolves(tmp_path: Path) -> None:
+    """A def-created path's leading segment resolving to an imported type is transparent.
+
+    Unlike a plain opened scope region, ``Geo`` here is itself an imported record, so
+    the ``def Geo::Inner::choose`` receiver path is ``Geo``'s method namespace, and its
+    own annotations reach the imported ``Geo::Inner`` nested type.
+    """
     check_agl_program(
         tmp_path,
         {
             "entry": (
                 "import shapes::*\n\n"
-                "def Geo::Point::choose("
-                "self: Geo::Point, other: Geo::Point"
-                ") -> Geo::Point = other"
+                "def Geo::Inner::choose("
+                "self: Geo::Inner, other: Geo::Inner"
+                ") -> Geo::Inner = other"
             ),
-            "shapes": "scope Geo\n  record Point\nend Geo",
+            "shapes": "record Geo\n  x: int\nrecord Geo::Inner\n  y: int",
         },
         default_stdlib=False,
     )
+
+
+def test_nested_type_reference_two_levels_below_an_imported_owner_resolves(
+    tmp_path: Path,
+) -> None:
+    """The leading-lookup deferral applies below a two-segment local path too.
+
+    ``Foo::Bar`` is a def-created path here, never itself declared locally or
+    imported -- only ``Foo`` and ``Foo::Bar::Extra`` are real (imported), so
+    the plain local scope-path table never lists ``Foo::Bar`` as a type. Since
+    ``Foo`` still resolves, below local scope, to a declared owner, the whole
+    path defers to ordinary (import-aware) owner resolution, which finds
+    ``Foo::Bar::Extra`` transparently, rather than being wrongly treated as a
+    decisively local (and thus member-less) namespace.
+    """
+    check_agl_program(
+        tmp_path,
+        {
+            "entry": (
+                "import shapes::*\n\n"
+                "def Foo::Bar::helper() -> int = 1\n\n"
+                "def use_it(p: Foo::Bar::Extra) -> int = 1"
+            ),
+            "shapes": (
+                "record Foo\n  x: int\nrecord Foo::Bar\n  y: int\nrecord Foo::Bar::Extra\n  z: int"
+            ),
+        },
+        default_stdlib=False,
+    )
+
+
+def test_nested_type_reference_below_a_scope_regions_own_use_contribution_resolves(
+    tmp_path: Path,
+) -> None:
+    """The leading-lookup deferral sees a scope region's own ``use``, not only module imports.
+
+    ``Foo`` is visible inside ``region1`` only through the ``use shapes::Foo``
+    written there, never at module scope. ``Foo::Bar`` is still a def-created
+    path with no member set of its own, so the type reference to
+    ``Foo::Bar::Extra`` must defer to ``Foo``'s owner resolution -- reached
+    through that scope region's own contribution layer -- rather than being
+    read as a decisively local (and thus member-less) namespace.
+    """
+    check_agl_program(
+        tmp_path,
+        {
+            "entry": (
+                "import shapes\n\n"
+                "scope region1\n"
+                "  use shapes::Foo\n\n"
+                "  def Foo::Bar::helper() -> int = 1\n\n"
+                "  def use_it(p: Foo::Bar::Extra) -> int = 1\n"
+                "end region1"
+            ),
+            "shapes": (
+                "record Foo\n  x: int\nrecord Foo::Bar\n  y: int\nrecord Foo::Bar::Extra\n  z: int"
+            ),
+        },
+        default_stdlib=False,
+    )
+
+
+def test_nested_type_reference_resolves_full_path_first_past_a_same_level_ambiguous_leading_owner(
+    tmp_path: Path,
+) -> None:
+    """The leading-lookup defers non-raisingly, even when the leading segment alone is ambiguous.
+
+    ``Foo`` names two same-level candidates here (one per wildcard-imported
+    module), but only ``amod::Foo`` declares a nested ``Bar::Extra``, so the
+    full qualified path ``Foo::Bar::Extra`` disambiguates on its own: the
+    leading-segment lookup that decides whether ``Foo::Bar`` -- a def-created
+    path -- defers to owner resolution must stay non-raising over that
+    same-level ambiguity and let the full path decide, rather than rejecting
+    the reference outright.
+    """
+    check_agl_program(
+        tmp_path,
+        {
+            "amod": (
+                "record Foo\n  x: int\n\n"
+                "record Foo::Bar\n  y: int\n\n"
+                "record Foo::Bar::Extra\n  z: int"
+            ),
+            "bmod": "record Foo\n  w: int",
+            "entry": (
+                "import amod::*\n"
+                "import bmod::*\n\n"
+                "def Foo::Bar::helper() -> int = 1\n\n"
+                "def use_it(p: Foo::Bar::Extra) -> int = 1"
+            ),
+        },
+        default_stdlib=False,
+    )
+
+
+def test_nested_type_reference_below_an_outer_scope_regions_own_local_owner_resolves(
+    tmp_path: Path,
+) -> None:
+    """The leading-lookup sees an enclosing scope region's own local type first.
+
+    ``Foo`` is declared in the outer ``region1``, never imported and never
+    declared in the inner ``inner`` region the def-created path and the
+    reference both sit in. The leading-lookup's outer-lexical-levels-first
+    walk must still find it there, deferring ``Foo::Bar::Extra`` to that
+    owner rather than reading ``Foo::Bar`` as a decisively local (and thus
+    member-less) namespace of the inner region alone.
+    """
+    check_agl_program(
+        tmp_path,
+        {
+            "entry": (
+                "scope region1\n"
+                "  record Foo\n"
+                "    x: int\n\n"
+                "  record Foo::Bar\n"
+                "    y: int\n\n"
+                "  record Foo::Bar::Extra\n"
+                "    z: int\n\n"
+                "  scope inner\n"
+                "    def Foo::Bar::helper() -> int = 1\n\n"
+                "    def use_it(p: Foo::Bar::Extra) -> int = 1\n"
+                "  end inner\n"
+                "end region1"
+            ),
+        },
+        default_stdlib=False,
+    )
+
+
+def test_nested_value_construction_below_a_root_local_owner_resolves_over_a_def_created_path(
+    tmp_path: Path,
+) -> None:
+    """A constructor call sees an outer local type owner the same way a type reference does.
+
+    ``Geo`` is declared at the module root; ``r::Geo`` is a def-created path
+    of its own, from ``def Geo::m(self)`` inside ``scope r``. A reference to
+    ``Geo::Inner`` inside ``r`` must still defer to the root ``Geo``'s own
+    nested ``Inner`` record, exactly as an annotation naming it already does,
+    rather than reading ``r::Geo`` as a decisively local (and thus
+    member-less) namespace.
+    """
+    check_agl_program(
+        tmp_path,
+        {
+            "entry": (
+                "record Geo\n  x: int\n\n"
+                "record Geo::Inner\n  y: int\n\n"
+                "scope r\n"
+                "  def Geo::m(self) -> int = 1\n\n"
+                "  let q = Geo::Inner(y = 1)\n"
+                "end r"
+            ),
+        },
+        default_stdlib=False,
+    )
+
+
+def test_nested_structural_alias_below_a_root_local_owner_is_not_a_constructor(
+    tmp_path: Path,
+) -> None:
+    """The leading-lookup's full-path hit still needs a constructible owner.
+
+    ``Geo::Inner`` is a real nested declaration -- the same shape the
+    ``Geo::Inner`` record in the sibling test above resolves through the
+    leading-lookup's full-path hit -- but here it is a structural alias
+    (``type Geo::Inner = int``), which qualifies no constructor at all. The
+    leading-lookup must keep looking rather than mistake it for the owner a
+    constructor call needs, so the reference fails as an unknown member of
+    ``Geo``'s own scope, not with a false accept.
+    """
+    with pytest.raises(UnknownMemberError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": (
+                    "record Geo\n  x: int\n\n"
+                    "type Geo::Inner = int\n\n"
+                    "scope r\n"
+                    "  def Geo::m(self) -> int = 1\n\n"
+                    "  let q = Geo::Inner\n"
+                    "end r"
+                ),
+            },
+            default_stdlib=False,
+        )
+
+
+def test_nested_type_reference_below_a_locally_declared_owner_is_unknown_member(
+    tmp_path: Path,
+) -> None:
+    """A def-created path's leading segment resolving to a local type is transparent.
+
+    ``Foo`` is a locally declared record, so ``def Foo::Bar::Baz::helper``'s receiver
+    path is ``Foo``'s own method namespace, not a plain local namespace of its own --
+    but neither ``Foo::Bar::Baz`` nor any of its members ever declares ``Missing``, so
+    a type reference naming it is still the owner's own missing member, never an
+    unknown route.
+    """
+    with pytest.raises(UnknownMemberError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": (
+                    "record Foo\n  x: int\n\n"
+                    "def Foo::Bar::Baz::helper() -> int = 1\n\n"
+                    "def use(p: Foo::Bar::Baz::Missing) -> int = 1"
+                ),
+            },
+            default_stdlib=False,
+        )
+
+
+def test_nested_value_reference_below_a_locally_declared_owner_is_unknown_member(
+    tmp_path: Path,
+) -> None:
+    """As the type-position case, a value reference below a transparent owner path.
+
+    ``Foo::Bar::Baz::missing`` is neither an import route (``Foo`` is declared
+    locally, never imported) nor a real member anywhere below ``Foo``, so it is the
+    owner's own missing member, not an unknown module qualifier.
+    """
+    with pytest.raises(UnknownMemberError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": (
+                    "record Foo\n  x: int\n\n"
+                    "def Foo::Bar::Baz::helper() -> int = 1\n\n"
+                    "let result = Foo::Bar::Baz::missing"
+                ),
+            },
+            default_stdlib=False,
+        )
 
 
 def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path) -> None:

@@ -10526,9 +10526,12 @@ class TestBareTypeEntry:
     def test_ambiguous_bare_generic_entry_keeps_original_failure(self) -> None:
         """Two same-named generics from distinct ``use``s: the bare entry must not
 
-        pick either one arbitrarily -- it fails as an error of the same class
-        ``type_of`` raises for the identical ambiguity in annotation position,
-        ``fn(x: G) => 1``.
+        pick either one arbitrarily. It stays a value-position lookup (no
+        constructor named ``G`` exists either), so it fails the same way any
+        bare name with no value meaning does, unrelated to which candidate a
+        type reading would have selected -- the annotation position,
+        ``fn(x: G) => 1``, decides that ambiguity itself, in scope, before
+        typecheck ever runs.
         """
         session = open_session()
         assert session.eval_entry("scope s\n  enum G[T] = A(x: T)\nend s").ok
@@ -10545,7 +10548,8 @@ class TestBareTypeEntry:
             session.type_of("G")
         with pytest.raises(AglError) as annotated:
             session.type_of("fn(x: G) => 1")
-        assert type(bare.value) is type(annotated.value) is AglTypeError
+        assert type(bare.value) is AglTypeError
+        assert type(annotated.value) is AmbiguousQualificationError
 
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep

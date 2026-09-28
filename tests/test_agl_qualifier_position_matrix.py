@@ -222,12 +222,11 @@ _POS: dict[str, str] = {
 # position actually checks the referenced value/pattern against ``v``'s type
 # (pattern, ``is``) and otherwise just a legal type reference; "amb" is
 # always scope's ambiguity verdict; "missing" is scope's selects-none
-# verdict everywhere, except that an owner ambiguous on its own spelling --
+# verdict everywhere: the same-level ambiguity of an owner's own spelling --
 # whether a bare unqualified name or a routed one (``route::Owner``) -- is
-# reported ambiguous before its member is even considered, in the one
-# position where the owner is resolved on its own first (a raw value
-# reference): the member-aware full-path lookup that would otherwise find
-# "missing" only runs once the owner itself is unique.
+# decided full-path-first, so an owner ambiguous on its own spelling still
+# selects "missing" once the requested member disambiguates it in no
+# candidate.
 _ACCEPTED = ("accepted", type(None))
 _OTHER_MISMATCH = ("typecheck", AglTypeError)
 _AMBIGUOUS = ("scope", AmbiguousQualificationError)
@@ -242,8 +241,6 @@ for _form in _FORMS:
         )
         _EXPECTED[(_form, "amb", _pos)] = _AMBIGUOUS
         _EXPECTED[(_form, "missing", _pos)] = _MISSING
-for _form in ("route", "bare", "localuse", "moduse"):
-    _EXPECTED[(_form, "missing", "value")] = _AMBIGUOUS
 del _form, _pos
 
 # The span of a raised error covers exactly the qualifier chain's own text
@@ -484,3 +481,309 @@ class TestUnknownQualifierRouteAcrossPositions:
         assert (phase, cls) == ("scope", UnknownQualifierError)
         assert span is not None
         assert entry[span.start_offset : span.end_offset] == self._expected_span_text(pos_name)
+
+
+# ---------------------------------------------------------------------------
+# A local, bare (non-scoped) nominal type beats a same-named wildcard-
+# imported one, exactly as a local scope region does: the local owner's own
+# member set is final, never merged with the import's.
+# ---------------------------------------------------------------------------
+
+_ENUM_LIB = "record Point\n  x: int\nenum Shape\n  | Circle\n"
+_ENUM_LOCAL = "enum Shape\n  | Tri\n"
+
+_ENUM_POS: dict[str, str] = {
+    "value": "{q}",
+    "pattern": "case 1 of\n  | {q} => 1\n  | _ => 2",
+    "is": "let v = 1\nv is {q}",
+    "annot": "fn(p: {q}) => 1",
+}
+
+
+class TestLocalEnumShadowsImportedEnum:
+    """A local ``enum Shape`` lacking ``Circle`` beats an imported ``Shape::Circle``."""
+
+    @pytest.mark.parametrize("pos_name", sorted(_ENUM_POS))
+    def test_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _ENUM_POS[pos_name].format(q="Shape::Circle")
+        src = "\n".join(["import lib::*", _ENUM_LOCAL, entry])
+        phase, cls, span = _file_verdict(tmp_path, {"entry": src, "lib": _ENUM_LIB})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Shape::Circle"
+
+    @pytest.mark.parametrize("pos_name", sorted(_ENUM_POS))
+    def test_repl_grouped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pos_name: str
+    ) -> None:
+        entry = _ENUM_POS[pos_name].format(q="Shape::Circle")
+        src = "\n".join(["import lib::*", _ENUM_LOCAL, entry])
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {"lib": _ENUM_LIB}, [src])
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Shape::Circle"
+
+    def test_repl_split_entries_agree_with_one_grouped_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entry = _ENUM_POS["annot"].format(q="Shape::Circle")
+        entries = ["import lib::*", _ENUM_LOCAL, entry]
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {"lib": _ENUM_LIB}, entries)
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert entry[span.start_offset : span.end_offset] == "Shape::Circle"
+
+
+# ---------------------------------------------------------------------------
+# ``def Owner::method`` declares *Owner* as a scope path with no member set
+# of its own (a method-owner namespace, unlike a scope region or a nominal
+# type): it must never shadow an import route sharing its spelling, in the
+# pattern and ``is`` positions just as in value and annotation positions --
+# nor invent members when no import supplies any at all.
+# ---------------------------------------------------------------------------
+
+_DEFPATH_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
+_DEFPATH_HEADER = ["import shapes::*", "def Geo::f() -> int = 1"]
+
+_DEFPATH_ACCEPTED_POS: dict[str, str] = {
+    "value": "Geo::Point(x = 1)",
+    "annot": "fn(p: Geo::Point) => 1",
+    "pattern": "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x",
+}
+
+# A record type is never ``is``-testable, so that position is exercised only
+# by the missing-member reproducer below, whose scope-level rejection
+# precedes any such typecheck concern.
+_DEFPATH_MISSING_POS: dict[str, str] = {
+    "value": "Geo::Point(x = 1)",
+    "annot": "fn(p: Geo::Point) => 1",
+    "pattern": "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
+    "is": "1 is Geo::Point",
+}
+
+# The span a scope-level miss covers depends on its syntactic shape: a bare
+# reference or annotation covers just the qualifier chain, a constructor
+# pattern covers the whole pattern including its argument list, and an
+# ``is``-test covers the whole ``subject is owner::member`` expression.
+_DEFPATH_MISSING_SPAN_TEXT: dict[str, str] = {
+    "value": "Geo::Point",
+    "annot": "Geo::Point",
+    "pattern": "Geo::Point(x)",
+    "is": "1 is Geo::Point",
+}
+
+
+class TestDefCreatedScopePathDefersToImport:
+    """A def-created path with an import in scope resolves through the import."""
+
+    @pytest.mark.parametrize("pos_name", sorted(_DEFPATH_ACCEPTED_POS))
+    def test_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _DEFPATH_ACCEPTED_POS[pos_name]
+        src = "\n".join([*_DEFPATH_HEADER, entry])
+        phase, _cls, _span = _file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_LIB})
+        assert phase == "accepted"
+
+    @pytest.mark.parametrize("pos_name", sorted(_DEFPATH_ACCEPTED_POS))
+    def test_repl_grouped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pos_name: str
+    ) -> None:
+        entry = _DEFPATH_ACCEPTED_POS[pos_name]
+        src = "\n".join([*_DEFPATH_HEADER, entry])
+        phase, _cls, _span = _repl_verdict(monkeypatch, tmp_path, {"shapes": _DEFPATH_LIB}, [src])
+        assert phase == "accepted"
+
+    def test_repl_split_entries_agree_with_one_grouped_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entries = [*_DEFPATH_HEADER, _DEFPATH_ACCEPTED_POS["pattern"]]
+        phase, _cls, _span = _repl_verdict(monkeypatch, tmp_path, {"shapes": _DEFPATH_LIB}, entries)
+        assert phase == "accepted"
+
+
+class TestDefCreatedScopePathWithoutImportIsUnknownMember:
+    """A def-created path with no import at all rejects every position identically."""
+
+    @pytest.mark.parametrize("pos_name", sorted(_DEFPATH_MISSING_POS))
+    def test_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _DEFPATH_MISSING_POS[pos_name]
+        src = "\n".join(["def Geo::f() -> int = 1", entry])
+        phase, cls, span = _file_verdict(tmp_path, {"entry": src})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == _DEFPATH_MISSING_SPAN_TEXT[pos_name]
+
+    @pytest.mark.parametrize("pos_name", sorted(_DEFPATH_MISSING_POS))
+    def test_repl_grouped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pos_name: str
+    ) -> None:
+        entry = _DEFPATH_MISSING_POS[pos_name]
+        src = "\n".join(["def Geo::f() -> int = 1", entry])
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {}, [src])
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == _DEFPATH_MISSING_SPAN_TEXT[pos_name]
+
+    def test_repl_split_entries_agree_with_one_grouped_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entries = ["def Geo::f() -> int = 1", self._entry()]
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {}, entries)
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert self._entry()[span.start_offset : span.end_offset] == "Geo::Point"
+
+    @staticmethod
+    def _entry() -> str:
+        return _DEFPATH_MISSING_POS["annot"]
+
+
+# ---------------------------------------------------------------------------
+# A local scope's own reading, once decisive, is walked exactly regardless of
+# the qualifier chain's length: a 2-segment miss (the owner's own missing
+# member) and a 3-segment miss (a member nested one level deeper, inside an
+# owner nested in the same local scope) both reject with the identical
+# verdict the local owner's member set alone decides.
+# ---------------------------------------------------------------------------
+
+_CHAIN_LIB = (
+    "scope Geo\n  record Point\n    x: int\n  enum Shape\n    | Circle\n    | Square\nend Geo\n"
+)
+_CHAIN_LOCAL = "scope Geo\n  enum Kind = Round | Flat\nend Geo"
+
+_CHAIN_LEN2_POS: dict[str, str] = {
+    "value": "Geo::Point(x = 1)",
+    "annot": "fn(p: Geo::Point) => 1",
+    "pattern": "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
+}
+_CHAIN_LEN3_POS: dict[str, str] = {
+    "value": "Geo::Shape::Circle",
+    "annot": "fn(p: Geo::Shape::Circle) => 1",
+    "pattern": "case 1 of\n  | Geo::Shape::Circle => 1\n  | _ => 2",
+    "is": "1 is Geo::Shape::Circle",
+}
+
+
+class TestLocalScopeChainLengthsAgree:
+    """A decisive local scope's missing member rejects at length 2 and length 3 alike."""
+
+    @pytest.mark.parametrize("pos_name", sorted(_CHAIN_LEN2_POS))
+    def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _CHAIN_LEN2_POS[pos_name]
+        src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
+        phase, cls, span = _file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Geo::Point"
+
+    @pytest.mark.parametrize("pos_name", sorted(_CHAIN_LEN3_POS))
+    def test_length_three_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _CHAIN_LEN3_POS[pos_name]
+        src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
+        phase, cls, span = _file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Shape"
+
+    @pytest.mark.parametrize("pos_name", sorted(_CHAIN_LEN3_POS))
+    def test_length_three_repl_grouped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pos_name: str
+    ) -> None:
+        entry = _CHAIN_LEN3_POS[pos_name]
+        src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {"shapes": _CHAIN_LIB}, [src])
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Shape"
+
+    def test_repl_split_entries_agree_with_one_grouped_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entries = ["import shapes::*", _CHAIN_LOCAL, _CHAIN_LEN3_POS["annot"]]
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {"shapes": _CHAIN_LIB}, entries)
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert _CHAIN_LEN3_POS["annot"][span.start_offset : span.end_offset] == "Shape"
+
+    def test_length_four_misses_one_level_past_a_walked_hit_file(self, tmp_path: Path) -> None:
+        """A 3-segment chain whose first two segments walk successfully rejects at the third.
+
+        ``Shape`` nested inside the local ``Geo`` region exists (the walk's
+        own first step hits), but nothing beneath it is named ``Missing``:
+        the walk's own second step is what rejects, not its first.
+        """
+        entry = "Geo::Shape::Missing::X"
+        src = "\n".join([_CHAIN_NESTED_LOCAL, entry])
+        phase, cls, span = _file_verdict(tmp_path, {"entry": src})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Missing"
+
+    def test_length_four_misses_one_level_past_a_walked_hit_repl(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entry = "Geo::Shape::Missing::X"
+        src = "\n".join([_CHAIN_NESTED_LOCAL, entry])
+        phase, cls, span = _repl_verdict(monkeypatch, tmp_path, {}, [src])
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Missing"
+
+
+_CHAIN_NESTED_LOCAL = (
+    "scope Geo\n\n  scope Shape\n    enum Kind = Round | Flat\n  end Shape\nend Geo"
+)
+
+_ACCEPTED_CHAIN_LEN2_POS: dict[str, str] = {
+    "value": "Geo::Point(x = 1)",
+    "annot": "fn(p: Geo::Point) => 1",
+    "pattern": "let v: Geo::Point = Geo::Point(x = 1)\ncase v of\n  | Geo::Point(x) => x",
+}
+_ACCEPTED_CHAIN_LEN3_POS: dict[str, str] = {
+    "value": "Geo::Shape::Circle",
+    "annot": "fn(p: Geo::Shape::Circle) => 1",
+    "pattern": (
+        "let v: Geo::Shape = Geo::Shape::Circle\ncase v of\n  | Geo::Shape::Circle => 1\n  | _ => 2"
+    ),
+    "is": "let v: Geo::Shape = Geo::Shape::Circle\nv is Geo::Shape::Circle",
+}
+
+
+class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
+    """A decisive local scope's own member is accepted, walked exactly, at length 2 and 3 alike.
+
+    ``_CHAIN_LIB``'s shape, declared locally instead of imported, exercises
+    the same exact-path walk ``TestLocalScopeChainLengthsAgree`` exercises
+    for a miss, this time to a hit at every step: the walk's own multi-
+    segment success path, distinct from a same-spelled import ever being
+    reachable at all.
+    """
+
+    @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN2_POS))
+    def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _ACCEPTED_CHAIN_LEN2_POS[pos_name]
+        src = "\n".join([_CHAIN_LIB, entry])
+        phase, _cls, _span = _file_verdict(tmp_path, {"entry": src})
+        assert phase == "accepted"
+
+    @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN3_POS))
+    def test_length_three_file(self, tmp_path: Path, pos_name: str) -> None:
+        entry = _ACCEPTED_CHAIN_LEN3_POS[pos_name]
+        src = "\n".join([_CHAIN_LIB, entry])
+        phase, _cls, _span = _file_verdict(tmp_path, {"entry": src})
+        assert phase == "accepted"
+
+    @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN3_POS))
+    def test_length_three_repl_grouped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pos_name: str
+    ) -> None:
+        entry = _ACCEPTED_CHAIN_LEN3_POS[pos_name]
+        src = "\n".join([_CHAIN_LIB, entry])
+        phase, _cls, _span = _repl_verdict(monkeypatch, tmp_path, {}, [src])
+        assert phase == "accepted"
+
+    def test_repl_split_entries_agree_with_one_grouped_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        entries = [_CHAIN_LIB, _ACCEPTED_CHAIN_LEN3_POS["annot"]]
+        phase, _cls, _span = _repl_verdict(monkeypatch, tmp_path, {}, entries)
+        assert phase == "accepted"

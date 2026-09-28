@@ -15,7 +15,6 @@ from agm.agl.scope.symbols import (
     UnknownMemberError,
     UnknownQualifierError,
 )
-from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_repl_graph_from_files, resolve_repl_graph
 
@@ -536,8 +535,8 @@ class TestAmbiguityRepairsAreSpellable:
             self._AMBIGUOUS_SCOPE_USES + "\nlet f: X::Flag = X::Flag::Good\nlet g: Flag = f\n",
         )
 
-        with pytest.raises(AglTypeError) as raised:
-            check_program(resolve_repl_graph(graph), base_caps())
+        with pytest.raises(AglScopeError) as raised:
+            resolve_repl_graph(graph)
 
         diagnostic = str(raised.value)
         assert "\x00" not in diagnostic

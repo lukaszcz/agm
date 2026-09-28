@@ -1071,14 +1071,15 @@ def test_ambiguous_record_constructor_reports_module_qualified_origins(
     assert excinfo.value.repair == "a/lib::Point"
 
 
-def test_ambiguous_routed_owner_propagates_even_when_its_member_is_missing(
+def test_ambiguous_routed_owner_selects_unknown_member_when_no_candidate_declares_it(
     tmp_path: Path,
 ) -> None:
     """A value-position constructor route whose owner alone is ambiguous
-    raises that ambiguity even when neither candidate owner declares the
-    requested member (regression: ``_imported_chain_owner``'s multi-segment
-    branch no longer swallows ambiguity from its owner lookup and falls
-    through to an unrelated "missing member" verdict)."""
+    still selects none when neither candidate owner declares the requested
+    member: the same-level ambiguity of the leading segment is decided
+    full-path-first, so the owner's own ambiguity is not the final verdict
+    while the requested member could still disambiguate it -- and here it
+    cannot, since no candidate declares it either."""
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -1088,13 +1089,103 @@ def test_ambiguous_routed_owner_propagates_even_when_its_member_is_missing(
         },
     )
 
-    with pytest.raises(AmbiguousQualificationError) as excinfo:
+    with pytest.raises(UnknownMemberError):
         resolve_program(graph)
 
-    assert set(excinfo.value.origins) == {
-        ImportedModuleOrigin((ModuleId.from_path("one/types"), "Color")),
-        ImportedModuleOrigin((ModuleId.from_path("two/types"), "Color")),
-    }
+
+def test_ambiguous_routed_owner_selects_its_one_hidden_candidate(tmp_path: Path) -> None:
+    """A routed owner ambiguous in isolation still selects the one candidate
+
+    declaring the requested member even when that very import hides it: the
+    member's own visibility is decided only once its owner is, so the hiding
+    import's own verdict -- not a further ambiguity or a missing member --
+    is what the selected candidate then raises.
+    """
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import one/types hiding Color::Green\nimport two/types\ntypes::Color::Green\n"
+            ),
+            "one/types": "enum Color\n  | Green\n  | Red\n",
+            "two/types": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    with pytest.raises(HiddenMemberError):
+        resolve_program(graph)
+
+
+def test_ambiguous_routed_owner_reports_ambiguity_when_every_candidate_hides_it(
+    tmp_path: Path,
+) -> None:
+    """A routed owner ambiguous in isolation, whose requested member every
+
+    candidate both declares and hides, stays the owner's own ambiguity: more
+    than one candidate could still supply the member, so hiding decides
+    nothing between them.
+    """
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import one/types hiding Color::Red\n"
+                "import two/types hiding Color::Red\n"
+                "types::Color::Red\n"
+            ),
+            "one/types": "enum Color\n  | Red\n  | Green\n",
+            "two/types": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
+
+
+def test_ambiguous_bare_owner_selects_its_one_hidden_candidate(tmp_path: Path) -> None:
+    """A bare ``use``-opened owner ambiguous in isolation still selects the
+
+    one candidate declaring the requested member even when that very ``use``
+    hides it, mirroring the routed case: the member's own visibility is
+    decided only once its owner is.
+    """
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import m\nimport n\nuse m::* hiding Color::Green\nuse n::*\nColor::Green\n"),
+            "m": "enum Color\n  | Red\n  | Green\n",
+            "n": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    with pytest.raises(HiddenMemberError):
+        resolve_program(graph)
+
+
+def test_ambiguous_bare_owner_reports_ambiguity_when_every_candidate_hides_it(
+    tmp_path: Path,
+) -> None:
+    """A bare ``use``-opened owner ambiguous in isolation, whose requested
+
+    member every candidate both declares and hides, stays the owner's own
+    ambiguity, mirroring the routed case.
+    """
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import m\nimport n\n"
+                "use m::* hiding Color::Red\n"
+                "use n::* hiding Color::Red\n"
+                "Color::Red\n"
+            ),
+            "m": "enum Color\n  | Red\n  | Green\n",
+            "n": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
 
 
 def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
@@ -1235,8 +1326,8 @@ def test_root_use_and_import_tail_type_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
 
 
 @pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)

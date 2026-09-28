@@ -9,7 +9,7 @@ import pytest
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, UnknownMemberError, UnknownQualifierError
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_repl_graph_from_files, resolve_repl_graph
@@ -426,19 +426,20 @@ def test_qualified_scope_errors_distinguish_unknown_route_from_missing_member(
 def test_qualified_type_errors_keep_unknown_route_and_missing_member_diagnostics(
     tmp_path: Path,
 ) -> None:
-    """An unknown route, or a route missing the named member, is a type error."""
-    cases: tuple[tuple[str, dict[str, str]], ...] = (
-        ("let value: missing::Item = null\nvalue", {}),
+    """An unknown route, or a route missing the named member, is a scope error."""
+    cases: tuple[tuple[str, dict[str, str], type[AglScopeError]], ...] = (
+        ("let value: missing::Item = null\nvalue", {}, UnknownQualifierError),
         (
             "import remote/config::read\nlet value: remote/config::Missing = null\nvalue",
             {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+            UnknownMemberError,
         ),
     )
 
-    for entry, modules in cases:
+    for entry, modules, error_type in cases:
         graph = _graph(tmp_path, entry, modules)
-        with pytest.raises(AglTypeError):
-            check_program(resolve_repl_graph(graph), base_caps())
+        with pytest.raises(error_type):
+            resolve_repl_graph(graph)
 
     reachable = _graph(
         tmp_path,

@@ -19,7 +19,11 @@ from agm.agl.scope.imports import (
     resolve_qualified,
 )
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AmbiguousQualificationError, qualification_repair_guidance
+from agm.agl.scope.symbols import (
+    AmbiguousQualificationError,
+    UnknownQualifierError,
+    qualification_repair_guidance,
+)
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -234,7 +238,11 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
     ),
 )
 def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
-    resolve_inline_entry(source)
+    """A chain's length is never itself a rejection reason: scope reaches
+    content resolution regardless of depth, and rejects an unknown route
+    exactly as it would a shorter one (``First`` never names a module)."""
+    with pytest.raises(UnknownQualifierError):
+        resolve_inline_entry(source)
 
 
 def test_long_qualifier_chain_with_a_resolved_owner_reports_unknown_member() -> None:

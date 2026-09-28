@@ -8,7 +8,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError
+from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError, UnknownMemberError
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
@@ -347,7 +347,7 @@ def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: 
 
 def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
     """``A::helper(x)`` reaches a scope member that owns no constructor."""
-    reject(
+    error = rejection(
         "scope A\n"
         "  def helper(x: int) -> int = x\n"
         "  record Point\n"
@@ -357,3 +357,4 @@ def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
         "let p: A::Point = A::Point(x = 1)\n"
         "case p of | A::helper(x) => x | _ => 0\n"
     )
+    assert type(error) is UnknownMemberError

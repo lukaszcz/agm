@@ -319,7 +319,7 @@ def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -
         "pal": "enum Color\n  | Red",
     }
 
-    assert _program_outcome(tmp_path, modules) == "typecheck"
+    assert _program_outcome(tmp_path, modules) == "scope"
 
 
 def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path) -> None:

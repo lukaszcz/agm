@@ -531,7 +531,6 @@ def _build_program_type_table(
             continue
         env = TypeEnvironment(
             module_id=mid,
-            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
             owner_declarations=rmod.resolved.owner_declarations,
         )
@@ -634,7 +633,6 @@ def _build_program_type_table(
             program_alias_table=tables.aliases,
             program_aliases=program_aliases,
             import_env=import_env,
-            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=shared_type_table,
@@ -754,7 +752,6 @@ def _build_program_func_sig_table(
             program_generic_table=tables.generics,
             program_alias_table=tables.aliases,
             import_env=import_env,
-            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=type_table,
@@ -1081,7 +1078,6 @@ def _prepare_module_environment(
         program_generic_table=tables.generics,
         program_alias_table=tables.aliases,
         import_env=import_env_map[mid],
-        local_scope_paths=frozenset(resolved.scope_nodes),
         scope_nodes=resolved.scope_nodes,
         module_id=mid,
         type_table=type_table,

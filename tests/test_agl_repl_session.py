@@ -2288,15 +2288,15 @@ def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_p
     ("probe", "expected_error"),
     (
         ("Foo::Old::E::A", (UnknownQualifierError,)),
-        ("fn(x: Foo::Old::E::A) => 1", (AglTypeError,)),
+        ("fn(x: Foo::Old::E::A) => 1", (UnknownQualifierError,)),
         # A grouping whose combined setup entry fails to redeclare ``Foo``
         # (name-clash inside one entry) leaves ``Old`` declared but never
         # nested with ``E`` at all, rather than genuinely retired: scope
         # itself then reports the same unknown-member verdict
         # (``UnknownMemberError``) it reports for a live owner missing a
         # member anywhere else, alongside the genuinely-retired groupings'
-        # plain ``AglTypeError``.
-        ("fn(x: Foo::Old::E) => 1", (AglTypeError, UnknownMemberError)),
+        # ``UnknownQualifierError``.
+        ("fn(x: Foo::Old::E) => 1", (UnknownQualifierError, UnknownMemberError)),
     ),
     ids=("value", "type-member", "type-owner"),
 )
@@ -8660,7 +8660,7 @@ class TestImports:
         assert kept_valued.ok, kept_valued.diagnostics
         assert not lost_typed.ok
         assert not lost_valued.ok
-        with pytest.raises(AglTypeError) as typed_error:
+        with pytest.raises(UnknownMemberError) as typed_error:
             session.type_of("fn(x: Outer::Second) => 1")
         assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
         with pytest.raises(UnknownMemberError):
@@ -8724,7 +8724,7 @@ class TestImports:
         assert new_valued.ok, new_valued.diagnostics
         assert not old_typed.ok
         assert not old_valued.ok
-        with pytest.raises(AglTypeError) as typed_error:
+        with pytest.raises(UnknownMemberError) as typed_error:
             session.type_of("fn(x: Outer::Old) => 1")
         assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
         with pytest.raises(UnknownMemberError):

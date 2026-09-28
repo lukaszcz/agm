@@ -29,6 +29,7 @@ from agm.agl.scope.symbols import (
     ReceiverOwner,
     ScopeNode,
     UnknownMemberError,
+    UnknownQualifierError,
 )
 from agm.agl.syntax.nodes import (
     AsPattern,
@@ -3632,17 +3633,16 @@ class TestConstructorBindings:
         candidates = r.constructor_candidates["Local"]
         assert candidates[0].owner_path == ()
 
-    def test_alias_with_unresolvable_qualified_target_is_presumed_constructible(
-        self,
-    ) -> None:
-        """Same as above, for a module-qualified target.
+    def test_alias_with_unresolvable_qualified_target_is_rejected(self) -> None:
+        """Unlike a bare name, a qualified target names a definite route.
 
-        A standalone module has no import environment to resolve the
-        qualifier through, so the alias is presumed constructible.
+        A standalone module has no import environment, so ``pal`` never
+        names an import: unlike an unqualified target (which scope cannot
+        distinguish from a forward reference), scope decides this
+        definitively and rejects it, rather than presuming it constructible.
         """
-        r = parse_and_resolve("type Local = pal::Something\n()\n")
-        candidates = r.constructor_candidates["Local"]
-        assert candidates[0].owner_path == ()
+        with pytest.raises(UnknownQualifierError):
+            parse_and_resolve("type Local = pal::Something\n()\n")
 
     def test_declared_type_names_excludes_variants(self) -> None:
         """Enum variant names are NOT root-level type names (they are values)."""

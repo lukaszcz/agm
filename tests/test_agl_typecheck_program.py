@@ -16,7 +16,12 @@ from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError, RouteClashError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    RouteClashError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.semantics.types import (
     InferenceVarType,
     contains_inference_var,
@@ -1987,12 +1992,12 @@ def test_type_qualified_through_an_imported_function_is_rejected(tmp_path: Path)
 
 
 def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
-    """Reference to an un-imported module qualifier → type error."""
+    """Reference to an un-imported module qualifier → scope error."""
     modules = {
         "entry": ("import mylib\nlet n: other::Point = mylib::mkPoint()\nn"),
         "mylib": ("record Point\n  x: int\ndef mkPoint() -> Point = Point(x = 1)"),
     }
-    with pytest.raises(AglTypeError):
+    with pytest.raises(UnknownQualifierError):
         check_agl_program(tmp_path, modules)
 
 
@@ -2194,7 +2199,7 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
 
 
 def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> None:
-    "In a case pattern, 'mylib::Unknown::Red' where Unknown doesn't exist → type error."
+    "In a case pattern, 'mylib::Unknown::Red' where Unknown doesn't exist → scope error."
     modules = {
         "entry": (
             "import mylib\n"
@@ -2205,7 +2210,7 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
         ),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglTypeError):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(tmp_path, modules)
 
 
@@ -2868,9 +2873,7 @@ def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
 
 
 def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> None:
-    """A record field typed 'other::Data' where 'other' is NOT imported → AglTypeError."""
-    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
-
+    """A record field typed 'other::Data' where 'other' is NOT imported → scope error."""
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
@@ -2878,14 +2881,12 @@ def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> N
             "record MyRec\n  c: other::Data"
         ),
     }
-    with pytest.raises(_AglTypeError):
+    with pytest.raises(UnknownQualifierError):
         check_agl_program(tmp_path, modules)
 
 
 def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) -> None:
-    """A record field typed 'payload::Unknown' where 'Unknown' is not exported → AglTypeError."""
-    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
-
+    """A record field typed 'payload::Unknown' where 'Unknown' is not exported → scope error."""
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
@@ -2896,7 +2897,7 @@ def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) ->
         ),
         "payload": ("record Data\n  n: int"),
     }
-    with pytest.raises(_AglTypeError):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(tmp_path, modules)
 
 
@@ -3673,21 +3674,28 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "entry",
+    ("entry", "error"),
     [
-        "import lib::*\nlet x: missing::Box[int] = null\nx",
-        "import lib::*\nlet x: lib::Point[int] = null\nx",
-        "import lib::*\nlet x: lib::helper[int] = null\nx",
+        # An unknown module route is scope's decision.
+        ("import lib::*\nlet x: missing::Box[int] = null\nx", UnknownQualifierError),
+        # A non-generic type applied to type arguments, and a function
+        # applied as a type, are both genuinely type-level: scope cannot
+        # tell a type's arity, or that a value declaration is not a type,
+        # without a type table.
+        ("import lib::*\nlet x: lib::Point[int] = null\nx", AglTypeError),
+        ("import lib::*\nlet x: lib::helper[int] = null\nx", AglTypeError),
     ],
 )
-def test_qualified_type_application_errors(tmp_path: Path, entry: str) -> None:
+def test_qualified_type_application_errors(
+    tmp_path: Path, entry: str, error: type[AglScopeError] | type[AglTypeError]
+) -> None:
     modules = {
         "lib": (
             "record Box[T]\n  value: T\nrecord Point\n  value: int\ndef helper(x: int) -> int = x"
         ),
         "entry": entry,
     }
-    with pytest.raises(AglTypeError):
+    with pytest.raises(error):
         check_agl_program(tmp_path, modules)
 
 

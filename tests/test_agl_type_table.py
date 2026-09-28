@@ -23,6 +23,7 @@ from agm.agl.ir.reserved_nominals import (
 )
 from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.repl import ReplSession
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
@@ -430,7 +431,7 @@ def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
 
 
 def test_current_module_generic_type_anchor_rejects_unknown_root_type() -> None:
-    with pytest.raises(AglTypeError, match="Unknown scoped type"):
+    with pytest.raises(AglScopeError):
         _check("def f(value: ::A::Missing[int]) -> int = 0\nf(1)")
 
 

@@ -478,9 +478,7 @@ def check_resolved(
     """
     if capabilities is None:
         capabilities = _DEFAULT_CAPABILITIES
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
+    env = TypeEnvironment(scope_nodes=resolved.scope_nodes)
     if seed_env is not None:
         env.seed_from(seed_env)
     return _check_prepared_module(resolved, capabilities, env=env)

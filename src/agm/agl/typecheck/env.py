@@ -41,10 +41,8 @@ from agm.agl.scope.imports import (
     QName,
     QualResolutionFound,
     contribution_routes,
-    qualifier_candidates,
     qualifier_contributes,
     resolve_qualified,
-    try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -53,9 +51,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     contributed_declarations,
-    qualification_repair_guidance,
     resolve_bare_contribution_layer,
-    to_bare_atom,
 )
 from agm.agl.scope.type_names import (
     TypeNameSite,
@@ -100,7 +96,6 @@ from agm.agl.semantics.types import (
     contains_inference_var,
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
-from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, render_qualified_name
 from agm.agl.zones import ParamZone
@@ -1109,7 +1104,6 @@ class TypeEnvironment:
         program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
         program_aliases: ProgramAliasResolution | None = None,
         import_env: ImportEnv = EMPTY_IMPORT_ENV,
-        local_scope_paths: frozenset[ScopePath] = frozenset(),
         scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
@@ -1176,10 +1170,6 @@ class TypeEnvironment:
         self._program_aliases: ProgramAliasResolution | None = program_aliases
         self._import_env: ImportEnv = import_env
         self._module_id: ModuleId = module_id
-        # Scope resolution supplies every local path, including regions with no
-        # type declarations, so failed qualified type references retain their
-        # scoped diagnostic instead of being mistaken for module routes.
-        self._local_scope_paths = local_scope_paths
         # Scope's bare contribution layers are shared by value and type lookup.
         # They retain selection, renaming, provenance, and region boundaries.
         self._scope_nodes = scope_nodes if scope_nodes is not None else {}
@@ -1332,67 +1322,15 @@ class TypeEnvironment:
         """Return the handle of a non-generic nominal declaration scope resolved."""
         return self._type_table.named(module_id, scope_path[-1], scope_path[:-1]).handle()
 
-    def _has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
-        """Return whether a qualifier route contributes *name* after filtering."""
-        route = tuple(part for part in qualifier.segments[0].name.split("/"))
-        atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
-        atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
-        return qualifier_contributes(self._import_env, route, atom, anchored=qualifier.anchored)
+    def _recorded_type_key(self, qualifier: QualifierChain) -> DeclKey | None:
+        """Return the declaration identity scope selected for *qualifier*, if it recorded one.
 
-    def _ensure_qualified_type_route_unambiguous(
-        self,
-        qualifier: QualifierChain,
-        name: str,
-        selected_key: DeclKey,
-        *,
-        selected_route: Literal["type name", "use route"],
-        span: SourceSpan | None,
-    ) -> None:
-        """Reject a qualified local/import collision unless both routes select one declaration."""
-        if qualifier.anchor is not None or not self._has_qualified_import_member(qualifier, name):
-            return
-        imported_qname = self._try_resolve_import_qname(qualifier, name)
-        if imported_qname is not None and self._qname_decl_key(imported_qname) == selected_key:
-            return
-        raise AglTypeError(
-            f"Qualifier '{qualifier.render()}' is both a {selected_route} and a module route "
-            f"for '{name}'. {qualification_repair_guidance()}",
-            span=span,
-        )
-
-    def _import_route_member(
-        self, qualifier: QualifierChain, name: str
-    ) -> tuple[ImportEnv, tuple[str, ...], NameAtom]:
-        """Split a module-route qualifier and type path for import resolution."""
-        import_env = self._import_env
-        route = tuple(part for part in qualifier.segments[0].name.split("/"))
-        atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
-        atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
-        return import_env, route, atom
-
-    def _try_resolve_import_qname(self, qualifier: QualifierChain, name: str) -> QName | None:
-        """Resolve a module route followed by one structured type path, if it resolves."""
-        import_env, route, atom = self._import_route_member(qualifier, name)
-        return try_resolve_qualified_member(import_env, route, atom, anchored=qualifier.anchored)
-
-    def _recorded_type_key(self, qualifier: QualifierChain, name: str) -> DeclKey | None:
-        """Return the declaration identity a qualified type reference names.
-
-        Unpeeled: scope records the full path it selected for ``qualifier``'s
-        member by suffix resolution (see ``ModuleResolution.owner_declarations``)
-        whenever type-name selection alone can find an owner or a full path --
-        whether the member is a plain module-routed type or an unapplied
-        enum's own inline member, both under this same dotted identity in the
-        type table. Type-name selection never walks a plain wildcard module
-        import's own nested scope regions, so a qualifier reaching one (an
-        opened, unrouted ``import`` exposing a scoped record or enum by its
-        nested path) falls back to the import environment directly.
+        Scope's qualifier validation records every uniquely selected qualified
+        type name against its route (``ModuleResolution.owner_declarations``).
+        ``None`` only for a routeless self-reference (``::Name``), which
+        carries no route for scope to record against.
         """
-        recorded = self._owner_declarations.get(qualifier.node_id)
-        if recorded is not None:
-            return recorded
-        imported = self._try_resolve_import_qname(qualifier, name)
-        return None if imported is None else self._qname_decl_key(imported)
+        return self._owner_declarations.get(qualifier.node_id)
 
     def resolve_owner_applied_inline_member_type(
         self,
@@ -1739,15 +1677,26 @@ class TypeEnvironment:
         Peels the trailing member off the full ``owner::member`` path scope
         recorded for this qualifier (see ``ModuleResolution.owner_declarations``).
         ``None`` when scope recorded no separate owner -- the qualifier names
-        no such inline-member relationship at all (a module route straight to
-        a plain type, or an unrecognized qualifier typecheck's ordinary
-        diagnostics handle).
+        no such inline-member relationship at all: a module route straight to
+        a plain type reached through a scope region (the recorded path then
+        has no declared type one level up), or an unrecognized qualifier
+        typecheck's ordinary diagnostics handle.
         """
         full_key = self._owner_declarations.get(qualifier.node_id)
         if full_key is None:
             return None
         module_id, scope_path, _name = full_key
-        return None if not scope_path else (module_id, scope_path[:-1], scope_path[-1])
+        if not scope_path:
+            return None
+        owner_key = (module_id, scope_path[:-1], scope_path[-1])
+        return owner_key if self._is_declared_owner_key(owner_key) else None
+
+    def _is_declared_owner_key(self, key: DeclKey) -> bool:
+        """Whether *key* names a declared type this program can instantiate as an owner."""
+        module_id, scope_path, name = key
+        if module_id == self._module_id:
+            return self._has_own_type_name(_join_scoped_type_name(scope_path, name))
+        return self._in_program_type_tables(key)
 
     def owner_type_for_qualifier(
         self,
@@ -1769,11 +1718,32 @@ class TypeEnvironment:
         if key is None:
             return None
         module_id, scope_path, name = key
+        template = self.declared_type_template(module_id, name, scope_path=scope_path)
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, AppliedT):
-            return self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars), ()
-        template = self.declared_type_template(module_id, name, scope_path=scope_path)
+            args = tuple(
+                self.resolve_type_expr(arg, span=span, type_vars=type_vars)
+                for arg in owner_expr.args
+            )
+            return self._instantiate_owner_template(name, template, args, span), ()
         return template.template, template.type_params
+
+    def _instantiate_owner_template(
+        self, name: str, template: TypeTemplate, args: tuple[Type, ...], span: SourceSpan | None
+    ) -> Type:
+        """Instantiate *template*, the recorded owner's own template, with *args*.
+
+        Always by substitution: a nominal (record/enum) template's own type
+        params appear as its bare type args, so substituting them is the same
+        as swapping them in directly; an alias target (possibly parameterized
+        over the *same-named* type params, but nested inside another generic
+        shape, as ``Rows[A] = Slot[array[A]]``) needs the real substitution a
+        bare swap would skip. ``isinstance`` on the resolved template cannot
+        tell the two apart -- an alias to a bare nominal type looks exactly
+        like a direct declaration -- so both go through the one path.
+        """
+        alias_def = GenericAliasDef(type_params=template.type_params, template=template.template)
+        return self.instantiate_alias(name, alias_def, args, span=span)
 
     def with_owner_declarations(self, entries: Mapping[int, DeclKey]) -> "TypeEnvironment":
         """Return a read-only view of this environment with *entries* merged in.
@@ -2041,14 +2011,6 @@ class TypeEnvironment:
         )
         return None if resolved is None else contributed_declarations(*resolved)
 
-    def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
-        """Return the unique type declaration contributed to this type region."""
-        resolved = self._type_contributions(name)
-        qnames = frozenset() if resolved is None else resolved[1]
-        return self._unique_bare_type_key(
-            name, {self._qname_decl_key(qname) for qname in qnames}, span
-        )
-
     def _bare_type_key(self, name: str, span: SourceSpan | None) -> DeclKey | None:
         """Resolve a bare type across equally ranked root use and import routes."""
         selected = bare_type_selection(self._type_name_site(), name)
@@ -2238,59 +2200,16 @@ class TypeEnvironment:
         )
 
     def _local_qualified_type_name(self, qualifier: QualifierChain, name: str) -> str | None:
-        """Find the local type selected by *qualifier* without routing imports.
+        """Resolve ``::Name``, the routeless self-reference to this module's own type.
 
-        ``::`` starts at this module's root, ``/`` always denotes an import
-        route, and an unanchored qualifier walks the active lexical layers.
-        Keeping this selection separate from route resolution prevents a type
-        lookup from inheriting a stale lexical context or treating a module
-        anchor as a local path.
+        Scope's qualifier validation walks only a route (``qualifier.segments``);
+        a bare ``::Name`` self-reference carries none, so it is the one
+        qualified spelling still resolved here rather than through the
+        recorded owner key.
         """
-        if qualifier.anchor is QualifierAnchor.MODULE:
+        if qualifier.anchor is not QualifierAnchor.CURRENT_MODULE or qualifier.segments:
             return None
-        bases = enclosing_scope_bases(
-            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-        )
-        for base in bases:
-            candidate = "::".join((*base, *qualifier.route_segments, name))
-            if self._has_own_type_name(candidate):
-                return candidate
-        return None
-
-    def _has_local_scope_prefix(self, qualifier: QualifierChain) -> bool:
-        """Whether a local scope begins the qualifier in an active lexical layer."""
-        if qualifier.anchor is QualifierAnchor.MODULE:
-            return False
-        bases = enclosing_scope_bases(
-            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-        )
-        for base in bases:
-            path = (*base, *qualifier.route_segments)
-            if any(
-                len(scope_path) > len(base)
-                and len(scope_path) <= len(path)
-                and path[: len(scope_path)] == scope_path
-                for scope_path in self._local_scope_paths
-            ):
-                return True
-        return False
-
-    def _is_missing_local_scoped_type(self, qualifier: QualifierChain, name: str) -> bool:
-        """Whether an unresolved qualifier belongs to a local scope, not a route."""
-        if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
-            return True
-        has_import_route = qualifier_candidates(
-            self._import_env, qualifier.route_segments, anchored=qualifier.anchored
-        )
-        has_bare_import = (
-            not qualifier.anchored
-            and to_bare_atom((*qualifier.route_segments, name)) in self._import_env.unqualified
-        )
-        return self._has_local_scope_prefix(qualifier) and not (has_import_route or has_bare_import)
-
-    @staticmethod
-    def _unknown_scoped_type_message(qualifier: QualifierChain, name: str) -> str:
-        return f"Unknown scoped type '{'::'.join((*qualifier.route_segments, name))}'."
+        return name if self._has_own_type_name(name) else None
 
     def resolve_type_expr(
         self,
@@ -2412,14 +2331,6 @@ class TypeEnvironment:
             if qualifier is not None:
                 local_name = self._local_qualified_type_name(qualifier, name)
                 if local_name is not None:
-                    local_path, declared_name = _split_scoped_type_name(local_name)
-                    self._ensure_qualified_type_route_unambiguous(
-                        qualifier,
-                        name,
-                        (self._module_id, local_path, declared_name),
-                        selected_route="type name",
-                        span=eff_span,
-                    )
                     name = local_name
                     qualifier = None
             resolved_args = tuple(
@@ -2431,23 +2342,6 @@ class TypeEnvironment:
                     f"Type '{rendered_owner}::{type_expr.name}' does not take type arguments.",
                     span=eff_span,
                 )
-            if qualifier is not None and qualifier.anchor is None:
-                opened_atom = to_bare_atom(
-                    (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
-                )
-                opened_key = self._opened_type_key(opened_atom, eff_span)
-                if opened_key is not None:
-                    opened = self._resolve_applied_type_key(
-                        opened_key, opened_atom, resolved_args, eff_span
-                    )
-                    self._ensure_qualified_type_route_unambiguous(
-                        qualifier,
-                        name,
-                        opened_key,
-                        selected_route="use route",
-                        span=eff_span,
-                    )
-                    return opened
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
                     qualifier, name, resolved_args, span=eff_span
@@ -2497,13 +2391,15 @@ class TypeEnvironment:
         *,
         span: SourceSpan | None,
     ) -> Type:
-        """Resolve ``module::Name[args]`` through the module import environment."""
+        """Resolve ``module::Name[args]`` through scope's recorded qualifier decision.
+
+        Only called for a routed qualifier (``route_segments``), which
+        scope's qualifier validation always resolves to a declaration or
+        rejects before typecheck runs; the recorded key is trusted rather
+        than re-checked here.
+        """
         rendered = render_qualified_name(qualifier, name)
-        if self._is_missing_local_scoped_type(qualifier, name):
-            raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
-        key = self._recorded_type_key(qualifier, name)
-        if key is None:
-            raise AglTypeError(f"'{rendered}' does not name a type.", span=span)
+        key = self._owner_declarations[qualifier.node_id]
         source_name = key[2]
         gdef = self._program_generic_table.get(key)
         if gdef is not None:
@@ -2600,42 +2496,18 @@ class TypeEnvironment:
         """Resolve a module-qualified type reference ``QUALIFIER::Name``.
 
         Falls back to the local type namespace (prelude / built-ins) when the
-        qualifier is empty (``::Name`` self-reference to the current module):
-        scope records no route for it, since it names none.
+        qualifier carries no route at all (``::Name`` self-reference to the
+        current module): scope's qualifier validation walks only a route, so
+        it records nothing for this spelling.
         """
         local_name = self._local_qualified_type_name(qualifier, name)
         if local_name is not None:
-            local_path, declared_name = _split_scoped_type_name(local_name)
-            self._ensure_qualified_type_route_unambiguous(
-                qualifier,
-                name,
-                (self._module_id, local_path, declared_name),
-                selected_route="type name",
-                span=span,
-            )
             return self._resolve_name_type(
                 local_name, span=span, _resolving=frozenset(), lexical=False
             )
 
-        if qualifier.anchor is None:
-            opened_atom = to_bare_atom(
-                (*tuple(segment.name for segment in qualifier.segments), name)
-            )
-            opened_key = self._opened_type_key(opened_atom, span)
-            if opened_key is not None:
-                self._ensure_qualified_type_route_unambiguous(
-                    qualifier,
-                    name,
-                    opened_key,
-                    selected_route="use route",
-                    span=span,
-                )
-                return self._resolve_type_key_unapplied(opened_key, opened_atom, span)
-        if self._is_missing_local_scoped_type(qualifier, name):
-            raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
-
         exposed_name = render_qualified_name(qualifier, name)
-        key = self._recorded_type_key(qualifier, name)
+        key = self._recorded_type_key(qualifier)
         if key is None:
             raise AglTypeError(f"'{exposed_name}' does not name a type.", span=span)
         return self._resolve_type_key_as_bare(key, exposed_name, span=span)

@@ -1,0 +1,12 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+record Box
+  inner: Slot[int]
+
+program def main() -> unit =
+  let b = Box(inner = Slot::Filled(value = 1))
+  case b of
+    | Box(inner = Slot[text]::Filled(value)) => print value
+    | _ => print "0"

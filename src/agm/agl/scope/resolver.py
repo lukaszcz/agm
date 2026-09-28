@@ -3648,11 +3648,39 @@ class _Resolver:
                     "as a qualifier route.",
                     span=chain.segments[0].span,
                 )
-            self._validate_local_scope_chain(chain)
+            local_path = self._validate_local_scope_chain(chain)
             if (
                 isinstance(node, (NameT, AppliedT, ConstructorPattern, IsTest, VariantRef))
                 and chain.segments
             ):
+                if local_path is not None and local_path in self._scope_region_paths:
+                    # An exact local scope-region match takes precedence
+                    # over any import route or use contribution sharing its
+                    # spelling, exactly as it does for a value read
+                    # (``_resolve_local_scope_member``): a scoped
+                    # constructor member is decided here, by the scope's own
+                    # member set, whether or not it declares *chain.member*.
+                    # A plain type declared at the scope's own path -- no
+                    # constructor of its own -- is left to the ordinary
+                    # owner/full-path resolution below, which finds it
+                    # directly through its exact nested identity. A
+                    # ``local_path`` matching neither a scope region nor a
+                    # type is a method-owner namespace instead (a
+                    # ``def Owner::Name::method`` receiver path extending an
+                    # imported type): it has no member set of its own to
+                    # decide against, so it always falls through too.
+                    self._check_local_scope_route_ambiguity(chain, chain.member, local_path)
+                    candidates = self._scoped_constructor_candidates.get(
+                        (local_path, chain.member), ()
+                    )
+                    if candidates:
+                        scoped_owner_qname = (self._module_id, _bare_atom(local_path))
+                        self._owner_declarations[chain.node_id] = self._owner_member_key(
+                            scoped_owner_qname, chain.member
+                        )
+                        return
+                    if (*local_path, chain.member) not in self._type_paths:
+                        raise _unknown_scope_member(chain.member, local_path, chain.span)
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
                 # The full ``owner::member`` path is tried first: it can only
@@ -3672,16 +3700,48 @@ class _Resolver:
                 full_selection = type_name_selection(
                     site, NameT(chain.member, chain.span, chain.node_id, qualifier=chain)
                 )
+                if (
+                    isinstance(node, (NameT, AppliedT))
+                    and chain.anchor is None
+                    and chain.segments
+                    and len(full_selection) == 1
+                ):
+                    # A contribution's own layer stops short of trying a
+                    # module route sharing the same spelling (a nested
+                    # region's own contribution is final, but a root one
+                    # is not: a route only ever reaches the root). Trying
+                    # the route here, always, catches a root contribution
+                    # -- a ``use`` alias, most often -- clashing with an
+                    # identically spelled import, exactly as a value read
+                    # does; a route reaching the same declaration a second
+                    # time changes nothing.
+                    imported = self._qualified_import_resolution(chain, chain.member)
+                    if isinstance(imported, QualResolutionFound):
+                        full_selection = full_selection | {imported.qname}
+                    elif isinstance(imported, QualResolutionAmbiguous):
+                        full_selection = full_selection | {
+                            (module, imported.member) for module in imported.candidates
+                        }
                 if len(full_selection) > 1:
                     route, member = routed_qualifier_and_member(chain, (chain.member,))
-                    modules = sorted({qname[0] for qname in full_selection}, key=ModuleId.path_str)
                     spelling = (
                         f"{render_qualifier(route, anchored=chain.anchored)}::"
                         f"{'::'.join(_bare_path(member))}"
                     )
+                    modules = sorted(
+                        {qname[0] for qname in full_selection if qname[0] != self._module_id},
+                        key=ModuleId.path_str,
+                    )
                     raise AmbiguousQualificationError.for_origins(
                         spelling,
-                        (ImportedModuleOrigin(module) for module in modules),
+                        (
+                            *(
+                                UseDeclarationOrigin(qname)
+                                for qname in full_selection
+                                if qname[0] == self._module_id
+                            ),
+                            *(ImportedModuleOrigin(module) for module in modules),
+                        ),
                         span=chain.span,
                         local_to=self._module_id,
                     )
@@ -3693,11 +3753,14 @@ class _Resolver:
                     # name) incapable of owning any member at all.
                     (only,) = full_selection
                     owner_qname = self._owner_of_member_qname(only)
-                    if owner_qname is None:
-                        # No separate owner: the full path names a plain
+                    if owner_qname is None or self._type_owners.owner(owner_qname) is None:
+                        # No type owner: either the full path names a plain
                         # declaration directly (a module route to a top-level
-                        # or nested type), which typecheck resolves by this
-                        # identity rather than the qualifier's spelling.
+                        # or nested type), or its prefix is a scope region --
+                        # local or imported, not itself a type -- either way
+                        # the full path already names a real declaration,
+                        # which typecheck resolves by this identity rather
+                        # than re-resolving the qualifier's spelling.
                         self._owner_declarations[chain.node_id] = self._qname_decl_key(only)
                     else:
                         self._select_chain_owner_member(
@@ -3719,6 +3782,29 @@ class _Resolver:
                     raise self._unknown_owner_member(
                         render_qualifier_path(chain), chain.member, chain.span
                     )
+                if isinstance(node, (NameT, AppliedT)) or len(chain.segments) > 1:
+                    # Neither the full path nor the owner alone selects
+                    # anything at all: this qualifier's route is unknown, or
+                    # a known route is simply missing the member -- decided
+                    # here through the very same route classification and
+                    # error builders the value path uses for the identical
+                    # qualifier shape. A one-segment constructor position
+                    # (pattern, is, variant) instead defers to its own
+                    # module-surface injection lookup (``_module_surface_
+                    # constructor``), which a plain type-name search cannot
+                    # see -- a route-injected root enum member has no
+                    # separate type identity at this qualifier's spelling --
+                    # and which itself raises for a route that also misses
+                    # there; a multi-segment route names no such injected
+                    # surface, so it is decided here alone. A
+                    # ``CURRENT_MODULE``-anchored chain (``::A::Name``) is
+                    # never a route -- the same split the value path draws
+                    # before ever reaching the shared route resolver --
+                    # so it raises the current-module-scope-miss verdict
+                    # directly instead.
+                    if chain.anchor is QualifierAnchor.CURRENT_MODULE:
+                        raise self._own_scope_miss(chain, chain.span)
+                    self._resolve_qualified_qname(chain, chain.member, chain.span)
 
         walk(root, validate)
 
@@ -5200,8 +5286,10 @@ class _Resolver:
         if local_path in self._type_paths:
             return (self._local_owner_constructor(chain, local_path, name),)
         if local_path is not None:
-            if name not in self._scope_nodes[local_path].members:
-                raise _unknown_scope_member(name, local_path, span)
+            # A scope-region member miss is already scope's own verdict,
+            # raised by ``_validate_qualifier_chains`` for every position
+            # before pattern/``is`` candidates are ever collected: reaching
+            # here means *name* is a real member of the scope.
             # The scope's selection is complete; typecheck never reads it as a module route.
             self._scope_qualified_spellings.add(node_id)
             return tuple(self._scoped_constructor_candidates.get((local_path, name), ()))

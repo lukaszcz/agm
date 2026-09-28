@@ -6280,14 +6280,11 @@ class _Checker:
                     ):
                         named = self._env.owner_inline_member(enum_type, pattern.name)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
-                elif (
-                    applied_member := self._applied_member(
-                        pattern.qualifier, pattern.name, pattern.span
-                    )
-                ) is not None:
-                    self._require_selected_member(
-                        pattern.name, applied_member, subj_type, pattern.span
-                    )
+                # A non-enum applied owner (`Owner[T]::name`) is never a valid
+                # constructor-pattern qualifier here: `_local_qualified_enum`
+                # above already selects every owner that instantiates to an
+                # enum, and scope's own candidate resolution already rejects
+                # a qualifier naming no such owner before this function runs.
                 # A constructor scope resolved for this record already names it.
                 elif constructor_ref is None:
                     raise AglTypeError(

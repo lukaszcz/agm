@@ -835,8 +835,8 @@ def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Pa
         },
     )
 
-    with pytest.raises(AglTypeError, match="both"):
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
 
 
 def test_ambiguous_qualification_reports_two_module_origins(tmp_path: Path) -> None:
@@ -933,8 +933,41 @@ def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglTypeError, match="both"):
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
+
+
+def test_qualified_type_use_route_collides_with_an_ambiguous_import_route(
+    tmp_path: Path,
+) -> None:
+    """A use-contributed type's route sharing a suffix-ambiguous import route is ambiguous.
+
+    ``lib`` uniquely resolves to ``S::T`` through the ``use`` alias, but the
+    same spelling also matches ``a/lib`` and ``b/lib`` by suffix -- the
+    import side's own ambiguity, not just a single competing import, still
+    joins the type owner's candidate set."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import a/lib\n"
+                "import b/lib\n"
+                "use S as lib\n"
+                "\n"
+                "scope S\n"
+                "  record T\n"
+                "    value: int\n"
+                "end S\n"
+                "\n"
+                "def identity(value: lib::T) -> lib::T = value\n"
+            ),
+            "a/lib": "record T\n  value: int\n",
+            "b/lib": "record T\n  value: int\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError):
+        resolve_program(graph)
 
 
 def test_qualified_type_use_and_import_routes_deduplicate_same_origin(tmp_path: Path) -> None:
@@ -1479,8 +1512,8 @@ def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_pat
         },
     )
 
-    with pytest.raises(AglTypeError, match="module route") as exc_info:
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(RouteClashError, match="module route") as exc_info:
+        resolve_program(graph)
 
     for repair in ("hiding", "longer suffix", "/-anchored", "as"):
         assert repair in str(exc_info.value)
@@ -1505,8 +1538,8 @@ def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
         },
     )
 
-    with pytest.raises(AglTypeError):
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(RouteClashError):
+        resolve_program(graph)
 
 
 def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor(
@@ -1530,8 +1563,8 @@ def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor
         },
     )
 
-    with pytest.raises(AglTypeError, match="module route"):
-        check_program(resolve_program(graph), base_caps())
+    with pytest.raises(RouteClashError, match="module route"):
+        resolve_program(graph)
 
 
 def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path) -> None:
@@ -1643,11 +1676,11 @@ def test_current_module_anchor_does_not_qualify_an_imported_enum_owner_in_patter
         ("case flag of | ::Unknown::On => 1 | _ => 2", AglScopeError),
         ("flag is ::Unknown::On", AglScopeError),
         ("flag is ::Unknown::Deep::On", UnknownQualifierError),
-        ("flag is /Unknown::Flag::On", AglTypeError),
+        ("flag is /Unknown::Flag::On", UnknownQualifierError),
     ],
 )
 def test_invalid_qualified_pattern_and_is_routes_are_rejected(
-    tmp_path: Path, use: str, error: type[AglScopeError] | type[AglTypeError]
+    tmp_path: Path, use: str, error: type[AglScopeError]
 ) -> None:
     """A current-module path naming nothing fails as its value does; a route owner is checked."""
     graph = make_graph_from_files(
@@ -1655,7 +1688,7 @@ def test_invalid_qualified_pattern_and_is_routes_are_rejected(
         {"entry": f"enum Flag | On | Off\nlet flag: Flag = Flag::On\n{use}"},
     )
     with pytest.raises(error):
-        check_program(resolve_program(graph), base_caps())
+        resolve_program(graph)
 
 
 @pytest.mark.parametrize(
@@ -1685,7 +1718,7 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
         (
             "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
             {},
-            AglTypeError,
+            UnknownQualifierError,
         ),
         (
             "import remote/config hiding Flag\nenum Flag | On | Off\n"
@@ -1695,7 +1728,7 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
             "  | _ => 2\n"
             "result",
             {"remote/config": "enum Flag | On | Off"},
-            AglTypeError,
+            UnknownMemberError,
         ),
         (
             # A qualifier ambiguous across two imported modules is scope's
@@ -1712,12 +1745,12 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     tmp_path: Path,
     source: str,
     modules: dict[str, str],
-    error: type[AglScopeError] | type[AglTypeError],
+    error: type[AglScopeError],
 ) -> None:
     graph = make_graph_from_files(tmp_path, {"entry": source, **modules})
 
     with pytest.raises(error):
-        check_program(resolve_program(graph), base_caps())
+        resolve_program(graph)
 
 
 def test_qualified_import_tail_keeps_the_full_type_surface(tmp_path: Path) -> None:
@@ -2099,7 +2132,7 @@ def test_enum_variant_expansion_never_contributes_a_bare_type(
     case here since no route ever contributes the name as a type at all.
     """
     graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
-    with pytest.raises(AglTypeError) as raised:
+    with pytest.raises((AglTypeError, AglScopeError)) as raised:
         check_program(resolve_program(graph), base_caps())
     assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))
 

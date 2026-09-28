@@ -36,6 +36,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ScopeNode,
     UnknownMemberError,
+    UnknownQualifierError,
 )
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
@@ -758,13 +759,13 @@ class TestIsAssignable:
 
 @pytest.mark.parametrize("type_ref", ("A::Missing", "A::Missing[int]"))
 def test_missing_type_under_recognized_local_scope_is_focused(type_ref: str) -> None:
-    """A locally-scoped-region lookup miss reports the scoped name, not a
+    """A locally-scoped-region lookup miss is scope's own focused verdict, not a
     generic "unknown module" diagnostic — a property of local ``scope``
     regions, independent of whether a module graph or the standard library is
     in scope."""
     source = f"scope A\ndef member() -> int = 1\nend A\ndef use(value: {type_ref}) -> int = 1"
     err = reject_type(source)
-    assert "'A::Missing'" in str(err)
+    assert type(err) is UnknownMemberError
 
 
 # ---------------------------------------------------------------------------
@@ -7542,23 +7543,23 @@ class TestExceptionIsTest:
         err = reject_type(src)
         assert type(err) is UnknownMemberError
         assert err.span is not None
-        assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Unknown"
+        assert src[err.span.start_offset : err.span.end_offset] == "Lib::Unknown"
 
     def test_qualified_unknown_module_route_reports_route_cause(self) -> None:
-        """A route owner naming no route at all raises before the generic relatedness check.
+        """Scope decides an unknown route owner before the checker ever runs.
 
-        The resolver defers this owner route failure; the checker must surface
-        it rather than falling back to the generic "no exception related"
-        message it uses for a resolvable, unrelated RHS
+        Scope's own qualifier-chain resolution rejects a route naming no
+        module at all, rather than falling back to the generic "no exception
+        related" message the checker uses for a resolvable, unrelated RHS
         (``test_qualified_unrelated_rejected``).
         """
         src = _EXCEPTION_IS_HIERARCHY + (
             'let d = Detailed(message = "m", code = 1, detail = "x")\nd is nosuch::Owner::X'
         )
         err = reject_type(src)
-        assert isinstance(err, AglTypeError)
+        assert type(err) is UnknownQualifierError
         assert err.span is not None
-        assert src[err.span.start_offset : err.span.end_offset] == "d is nosuch::Owner::X"
+        assert src[err.span.start_offset : err.span.end_offset] == "nosuch::Owner::X"
 
     def test_is_not_exception(self) -> None:
         r = accept_type(
@@ -8343,7 +8344,7 @@ class TestBareConstructorTypeApply:
 
     def test_applied_unknown_owner_member_is_rejected(self) -> None:
         error = reject_type("let v: Missing[int]::Bar = 1\nv")
-        assert isinstance(error, AglTypeError)
+        assert isinstance(error, AglScopeError)
 
     def test_owner_apply_substitutes_only_the_selected_member_parameters(self) -> None:
         checked = accept_type(

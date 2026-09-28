@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode, TypeOwner
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
+    from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -702,6 +703,32 @@ class ReplSession:
                 return type_result
         return result
 
+    def _type_entry_program(
+        self, text: str
+    ) -> tuple[Program, int, tuple[SpacedQualifier, ...], str, SourceSpan]:
+        """Parse *text* as a type expression, wrapped as a synthetic ``type <fresh> = text`` alias.
+
+        A bare type has no program-level syntax of its own, so it is probed as
+        a fresh alias's body -- the same position ``type X = <type-expr>``
+        resolves through. Shared construction for :meth:`_try_type_entry`'s
+        REPL-only bare-type fallback and :meth:`resolve_type_entry`/
+        :meth:`resolve_and_check_type_entry` below. Raises the underlying
+        ``AglSyntaxError`` when *text* is not a type expression at all.
+        """
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_type_expr_seeded
+        from agm.agl.syntax.nodes import Block, Program, TypeAlias
+
+        with spaced_qualifier_collector() as spaced_sink:
+            type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
+        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
+        alias = TypeAlias(
+            name=fresh_name, type_expr=type_expr, span=type_expr.span, node_id=next_node_id
+        )
+        block = Block(items=(alias,), span=type_expr.span, node_id=next_node_id + 1)
+        program = Program(body=block, span=type_expr.span, node_id=next_node_id + 2)
+        return program, next_node_id + 3, tuple(spaced_sink), fresh_name, type_expr.span
+
     def _try_type_entry(self, text: str) -> EntryResult | None:
         """Attempt to interpret *text* as a bare type-expression entry.
 
@@ -738,33 +765,24 @@ class ReplSession:
         is discarded once its resolved type (or generic definition) is read.
         """
         from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
-        from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.parser import AglSyntaxError, parse_type_expr_seeded
+        from agm.agl.parser import AglSyntaxError
         from agm.agl.repl.type_display import format_generic_type_def_for_repl
         from agm.agl.scope import AglScopeError
-        from agm.agl.syntax.nodes import Block, Program, TypeAlias
         from agm.agl.typecheck import AglTypeError, UnappliedGenericTypeError
 
         host_env = self._runtime.host_environment()
-        with spaced_qualifier_collector() as spaced_sink:
-            try:
-                type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
-            except AglSyntaxError:
-                return None
-        spaced_qualifiers = tuple(spaced_sink)
-
-        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
-        alias = TypeAlias(
-            name=fresh_name, type_expr=type_expr, span=type_expr.span, node_id=next_node_id
-        )
-        block = Block(items=(alias,), span=type_expr.span, node_id=next_node_id + 1)
-        program = Program(body=block, span=type_expr.span, node_id=next_node_id + 2)
+        try:
+            program, next_node_id, spaced_qualifiers, fresh_name, type_span = (
+                self._type_entry_program(text)
+            )
+        except AglSyntaxError:
+            return None
 
         try:
             checked_program = self._entry_pipeline.resolve_and_check_program(
@@ -773,7 +791,7 @@ class ReplSession:
         except (HiddenMemberError, ReferencedMemberError) as exc:
             return self._fail([exc.to_diagnostic()], [])
         except UnappliedGenericTypeError as exc:
-            if exc.span != type_expr.span:
+            if exc.span != type_span:
                 # The unapplied generic is nested inside the entry (e.g. a type
                 # argument), not the entry's own whole spelling: its definition
                 # is not what was asked for, so the original failure stands.
@@ -1545,6 +1563,25 @@ class ReplSession:
     # type_of — type without evaluation
     # ------------------------------------------------------------------
 
+    def _parse_throwaway_entry(self, text: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:
+        """Parse *text* as a throwaway REPL entry, seeded at the session's node-id counter.
+
+        Shared prologue for :meth:`type_of`, :meth:`resolve_entry`, and
+        :meth:`resolve_and_check_entry`: none of them promote or advance the
+        session counter, so seeding at ``_next_node_id`` is safe -- all
+        promoted ids are strictly below it, making this parse's ids disjoint
+        from the session's. Raises the underlying ``AglSyntaxError`` on
+        failure.
+        """
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_program_seeded
+
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, resolve_infix=False
+            )
+        return program, next_node_id, tuple(spaced_sink)
+
     def type_of(self, text: str) -> str:
         """Return the canonical display type of *text* as an expression entry.
 
@@ -1554,25 +1591,17 @@ class ReplSession:
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import Binder, Declaration
 
         host_env = self._runtime.host_environment()
-        # Throwaway ids: type_of never promotes and never advances the session
-        # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
-        # strictly below it, making this parse's ids disjoint from the session's.
-        with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
+        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
         checked_program = self._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
+            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
         )
         checked = checked_program.modules[checked_program.entry_id]
         from agm.agl.matchcompile import (
@@ -1601,15 +1630,9 @@ class ReplSession:
         type-name-as-value mistake caught while resolving, ``AglTypeError``)
         on failure and returns normally on success.
         """
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.parser import parse_program_seeded
-
-        with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
+        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
         self._entry_pipeline.resolve_program(
-            program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
+            program, next_node_id, spaced_qualifiers=spaced_qualifiers
         )
 
     def resolve_and_check_entry(self, text: str) -> None:
@@ -1622,16 +1645,44 @@ class ReplSession:
         returns normally on success. Never lowers, evaluates, promotes, or
         advances the node-id counter.
         """
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.parser import parse_program_seeded
-
         host_env = self._runtime.host_environment()
-        with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
+        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
         self._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
+            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
+        )
+
+    def resolve_type_entry(self, text: str) -> None:
+        """Resolve *text* as a bare type-entry probe against the session's state.
+
+        As :meth:`resolve_entry`, but probes *text* the way
+        :meth:`_try_type_entry`'s REPL-only bare-type-entry fallback does
+        (as a fresh alias's body): raises the underlying
+        ``AglSyntaxError``/``AglScopeError`` (or, for a type-name-as-value
+        mistake caught while resolving, ``AglTypeError``) on failure and
+        returns normally on success.
+        """
+        program, next_node_id, spaced_qualifiers, _fresh_name, _span = self._type_entry_program(
+            text
+        )
+        self._entry_pipeline.resolve_program(
+            program, next_node_id, spaced_qualifiers=spaced_qualifiers
+        )
+
+    def resolve_and_check_type_entry(self, text: str) -> None:
+        """Resolve and type-check *text* as a bare type-entry probe against the session's state.
+
+        As :meth:`resolve_and_check_entry`, but probes *text* the way
+        :meth:`_try_type_entry`'s REPL-only bare-type-entry fallback does.
+        Raises the underlying
+        ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on failure and
+        returns normally on success.
+        """
+        host_env = self._runtime.host_environment()
+        program, next_node_id, spaced_qualifiers, _fresh_name, _span = self._type_entry_program(
+            text
+        )
+        self._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
         )
 
     # ------------------------------------------------------------------

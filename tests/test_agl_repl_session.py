@@ -72,7 +72,7 @@ from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
-from tests.agl.qualifier_support import all_groupings, eval_grouped_final
+from tests.agl.qualifier_support import all_groupings, eval_grouped_final, eval_setup_entries
 
 # ---------------------------------------------------------------------------
 # Session construction
@@ -1415,13 +1415,7 @@ def _grouping_legality(
     valid: list[tuple[int, ...]] = []
     for sizes in all_groupings(len(decls)):
         session = make_session()
-        start = 0
-        ok = True
-        for size in sizes:
-            if not session.eval_entry("\n".join(decls[start : start + size])).ok:
-                ok = False
-                break
-            start += size
+        ok = eval_setup_entries(session, decls, sizes)
         if ok and probe is not None:
             ok = session.eval_entry(probe).ok
         if ok:

@@ -3844,23 +3844,43 @@ class _Resolver:
                     # separate type identity at this qualifier's spelling --
                     # and which itself raises for a route that also misses
                     # there; a multi-segment route names no such injected
-                    # surface, so it is decided here alone. A
-                    # ``CURRENT_MODULE``-anchored chain (``::A::Name``) is
-                    # never a route -- the same split the value path draws
-                    # before ever reaching the shared route resolver --
-                    # so it raises the current-module-scope-miss verdict
-                    # directly instead.
-                    if chain.anchor is QualifierAnchor.CURRENT_MODULE:
-                        raise self._own_scope_miss(chain, chain.span)
+                    # surface, so it is decided here alone.
                     if local_path is not None:
                         # The leading segment already resolves locally (a
                         # method-owner namespace with no member set of its
                         # own, tried above and found wanting): a route
                         # sharing its spelling never overrides it, so the
                         # verdict is this local path's own missing member,
-                        # not an unknown qualifier.
+                        # not an unknown qualifier -- even under a
+                        # ``CURRENT_MODULE`` anchor, whose own root already
+                        # owns this local path.
                         self._check_local_scope_route_ambiguity(chain, chain.member, local_path)
                         raise _unknown_scope_member(chain.member, local_path, chain.span)
+                    if chain.anchor is QualifierAnchor.CURRENT_MODULE:
+                        # A ``CURRENT_MODULE``-anchored chain (``::A::Name``)
+                        # is never a route -- the same split the value path
+                        # draws before ever reaching the shared route
+                        # resolver below -- so it raises the current-module-
+                        # scope-miss verdict directly instead.
+                        raise self._own_scope_miss(chain, chain.span)
+                    # The owner itself may be a qualified name (a chain of
+                    # three or more atoms): its own owner may resolve to a
+                    # type that only REFERENCES or HIDES it -- an enum's
+                    # ``::Referenced`` member, say -- which the layered type
+                    # lookup above cannot see on its own. Try that one level
+                    # up, exactly as the value-position resolver does for the
+                    # identical qualifier shape; anything else (including no
+                    # single grand-owner) falls through unchanged.
+                    grand = self._referenced_grand_owner(chain)
+                    if grand is not None:
+                        grand_owner, owner_qualifier, owner_name, grand_route = grand
+                        self._select_owner_member(
+                            grand_owner,
+                            render_qualifier_path(owner_qualifier),
+                            owner_name,
+                            chain.span,
+                            grand_route,
+                        )
                     self._resolve_qualified_qname(chain, chain.member, chain.span)
 
         walk(root, validate)
@@ -4189,6 +4209,13 @@ class _Resolver:
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
             is_prelude_static_owner = self._denotes_builtin_static_owner(relative_path)
+            # A route this hopeless still has one further escape: *chain*'s
+            # own owner may itself be a type only referenced or hidden by a
+            # further owner one level up (an enum's ``::Referenced`` member,
+            # say), which none of the checks above -- all keyed to *chain*'s
+            # own scope path or route -- can see. Left to the qualified
+            # chain resolver, which reports that verdict precisely.
+            has_referenced_grand_owner = self._referenced_grand_owner(chain) is not None
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
                 known_segment
                 and not has_module_route
@@ -4196,6 +4223,7 @@ class _Resolver:
                 and not has_opened_member
                 and not has_opened_type_owner
                 and not is_prelude_static_owner
+                and not has_referenced_grand_owner
             ):
                 raise self._unknown_scope_path(chain)
             return False
@@ -4264,9 +4292,34 @@ class _Resolver:
                     # an unknown qualifier.
                     self._check_local_scope_route_ambiguity(chain, node.name, local_type_path)
                     raise _unknown_scope_member(node.name, local_type_path, node.span) from None
+                if isinstance(direct_error, UnknownQualifierError):
+                    # The route resolver's "no module" verdict may itself be
+                    # superseded: this qualifier's owner may resolve to a
+                    # type that only REFERENCES or HIDES it -- an enum's
+                    # ``::Referenced`` member, say -- one level up, exactly
+                    # as the type-position walk already tries for the
+                    # identical qualifier shape.
+                    grand = self._referenced_grand_owner(chain)
+                    if grand is not None:
+                        grand_owner, owner_qualifier, owner_name, route = grand
+                        self._select_owner_member(
+                            grand_owner,
+                            render_qualifier_path(owner_qualifier),
+                            owner_name,
+                            node.span,
+                            route,
+                        )
                 raise direct_error
             self._constructor_refs[node.node_id] = injected
             return
+        if local_type_path is not None:
+            # The leading segment already resolves locally (a method-owner
+            # namespace with no member set of its own, tried above and found
+            # wanting): the true miss is this local path's own member, not
+            # an unknown qualifier -- reached only under a ``CURRENT_MODULE``
+            # anchor, whose own route-qualified attempt above never runs.
+            self._check_local_scope_route_ambiguity(chain, node.name, local_type_path)
+            raise _unknown_scope_member(node.name, local_type_path, node.span)
         # Only a ``CURRENT_MODULE``-anchored chain reaches here: every other
         # anchor either resolves above or leaves ``direct_error`` set. Its
         # empty-segment self-reference form is handled in ``_resolve_varref``,
@@ -4546,6 +4599,47 @@ class _Resolver:
         site = self._type_owners.site(self._module_id, self._scope.scope_path)
         return OwnerRoute(site, owner_type_expr(chain))
 
+    def _referenced_grand_owner(
+        self, chain: QualifierChain
+    ) -> tuple[TypeOwner, QualifierChain, str, OwnerRoute] | None:
+        """Return *chain*'s owner's own owner, when it resolves to exactly one type.
+
+        *chain*'s own owner (its last segment) may itself be a type only
+        REFERENCED or HIDDEN by a further owner one level up -- an enum's
+        ``::Referenced`` member, say -- invisible to the ordinary layered
+        lookup for *chain*'s owner alone. ``None`` when *chain*'s owner
+        carries no further qualifier, or that further owner is absent or
+        ambiguous. The result pairs the further owner with *chain*'s own
+        owner's qualifier path and name -- the spelling to report a
+        referenced or hidden verdict against.
+        """
+        owner_route = self._owner_route(chain)
+        owner_expr = owner_route.owner_expr
+        owner_qualifier = owner_expr.qualifier
+        if owner_qualifier is None or not owner_qualifier.segments:
+            # An owner with no segments of its own -- just an anchor kept
+            # for rendering -- names no further nesting :func:`owner_type_expr`
+            # could walk up to.
+            return None
+        grand_owner_expr = owner_type_expr(owner_qualifier)
+        grand_owner_selection = type_name_selection(owner_route.site, grand_owner_expr)
+        # Exactly one candidate must both name the further owner unambiguously
+        # and be a real type owner -- the same "no single answer" verdict
+        # either way, so it is decided in one step rather than two.
+        grand_owner = (
+            self._type_owners.owner(next(iter(grand_owner_selection)))
+            if len(grand_owner_selection) == 1
+            else None
+        )
+        if grand_owner is None:
+            return None
+        return (
+            grand_owner,
+            owner_qualifier,
+            owner_expr.name,
+            OwnerRoute(owner_route.site, grand_owner_expr),
+        )
+
     def _reject_use_alias_referenced_member(self, chain: QualifierChain, variant: str) -> None:
         """Raise when a whole-target ``use`` alias spells a referenced or hidden member.
 
@@ -4631,35 +4725,38 @@ class _Resolver:
         self._owner_declarations[chain.node_id] = decl_key
         return constructor
 
-    def _local_leading_chain_owner(
-        self, chain: QualifierChain, variant: str
+    def _owner_variant_match(
+        self, owner_qname: QName, variant: str
     ) -> tuple[DeclarationKey, TypeOwner] | None:
-        """Resolve a single-segment chain's leading owner through the layered lookup.
+        """Whether *owner_qname*, a type owner, visibly selects *variant*.
 
-        Reached only once the plain import-route lookup above finds nothing:
-        the leading segment may still name an outer local type declaration --
-        an enclosing region's or the module root's own -- which only the
-        general nominal lookup (:func:`nominal_selection`), tried here against
-        the full ``leading::variant`` path, sees. A full-path hit only counts
-        when it is genuinely nested under a type owner (a record or enum's
-        own nested declaration, inline member included, e.g. ``Geo::Inner``
-        or ``Geo::Red``): a plain module-qualified top-level type (e.g.
-        ``lib::C``) also resolves through the same lookup, but it names no
-        owner at all -- that spelling is left for the module-route fallback
-        above, and ultimately the "type name, not a value" diagnostic, not
-        mistaken for an owner-and-member reference here.
+        Tried two ways, since a type owner's own ``members`` holds only an
+        enum's inline members: first, whether ``owner_qname::variant`` is
+        itself a directly declared, constructible type -- a record or
+        exception nested beneath the owner's own path (``record
+        Owner::Nested``) -- in which case *that* declaration's own owner is
+        returned, selected by its own name (:meth:`TypeOwner.select`'s
+        ``written`` fallback); otherwise, whether *variant* is one of
+        *owner_qname*'s own visible inline members. An enum's own inline
+        member is also registered at this nested path (so the enum's scope
+        can be walked uniformly), but it is not a *separate* declaration --
+        its hiding and referencing are decided by *owner_qname*'s own owner,
+        never by its self-describing nested one -- so that case falls
+        through to the members check below. Neither hidden nor referenced
+        members visibly select here -- a single remaining candidate still
+        defers to :meth:`_owner_constructor` for that decision.
         """
-        site = self._type_owners.site(self._module_id, self._scope.scope_path)
-        full_member_expr = NameT(variant, chain.span, chain.node_id, qualifier=chain)
-        selection = nominal_selection(site, full_member_expr)
-        full_selection = selection[0] if selection is not None else frozenset()
-        for qname in full_selection:
-            nested_owner_qname = self._owner_of_member_qname(qname)
-            if nested_owner_qname is None or self._type_owners.owner(nested_owner_qname) is None:
-                continue
-            owner = self._constructible_owner(qname)
-            if owner is not None:
-                return self._qname_decl_key(qname), owner
+        module_id, atom = owner_qname
+        nested_qname = (module_id, _bare_atom((*_bare_path(atom), variant)))
+        nested_owner = self._constructible_owner(nested_qname)
+        if nested_owner is not None and (
+            nested_owner.constructor is None
+            or nested_owner.constructor.inline_enum_owner_decl_node_id is None
+        ):
+            return self._qname_decl_key(nested_qname), nested_owner
+        owner = self._constructible_owner(owner_qname)
+        if owner is not None and owner.members.get(variant) is not None:
+            return self._owner_member_key(owner_qname, variant), owner
         return None
 
     def _imported_chain_owner(
@@ -4669,58 +4766,54 @@ class _Resolver:
 
         The final chain segment is selected as a normal imported member; any
         preceding segments are its route.  A one-segment chain may instead
-        name a type exposed by an import tail. This is the same chain walk used for
-        ordinary qualified values, with only the resulting member kind
-        determining whether it owns a constructor. The returned key is
-        already the full ``owner::variant`` declaration identity to record in
-        ``owner_declarations`` -- the ambiguous-bare-owner fallback below
-        resolves *variant* directly, so its own qname already names that
-        identity, unlike the other branches' separately named owner.
+        name a type exposed by an import tail, or an outer local type
+        declaration -- both are :meth:`_leading_segment_owner_candidates`'s
+        job, the same layered lookup a local def-created path's own leading
+        segment defers to for its owner reading. This is the same chain walk
+        used for ordinary qualified values, with only the resulting member
+        kind determining whether it owns a constructor.
         """
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
         if len(chain.segments) == 1 and not chain.anchored:
             segment = chain.segments[0]
-            try:
-                owner_ref = self._lookup_import_env_unqualified(
-                    segment.name, chain.span, self._is_type_contribution
+            candidates = self._leading_segment_owner_candidates(chain)
+            if not candidates:
+                return None
+            owner_matches = [
+                (qname, match)
+                for qname in candidates
+                for match in (self._owner_variant_match(qname, variant),)
+                if match is not None
+            ]
+            if len(owner_matches) > 1:
+                # The same-level ambiguity of the leading segment is decided
+                # full-path-first: more than one candidate owner declares
+                # *variant*, so the bare leading segment's own ambiguity is
+                # not the final verdict.
+                raise AmbiguousQualificationError.for_origins(
+                    (),
+                    (segment.name, variant),
+                    (ImportedModuleOrigin(qname) for qname, _match in owner_matches),
+                    span=chain.span,
+                    local_to=self._module_id,
                 )
-            except AmbiguousQualificationError:
-                # An owner ambiguous by its bare spelling alone, always an
-                # import collision, still selects the one module declaring
-                # *variant* through it: the same-level ambiguity of the
-                # leading segment is decided full-path-first, so the bare
-                # lookup's own ambiguity is not the final verdict -- resolve
-                # the full ``owner::variant`` path instead.
-                result = resolve_qualified(
-                    self._import_env, (), _bare_atom((segment.name, variant)), anchored=False
-                )
-                if isinstance(result, QualResolutionFound):
-                    owner = self._constructible_owner(result.qname)
-                    return None if owner is None else (self._qname_decl_key(result.qname), owner)
-                if isinstance(result, QualResolutionAmbiguous):
-                    raise AmbiguousQualificationError.for_origins(
-                        (),
-                        (segment.name, variant),
-                        (
-                            ImportedModuleOrigin((module, result.member))
-                            for module in result.candidates
-                        ),
-                        span=chain.span,
-                        local_to=self._module_id,
-                    ) from None
-                # No candidate declares *variant* either: the same unknown-member
-                # verdict every other owner-member miss raises, not the bare
-                # owner's own ambiguity (already caught above) nor a bogus
-                # module-route diagnostic.
-                raise self._unknown_owner_member(
-                    render_qualifier_path(chain), variant, chain.span
-                ) from None
-            if owner_ref is None:
-                return self._local_leading_chain_owner(chain, variant)
-            owner_qname = _ref_qname(owner_ref)
-            owner = self._constructible_owner(owner_qname)
-            return None if owner is None else (self._owner_member_key(owner_qname, variant), owner)
+            if owner_matches:
+                return owner_matches[0][1]
+            if len(candidates) == 1:
+                # The one candidate decides *variant*'s own verdict (hidden,
+                # referenced, or genuinely unknown) below, in
+                # ``_owner_constructor``.
+                sole_qname = next(iter(candidates))
+                sole_owner = self._constructible_owner(sole_qname)
+                if sole_owner is None:
+                    return None
+                return self._owner_member_key(sole_qname, variant), sole_owner
+            # No candidate declares *variant* either: the same unknown-member
+            # verdict every other owner-member miss raises, not the leading
+            # segment's own ambiguity (already resolved above) nor a bogus
+            # module-route diagnostic.
+            raise self._unknown_owner_member(render_qualifier_path(chain), variant, chain.span)
         if len(chain.segments) > 1:
             route = QualifierChain(
                 anchor=chain.anchor,
@@ -4744,20 +4837,21 @@ class _Resolver:
                 # full-path-first, so the owner's own ambiguity is not the
                 # final verdict while *variant* could still disambiguate it --
                 # exactly as the one-segment branch above already does.
-                resolvable = [
-                    (origin.declaration, owner)
+                route_owner_matches = [
+                    (origin.declaration, candidate_owner)
                     for origin in exc.origins
-                    for owner in (self._constructible_owner(origin.declaration),)
-                    if owner is not None and owner.members.get(variant) is not None
+                    for candidate_owner in (self._constructible_owner(origin.declaration),)
+                    if candidate_owner is not None
+                    if candidate_owner.members.get(variant) is not None
                 ]
-                if not resolvable:
+                if not route_owner_matches:
                     raise self._unknown_owner_member(
                         render_qualifier_path(chain), variant, chain.span
                     ) from None
-                if len(resolvable) > 1:
+                if len(route_owner_matches) > 1:
                     raise
-                owner_qname, owner = resolvable[0]
-                return self._owner_member_key(owner_qname, variant), owner
+                matched_qname, matched_owner = route_owner_matches[0]
+                return self._owner_member_key(matched_qname, variant), matched_owner
             owner_qname = _ref_qname(owner_ref)
             owner = self._constructible_owner(owner_qname)
             if owner is None:

@@ -41,6 +41,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import ReferencedMemberError
 from agm.agl.repl import ReplSession
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
@@ -51,7 +52,14 @@ from agm.agl.scope.symbols import (
 from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir_graph
-from tests.agl.qualifier_support import Verdict, file_verdict, repl_verdict_all_groupings
+from tests.agl.qualifier_support import (
+    Verdict,
+    all_groupings,
+    eval_setup_entries,
+    file_verdict,
+    repl_verdict_all_groupings,
+    reptype_verdict_all_groupings,
+)
 
 # ---------------------------------------------------------------------------
 # Unique, other (a real but mismatched member), ambiguous and missing
@@ -142,7 +150,7 @@ _MISSING = ("scope", UnknownMemberError)
 
 _EXPECTED: dict[tuple[str, str, str], tuple[str, type[BaseException] | type[None]]] = {}
 for _form in _FORMS:
-    for _pos in _POS:
+    for _pos in (*_POS, "reptype"):
         _EXPECTED[(_form, "unique", _pos)] = _ACCEPTED
         _EXPECTED[(_form, "other", _pos)] = (
             _OTHER_MISMATCH if _pos in ("pattern", "is") else _ACCEPTED
@@ -226,6 +234,58 @@ def test_qualifier_decision_matrix_repl(
     decls = (*header, entry)
     verdict = repl_verdict_all_groupings(tmp_path, modules, decls)
     _assert_matrix_verdict("\n".join(decls), verdict, form_name, outcome, pos_name, q)
+
+
+def _matrix_params_reptype() -> list[object]:
+    # As `_matrix_params_repl`, "moduse"'s ambiguity outcome is excluded for
+    # the same pre-existing, separately tracked REPL-grouping divergence.
+    return [
+        pytest.param(form_name, outcome, id=f"{form_name}-{outcome}")
+        for form_name, (_, _, _, outcomes) in _FORMS.items()
+        for outcome in outcomes
+        if not (form_name == "moduse" and outcome == "amb")
+    ]
+
+
+@pytest.mark.parametrize(("form_name", "outcome"), _matrix_params_reptype())
+def test_qualifier_decision_matrix_reptype(tmp_path: Path, form_name: str, outcome: str) -> None:
+    """The REPL-only bare-type-entry position reaches a pure-type-position verdict.
+
+    A qualifier chain typed alone at the REPL prompt probes the same
+    owner/member decision as a type position (``annot``/``alias``/``tyarg``),
+    not a value one: unlike ``value``/``pattern``/``is``, it never checks a
+    referenced member against a subject's own type, so "other" (a real but
+    structurally mismatched member) is accepted, not a typecheck mismatch.
+    """
+    modules, header, probe, q = _matrix_case(form_name, outcome, "value")
+    verdict = reptype_verdict_all_groupings(tmp_path, modules, tuple(header), probe)
+    _assert_matrix_verdict(probe, verdict, form_name, outcome, "reptype", q)
+
+
+def test_localuse_header_legal_groupings_are_exactly_their_expected_set(tmp_path: Path) -> None:
+    """The ``localuse`` form's header setup is legal in only two REPL groupings.
+
+    Its ``use a::*``/``use b::*`` name scope regions their own later
+    ``scope a``/``scope b`` declarations haven't opened yet, in REPL-entry
+    order, so only a grouping that keeps the whole header in one entry ever
+    sets up (whether or not that entry also carries the ``let`` referencing
+    them). Verified fresh here, via the same :func:`eval_setup_entries` walk
+    the matrix's own REPL grouping helpers build on, so a change that quietly
+    admits or drops a legal grouping fails loudly here rather than only ever
+    showing up as a skipped parametrization in the matrix tests above.
+    """
+    _, header, _, _ = _FORMS["localuse"]
+    decls = tuple(header)
+    expected = frozenset({(4, 1), (5,)})
+    legal: set[tuple[int, ...]] = set()
+    for index, sizes in enumerate(all_groupings(len(decls))):
+        session_dir = tmp_path / str(index)
+        session_dir.mkdir()
+        session = ReplSession(cwd=session_dir, default_stdlib=False)
+        session.open()
+        if eval_setup_entries(session, decls, sizes):
+            legal.add(sizes)
+    assert legal == expected
 
 
 def test_moduse_ambiguity_depends_on_repl_grouping(tmp_path: Path) -> None:
@@ -700,6 +760,71 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Nope"
 
 
+class TestCurrentModuleAnchoredDefCreatedPathIsAnOwnRootMiss:
+    """A ``::``-anchored qualifier over a def-created path still walks it exactly.
+
+    Regression: the ``::`` anchor used to short-circuit straight to an
+    unknown-qualifier verdict spanning only the leading segment, without
+    ever checking whether that segment already resolves locally (as a
+    def-created method-owner namespace); it must instead report the local
+    path's own missing member, spanned on the whole qualifier -- for
+    ``Nope``, which the imported owner also lacks, and for ``Inner``, which
+    the imported owner has but this module's own root, all ``::`` anchors,
+    does not.
+    """
+
+    @pytest.mark.parametrize("member", ["Inner", "Nope"])
+    @pytest.mark.parametrize("shape", ["fn(p: ::Geo::{}) => 1", "::Geo::{}(y = 1)"])
+    def test_file(self, tmp_path: Path, shape: str, member: str) -> None:
+        entry = shape.format(member)
+        src = "\n".join(["import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry])
+        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB})
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == f"::Geo::{member}"
+
+    @pytest.mark.parametrize("member", ["Inner", "Nope"])
+    @pytest.mark.parametrize("shape", ["fn(p: ::Geo::{}) => 1", "::Geo::{}(y = 1)"])
+    def test_repl(self, tmp_path: Path, shape: str, member: str) -> None:
+        entry = shape.format(member)
+        decls = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry)
+        phase, cls, span = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _DEFPATH_TYPE_OWNER_LIB}, decls
+        )
+        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert span is not None
+        assert "\n".join(decls)[span.start_offset : span.end_offset] == f"::Geo::{member}"
+
+
+_REFERENCED_MEMBER_HEADER = ("record Saved\n  id: int", "enum Stored = ::Saved | Fresh")
+
+
+class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
+    """A referenced enum member, walked one segment past, is a member miss.
+
+    Regression: ``Stored::Saved::X`` treated ``Stored`` as an unresolved
+    module route -- the leading lookup for the owner ``Stored::Saved`` never
+    recognized a referenced member -- instead of reporting the same
+    referenced-member verdict a bare ``Stored::Saved`` already gets.
+    """
+
+    @pytest.mark.parametrize("entry", ["fn(p: Stored::Saved::X) => 1", "Stored::Saved::X"])
+    def test_file(self, tmp_path: Path, entry: str) -> None:
+        src = "\n".join([*_REFERENCED_MEMBER_HEADER, entry])
+        phase, cls, span = file_verdict(tmp_path, {"entry": src})
+        assert (phase, cls) == ("scope", ReferencedMemberError)
+        assert span is not None
+        assert src[span.start_offset : span.end_offset] == "Stored::Saved::X"
+
+    @pytest.mark.parametrize("entry", ["fn(p: Stored::Saved::X) => 1", "Stored::Saved::X"])
+    def test_repl(self, tmp_path: Path, entry: str) -> None:
+        decls = (*_REFERENCED_MEMBER_HEADER, entry)
+        phase, cls, span = repl_verdict_all_groupings(tmp_path, {}, decls)
+        assert (phase, cls) == ("scope", ReferencedMemberError)
+        assert span is not None
+        assert "\n".join(decls)[span.start_offset : span.end_offset] == "Stored::Saved::X"
+
+
 # ---------------------------------------------------------------------------
 # ``def Owner::method`` declares *Owner* as a scope path with no member set
 # of its own (a method-owner namespace, unlike a scope region or a nominal
@@ -978,6 +1103,39 @@ class TestLocalScopeChainLengthsAgree:
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
+
+
+_ROUTE_AND_PARTIAL_LOCAL_MISS_LIB = {"Geo": "let x = 1\n"}
+
+
+def test_local_scope_partial_miss_clashes_with_a_same_named_route_file(tmp_path: Path) -> None:
+    """A partial local-scope miss still clashes with a same-named import route.
+
+    ``Geo::Shape::Missing::X``'s walk matches ``Geo::Shape`` (both nested
+    scope regions) but misses at ``Missing``; ``Geo`` also names a genuine
+    import route (not merely a same-spelled scope), so the missing step
+    defers to the route-clash check instead of rejecting directly -- and a
+    plain scope region never declares ``Missing`` itself, so any such route
+    at all is a clash.
+    """
+    src = "\n".join(["import Geo", _CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X"])
+    phase, cls, span = file_verdict(
+        tmp_path, {"entry": src, **_ROUTE_AND_PARTIAL_LOCAL_MISS_LIB}, stdlib=False
+    )
+    assert (phase, cls) == ("scope", RouteClashError)
+    assert span is not None
+    assert src[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
+
+
+def test_local_scope_partial_miss_clashes_with_a_same_named_route_repl(tmp_path: Path) -> None:
+    """As the file-mode case above, identically across every legal REPL grouping."""
+    decls = ("import Geo", _CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X")
+    phase, cls, span = repl_verdict_all_groupings(
+        tmp_path, _ROUTE_AND_PARTIAL_LOCAL_MISS_LIB, decls, stdlib=False
+    )
+    assert (phase, cls) == ("scope", RouteClashError)
+    assert span is not None
+    assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
 
 
 _ACCEPTED_CHAIN_LEN2_POS: dict[str, str] = {

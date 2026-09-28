@@ -169,6 +169,9 @@ def _run_command(request: Invocation) -> object:
     os.chdir(cwd)
     os.environ.clear()
     os.environ.update(env)
+    # A prior command (or preload) may have cached the zygote's own TMPDIR;
+    # clear it so this child derives its temp directory from its own environ.
+    tempfile.tempdir = None
     sys.argv = list(argv)
     from agm.cli import main
 

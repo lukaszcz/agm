@@ -230,7 +230,12 @@ or dotted spelling — never a program signature argument — and must be reacha
 package's own import graph: a dependency or `std` module the package never imports contributes no
 spelling. `pkg check`/`create`/`install` reject an unregistered nested table, an unknown leaf, an
 engine value that fails to decode, and a word that is ambiguously both a registered subcommand and
-a setting spelling.
+a setting spelling. At run time, whenever the selected program is owned by the package (run as a
+registered command, an installed reference, or a file path), its command table beats an inherited
+group table beats the root, ranking below config-file program, command, and group tables and
+`@config`, and above `[exec]` and a module's own module route (see the Configuration bullet
+below); a relative path-valued engine key such as `trace-file` resolves against the current
+working directory, like a CLI flag value, never against the package root.
 
 ## Registered commands
 
@@ -261,11 +266,13 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   [Aliases](#aliases)) — supplies further defaults. The program's own
   [`@config`](../agl/reference/attributes.md#config) entries rank below the program route: an
   engine setting falls through to `@config` before `[exec]`, and a module parameter falls
-  through to `@config` before its declaring module's module route. A resolving program-route
-  leaf — its bare external name, or a dotted qualified spelling as a quoted key — still overrides
-  both. CLI values win over all of them; `@opt-env` reaches a module parameter the same way, but
-  not an engine setting, which only a source `std/config` write outranks. See
-  [Configuration](agl.md#configuration).
+  through to `@config` before its declaring module's module route. Below `@config`, the owning
+  package's manifest [`[config]`](#config) supplies further defaults — its own command table,
+  then an inherited group table, then the root — still above `[exec]` and a module's own module
+  route. A resolving program-route leaf — its bare external name, or a dotted qualified spelling
+  as a quoted key — still overrides both. CLI values win over all of them; `@opt-env` reaches a
+  module parameter the same way, but not an engine setting, which only a source `std/config`
+  write outranks. See [Configuration](agl.md#configuration).
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
   `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation
   index preserves it.

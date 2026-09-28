@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, assert_never
 
@@ -107,20 +107,26 @@ from agm.cli_support.program_options import (
     native_raw_value,
 )
 from agm.config.context import ConfigContext, current_config_context
-from agm.config.general import exec_config_from_merged, load_general_config
+from agm.config.engine_keys import PATH_ENGINE_KEYS
+from agm.config.general import (
+    exec_config_from_merged,
+    load_general_config,
+    resolve_section_paths,
+)
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    resolve_manifest_values,
     resolve_qualified_values,
 )
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.process import terminating_signals_exit
-from agm.core.toml import toml_dict
+from agm.core.toml import TomlDict, toml_dict
 from agm.packages.activation import load_activation_index
 from agm.packages.manifest import command_paths_for_program, expanded_commands
-from agm.packages.model import owning_package
+from agm.packages.model import PackageInfo, owning_package
 from agm.sandbox.prepare import lazy_sandbox_context
 
 if TYPE_CHECKING:
@@ -168,6 +174,7 @@ def _bind_host_inputs(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     package_command_paths: frozenset[tuple[str, ...]],
+    package_config: TomlDict | None = None,
 ) -> tuple[ProgramArguments, ParamValueTiers]:
     """Bind one selected program's CLI, environment, and config host inputs.
 
@@ -178,8 +185,10 @@ def _bind_host_inputs(
 
     The returned :class:`ParamValueTiers` is handed to
     ``PipelineDriver.preflight_arguments`` unmerged: it, not this function,
-    ranks the module-route (``lower``) tier beneath the selected program's own
-    ``@config`` values, which are only known once the program is lowered.
+    ranks the ``lower`` tier — the plain module route, with a package-owned
+    program's manifest ``[config]`` values already folded in above it — beneath
+    the selected program's own ``@config`` values, which are only known once
+    the program is lowered.
     """
     if program is None:
         if tokens:
@@ -218,6 +227,7 @@ def _bind_host_inputs(
             command_paths=command_paths,
             surface=program_command.surface,
             package_command_paths=package_command_paths,
+            package_config=package_config,
         )
     except QualifiedConfigLookupError as exc:
         print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
@@ -258,40 +268,75 @@ def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[st
     return None if module_id is None else module_id.segments
 
 
-def _registered_command_paths(
+@dataclass(frozen=True)
+class _PackageProgramRoute:
+    """One program's owning package, if any, plus its registered command-path metadata.
+
+    ``command_paths`` is this program's own registration, one more spelling
+    of its configuration table; ``package_command_paths`` is every path the
+    package registers at all (aliases expanded), used to exempt a command's
+    own table from undeclared-key warnings when a leaf is really a
+    descendant command's inherited default. ``package`` is the owner itself,
+    whose manifest ``[config]`` supplies this program's defaults.
+    """
+
+    package: PackageInfo | None
+    command_paths: tuple[tuple[str, ...], ...]
+    package_command_paths: frozenset[tuple[str, ...]]
+
+
+def _package_program_route(
     entry_path: Path,
     roots: RootSet,
     module_segments: tuple[str, ...],
     program_path: tuple[str, ...],
-) -> tuple[tuple[str, ...], ...]:
-    """Return the CLI command paths the entry's own package registers for this program.
+) -> _PackageProgramRoute:
+    """Resolve the entry's owning package once, for every package-derived config route.
 
-    A registered command path addresses the program it names, so it is one
-    more spelling of that program's configuration table — read whether the
-    program was reached as the command, by installed reference, or by file
-    path. The owning package's manifest is the authority dispatch itself
-    checks, so a program no package owns has no command table.
+    Read whether the program was reached as a registered command, by
+    installed reference, or by file path — the owning package's manifest is
+    the authority dispatch itself checks, so a program no package owns has no
+    command table and no manifest defaults. A development checkout's table is
+    completed here, on demand, for this one owning package only — mounting
+    its module root never pays for that scan (see
+    :mod:`agm.packages.development`).
     """
     package = owning_package(entry_path, roots.packages)
     if package is None:
-        return ()
+        return _PackageProgramRoute(None, (), frozenset())
+    if not package.commands_complete:
+        # Lazy: builds the AgL parser, which activation.py also keeps out of
+        # import-time paths.
+        from agm.packages.source_commands import package_with_source_commands_or_declared
+
+        package = package_with_source_commands_or_declared(package)
     reference = "::".join(("/".join(module_segments), *program_path))
-    return command_paths_for_program(package.manifest, reference)
+    command_paths = command_paths_for_program(package.manifest, reference)
+    package_command_paths = frozenset(
+        tuple(path.split()) for path in expanded_commands(package.manifest)
+    )
+    return _PackageProgramRoute(package, command_paths, package_command_paths)
 
 
-def _registered_package_command_paths(
-    entry_path: Path, roots: RootSet
-) -> frozenset[tuple[str, ...]]:
-    """Return every command path the entry's own package registers, aliases expanded.
+def _manifest_engine_table(
+    package: PackageInfo, engine_keys: tuple[QualifiedConfigKey, ...], *, cwd: Path
+) -> dict[str, object]:
+    """Resolve *engine_keys* from *package*'s manifest ``[config]``, anchoring path values.
 
-    Used to tell whether a command's own config table also feeds a registered
-    descendant command, which exempts its leaves from that command's own
-    undeclared-key warnings.
+    Command paths beat inherited groups beat the manifest root, per
+    :func:`~agm.config.qualified_keys.resolve_manifest_values`. A relative
+    ``trace-file`` resolves against *cwd*, like a CLI flag value, never
+    against the package root — which for an installed package is immutable.
     """
-    package = owning_package(entry_path, roots.packages)
-    if package is None:
-        return frozenset()
-    return frozenset(tuple(path.split()) for path in expanded_commands(package.manifest))
+    if not package.manifest.config:
+        return {}
+    raw = {
+        key.leaf: value
+        for key, value in resolve_manifest_values(package.manifest.config, engine_keys).items()
+    }
+    if not raw:
+        return raw
+    return resolve_section_paths(raw, PATH_ENGINE_KEYS, cwd, cwd, sentinels={})
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:
@@ -467,16 +512,20 @@ def run(
         ),
     )
     engine_program_table: dict[str, object] = {}
+    manifest_engine_table: dict[str, object] = {}
     command_paths: tuple[tuple[str, ...], ...] = ()
     package_command_paths: frozenset[tuple[str, ...]] = frozenset()
+    owning_package_info: PackageInfo | None = None
     if entry_path is not None and selected_parsed_program is not None:
         program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
             selected_parsed_program.name,
         )
-        command_paths = _registered_command_paths(
+        package_route = _package_program_route(
             entry_path, exec_roots.roots, config_entry_segments, program_path
         )
-        package_command_paths = _registered_package_command_paths(entry_path, exec_roots.roots)
+        owning_package_info = package_route.package
+        command_paths = package_route.command_paths
+        package_command_paths = package_route.package_command_paths
         engine_keys = tuple(
             QualifiedConfigKey(config_entry_segments, program_path, key, command_paths)
             for key in ENGINE_KEY_NAMES
@@ -486,11 +535,17 @@ def run(
                 key.leaf: value
                 for key, value in resolve_qualified_values(config_view, engine_keys).items()
             }
+            if owning_package_info is not None:
+                manifest_engine_table = _manifest_engine_table(
+                    owning_package_info, engine_keys, cwd=ctx.cwd
+                )
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
     try:
-        config = exec_config_from_merged(merged_config, program_table=engine_program_table)
+        config = exec_config_from_merged(
+            merged_config, program_table=engine_program_table, package_table=manifest_engine_table
+        )
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -520,7 +575,7 @@ def run(
     engine_tiers = build_host_engine_seeds(
         config=config,
         primary_table=engine_program_table,
-        fallback_table=toml_dict(merged_config.get("exec")),
+        fallback_table={**toml_dict(merged_config.get("exec")), **manifest_engine_table},
         cli_values=cli_values,
     )
 
@@ -594,6 +649,9 @@ def run(
         entry_segments=config_entry_segments,
         command_paths=command_paths,
         package_command_paths=package_command_paths,
+        package_config=(
+            owning_package_info.manifest.config if owning_package_info is not None else None
+        ),
     )
 
     # Program arguments are validated against the lowered program, so this

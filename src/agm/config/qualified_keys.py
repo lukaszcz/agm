@@ -68,23 +68,38 @@ def resolve_qualified_values(
     """
 
     unique_keys = _dedupe_keys(keys)
-    resolved: dict[QualifiedConfigKey, object] = {}
-
-    exact_paths = {
-        key: route_table_paths(key.module_segments, key.scope_path, key.command_paths)
+    tiers_by_key = {
+        key: (
+            route_table_paths(key.module_segments, key.scope_path, key.command_paths),
+            *_inherited_group_paths(key.command_paths),
+        )
         for key in unique_keys
     }
-    resolved.update(_resolve_tier(config.layers, unique_keys, exact_paths))
+    return _resolve_tiers(config.layers, unique_keys, tiers_by_key)
 
-    tiers_by_key = {key: _inherited_group_paths(key.command_paths) for key in unique_keys}
+
+def _resolve_tiers(
+    layers: tuple[TomlDict, ...],
+    keys: tuple[QualifiedConfigKey, ...],
+    tiers_by_key: Mapping[QualifiedConfigKey, tuple[tuple[tuple[str, ...], ...], ...]],
+) -> dict[QualifiedConfigKey, object]:
+    """Resolve *keys* tier by tier, most specific first, keeping each key's first hit.
+
+    *tiers_by_key* maps every key to its own ordered specificity tiers (each
+    tier itself a tuple of equally specific table paths); a key with fewer
+    tiers than another simply contributes nothing once its own are exhausted.
+    Shared by :func:`resolve_qualified_values` (exact route, then inherited
+    groups) and :func:`resolve_manifest_values` (a program's own command
+    table, then inherited groups, then the manifest root).
+    """
+    resolved: dict[QualifiedConfigKey, object] = {}
     tier_count = max((len(tiers) for tiers in tiers_by_key.values()), default=0)
     for index in range(tier_count):
         tier_paths = {
             key: tiers[index] if index < len(tiers) else () for key, tiers in tiers_by_key.items()
         }
-        for key, value in _resolve_tier(config.layers, unique_keys, tier_paths).items():
+        for key, value in _resolve_tier(layers, keys, tier_paths).items():
             resolved.setdefault(key, value)
-
     return resolved
 
 
@@ -255,6 +270,70 @@ def configured_leaf_table_candidates(
                 if not isinstance(value, dict):
                     tables.setdefault(name, set()).add(path)
     return {name: frozenset(paths_seen) for name, paths_seen in tables.items()}
+
+
+def _manifest_layer(manifest_config: TomlDict) -> tuple[TomlDict, ...]:
+    """Wrap *manifest_config* as the single layer manifest routes resolve against.
+
+    Every manifest table path is prefixed with ``"config"``, since
+    ``package.toml``'s own ``[config]``/``[config.a.b]`` tables are the real
+    TOML spelling a diagnostic should name — not a synthetic anchor.
+    """
+    return ({"config": manifest_config},)
+
+
+def _manifest_tiers(
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[tuple[str, ...], ...], ...]:
+    """Return one manifest route's tiers, most specific first, ``"config"``-prefixed.
+
+    A program's own command paths (exact), then each inherited group tier
+    deepest first, then the manifest root — no module-suffix or
+    quoted-anchor routes, since a manifest names commands only.
+    """
+    exact = tuple(("config", *segment) for segment in command_paths)
+    inherited = tuple(
+        tuple(("config", *segment) for segment in tier)
+        for tier in _inherited_group_paths(command_paths)
+    )
+    return (exact, *inherited, (("config",),))
+
+
+def resolve_manifest_values(
+    manifest_config: TomlDict, keys: Iterable[QualifiedConfigKey]
+) -> dict[QualifiedConfigKey, object]:
+    """Resolve *keys* from a package manifest's ``[config]`` table.
+
+    See :func:`_manifest_tiers` for tier order; reuses :func:`_resolve_tiers`
+    against the manifest as a single ``"config"``-prefixed layer.
+    """
+    unique_keys = _dedupe_keys(keys)
+    tiers_by_key = {key: _manifest_tiers(key.command_paths) for key in unique_keys}
+    return _resolve_tiers(_manifest_layer(manifest_config), unique_keys, tiers_by_key)
+
+
+def manifest_leaf_tables(
+    manifest_config: TomlDict, command_paths: tuple[tuple[str, ...], ...]
+) -> dict[str, tuple[str, ...]]:
+    """Return each leaf key one of a manifest route's tables sets, with that table's path.
+
+    Mirrors :func:`configured_leaf_tables` for a package manifest: the most
+    specific table setting a leaf — command table, then inherited group,
+    then root — is the one named, same tiers :func:`resolve_manifest_values`
+    resolves values through. Used to extend the ambiguous-bare-leaf check
+    over manifest tables, not just config-file ones.
+    """
+    layer: TomlDict = {"config": manifest_config}
+    tables: dict[str, tuple[str, ...]] = {}
+    for tier in _manifest_tiers(command_paths):
+        for path in tier:
+            table = _table_at(layer, path)
+            if table is None:
+                continue
+            for name, value in table.items():
+                if not isinstance(value, dict):
+                    tables.setdefault(name, path)
+    return tables
 
 
 def param_spellings_for(

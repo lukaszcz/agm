@@ -1327,13 +1327,15 @@ class PipelineDriver:
         without lowering it a second time.
 
         *param_values* (the supplied/program-route tier) always wins.
-        *param_values_lower* (the module-route tier) is decoded only for keys
-        neither *param_values* nor the selected program's own ``@config``
-        cover — a module-route value either of those overrides is never
-        decoded, exactly as a program-route override is today. The
-        ``@config`` values targeting a ``@param`` binding are already typed
-        ``Value``s (evaluated by :meth:`_evaluate_program_config`) and need
-        no decoding; they rank between the two raw tiers.
+        *param_values_lower* (the module-route tier — a package-owned
+        program's manifest ``[config]`` values already folded in above the
+        plain module route) is decoded only for keys neither *param_values*
+        nor the selected program's own ``@config`` cover — a value either of
+        those overrides is never decoded, exactly as a program-route override
+        is today. The ``@config`` values targeting a ``@param`` binding are
+        already typed ``Value``s (evaluated by
+        :meth:`_evaluate_program_config`) and need no decoding; they rank
+        between the two raw tiers.
         """
         from agm.agl.runtime.arguments import bind_param_values, bind_program_arguments_for
 

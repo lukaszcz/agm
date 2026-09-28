@@ -2569,3 +2569,393 @@ def test_a_commands_own_table_draws_no_warning_for_a_descendants_key(
     assert result.exit_code == 0
     assert result.output == "a\n"
     assert "unrelated" not in result.output
+
+
+def _write_manifest_config_package(root: Path, config_toml: str) -> None:
+    """Write a ``devel review`` package plus an unregistered ``other`` program.
+
+    ``main`` prints an engine setting, a module parameter, and a ``std``
+    dependency's own parameter, so one invocation exercises all three kinds of
+    manifest ``[config]`` leaf. ``other`` is package-owned but registers no
+    command, so it reads only the manifest root. Callable more than once
+    against the same *root* to rewrite ``[config]`` between installs.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        f"\n{config_toml}",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\nimport std/http\nimport tools/logging\n\n"
+        "program def main() -> unit =\n"
+        "  print std/config::strict-json\n"
+        "  print tools/logging::verbose\n"
+        '  print std/http::timeout.unwrap-or("none")\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "other.agl").write_text(
+        "import std/config\n\nprogram def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+
+
+def _write_manifest_config_tiers_package(root: Path) -> None:
+    """Write a ``devel review`` package with three text params, each naming the tier that
+    must win it: a full command/group/root stack, a group+root stack, and a root-only leaf.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        '\n[config]\nall-tiers = "root"\ngroup-and-root = "root"\nroot-only = "root"\n'
+        '\n[config.devel]\nall-tiers = "group"\ngroup-and-root = "group"\n'
+        '\n[config.devel.review]\nall-tiers = "command"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "program def main() -> unit =\n"
+        "  print tools/logging::all-tiers\n"
+        "  print tools/logging::group-and-root\n"
+        "  print tools/logging::root-only\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        '@param let all-tiers: text = "default"\n'
+        '@param let group-and-root: text = "default"\n'
+        '@param let root-only: text = "default"\n',
+        encoding="utf-8",
+    )
+
+
+def test_manifest_config_tiers_command_beats_group_beats_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One invocation exercises all three tier combinations: command beats group beats root."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_tiers_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "command\ngroup\nroot\n"
+
+
+def _write_ambiguous_param_manifest_package(root: Path, config_toml: str) -> None:
+    """Write a ``devel review`` package where two modules declare the same param name.
+
+    ``verbose``'s bare spelling is ambiguous between ``logging`` and
+    ``format``, so only each module's dotted spelling (``logging.verbose``,
+    ``format.verbose``) addresses it.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        f"\n{config_toml}",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\nimport tools/format\n\n"
+        "program def main() -> unit =\n"
+        "  print tools/logging::verbose\n"
+        "  print tools/format::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "format.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_manifest_supplies_a_module_parameter_via_its_dotted_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_ambiguous_param_manifest_package(
+        root, '[config.devel.review]\n"logging.verbose" = true\n'
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\nfalse\n"
+
+
+def test_manifest_same_tier_conflicting_spellings_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One manifest table setting both a param's leaf-alias spellings conflicts, not picks."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root, '[config.devel.review]\nverbose = true\n"logging.verbose" = false\n'
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 1
+
+
+def test_manifest_engine_key_conflict_across_two_command_groups_errors_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A program registered under two command paths inherits two peer groups at the same
+    tier; conflicting engine values there report cleanly (exit 1, no traceback), exactly
+    like a module-parameter manifest conflict does."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"tools review" = { program = "tools/main::main" }\n'
+        '"devel review" = { program = "tools/main::main" }\n'
+        "\n[config.tools]\nstrict-json = true\n"
+        "\n[config.devel]\nstrict-json = false\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\n\nprogram def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["tools", "review"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_package_owned_program_with_no_command_gets_only_manifest_root_leaves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``other`` is package-owned but registers no command: only the manifest root applies."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root,
+        "[config]\nstrict-json = true\n"
+        "\n[config.devel]\nstrict-json = false\n"
+        "\n[config.devel.review]\nstrict-json = false\n",
+    )
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    reference_result = invoke(CliRunner(), ["exec", "tools/other::main"])
+    assert reference_result.exit_code == 0
+    assert reference_result.stdout == "true\n"
+
+    file_result = invoke(
+        CliRunner(), ["exec", str(installed.root / MODULE_TREE_DIRNAME / "other.agl")]
+    )
+    assert file_result.exit_code == 0
+    assert file_result.stdout == "true\n"
+
+
+def test_manifest_trace_file_is_anchored_to_the_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative ``trace-file`` resolves against cwd, like a CLI flag value, never against
+    the package root — which for an installed package is immutable."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, '[config]\ntrace-file = "manifest.log"\n')
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert (workdir / "manifest.log").read_text(encoding="utf-8")
+    assert not (installed.root / "manifest.log").exists()
+
+
+def test_engine_setting_precedence_from_exec_through_manifest_to_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[exec]`` < manifest < a file group table < a CLI flag."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, "")
+    install_directory(root, home=home, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+    home_config = home / ".agm" / "config.toml"
+
+    home_config.write_text("[exec]\nstrict-json = false\n", encoding="utf-8")
+    exec_result = invoke(CliRunner(), ["devel", "review"])
+    assert exec_result.exit_code == 0
+    assert exec_result.output.splitlines()[0] == "false"
+
+    # An editable install rescans the live manifest, so rewriting it in place takes
+    # effect on the next invocation without reinstalling.
+    _write_manifest_config_package(root, "[config]\nstrict-json = true\n")
+    manifest_result = invoke(CliRunner(), ["devel", "review"])
+    assert manifest_result.exit_code == 0
+    assert manifest_result.output.splitlines()[0] == "true"
+
+    home_config.write_text(
+        "[exec]\nstrict-json = false\n\n[devel]\nstrict-json = false\n", encoding="utf-8"
+    )
+    file_result = invoke(CliRunner(), ["devel", "review"])
+    assert file_result.exit_code == 0
+    assert file_result.output.splitlines()[0] == "false"
+
+    cli_result = invoke(CliRunner(), ["devel", "review", "--strict-json"])
+    assert cli_result.exit_code == 0
+    assert cli_result.output.splitlines()[0] == "true"
+
+
+def test_a_config_attribute_beats_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nstrict-json = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\n\n"
+        "@config(config::strict-json = false)\n"
+        "program def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\n"
+
+
+def test_manifest_beats_the_file_module_route_for_a_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, "[config.devel.review]\nverbose = true\n")
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[logging]\nverbose = false\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[1] == "true"
+
+
+def test_a_config_attribute_beats_the_manifest_for_a_module_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nverbose = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "@config(logging::verbose = false)\n"
+        "program def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\n"
+
+
+def test_a_cli_flag_and_environment_variable_beat_the_manifest_for_a_module_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nverbose = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\nprogram def main() -> unit = print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        '@param @opt-env("AGM_TOOLS_VERBOSE") let verbose: bool = false\n', encoding="utf-8"
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    manifest_result = invoke(CliRunner(), ["devel", "review"])
+    assert manifest_result.exit_code == 0
+    assert manifest_result.output == "true\n"
+
+    cli_result = invoke(CliRunner(), ["devel", "review", "--no-verbose"])
+    assert cli_result.exit_code == 0
+    assert cli_result.output == "false\n"
+
+    monkeypatch.setenv("AGM_TOOLS_VERBOSE", "false")
+    environment_result = invoke(CliRunner(), ["devel", "review"])
+    assert environment_result.exit_code == 0
+    assert environment_result.output == "false\n"
+
+
+def test_exec_by_reference_of_a_registered_program_uses_its_manifest_command_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered program's manifest command tier still applies when it is run directly,
+    by reference or by file path, instead of through its command path."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root,
+        "[config]\nstrict-json = false\n"
+        "\n[config.devel]\nstrict-json = false\n"
+        "\n[config.devel.review]\nstrict-json = true\n",
+    )
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    reference_result = invoke(CliRunner(), ["exec", "tools/main::main"])
+    assert reference_result.exit_code == 0
+    assert reference_result.stdout.splitlines()[0] == "true"
+
+    file_result = invoke(
+        CliRunner(), ["exec", str(installed.root / MODULE_TREE_DIRNAME / "main.agl")]
+    )
+    assert file_result.exit_code == 0
+    assert file_result.stdout.splitlines()[0] == "true"

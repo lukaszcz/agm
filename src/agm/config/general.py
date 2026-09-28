@@ -351,7 +351,7 @@ def _anchor_section_paths(
     return resolved
 
 
-def _resolve_section_paths(
+def resolve_section_paths(
     section: TomlDict,
     fields: Sequence[str],
     config_dir: Path,
@@ -359,6 +359,13 @@ def _resolve_section_paths(
     *,
     sentinels: dict[str, set[str]],
 ) -> TomlDict:
+    """Interpolate and anchor *section*'s path-like *fields* to *config_dir*.
+
+    Shared by config-file loading (anchored to the file's own directory) and
+    package manifest ``[config]`` engine-key resolution (anchored to *cwd* for
+    both arguments, like a CLI flag value), so each origin resolves a relative
+    path the way its own spelling implies.
+    """
     expanded, unresolved_fields = _interpolate_and_expand_section_paths(section, fields)
     resolved = _anchor_section_paths(
         expanded,
@@ -370,7 +377,7 @@ def _resolve_section_paths(
     )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
-            resolved[key] = _resolve_section_paths(
+            resolved[key] = resolve_section_paths(
                 toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
             )
     return resolved
@@ -384,7 +391,7 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
             # unknown/program sections carry only engine keys, so they fall
             # back to the path-valued ones.
             fields = _CONFIG_PATH_FIELDS.get(section_name, PATH_ENGINE_KEYS)
-            resolved[section_name] = _resolve_section_paths(
+            resolved[section_name] = resolve_section_paths(
                 toml_dict(section),
                 fields,
                 config_dir,
@@ -703,6 +710,7 @@ def exec_config_from_merged(
     merged: TomlDict,
     *,
     program_table: dict[str, object] | None = None,
+    package_table: dict[str, object] | None = None,
 ) -> ExecConfig:
     """Build :class:`ExecConfig` from an already-merged config dict.
 
@@ -714,17 +722,21 @@ def exec_config_from_merged(
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
-    Engine keys use kebab-case names: ``strict-json``, ``trace-file``.
+    *package_table* — a package-owned program's manifest ``[config]`` values —
+    ranks between ``[exec]`` and *program_table*. Engine keys use kebab-case
+    names: ``strict-json``, ``trace-file``.
     """
     exec_table = toml_dict(merged.get("exec"))
 
-    # Qualified per-program engine-key overrides win over [exec].KEY.
-    # Engine keys use kebab-case names.
+    # Effective precedence, low to high: [exec] < package manifest < the
+    # qualified program table (exact route, then inherited groups).
     effective: TomlDict = dict(exec_table)
-    if program_table is not None:
+    for table in (package_table, program_table):
+        if table is None:
+            continue
         for key, _ in ENGINE_KEY_KINDS:
-            if key in program_table:
-                effective[key] = program_table[key]
+            if key in table:
+                effective[key] = table[key]
 
     resolved_strict_json = _optional_bool(effective, "strict-json")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")

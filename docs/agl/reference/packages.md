@@ -146,8 +146,11 @@ registered command path and the selected program's own table are equivalent
 **program routes**: either can override a module parameter through any spelling
 that resolves for it — its bare external name, or a dotted qualified spelling
 (as a quoted key) when a nearer declaration claims the bare one. A program-route
-value wins over the program's own [`@config`](attributes.md#config) entries, which in turn win
-over a module-route value; CLI and `@opt-env` values win over all three. See
+value wins over the program's own [`@config`](attributes.md#config) entries,
+which in turn win over the package's own manifest
+[`[config]`](../../commands/pkg.md#config) table — its command table, then an
+inherited group table, then the manifest root — which wins over a module-route
+value; CLI and `@opt-env` values win over all of these. See
 [Module parameters](host-environment.md#module-parameters) for all spelling,
 ambiguity, and precedence rules.
 

@@ -13,6 +13,7 @@ from agm.config.qualified_keys import (
     QualifiedConfigLookupError,
     configured_leaf_table_candidates,
     configured_leaf_tables,
+    resolve_manifest_values,
     resolve_qualified_values,
     route_table_paths,
 )
@@ -471,3 +472,88 @@ class TestGroupTableInheritance:
             ("main",),
             command_paths=(("devel", "review"),),
         ) == {"strict": frozenset({("devel", "review"), ("devel",)})}
+
+
+class TestResolveManifestValues:
+    """A package manifest ``[config]`` table resolves command > groups > root."""
+
+    def test_a_command_table_wins_over_a_group_table(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        manifest = {"devel": {"strict": False, "review": {"strict": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_group_table_wins_over_the_root(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        manifest = {"strict": False, "devel": {"strict": True}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_deeper_group_table_wins_over_a_shallower_one(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "strict",
+            command_paths=(("devel", "sub", "review"),),
+        )
+        manifest = {"devel": {"strict": False, "sub": {"strict": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_program_with_no_command_paths_reads_only_the_root(self) -> None:
+        key = QualifiedConfigKey(("tools", "review"), ("main",), "strict")
+        manifest = {"strict": True, "devel": {"strict": False}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_no_root_and_no_command_table_resolves_nothing(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+
+        assert resolve_manifest_values({"devel": {"other": 1}}, (key,)) == {}
+
+    def test_a_leaf_alias_resolves_like_its_primary_spelling(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "logging"),
+            ("main",),
+            "verbose",
+            command_paths=(("devel", "review"),),
+            leaf_aliases=("logging.verbose",),
+        )
+        manifest = {"devel": {"review": {"logging.verbose": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_same_tier_conflicting_spellings_error(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "logging"),
+            ("main",),
+            "verbose",
+            command_paths=(("devel", "review"),),
+            leaf_aliases=("logging.verbose",),
+        )
+        manifest = {"devel": {"review": {"verbose": True, "logging.verbose": False}}}
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_manifest_values(manifest, (key,))
+
+    def test_a_module_suffix_route_never_addresses_a_manifest_table(self) -> None:
+        """Only command paths and the root apply; a bare module name is not a route."""
+        key = QualifiedConfigKey(("tools", "review"), ("main",), "strict")
+
+        assert resolve_manifest_values({"tools": {"strict": True}}, (key,)) == {}
+
+    def test_a_root_tier_conflict_reports_cleanly_instead_of_crashing(self) -> None:
+        """A program with no command table still gets a clean error, not a raw ``ValueError``."""
+        key = QualifiedConfigKey(
+            ("tools", "logging"), ("main",), "verbose", leaf_aliases=("logging.verbose",)
+        )
+        manifest = {"verbose": True, "logging.verbose": False}
+
+        with pytest.raises(QualifiedConfigLookupError, match=r"config\.verbose"):
+            resolve_manifest_values(manifest, (key,))

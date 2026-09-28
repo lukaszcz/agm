@@ -21,8 +21,11 @@ from agm.config.qualified_keys import (
     configured_leaf_table_candidates,
     configured_leaf_tables,
     display_table_path,
+    manifest_leaf_tables,
+    resolve_manifest_values,
     resolve_qualified_values,
 )
+from agm.core.toml import TomlDict
 
 __all__ = [
     "ParamValueTiers",
@@ -39,10 +42,12 @@ _RouteKey = tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, ...], ...]]
 class ParamValueTiers:
     """Supplied/program-route values (``upper``) above module-route values (``lower``).
 
-    ``lower`` holds only keys absent from ``upper``. The full chain also
-    ranks a selected program's own ``@config`` entries between the two —
-    ``PipelineDriver.preflight_arguments`` merges all three; there is no
-    flattened two-tier view here.
+    ``lower`` holds only keys absent from ``upper``, and within it a
+    package manifest ``[config]`` value (when the selected program is
+    package-owned) already outranks the plain module-route value for the
+    same key. The full chain also ranks a selected program's own ``@config``
+    entries between the two — ``PipelineDriver.preflight_arguments`` merges
+    all three; there is no flattened two-tier view here.
     """
 
     upper: Mapping[StaticBindingKey, object]
@@ -133,6 +138,7 @@ def resolve_param_values(
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
     package_command_paths: frozenset[tuple[str, ...]] = frozenset(),
+    package_config: TomlDict | None = None,
 ) -> ParamValueTiers:
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
@@ -144,6 +150,12 @@ def resolve_param_values(
     less-specific config layer than the module route. The supplied and
     program-route values form :attr:`ParamValueTiers.upper`; the module-route
     values not already covered by that tier form :attr:`ParamValueTiers.lower`.
+
+    *package_config* is the owning package's manifest ``[config]`` table
+    (``None``/empty when the program is not package-owned). Its values
+    address the same program-route spellings and are merged into ``lower``,
+    above the plain module-route value, for every key not already resolved
+    in ``upper`` — never overriding an ``upper`` entry.
 
     Configured leaves on those routes that no host input consumes are reported
     as warnings here, where the routes are known. *package_command_paths* is
@@ -160,12 +172,17 @@ def resolve_param_values(
     module_values = resolve_module_param_values(config, module_params)
 
     _reject_configured_ambiguous_program_leaves(
-        config, program, entry_segments, command_paths, surface
+        config, program, entry_segments, command_paths, surface, package_config
     )
     program_values = resolve_qualified_values(config, tuple(key for _entry, key in program_routes))
     upper = dict(params)
     _merge_route_values(upper, supplied, program_routes, program_values)
     lower = {key: value for key, value in module_values.items() if key not in upper}
+    if package_config:
+        manifest_values = resolve_manifest_values(
+            package_config, tuple(key for _entry, key in program_routes)
+        )
+        _merge_route_values(lower, frozenset(upper), program_routes, manifest_values)
 
     _report_undeclared_config_keys(
         config,
@@ -335,7 +352,13 @@ def _merge_route_values(
     routes: Iterable[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
     configured: Mapping[QualifiedConfigKey, object],
 ) -> None:
-    """Project configured native values without replacing CLI/environment values."""
+    """Project configured native values into *values*, skipping keys already in *supplied*.
+
+    Shared by the program-route merge into ``upper`` (*supplied* = CLI/
+    environment keys) and the manifest merge into ``lower`` (*supplied* =
+    every key already resolved in ``upper``, so a manifest value never
+    overrides one): both are "does a higher tier already own this key".
+    """
     for entry, key in routes:
         if entry.param.key in supplied or key not in configured:
             continue
@@ -349,17 +372,22 @@ def _reject_configured_ambiguous_program_leaves(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
+    package_config: TomlDict | None = None,
 ) -> None:
     """Reject a configured program-table leaf claimed by peer module parameters.
 
     Every spelling a program table may use is checked, bare or qualified: a
     spelling several parameters claim resolves to none of them, so *using* it
-    names the candidates rather than silently picking one.
+    names the candidates rather than silently picking one. *package_config*
+    extends the same check over the owning package's manifest command, group,
+    and root tables, since those address the same program-route spellings.
     """
     if not entry_segments:
         return
     program_path = (*program.scope_path, program.name)
     configured = configured_leaf_tables(config, entry_segments, program_path, command_paths)
+    if package_config:
+        configured = {**manifest_leaf_tables(package_config, command_paths), **configured}
     _reject_configured_ambiguity(configured, surface.ambiguous)
 
 

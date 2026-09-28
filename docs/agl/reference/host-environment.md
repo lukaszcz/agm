@@ -248,7 +248,7 @@ short spelling.
 For an unset module parameter, the value is chosen in this order:
 
 ```
-CLI flag  >  @opt-env variable  >  program route  >  @config  >  module route  >  initializer
+CLI flag  >  @opt-env variable  >  program route  >  @config  >  manifest [config]  >  module route  >  initializer
 ```
 
 The **program route** is the selected program's table. It addresses a parameter
@@ -259,10 +259,12 @@ module — is therefore still configurable for one program through a qualified
 leaf. Setting two spellings of one parameter in a single layer is an error, and
 a spelling several parameters claim is rejected naming them, exactly as the
 matching flag would be. The program route wins over the selected program's own
-[`@config`](attributes.md#config) entries, which in turn win over the
-**module route**, even when the latter appears in a more-specific TOML layer.
-A module route addresses the binding's declaring module and scope, so it
-remains available too.
+[`@config`](attributes.md#config) entries. When the selected program is owned
+by a package, its manifest [`[config]`](../../commands/pkg.md#config) table
+ranks next — its own command table, then an inherited group table, then the
+manifest root — and wins over the **module route**, even when the latter
+appears in a more-specific TOML layer. A module route addresses the binding's
+declaring module and scope, so it remains available too.
 
 For example, this program imports the `A/logging` module:
 
@@ -346,15 +348,16 @@ nested constructor's kind with the same `"$case"` key its JSON form uses.
 `agm exec` resolves initial values as:
 
 ```
-setting X:    source (std/config::X := e)  >  CLI --X  >  qualified program table  >  @config  >  [exec].X  >  declared default
+setting X:    source (std/config::X := e)  >  CLI --X  >  qualified program table  >  @config  >  manifest [config].X  >  [exec].X  >  declared default
 argument Y:   CLI token (--Y / positional) >  qualified program table             >  declared default > required error
 ```
 
-The CLI flag and config-file layers, and the selected program's own
-[`@config`](attributes.md#config) entries, supply a setting's **initial**
-value; a source write to `std/config::X` overrides them from its program
-point onward. A program that never writes a setting keeps the value chosen by
-those layers.
+The CLI flag and config-file layers, the selected program's own
+[`@config`](attributes.md#config) entries, and — when the selected program is
+owned by a package — its manifest [`[config]`](../../commands/pkg.md#config)
+table supply a setting's **initial** value; a source write to `std/config::X`
+overrides them from its program point onward. A program that never writes a
+setting keeps the value chosen by those layers.
 
 For example, `--default-sandbox Native` overrides both a `[prog.main]
 default-sandbox = "Sandbox"` table entry and `[exec] default-sandbox =
@@ -381,7 +384,10 @@ parameters are CLI-only. The selected program's own
 [`@config`](attributes.md#config) entries rank between this qualified table
 and `[exec]` for an engine setting, and between this table and a module route
 for a module parameter; `@config` is a source declaration, so it never
-appears in a config file. For example:
+appears in a config file. When the selected program is owned by a package,
+its manifest [`[config]`](../../commands/pkg.md#config) table ranks below
+`@config` and above `[exec]`/the module route, in the same command-table >
+group-table > root tiers command-path addressing uses. For example:
 
 ```toml
 [exec]

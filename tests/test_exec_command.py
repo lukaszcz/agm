@@ -4911,6 +4911,60 @@ class TestExecDevelopmentPackages:
 
         assert exec_command.run(_exec_args_no_trace(entry, no_stdlib=True)) is None
 
+    def test_a_source_declared_command_reaches_manifest_and_file_config_routing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A development package's own ``@command`` registration is discovered from source,
+        not baked into the manifest, so the manifest and file config tables it feeds — command,
+        group, and root tiers alike — must still see it, exactly as an installed package's
+        baked-in ``[commands]`` table does."""
+        alpha = tmp_path / "alpha"
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n'
+            "\n[config]\nroot-verbose = true"
+            "\n\n[config.tools]\ngroup-verbose = true"
+            "\n\n[config.tools.review]\ncommand-verbose = true\n"
+        )
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
+        entry.write_text(
+            "import alpha/logging\n\n"
+            '@command("tools review")\n'
+            "program def main() -> unit =\n"
+            "  print alpha/logging::root-verbose\n"
+            "  print alpha/logging::group-verbose\n"
+            "  print alpha/logging::command-verbose\n"
+            "  print alpha/logging::file-verbose\n"
+        )
+        (alpha / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+            "@param let root-verbose: bool = false\n"
+            "@param let group-verbose: bool = false\n"
+            "@param let command-verbose: bool = false\n"
+            "@param let file-verbose: bool = false\n"
+        )
+        _config_home(tmp_path, monkeypatch, "[tools.review]\nfile-verbose = true\n")
+
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
+
+        assert capsys.readouterr().out == "true\ntrue\ntrue\ntrue\n"
+
+    def test_a_broken_sibling_module_does_not_block_execution_or_its_own_completion(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A development package's own-source command scan tolerates a sibling module that
+        fails to parse: execution still proceeds, and the package's command table is still
+        marked complete since nothing it declares needed the scan's registrations."""
+        alpha = tmp_path / "alpha"
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
+        entry.write_text('program def main() -> unit = print "ran"\n')
+        (alpha / MODULE_TREE_DIRNAME / "broken.agl").write_text("def (\n")
+
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
+
+        assert capsys.readouterr().out == "ran\n"
+
 
 class TestExecStandardLibraryEntries:
     """A directly executed standard-library file is owned by its own package."""

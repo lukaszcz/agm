@@ -65,10 +65,20 @@ def unmet_std_requirement(requirement: DependencySpec) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class PackageInfo:
-    """A manifest paired with its canonical package-root directory."""
+    """A manifest paired with its canonical package-root directory.
+
+    ``commands_complete`` is false only for a raw development-checkout
+    discovery (:mod:`agm.packages.development`), whose manifest is loaded
+    without the AST scan that merges a program's own ``@command``
+    registrations in — a cost mounting a module root should not always pay.
+    A command host that owns the selected program completes it on demand
+    (:func:`agm.packages.source_commands.package_with_source_commands_or_declared`),
+    which always returns a package with this true.
+    """
 
     root: Path
     manifest: PackageManifest
+    commands_complete: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", self.root.resolve())

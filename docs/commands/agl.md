@@ -343,11 +343,13 @@ use `[A.logging]`; bindings in `scope debug` use `[A.logging.debug]`, or the exa
 **program route**: it overrides a module parameter through any resolving spelling — the bare
 external name, or a dotted qualified spelling as a quoted key such as `"A.logging.verbose"`,
 which reaches a parameter whose bare name a nearer declaration claims — and wins over the
-program's own [`@config`](../agl/reference/attributes.md#config) entries, which in turn win over
-the module route; CLI and `@opt-env` still win over all three. An inline entry has no
-config-file route, but its `@config` entries still apply to its own module parameters, so
-they resolve as CLI > `@opt-env` > `@config` > initializer; its imported modules retain
-their module routes and may still be seeded by `@config`.
+program's own [`@config`](../agl/reference/attributes.md#config) entries. Below `@config`, a
+package-owned program's [manifest `[config]`](pkg.md#config) table supplies further defaults —
+its own command table, then an inherited group table, then the manifest root — still above the
+module route; CLI and `@opt-env` still win over all of these. An inline entry has no
+config-file route or manifest, but its `@config` entries still apply to its own module
+parameters, so they resolve as CLI > `@opt-env` > `@config` > initializer; its imported modules
+retain their module routes and may still be seeded by `@config`.
 
 A [registered command](pkg.md#registered-commands)'s program route also inherits from its
 [group tables](pkg.md#registered-commands): a table named for a proper prefix of the command's
@@ -395,11 +397,14 @@ or `None`.
 
 Precedence for `default-agent`, `default-sandbox`, `strict-json`, `timeout`, `trace`,
 `trace-file`, and `debug` is
-`source write > CLI > qualified program table > @config > [exec].X > engine default`, where
-`@config` is the selected program's own [`@config`](../agl/reference/attributes.md#config)
-entries. CLI, config, and `@config` supply the **initial** value; a source write overrides it
-from that program point on: after `--no-trace`, `std/config::trace := true` enables tracing from
-there, and `std/config::strict-json := true` overrides `[exec] strict-json = false`.
+`source write > CLI > qualified program table > @config > a package-owned program's manifest
+[config] > [exec].X > engine default`, where `@config` is the selected program's own
+[`@config`](../agl/reference/attributes.md#config) entries and the
+[manifest `[config]`](pkg.md#config) tier resolves its own command table, then an inherited
+group table, then the manifest root. CLI, config, `@config`, and the manifest supply the
+**initial** value; a source write overrides it from that program point on: after `--no-trace`,
+`std/config::trace := true` enables tracing from there, and `std/config::strict-json := true`
+overrides `[exec] strict-json = false`.
 
 Writes take effect **positionally**, like `var` mutation. `trace`/`trace-file` writes reconfigure
 the trace destination for subsequent calls; `trace-file := Some(path)` enables tracing, and a

@@ -222,9 +222,12 @@ _POS: dict[str, str] = {
 # position actually checks the referenced value/pattern against ``v``'s type
 # (pattern, ``is``) and otherwise just a legal type reference; "amb" is
 # always scope's ambiguity verdict; "missing" is scope's selects-none
-# verdict everywhere, except that a bare (unqualified-route) owner is
-# itself ambiguous before its member is even considered, in the one
-# position where the owner is resolved on its own (a raw value reference).
+# verdict everywhere, except that an owner ambiguous on its own spelling --
+# whether a bare unqualified name or a routed one (``route::Owner``) -- is
+# reported ambiguous before its member is even considered, in the one
+# position where the owner is resolved on its own first (a raw value
+# reference): the member-aware full-path lookup that would otherwise find
+# "missing" only runs once the owner itself is unique.
 _ACCEPTED = ("accepted", type(None))
 _OTHER_MISMATCH = ("typecheck", AglTypeError)
 _AMBIGUOUS = ("scope", AmbiguousQualificationError)
@@ -239,7 +242,7 @@ for _form in _FORMS:
         )
         _EXPECTED[(_form, "amb", _pos)] = _AMBIGUOUS
         _EXPECTED[(_form, "missing", _pos)] = _MISSING
-for _form in ("bare", "localuse", "moduse"):
+for _form in ("route", "bare", "localuse", "moduse"):
     _EXPECTED[(_form, "missing", "value")] = _AMBIGUOUS
 del _form, _pos
 

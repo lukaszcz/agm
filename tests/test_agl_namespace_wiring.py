@@ -12,6 +12,7 @@ from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AglScopeError,
+    AmbiguousConstructorError,
     AmbiguousQualificationError,
     ImportedModuleOrigin,
     RouteClashError,
@@ -642,23 +643,6 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
         resolve_program(graph)
 
 
-def test_qualified_constructor_use_and_import_routes_deduplicate_same_origin(
-    tmp_path: Path,
-) -> None:
-    """A ``use`` route reopening the same module an ``import`` already
-    qualifies selects the identical constructor at a value spelling, so the
-    two routes agree and the call is accepted rather than ambiguous."""
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": "import lib\nuse /lib as lib\n\nlib::X(value = 1)\n",
-            "lib": "record X\n  value: int\n",
-        },
-    )
-
-    check_program(resolve_program(graph), base_caps())
-
-
 def test_qualified_constructor_pattern_use_and_import_routes_deduplicate_same_origin(
     tmp_path: Path,
 ) -> None:
@@ -744,8 +728,8 @@ def test_constructor_pattern_route_ambiguous_among_imports_and_a_use_declaration
     entry_id = graph.entry_id
     assert set(excinfo.value.origins) == {
         UseDeclarationOrigin((entry_id, ("S", "E", "A"))),
-        ImportedModuleOrigin(ModuleId.from_path("lib1")),
-        ImportedModuleOrigin(ModuleId.from_path("lib2")),
+        ImportedModuleOrigin((ModuleId.from_path("lib1"), ("E", "A"))),
+        ImportedModuleOrigin((ModuleId.from_path("lib2"), ("E", "A"))),
     }
 
 
@@ -855,8 +839,8 @@ def test_ambiguous_qualification_reports_two_module_origins(tmp_path: Path) -> N
         resolve_program(graph)
 
     assert set(excinfo.value.origins) == {
-        ImportedModuleOrigin(ModuleId.from_path("one/config")),
-        ImportedModuleOrigin(ModuleId.from_path("two/config")),
+        ImportedModuleOrigin((ModuleId.from_path("one/config"), "shared")),
+        ImportedModuleOrigin((ModuleId.from_path("two/config"), "shared")),
     }
 
 
@@ -907,8 +891,209 @@ def test_ambiguous_qualification_reports_mixed_module_and_use_origins(tmp_path: 
 
     entry_id = graph.entry_id
     assert set(excinfo.value.origins) == {
-        ImportedModuleOrigin(ModuleId.from_path("lib")),
+        ImportedModuleOrigin((ModuleId.from_path("lib"), "shared")),
         UseDeclarationOrigin((entry_id, ("S", "shared"))),
+    }
+
+
+def test_ambiguous_qualification_reports_two_region_scoped_import_origins(
+    tmp_path: Path,
+) -> None:
+    """A bare name two region-scoped import tails both expose carries one
+    :class:`ImportedModuleOrigin` per module -- recorded provenance, not a
+    scope-region-shaped guess, exactly as it is at the root."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "scope S\n"
+                "  import one/config::*\n"
+                "  import two/config::*\n"
+                "  let y = shared()\n"
+                "end S\n"
+            ),
+            "one/config": "def shared() -> int = 1\n",
+            "two/config": "def shared() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("one/config"), "shared")),
+        ImportedModuleOrigin((ModuleId.from_path("two/config"), "shared")),
+    }
+
+
+def test_ambiguous_qualification_reports_two_region_use_declaration_origins(
+    tmp_path: Path,
+) -> None:
+    """A bare name two region-scoped ``use`` declarations both expose carries
+    one :class:`UseDeclarationOrigin` per declaration, naming each's own
+    nested scope path -- recorded provenance, not a guess, inside a region
+    exactly as it is at the root."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "scope S\n"
+                "  use A::*\n"
+                "  use B::*\n"
+                "\n"
+                "  scope A\n    def shared() -> int = 1\n  end A\n"
+                "\n"
+                "  scope B\n    def shared() -> int = 2\n  end B\n"
+                "\n"
+                "  let y = shared()\n"
+                "end S\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        UseDeclarationOrigin((entry_id, ("S", "A", "shared"))),
+        UseDeclarationOrigin((entry_id, ("S", "B", "shared"))),
+    }
+
+
+def test_ambiguous_qualification_reports_mixed_origins_inside_a_region(
+    tmp_path: Path,
+) -> None:
+    """A bare name a region-scoped import tail and a region-scoped ``use``
+    both expose carries one origin of each kind, provenance-tagged even
+    though both contributions are recorded inside the same nested region."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "scope S\n"
+                "  import lib::*\n"
+                "  use T::*\n"
+                "\n"
+                "  scope T\n    def shared() -> int = 2\n  end T\n"
+                "\n"
+                "  let y = shared()\n"
+                "end S\n"
+            ),
+            "lib": "def shared() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("lib"), "shared")),
+        UseDeclarationOrigin((entry_id, ("S", "T", "shared"))),
+    }
+
+
+def test_use_tail_names_a_member_the_target_scope_does_not_declare(
+    tmp_path: Path,
+) -> None:
+    """A ``use S::{Missing}`` tail naming no member of ``S`` raises
+    :class:`UnknownMemberError` -- ``S`` itself resolves, so the target is
+    known and only its selected member is missing, unlike an unresolved
+    qualifier route."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {"entry": "use S::{Missing}\n\nscope S\n  def present() -> int = 1\nend S\n"},
+    )
+
+    with pytest.raises(UnknownMemberError):
+        resolve_program(graph)
+
+
+def test_use_opened_enum_route_naming_a_sibling_declaration_is_unknown_member(
+    tmp_path: Path,
+) -> None:
+    """A ``use``-opened enum route, spelled as if constructing a sibling
+    declaration, raises :class:`UnknownMemberError` -- the route itself
+    resolves through ``use``, so a spelling it does not select is a missing
+    constructor, not an unresolvable qualifier."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{Color}\n\n"
+                "scope S\n  enum Color\n    | Red\n  record Shape\n    x: int\nend S\n\n"
+                "Color::Shape"
+            )
+        },
+    )
+
+    with pytest.raises(UnknownMemberError):
+        resolve_program(graph)
+
+
+def test_bare_module_root_qualifier_naming_no_declaration_is_unknown_member(
+    tmp_path: Path,
+) -> None:
+    """``::nope`` naming nothing at the module root raises
+    :class:`UnknownMemberError` -- the module root always resolves, so a name
+    it does not declare is a missing member, not an unresolvable qualifier."""
+    graph = make_graph_from_files(tmp_path, {"entry": "::nope\n"})
+
+    with pytest.raises(UnknownMemberError):
+        resolve_program(graph)
+
+
+def test_ambiguous_record_constructor_reports_module_qualified_origins(
+    tmp_path: Path,
+) -> None:
+    """A bare record constructor two imported modules both declare carries
+    one :class:`ImportedModuleOrigin` per module, exactly as an ambiguous
+    enum member does -- :class:`AmbiguousConstructorError` is built through
+    the same origin-recording constructor-ambiguity path regardless of the
+    owning type's own kind."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import a/lib::*\nimport b/lib::*\nlet probe = Point(x = 1)\n",
+            "a/lib": "record Point\n  x: int\n",
+            "b/lib": "record Point\n  x: int\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousConstructorError) as excinfo:
+        resolve_program(graph)
+
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("a/lib"), "Point")),
+        ImportedModuleOrigin((ModuleId.from_path("b/lib"), "Point")),
+    }
+    assert excinfo.value.repair == "a/lib::Point"
+
+
+def test_ambiguous_routed_owner_propagates_even_when_its_member_is_missing(
+    tmp_path: Path,
+) -> None:
+    """A value-position constructor route whose owner alone is ambiguous
+    raises that ambiguity even when neither candidate owner declares the
+    requested member (regression: ``_imported_chain_owner``'s multi-segment
+    branch no longer swallows ambiguity from its owner lookup and falls
+    through to an unrelated "missing member" verdict)."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import one/types\nimport two/types\ntypes::Color::NoSuch\n",
+            "one/types": "enum Color\n  | Red\n  | Green\n",
+            "two/types": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("one/types"), "Color")),
+        ImportedModuleOrigin((ModuleId.from_path("two/types"), "Color")),
     }
 
 
@@ -1257,11 +1442,14 @@ def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) ->
         },
     )
 
-    with pytest.raises(AglScopeError, match="local scopes") as raised:
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
         resolve_program(graph)
 
-    assert "First" in str(raised.value)
-    assert "Second" in str(raised.value)
+    entry_id = graph.entry_id
+    assert set(excinfo.value.origins) == {
+        UseDeclarationOrigin((entry_id, ("First", "Shared"))),
+        UseDeclarationOrigin((entry_id, ("Second", "Shared"))),
+    }
 
 
 def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
@@ -1364,11 +1552,13 @@ def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
         },
     )
 
-    with pytest.raises(AglScopeError, match="imported modules") as raised:
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
         resolve_program(graph)
 
-    assert "left" in str(raised.value)
-    assert "right" in str(raised.value)
+    assert set(excinfo.value.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("left"), ("Outer", "Shared"))),
+        ImportedModuleOrigin((ModuleId.from_path("right"), ("Outer", "Shared"))),
+    }
 
 
 def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
@@ -1443,7 +1633,7 @@ def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> No
         resolve_program(graph)
 
     modules = {
-        origin.module
+        origin.declaration[0]
         for origin in exc_info.value.origins
         if isinstance(origin, ImportedModuleOrigin)
     }
@@ -1673,8 +1863,8 @@ def test_current_module_anchor_does_not_qualify_an_imported_enum_owner_in_patter
 @pytest.mark.parametrize(
     ("use", "error"),
     [
-        ("case flag of | ::Unknown::On => 1 | _ => 2", AglScopeError),
-        ("flag is ::Unknown::On", AglScopeError),
+        ("case flag of | ::Unknown::On => 1 | _ => 2", UnknownQualifierError),
+        ("flag is ::Unknown::On", UnknownQualifierError),
         ("flag is ::Unknown::Deep::On", UnknownQualifierError),
         ("flag is /Unknown::Flag::On", UnknownQualifierError),
     ],

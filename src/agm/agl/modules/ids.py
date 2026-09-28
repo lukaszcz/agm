@@ -155,6 +155,11 @@ def spell_scope_path(path: Sequence[str]) -> str:
     return "::".join(path)
 
 
+def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
+    """Render a source qualifier with its slash route and optional anchor."""
+    return ("/" if anchored else "") + "/".join(qualifier)
+
+
 def spell_declaration(
     module_id: ModuleId, path: Sequence[str], *, local_to: ModuleId | None = None
 ) -> str:
@@ -169,7 +174,7 @@ def spell_declaration(
     scoped = spell_scope_path(path)
     if module_id.is_reserved or (local_to is not None and module_id == local_to):
         return scoped
-    return f"{module_id.display()}::{scoped}"
+    return f"{module_id.display()}::{scoped}" if scoped else module_id.display()
 
 
 def expand_module_wildcard(

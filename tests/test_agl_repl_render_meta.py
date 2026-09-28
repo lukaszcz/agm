@@ -832,7 +832,7 @@ class TestInfo:
     def test_info_does_not_retain_state_a_later_query_could_collide_with(
         self, tmp_path: Path
     ) -> None:
-        """An ``:info`` query never mutates the session's retained type environment.
+        """A later, identically shaped query resolves its own owner.
 
         Regression test: ``:info`` resolves an ad-hoc parse seeded at the
         session's current node-id counter without advancing it, so two
@@ -845,7 +845,11 @@ class TestInfo:
         first through a direct import, the second only reachable
         transitively (through ``wrap``, never imported directly) -- to
         exercise both the ordinary and the canonical-library-fallback
-        resolution routes.
+        resolution routes. Each answer is compared against the same query's
+        answer in a fresh session with the same imports, so a stale
+        collision -- the first query's answer leaking into the second's --
+        would show up as a mismatch rather than as an easily-miscounted
+        substring check.
         """
         (tmp_path / "pkg").mkdir()
         (tmp_path / "pkg" / "lib.agl").write_text(
@@ -855,6 +859,14 @@ class TestInfo:
             "enum SlotB[T]\n  | FilledB(value: T)\n  | EmptyB\n"
         )
         (tmp_path / "wrap.agl").write_text("import pkg/other\nlet w = 1\n")
+
+        def info_in_a_fresh_session(query: str) -> str | None:
+            fresh = repl_session_with_root(tmp_path)
+            fresh.open()
+            assert fresh.eval_entry("import pkg/lib").ok
+            assert fresh.eval_entry("import wrap").ok
+            return fresh.info_of(query)
+
         session = repl_session_with_root(tmp_path)
         session.open()
         assert session.eval_entry("import pkg/lib").ok
@@ -863,9 +875,8 @@ class TestInfo:
         first = session.info_of("lib::SlotA[int]::FilledA")
         second = session.info_of("pkg/other::SlotB[text]::FilledB")
 
-        assert first is not None and "FilledA" in first and "int" in first
-        assert second is not None and "is a constructor" in second
-        assert "FilledB" in second and "text" in second
+        assert first == info_in_a_fresh_session("lib::SlotA[int]::FilledA")
+        assert second == info_in_a_fresh_session("pkg/other::SlotB[text]::FilledB")
 
     @pytest.mark.parametrize("name", ("lib::P", "lib::Point"))
     def test_info_reports_a_qualified_imported_record_or_alias(

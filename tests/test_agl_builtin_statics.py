@@ -10,6 +10,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
+from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
 from agm.agl.syntax.nodes import Call, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedModule, check_program
 from tests.agl.module_graph import resolve_and_check_repl_entry
@@ -87,10 +88,31 @@ def test_session_open_rejects_lookalike_option_some_record() -> None:
     )
 
 
-def test_session_unknown_static_reports_a_static_diagnostic() -> None:
-    message = _reject("Session::bogus()")
-    assert "unknown static" in message.lower()
-    assert "session" in message.lower()
+def test_session_unknown_static_raises_unknown_member() -> None:
+    """A qualified static a prelude type does not declare is an
+    :class:`UnknownMemberError` -- ``Session`` itself resolves as a prelude
+    owner, so an unrecognized static on it is a missing member, not an
+    unresolvable qualifier."""
+    with pytest.raises(UnknownMemberError):
+        _check("Session::bogus()")
+
+
+def test_ambiguous_static_owner_call_raises_ambiguity_not_unknown_static() -> None:
+    """A call whose owner route is genuinely ambiguous -- not merely
+    unknown -- raises the ambiguity itself rather than being reinterpreted
+    as an unrecognized built-in static (regression: `_resolve_call`'s catch
+    around the callee's own resolution no longer swallows ambiguity)."""
+    with pytest.raises(AmbiguousQualificationError):
+        _check(
+            "use A::*\n"
+            "use B::*\n"
+            "\n"
+            "scope A\n\n  scope Session\n    def open() -> int = 1\n  end Session\nend A\n"
+            "\n"
+            "scope B\n\n  scope Session\n    def open() -> int = 2\n  end Session\nend B\n"
+            "\n"
+            "Session::open()"
+        )
 
 
 @pytest.mark.parametrize("call", ["Session::ping()", "::Session::ping()"])

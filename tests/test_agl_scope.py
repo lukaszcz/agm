@@ -23,9 +23,11 @@ from agm.agl.scope import (
     ModuleResolution,
 )
 from agm.agl.scope.symbols import (
+    AmbiguousConstructorError,
     AmbiguousQualificationError,
     BinderKind,
     BindingRef,
+    DeclaredOrigin,
     ReceiverOwner,
     ScopeNode,
     UnknownMemberError,
@@ -3328,14 +3330,14 @@ class TestConstructorBindings:
         assert "B" in msg
 
     def test_ambiguous_mentions_qualification(self) -> None:
-        """Ambiguity error tells the user to qualify the reference."""
+        """Ambiguity error carries both declared origins and a concrete repair spelling."""
         err = reject_scope("enum Option\n  | some\nenum Other\n  | some\nsome\n")
-        msg = err.to_diagnostic().message
-        names = quoted_names(msg)
-        # The ambiguous reference, then both owners, then the repair spelling.
-        assert names[0] == "some"
-        assert {"Option::some", "Other::some"} <= set(names)
-        assert names[-1] == "Option::some", "the repair is a concrete qualified spelling"
+        assert isinstance(err, AmbiguousConstructorError)
+        assert set(err.origins) == {
+            DeclaredOrigin((ENTRY_ID, ("Option", "some"))),
+            DeclaredOrigin((ENTRY_ID, ("Other", "some"))),
+        }
+        assert err.repair == "Option::some"
 
     # ---  regression: payload / type-args / context do NOT disambiguate ---
 

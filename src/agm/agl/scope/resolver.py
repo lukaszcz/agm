@@ -85,12 +85,14 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
     AmbiguousQualificationError,
+    BareContributionSource,
     BinderKind,
     BindingRef,
     BuiltinKind,
     BuiltinStaticKind,
     ConstructorRef,
     DeclarationKey,
+    DeclaredOrigin,
     DeclInfo,
     ImmutableAssignmentError,
     ImportedModuleOrigin,
@@ -118,6 +120,7 @@ from agm.agl.scope.symbols import (
     is_qualified_function_member,
     qualification_repair_guidance,
     undefined_name_message,
+    unnameable_use_target_error,
 )
 from agm.agl.scope.symbols import binding_qname as _ref_qname
 from agm.agl.scope.symbols import import_item_path as _item_path
@@ -329,11 +332,6 @@ _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     """Order scope paths by depth, then lexical spelling."""
     return (len(path), path)
-
-
-def _receiver_owner_sort_key(owner: ReceiverOwner) -> tuple[tuple[str, ...], ScopePath]:
-    """Order resolved receiver owners by their declaration identity."""
-    return (owner.module_id.segments, owner.scope_path)
 
 
 def _constructor_candidate_sort_key(
@@ -1252,12 +1250,15 @@ class _Resolver:
         if len(owners) == 1:
             return next(iter(owners))
         if len(owners) > 1:
-            names = ", ".join(
-                spell_declaration(owner.module_id, owner.scope_path)
-                for owner in sorted(owners, key=_receiver_owner_sort_key)
-            )
-            raise AglScopeError(
-                f"Method receiver '{'::'.join(type_path)}' is ambiguous: {names}.", span=span
+            raise AmbiguousQualificationError.for_origins(
+                (),
+                type_path,
+                (
+                    self._declaration_origin((owner.module_id, _bare_atom(owner.scope_path)))
+                    for owner in owners
+                ),
+                span=span,
+                local_to=self._module_id,
             )
         return None
 
@@ -1991,16 +1992,18 @@ class _Resolver:
                 continue
             # Header enforcement: track that a non-import item has been seen.
             seen_non_import_item = True
-            # Named declarations switch to their declaration's lexical scope
-            # in their own handlers, and validate their own whole subtree
-            # (including any nested blocks) there. A root item that is
-            # neither has no enclosing declaration to validate it, so it is
-            # validated here; a nested block's own item is already covered by
-            # the walk of its enclosing item or declaration, so it is skipped.
-            if self._at_root and not isinstance(
-                item,
-                (ScopeRegion, FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias),
-            ):
+            # Named declarations (def/record/enum/exception/type, and a
+            # scoped let/var binder) validate their own whole subtree,
+            # including any nested blocks, in their own handlers after
+            # entering the right lexical scope. A scope region keeps
+            # `_at_root` set and revalidates its own items one by one through
+            # this same walk. Every other root item is validated here; a
+            # nested block's own item is already covered by the walk of its
+            # enclosing item or declaration.
+            skip_item_validation = isinstance(
+                item, (ScopeRegion, FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)
+            ) or (isinstance(item, (LetDecl, VarDecl)) and item.scope_path)
+            if self._at_root and not skip_item_validation:
                 self._validate_qualifier_chains(item)
             if isinstance(item, ScopeRegion):
                 self._resolve_scope_region(item)
@@ -2135,7 +2138,9 @@ class _Resolver:
         scope = self._scope
         for atom, qnames in bare.items():
             for qname in qnames:
-                scope.contribute_bare(atom, self._cross_module_binding_ref(qname))
+                scope.contribute_bare(
+                    atom, self._cross_module_binding_ref(qname), BareContributionSource.IMPORT_TAIL
+                )
                 self._deferred_constructors.append(
                     partial(self._contribute_bare_constructor, scope, atom, qname)
                 )
@@ -2176,6 +2181,7 @@ class _Resolver:
             scope.contribute_bare(
                 member.name,
                 replace(self._cross_module_binding_ref(variant_qname), is_variant_member=True),
+                BareContributionSource.IMPORT_TAIL,
             )
             scope.contribute_bare_constructor(
                 member.name, self._cross_module_constructor_refs[variant_qname]
@@ -2187,7 +2193,9 @@ class _Resolver:
         """Contribute the record constructors a bare-exposed enum's member reference denotes."""
         for constructor in self._type_owners.referenced_member_refs(module, member):
             scope.contribute_bare(
-                constructor.owner_name, self._variant_binding_ref(constructor, span)
+                constructor.owner_name,
+                self._variant_binding_ref(constructor, span),
+                BareContributionSource.IMPORT_TAIL,
             )
             scope.contribute_bare_constructor(constructor.owner_name, constructor)
 
@@ -2214,8 +2222,8 @@ class _Resolver:
                         continue
                     if (module, path) not in self._import_env.scope_origins_by_route:
                         rendered = "::".join(path)
-                        raise AglScopeError(
-                            f"use target '{module.display()}::{rendered}' is not nameable.",
+                        raise unnameable_use_target_error(
+                            f"{module.display()}::{rendered}",
                             span=self._import_env.decl_spans[module],
                         )
             scope = scope.parent
@@ -2348,29 +2356,24 @@ class _Resolver:
                 for imported_route, _members in imported
             )
             rendered = "::".join(target)
-            raise AglScopeError(
-                f"use target '{rendered}' is ambiguous between local scope '{'::'.join(local)}' "
-                f"and imported module route(s): {candidates}. Use {module_targets} to select the "
-                f"module route or ::{rendered} to select the local scope.",
+            raise RouteClashError(
+                f"Use target '{rendered}' is both local scope '{'::'.join(local)}' and imported "
+                f"module route(s): {candidates}. Use {module_targets} to select the module route "
+                f"or ::{rendered} to select the local scope.",
                 span=decl.span,
             )
         if len(imported) > 1 and not shared_alias_facade:
-            rendered = "/".join(route)
-            candidates = ", ".join(
-                f"{module.display()}::{'::'.join(root)}" if root else module.display()
-                for (module, root), _members in imported
-            )
-            raise AglScopeError(
-                f"use target '{rendered}' is ambiguous across imported modules: {candidates}. "
-                f"Use a longer suffix, a /-anchored path, or as to name one import distinctly.",
+            raise AmbiguousQualificationError.for_origins(
+                route[:-1],
+                (route[-1],),
+                (ImportedModuleOrigin((module, root)) for (module, root), _members in imported),
+                anchored=decl.anchored,
                 span=decl.span,
+                local_to=self._module_id,
             )
         if local is None and not imported:
             rendered = "/".join(route) if route else "::".join(target)
-            raise AglScopeError(
-                f"use target '{rendered}' is not nameable. Import its module before using it.",
-                span=decl.span,
-            )
+            raise unnameable_use_target_error(rendered, span=decl.span)
         if local is not None:
             self._use_targets[decl.node_id] = ResolvedUseTarget(local_path=local)
             self._scope.contribute_local_use(
@@ -2667,11 +2670,15 @@ class _Resolver:
                     if candidate in self._scope_nodes:
                         candidates.add(candidate)
             if len(candidates) > 1:
-                rendered = "::".join(target)
-                options = ", ".join("::".join(candidate) for candidate in sorted(candidates))
-                raise AglScopeError(
-                    f"use target '{rendered}' is ambiguous across local scopes: {options}.",
+                raise AmbiguousQualificationError.for_origins(
+                    (),
+                    target,
+                    (
+                        UseDeclarationOrigin((self._module_id, candidate))
+                        for candidate in candidates
+                    ),
                     span=span,
+                    local_to=self._module_id,
                 )
             if candidates:
                 return next(iter(candidates))
@@ -2783,7 +2790,7 @@ class _Resolver:
         for exposed, source in exposures:
             if not isinstance(source, BindingRef):
                 continue
-            layer.contribute_bare(exposed, source)
+            layer.contribute_bare(exposed, source, BareContributionSource.USE_DECLARATION)
             bindings.setdefault(exposed, set()).add(source)
             for constructor in self._declaring_constructor_candidates(source.name, source):
                 layer.contribute_bare_constructor(exposed, constructor)
@@ -2838,7 +2845,7 @@ class _Resolver:
 
         def contribute(exposed: NameAtom, source: QName) -> None:
             ref = self._cross_module_binding_ref(source)
-            scope.contribute_bare(exposed, ref)
+            scope.contribute_bare(exposed, ref, BareContributionSource.USE_DECLARATION)
             contributed_bindings.setdefault(exposed, set()).add(ref)
             contributed_sources.append((exposed, source))
 
@@ -2900,7 +2907,7 @@ class _Resolver:
             prefix = _item_path(item)
             matches = tuple(atom for atom in members if _atom_under_prefix(atom, prefix))
             if not matches and validate:
-                raise AglScopeError(
+                raise UnknownMemberError(
                     f"name {'::'.join(prefix)!r} is not declared by this use target.",
                     span=decl.span,
                 )
@@ -3041,6 +3048,7 @@ class _Resolver:
                 span=node.span,
             )
         with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+            self._validate_qualifier_chains(node)
             yield
 
     def _resolve_let(self, node: LetDecl) -> None:
@@ -3431,10 +3439,10 @@ class _Resolver:
             raise self._unknown_static_error(node, qualifier)
 
     @staticmethod
-    def _unknown_static_error(node: VarRef, qualifier: QualifierChain) -> AglScopeError:
+    def _unknown_static_error(node: VarRef, qualifier: QualifierChain) -> UnknownMemberError:
         """Build the diagnostic for a prelude owner that lacks the requested static."""
         owner = qualifier.render()
-        return AglScopeError(
+        return UnknownMemberError(
             f"Unknown static '{owner}::{node.name}' on prelude type '{owner}'.",
             span=node.span,
         )
@@ -3557,6 +3565,19 @@ class _Resolver:
             module, path, local_to=self._module_id
         )
 
+    def _declaration_origin(self, qname: QName) -> QualificationOrigin:
+        """Classify how *qname* is visible here: declared, imported, or use-contributed.
+
+        *qname* is already resolved, so this asks only how it reached
+        visibility: this module's own declaration, a spellable import route,
+        or (the remaining case) a ``use`` declaration's contribution.
+        """
+        if qname[0] == self._module_id:
+            return DeclaredOrigin(qname)
+        if route_spelling(self._import_env, qname) is not None:
+            return ImportedModuleOrigin(qname)
+        return UseDeclarationOrigin(qname)
+
     def _ambiguous_constructor(
         self,
         spelling: str,
@@ -3565,22 +3586,12 @@ class _Resolver:
         span: SourceSpan,
     ) -> AmbiguousConstructorError:
         """Report *spelling* as ambiguous among *candidates*; *repair* selects the first."""
-        owner_names = ", ".join(
-            "'"
-            + spell_declaration(
-                candidate.owner_module_id,
-                (*candidate.owner_path, candidate.owner_name),
-                local_to=self._module_id,
-            )
-            + "'"
-            for candidate in candidates
-        )
-        return AmbiguousConstructorError(
-            f"'{spelling}' is ambiguous: it is declared as a constructor "
-            f"in multiple types ({owner_names}). "
-            f"Qualify the reference, e.g. '{repair}'.",
+        return AmbiguousConstructorError.for_constructor_origins(
+            spelling,
+            (self._declaration_origin(candidate.qname) for candidate in candidates),
             repair=repair,
             span=span,
+            local_to=self._module_id,
         )
 
     def _require_textually_visible(self, ref: BindingRef, span: SourceSpan) -> None:
@@ -3643,7 +3654,7 @@ class _Resolver:
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
             if chain.anchor is None and chain.segments and chain.segments[0].name in type_param_set:
-                raise AglScopeError(
+                raise UnknownQualifierError(
                     f"'{chain.segments[0].name}' is a type parameter here and cannot be used "
                     "as a qualifier route.",
                     span=chain.segments[0].span,
@@ -3724,24 +3735,16 @@ class _Resolver:
                         }
                 if len(full_selection) > 1:
                     route, member = routed_qualifier_and_member(chain, (chain.member,))
-                    spelling = (
-                        f"{render_qualifier(route, anchored=chain.anchored)}::"
-                        f"{'::'.join(_bare_path(member))}"
-                    )
-                    modules = sorted(
-                        {qname[0] for qname in full_selection if qname[0] != self._module_id},
-                        key=ModuleId.path_str,
-                    )
                     raise AmbiguousQualificationError.for_origins(
-                        spelling,
+                        route,
+                        _bare_path(member),
                         (
-                            *(
-                                UseDeclarationOrigin(qname)
-                                for qname in full_selection
-                                if qname[0] == self._module_id
-                            ),
-                            *(ImportedModuleOrigin(module) for module in modules),
+                            DeclaredOrigin(qname)
+                            if qname[0] == self._module_id
+                            else ImportedModuleOrigin(qname)
+                            for qname in full_selection
                         ),
+                        anchored=chain.anchored,
                         span=chain.span,
                         local_to=self._module_id,
                     )
@@ -4030,7 +4033,7 @@ class _Resolver:
         self._reject_type_name_value(chain, name, span, node_id)
         return self._spaced_qualifier_repair(
             self._spaced_qualifier_at(chain.span), chain.span
-        ) or AglScopeError(undefined_name_message(name, in_module=True), span=span)
+        ) or UnknownMemberError(undefined_name_message(name, in_module=True), span=span)
 
     def _own_scope_miss(self, chain: QualifierChain, span: SourceSpan) -> AglScopeError:
         """Return why current-module *chain*, used at *span*, names no scope of this module."""
@@ -4039,7 +4042,9 @@ class _Resolver:
         segment = chain.segments[0]
         return self._spaced_qualifier_repair(
             self._spaced_qualifier_at(chain.span) or self._spaced_qualifier_around(span), span
-        ) or AglScopeError(undefined_name_message(segment.name, in_module=True), span=segment.span)
+        ) or UnknownQualifierError(
+            undefined_name_message(segment.name, in_module=True), span=segment.span
+        )
 
     @staticmethod
     def _unknown_scope_path(chain: QualifierChain) -> UnknownQualifierError:
@@ -4066,14 +4071,18 @@ class _Resolver:
         if opened is None:
             return None
         imported = self._qualified_import_resolution(chain, name)
-        spelling = f"{chain.render()}::{name}"
         if isinstance(imported, QualResolutionAmbiguous):
             raise AmbiguousQualificationError.for_origins(
-                spelling,
+                chain.route_segments,
+                (name,),
                 (
                     UseDeclarationOrigin(_ref_qname(opened)),
-                    *(ImportedModuleOrigin(module) for module in imported.candidates),
+                    *(
+                        ImportedModuleOrigin((module, imported.member))
+                        for module in imported.candidates
+                    ),
                 ),
+                anchored=chain.anchored,
                 span=span,
                 local_to=self._module_id,
             )
@@ -4093,11 +4102,13 @@ class _Resolver:
             )
             if opened_identity != imported_identity:
                 raise AmbiguousQualificationError.for_origins(
-                    spelling,
+                    chain.route_segments,
+                    (name,),
                     (
                         UseDeclarationOrigin(_ref_qname(opened)),
-                        ImportedModuleOrigin(imported.qname[0]),
+                        ImportedModuleOrigin(imported.qname),
                     ),
+                    anchored=chain.anchored,
                     span=span,
                     local_to=self._module_id,
                 )
@@ -4189,13 +4200,15 @@ class _Resolver:
             imported = self._qualified_import_resolution(chain, variant)
             extra_origins: list[QualificationOrigin] | None = None
             if isinstance(imported, QualResolutionAmbiguous):
-                extra_origins = [ImportedModuleOrigin(module) for module in imported.candidates]
+                extra_origins = [
+                    ImportedModuleOrigin((module, imported.member))
+                    for module in imported.candidates
+                ]
             elif isinstance(imported, QualResolutionFound):
                 imported_constructor = self._cross_module_constructor_refs.get(imported.qname)
                 if opened != {imported_constructor}:
-                    extra_origins = [ImportedModuleOrigin(imported.qname[0])]
+                    extra_origins = [ImportedModuleOrigin(imported.qname)]
             if extra_origins is not None:
-                rendered = "::".join((*relative_path, variant))
                 candidate = next(iter(opened))
                 origins: list[QualificationOrigin] = [
                     UseDeclarationOrigin(
@@ -4207,7 +4220,11 @@ class _Resolver:
                     *extra_origins,
                 ]
                 raise AmbiguousQualificationError.for_origins(
-                    rendered, origins, span=chain.span, local_to=self._module_id
+                    (),
+                    (*relative_path, variant),
+                    origins,
+                    span=chain.span,
+                    local_to=self._module_id,
                 )
         if opened is not None:
             return opened
@@ -4347,7 +4364,7 @@ class _Resolver:
                 owner_ref = self._lookup_import_env_unqualified(
                     segment.name, chain.span, self._is_type_contribution
                 )
-            except AglScopeError:
+            except AmbiguousQualificationError:
                 if segment.type_args is None:
                     raise
                 # An owner ambiguous by its bare spelling alone, always an
@@ -4364,8 +4381,12 @@ class _Resolver:
                     return None if owner is None else (self._qname_decl_key(result.qname), owner)
                 if isinstance(result, QualResolutionAmbiguous):
                     raise AmbiguousQualificationError.for_origins(
-                        f"{segment.name}::{variant}",
-                        (ImportedModuleOrigin(module) for module in result.candidates),
+                        (),
+                        (segment.name, variant),
+                        (
+                            ImportedModuleOrigin((module, result.member))
+                            for module in result.candidates
+                        ),
                         span=chain.span,
                         local_to=self._module_id,
                     ) from None
@@ -4393,10 +4414,11 @@ class _Resolver:
                 owner_ref = self._lookup_qualified_binding(
                     route, chain.segments[-1].name, chain.span
                 )
-            except AglScopeError:
+            except (UnknownQualifierError, UnknownMemberError):
                 # The final scope segment can be part of a selected path atom
                 # rather than a separately selected type owner. Let the normal
-                # module-path resolver consume the complete atom.
+                # module-path resolver consume the complete atom. Any other
+                # verdict -- notably ambiguity -- is a real error and propagates.
                 return None
             owner_qname = _ref_qname(owner_ref)
             owner = self._constructible_owner(owner_qname)
@@ -4698,7 +4720,7 @@ class _Resolver:
                 continue
             _, refs, constructor_refs = refresh
             for ref in refs:
-                layer.contribute_bare(atom, ref)
+                layer.contribute_bare(atom, ref, BareContributionSource.USE_DECLARATION)
             if refs:
                 bindings[atom] = frozenset(refs)
             for constructor in constructor_refs:
@@ -4773,11 +4795,15 @@ class _Resolver:
     ) -> BindingRef | None:
         """Resolve one region's bare contributions satisfying *binding_predicate*.
 
-        Clashes are deferred to use sites. A root-position tailed import's
-        contribution is an :class:`ImportedModuleOrigin`; everything else this
-        region's own bare table exposes (a ``use`` declaration, or a
-        region-scoped import tail) is a :class:`UseDeclarationOrigin`, since
-        both add bare names the same way (see the imports/`use` docs).
+        Clashes are deferred to use sites. Each candidate's own recorded
+        :class:`~agm.agl.scope.symbols.BareContributionSource` decides its
+        origin kind: a root-position tailed import's contribution, or a
+        region-scoped import tail's (see :class:`BareContributionSource`), is
+        an :class:`ImportedModuleOrigin`; a ``use`` declaration's is a
+        :class:`UseDeclarationOrigin`. A candidate live-refreshed past the
+        static snapshot (no recorded source at *name*) can only have reached
+        visibility through a ``use`` declaration -- an import tail never
+        refreshes -- so it defaults to :class:`UseDeclarationOrigin` too.
         """
         nearest = self._nearest_bare_contribution_layer(name, binding_predicate=binding_predicate)
         if nearest is None:
@@ -4796,14 +4822,15 @@ class _Resolver:
         }
         if len(distinct) == 1:
             return next(iter(distinct.values()))
+        sources = selected_layer.bare_contributions.get(name, {})
         origins = tuple(
-            ImportedModuleOrigin(ref.module_id)
-            if ref in root_refs
+            ImportedModuleOrigin(_ref_qname(ref))
+            if ref in root_refs or sources.get(ref) is BareContributionSource.IMPORT_TAIL
             else UseDeclarationOrigin(_ref_qname(ref))
             for ref in distinct.values()
         )
         raise AmbiguousQualificationError.for_origins(
-            "::".join(_bare_path(name)), origins, span=span, local_to=self._module_id, bare=True
+            (), _bare_path(name), origins, span=span, local_to=self._module_id
         )
 
     def _lookup_import_env_unqualified(
@@ -4827,11 +4854,11 @@ class _Resolver:
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
             raise AmbiguousQualificationError.for_origins(
-                name,
-                (ImportedModuleOrigin(qname[0]) for qname in qnames),
+                (),
+                (name,),
+                (ImportedModuleOrigin(qname) for qname in qnames),
                 span=span,
                 local_to=self._module_id,
-                bare=True,
             )
         # Exactly one QName.
         qname = next(iter(qnames))
@@ -4892,9 +4919,6 @@ class _Resolver:
                     span=segment.span,
                 )
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
-        spelling = (
-            f"{render_qualifier(route, anchored=qualifier.anchored)}::{'::'.join(_bare_path(atom))}"
-        )
         return resolve_qualified_member(
             self._import_env,
             route,
@@ -4908,8 +4932,10 @@ class _Resolver:
                 span=span,
             ),
             ambiguous=lambda candidates: AmbiguousQualificationError.for_origins(
-                spelling,
-                (ImportedModuleOrigin(module) for module in candidates),
+                route,
+                _bare_path(atom),
+                (ImportedModuleOrigin((module, atom)) for module in candidates),
+                anchored=qualifier.anchored,
                 span=span,
                 local_to=self._module_id,
             ),
@@ -5061,7 +5087,7 @@ class _Resolver:
         if isinstance(callee, VarRef):
             try:
                 self._resolve_varref(callee, is_call_target=True)
-            except AglScopeError:
+            except (UnknownQualifierError, UnknownMemberError):
                 qualifier = callee.qualifier
                 if qualifier is None or not self._qualifier_denotes_builtin_static_owner(qualifier):
                     raise
@@ -5394,10 +5420,14 @@ class _Resolver:
                 return None
             resolution = self._qualified_import_resolution(chain, name)
             if isinstance(resolution, QualResolutionAmbiguous):
-                spelling = f"{render_qualifier(route, anchored=chain.anchored)}::{name}"
                 raise AmbiguousQualificationError.for_origins(
-                    spelling,
-                    (ImportedModuleOrigin(module) for module in resolution.candidates),
+                    route,
+                    (name,),
+                    (
+                        ImportedModuleOrigin((module, resolution.member))
+                        for module in resolution.candidates
+                    ),
+                    anchored=chain.anchored,
                     span=chain.span,
                     local_to=self._module_id,
                 )

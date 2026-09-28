@@ -31,6 +31,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import (
+    BareContributionSource,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -803,6 +804,7 @@ class TestTypeEnvironment:
                 kind=BinderKind.constructor_binding,
                 scope_path=("Shapes",),
             ),
+            BareContributionSource.IMPORT_TAIL,
         )
         env = TypeEnvironment(
             program_type_table={
@@ -839,6 +841,7 @@ class TestTypeEnvironment:
                 module_id=library,
                 scope_path=("Shapes",),
             ),
+            BareContributionSource.IMPORT_TAIL,
         )
         foreign_env = TypeEnvironment(
             program_type_table={
@@ -865,6 +868,7 @@ class TestTypeEnvironment:
                     kind=BinderKind.constructor_binding,
                     module_id=library,
                 ),
+                BareContributionSource.IMPORT_TAIL,
             )
         generic_template = RecordType("Box", module_id=library, decl_id=_mk_node_id())
         alias_template = ArrayType(TypeVarType("T"))

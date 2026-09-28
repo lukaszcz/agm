@@ -68,6 +68,7 @@ from agm.agl.scope.symbols import (
     builtin_type_static_kind,
     contributed_declarations,
     dedupe_constructor_candidates,
+    not_exported_error,
     resolve_bare_contribution_layer,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
@@ -572,11 +573,7 @@ def _compute_reexport_additions(
         declarations = matching_atoms(target_exports, prefix)
         scopes = matching_atoms(target_scopes, prefix)
         if not declarations and not scopes and not allow_missing:
-            raise AglScopeError(
-                f"name {'::'.join(prefix)!r} is not exported by module "
-                f"{'/'.join(decl.module_path)!r}",
-                span=decl.span,
-            )
+            raise not_exported_error("::".join(prefix), "/".join(decl.module_path), span=decl.span)
         return declarations, scopes
 
     selected_items = [(item, *match(item)) for item in decl.items]

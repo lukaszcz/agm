@@ -18,7 +18,11 @@ from agm.agl.scope.imports import (
     resolve_qualified,
 )
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AmbiguousQualificationError
+from agm.agl.scope.symbols import (
+    AmbiguousQualificationError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
@@ -217,8 +221,9 @@ def test_type_parameter_shadowing_a_real_module_route_is_rejected(
     (
         "import one/types\ndef f[one](x: one/types::Color) -> int = 1",
         "import one/types\ndef f[one](x: int) -> int =\n  let c = one/types::Color::Red\n  1",
+        "import one/types\ndef f[one](x: int) = one/types::Color::Red",
     ),
-    ids=("annotation", "value"),
+    ids=("annotation", "value", "one-liner"),
 )
 def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry: str) -> None:
     """A ``/``-containing qualifier segment always names a module route.
@@ -236,34 +241,59 @@ def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry
     assert _program_outcome(tmp_path, modules) == "accepted"
 
 
+def _needle_span(entry: str, locate: str, span_len: int) -> tuple[int, int, int]:
+    """Compute (start_line, start_col, end_col) for *locate*'s last occurrence in *entry*.
+
+    The reported span covers only *locate*'s first *span_len* characters --
+    a scope row's shadowed segment is shorter than the qualifier locating it.
+    """
+    offset = entry.rindex(locate)
+    prefix = entry[:offset]
+    line = prefix.count("\n") + 1
+    col = offset - prefix.rfind("\n")
+    return line, col, col + span_len
+
+
 @pytest.mark.parametrize(
-    ("entry", "outcome"),
+    ("entry", "phase", "locate"),
     (
         (
             "import types\ndef f[types](x: int) = fn(y: types::Color) => 1",
             "scope",
+            "types::Color",
         ),
         (
             "import types\ndef S::f[types](x: int) = fn(y: types::Color) => 1",
             "scope",
+            "types::Color",
         ),
         (
             "import types\n\nscope S\n  def f[types](x: int) = fn(y: types::Color) => 1\nend S",
             "scope",
+            "types::Color",
         ),
         (
             "import types\ndef f[types](x: int) -> int = types::Color::Red",
             "scope",
+            "types::Color",
+        ),
+        (
+            "import types\nrecord Box\n  v: int\n"
+            "def Box::m[types](self) = fn(y: types::Color) => 1",
+            "scope",
+            "types::Color",
         ),
         (
             "import lib\ndef f(x: lib::SlotA[int]) -> int = "
             "case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0",
             "typecheck",
+            "lib::SlotA[text]::FilledA(value)",
         ),
         (
             "import lib\nprogram def main(x: lib::SlotA[int]) -> unit = "
             "print(case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0)",
             "typecheck",
+            "lib::SlotA[text]::FilledA(value)",
         ),
     ),
     ids=(
@@ -271,26 +301,109 @@ def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry
         "scoped-shorthand-def",
         "scope-region-def",
         "value-position-return",
+        "method-def",
         "plain-def-case",
         "program-def-case",
     ),
 )
-def test_a_one_liner_def_body_still_validates_its_qualifier_chains(
-    tmp_path: Path, entry: str, outcome: Outcome
+def test_a_one_liner_def_body_validates_its_qualifier_chains(
+    tmp_path: Path, entry: str, phase: Outcome, locate: str
 ) -> None:
     """A ``def`` whose body is a bare expression, never a ``Block``, still
     validates every qualifier chain reachable only through that body: a
     lambda parameter's type-parameter shadowing, a bare value chain, and an
     ill-typed constructor pattern -- across a plain, scoped-shorthand,
-    scope-region, and ``program`` ``def``.
+    scope-region, method, and ``program`` ``def``.
+
+    A scope-phase row's precise class is :class:`UnknownQualifierError`, at
+    the shadowed segment's own span; a typecheck-phase row's is
+    :class:`AglTypeError`, at the whole rejected pattern's span.
     """
+    from agm.agl.typecheck import AglTypeError
+    from agm.agl.typecheck.program import check_program
+    from tests.agl.ir_harness import base_caps, make_graph_from_files
+
     modules = {
         "entry": entry,
         "types": "enum Color\n  | Red\n  | Green",
         "lib": "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA",
     }
+    graph = make_graph_from_files(tmp_path, modules)
+    span_len = len("types") if phase == "scope" else len(locate)
+    expected_line, expected_start_col, expected_end_col = _needle_span(entry, locate, span_len)
 
-    assert _program_outcome(tmp_path, modules) == outcome
+    if phase == "scope":
+        with pytest.raises(UnknownQualifierError) as scope_excinfo:
+            resolve_program(graph)
+        span = scope_excinfo.value.span
+    else:
+        resolved = resolve_program(graph)
+        with pytest.raises(AglTypeError) as type_excinfo:
+            check_program(resolved, base_caps())
+        span = type_excinfo.value.span
+
+    assert span is not None
+    assert (span.start_line, span.start_col, span.end_col) == (
+        expected_line,
+        expected_start_col,
+        expected_end_col,
+    )
+
+
+_NESTED_SCOPE_MODULE = (
+    "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\nend S\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("shorthand", "region", "error", "needle"),
+    (
+        (
+            _NESTED_SCOPE_MODULE + "let S::x: P[int]::Q = P::Q\n",
+            (
+                "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n"
+                "\n"
+                "  let x: P[int]::Q = P::Q\nend S\n"
+            ),
+            AglScopeError,
+            "P[int]",
+        ),
+        (
+            _NESTED_SCOPE_MODULE + "let S::x: Color::Nope = Color::Blue\n",
+            (
+                "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n"
+                "\n"
+                "  let x: Color::Nope = Color::Blue\nend S\n"
+            ),
+            UnknownMemberError,
+            "Color::Nope",
+        ),
+    ),
+    ids=("type-args-on-scope-segment", "unknown-enum-member"),
+)
+def test_scoped_binder_shorthand_matches_its_region_form(
+    shorthand: str, region: str, error: type[AglScopeError], needle: str
+) -> None:
+    """A root ``let S::x`` binder validates its annotation inside ``S``, exactly as
+    ``scope S ... let x ... end S`` does: same phase, same precise class, and a span
+    over the same rejected sub-expression -- not the whole annotation or binder.
+    """
+    from tests.agl.module_graph import resolve_inline_entry
+
+    for source in (shorthand, region):
+        with pytest.raises(error) as excinfo:
+            resolve_inline_entry(source)
+        span = excinfo.value.span
+        assert span is not None
+        offset = source.index(needle)
+        prefix = source[:offset]
+        expected_line = prefix.count("\n") + 1
+        expected_start_col = offset - prefix.rfind("\n")
+        assert (span.start_line, span.start_col, span.end_col) == (
+            expected_line,
+            expected_start_col,
+            expected_start_col + len(needle),
+        )
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:

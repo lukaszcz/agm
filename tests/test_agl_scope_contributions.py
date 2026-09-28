@@ -16,6 +16,7 @@ from agm.agl.scope.imports import (
     resolve_qualified,
 )
 from agm.agl.scope.symbols import (
+    BareContributionSource,
     BinderKind,
     BindingRef,
     ScopeNode,
@@ -186,6 +187,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
                         BinderKind.function_binding,
                         module,
                     ),
+                    BareContributionSource.IMPORT_TAIL,
                 )
 
     assert resolve_bare_contribution(root, "selected") is None
@@ -211,6 +213,7 @@ def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> Non
             BinderKind.function_binding,
             module,
         ),
+        BareContributionSource.IMPORT_TAIL,
     )
 
     candidates = resolve_bare_contribution(root, "selected")

@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.symbols import UnknownMemberError
+from agm.agl.modules.ids import ModuleId, render_qualifier
 from agm.agl.scope.symbols import import_item_path as _item_path
+from agm.agl.scope.symbols import not_exported_error
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
@@ -80,11 +80,6 @@ def declares_bare_constructor(
 
 def _path_sort_key(atom: NameAtom) -> str:
     return "::".join(_path(atom))
-
-
-def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
-    """Render a source qualifier with its slash route and optional anchor."""
-    return ("/" if anchored else "") + "/".join(qualifier)
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,9 +338,7 @@ def _selected_public_atoms(
         scopes = matching_atoms(scope_exports, prefix)
         if not declarations and not scopes:
             rendered = "::".join(prefix)
-            raise UnknownMemberError(
-                f"name {rendered!r} is not exported by module {module.display()!r}", span=span
-            )
+            raise not_exported_error(rendered, module.display(), span=span)
         for atom in declarations:
             matched_exports[atom] = None
         for atom in scopes:

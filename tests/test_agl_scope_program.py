@@ -33,6 +33,7 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     BinderKind,
     ImmutableAssignmentError,
+    ImportedModuleOrigin,
     ReceiverOwner,
 )
 from agm.agl.semantics.values import IntValue
@@ -1781,8 +1782,12 @@ class TestWildcardImports:
             },
         )
 
-        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+        with pytest.raises(AmbiguousQualificationError) as exc_info:
             resolve_program(graph)
+        assert set(exc_info.value.origins) == {
+            ImportedModuleOrigin((ModuleId.from_path("alpha"), ())),
+            ImportedModuleOrigin((ModuleId.from_path("beta"), ())),
+        }
 
     def test_separate_wildcard_aliases_do_not_form_one_use_facade(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
@@ -1794,8 +1799,12 @@ class TestWildcardImports:
             },
         )
 
-        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+        with pytest.raises(AmbiguousQualificationError) as exc_info:
             resolve_program(graph)
+        assert set(exc_info.value.origins) == {
+            ImportedModuleOrigin((ModuleId.from_path("alpha/one"), ())),
+            ImportedModuleOrigin((ModuleId.from_path("beta/two"), ())),
+        }
 
     def test_nonfacade_route_keeps_wildcard_alias_use_ambiguous(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
@@ -1808,8 +1817,13 @@ class TestWildcardImports:
             },
         )
 
-        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+        with pytest.raises(AmbiguousQualificationError) as exc_info:
             resolve_program(graph)
+        assert set(exc_info.value.origins) == {
+            ImportedModuleOrigin((ModuleId.from_path("pkg/alpha"), ())),
+            ImportedModuleOrigin((ModuleId.from_path("pkg/beta"), ())),
+            ImportedModuleOrigin((ModuleId.from_path("other"), ("F",))),
+        }
 
     def test_type_name_import_handle_ambiguity_errors(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(

@@ -9,7 +9,12 @@ import pytest
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.scope.symbols import AglScopeError, UnknownMemberError, UnknownQualifierError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    RouteClashError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_repl_graph_from_files, resolve_repl_graph
@@ -39,7 +44,7 @@ def test_use_target_without_tail_or_alias_is_a_syntax_error() -> None:
         parse_program("use Tools")
 
 
-def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:
+def test_use_bare_target_route_clash_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:
     modules = {"library": "scope Scope\n  def remote() -> int = 1\nend Scope"}
     ambiguous = _graph(
         tmp_path,
@@ -47,7 +52,7 @@ def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: 
         modules,
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+    with pytest.raises(RouteClashError) as raised:
         resolve_repl_graph(ambiguous)
 
     diagnostic = str(raised.value)

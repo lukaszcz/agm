@@ -21,6 +21,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
+    RouteClashError,
     UnknownQualifierError,
     qualification_repair_guidance,
 )
@@ -481,7 +482,7 @@ _PALETTE_SCOPE = (
         "print(case /palette::Pixel(x = 1) of | palette::Pixel(x) => x | _ => 2)",
     ),
 )
-def test_local_scope_qualifying_nothing_is_ambiguous_with_a_same_named_module_route(
+def test_local_scope_qualifying_nothing_clashes_with_a_same_named_module_route(
     tmp_path: Path, use: str
 ) -> None:
     """A pattern or ``is`` spelling the local scope does not publish never falls to the route."""
@@ -490,7 +491,7 @@ def test_local_scope_qualifying_nothing_is_ambiguous_with_a_same_named_module_ro
         "palette": "enum Color\n  | Red\n  | Blue\n\nrecord Pixel\n  x: int\n",
     }
 
-    with pytest.raises(AglScopeError) as exc_info:
+    with pytest.raises(RouteClashError) as exc_info:
         _entry_resolution(tmp_path, modules)
 
     assert qualification_repair_guidance() in str(exc_info.value)
@@ -634,7 +635,7 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
         _entry_resolution(tmp_path, modules)
 
 
-def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
+def test_use_target_local_module_route_clash_requires_an_anchor(tmp_path: Path) -> None:
     modules = {
         "Point": "def remote() -> int = 1\n",
         "entry": (
@@ -643,7 +644,7 @@ def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) ->
     }
 
     del tmp_path
-    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+    with pytest.raises(RouteClashError) as raised:
         _resolve_without_loader(modules)
 
     diagnostic = str(raised.value)

@@ -216,7 +216,7 @@ def test_type_parameter_shadowing_a_real_module_route_is_rejected(
     "entry",
     (
         "import one/types\ndef f[one](x: one/types::Color) -> int = 1",
-        "import one/types\ndef f[one](x: int) -> one/types::Color = one/types::Color::Red",
+        "import one/types\ndef f[one](x: int) -> int =\n  let c = one/types::Color::Red\n  1",
     ),
     ids=("annotation", "value"),
 )
@@ -234,6 +234,63 @@ def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry
     }
 
     assert _program_outcome(tmp_path, modules) == "accepted"
+
+
+@pytest.mark.parametrize(
+    ("entry", "outcome"),
+    (
+        (
+            "import types\ndef f[types](x: int) = fn(y: types::Color) => 1",
+            "scope",
+        ),
+        (
+            "import types\ndef S::f[types](x: int) = fn(y: types::Color) => 1",
+            "scope",
+        ),
+        (
+            "import types\n\nscope S\n  def f[types](x: int) = fn(y: types::Color) => 1\nend S",
+            "scope",
+        ),
+        (
+            "import types\ndef f[types](x: int) -> int = types::Color::Red",
+            "scope",
+        ),
+        (
+            "import lib\ndef f(x: lib::SlotA[int]) -> int = "
+            "case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0",
+            "typecheck",
+        ),
+        (
+            "import lib\nprogram def main(x: lib::SlotA[int]) -> unit = "
+            "print(case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0)",
+            "typecheck",
+        ),
+    ),
+    ids=(
+        "plain-def",
+        "scoped-shorthand-def",
+        "scope-region-def",
+        "value-position-return",
+        "plain-def-case",
+        "program-def-case",
+    ),
+)
+def test_a_one_liner_def_body_still_validates_its_qualifier_chains(
+    tmp_path: Path, entry: str, outcome: Outcome
+) -> None:
+    """A ``def`` whose body is a bare expression, never a ``Block``, still
+    validates every qualifier chain reachable only through that body: a
+    lambda parameter's type-parameter shadowing, a bare value chain, and an
+    ill-typed constructor pattern -- across a plain, scoped-shorthand,
+    scope-region, and ``program`` ``def``.
+    """
+    modules = {
+        "entry": entry,
+        "types": "enum Color\n  | Red\n  | Green",
+        "lib": "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA",
+    }
+
+    assert _program_outcome(tmp_path, modules) == outcome
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:

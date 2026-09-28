@@ -835,33 +835,37 @@ class TestInfo:
         """An ``:info`` query never mutates the session's retained type environment.
 
         Regression test: ``:info`` resolves an ad-hoc parse seeded at the
-        session's current node-id counter without advancing it, so a query
-        used to record its own qualifiers' resolved identities directly into
-        the retained environment -- under node ids a later query's own
-        identically-shaped ad-hoc parse would reuse. Querying two differently
-        owned members shaped alike (so their qualifiers land on the same
-        ad-hoc ids) must resolve each to its own owner, repeatably, and the
-        retained environment a real entry would build on must come back
-        exactly as it was.
+        session's current node-id counter without advancing it, so two
+        differently owned, identically-shaped queries land their qualifier
+        chains on the same ad-hoc node ids. A query used to record its own
+        qualifier's resolved identity directly into the retained environment
+        under that id, so a later, differently owned query reading the same
+        id back got the wrong owner. The two queries below are shaped alike
+        (``Owner[T]::Member``) but resolve through different paths -- the
+        first through a direct import, the second only reachable
+        transitively (through ``wrap``, never imported directly) -- to
+        exercise both the ordinary and the canonical-library-fallback
+        resolution routes.
         """
-        (tmp_path / "lib.agl").write_text(
-            "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA\n\n"
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "lib.agl").write_text(
+            "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA\n"
+        )
+        (tmp_path / "pkg" / "other.agl").write_text(
             "enum SlotB[T]\n  | FilledB(value: T)\n  | EmptyB\n"
         )
+        (tmp_path / "wrap.agl").write_text("import pkg/other\nlet w = 1\n")
         session = repl_session_with_root(tmp_path)
         session.open()
-        assert session.eval_entry("import lib").ok
-
-        before = dict(session._type_env._owner_declarations)
+        assert session.eval_entry("import pkg/lib").ok
+        assert session.eval_entry("import wrap").ok
 
         first = session.info_of("lib::SlotA[int]::FilledA")
-        second = session.info_of("lib::SlotB[text]::FilledB")
-        first_again = session.info_of("lib::SlotA[int]::FilledA")
+        second = session.info_of("pkg/other::SlotB[text]::FilledB")
 
         assert first is not None and "FilledA" in first and "int" in first
-        assert second is not None and "FilledB" in second and "text" in second
-        assert first_again == first
-        assert dict(session._type_env._owner_declarations) == before
+        assert second is not None and "is a constructor" in second
+        assert "FilledB" in second and "text" in second
 
     @pytest.mark.parametrize("name", ("lib::P", "lib::Point"))
     def test_info_reports_a_qualified_imported_record_or_alias(

@@ -124,6 +124,8 @@ class _InfoReference:
     constructor: "ConstructorRef | None"
     alias: "TypeAlias | None"
     reference: "VarRef"
+    # Query-scoped view carrying this reference's own ad-hoc qualifier
+    # identities; read only by :meth:`ReplSession._constructor_signature`.
     type_env: "TypeEnvironment"
 
 
@@ -1645,14 +1647,13 @@ class ReplSession:
         scope_path, local_name = parts[:-1], parts[-1]
         resolved_reference = self._resolve_info_reference(name)
         ref = None if resolved_reference is None else resolved_reference.binding
-        query_env = self._type_env if resolved_reference is None else resolved_reference.type_env
         location = (
             _format_repl_location(ref.decl_span)
             if ref is not None and ref.module_id.is_entry
             else None
         )
         if ref is not None and ref.kind.value != "constructor_binding":
-            type_env = self._info_type_env(ref, query_env)
+            type_env = self._info_type_env(ref)
             signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
                 return "\n".join(
@@ -1758,13 +1759,14 @@ class ReplSession:
             # scope pass, not the retained entry the session's type env was
             # built from, and its node ids are not reserved (this parse never
             # advances ``_next_node_id``) -- a query-scoped view carries their
-            # identities without risking a later entry's colliding node ids
-            # reading them back.
+            # identities (read only by ``_constructor_signature``, via
+            # ``_InfoReference.type_env``) without risking a later entry's
+            # colliding node ids reading them back.
             type_env = type_env.with_owner_declarations(entry.owner_declarations)
         return _InfoReference(
             binding=binding,
             constructor=constructor,
-            alias=self._alias_declaration(reference, type_env),
+            alias=self._alias_declaration(reference),
             reference=reference,
             type_env=type_env,
         )
@@ -1789,9 +1791,7 @@ class ReplSession:
         )
         return binding, candidates[0] if len(candidates) == 1 else None
 
-    def _alias_declaration(
-        self, reference: "VarRef", type_env: "TypeEnvironment"
-    ) -> "TypeAlias | None":
+    def _alias_declaration(self, reference: "VarRef") -> "TypeAlias | None":
         """Return the alias declaration REFERENCE names as a type, by identity.
 
         ``None`` when it names no alias, or several declarations at once.
@@ -1804,7 +1804,7 @@ class ReplSession:
             reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
         )
         try:
-            key = type_env.type_name_declaration(type_name, span=reference.span)
+            key = self._type_env.type_name_declaration(type_name, span=reference.span)
         except AglTypeError:
             return None
         if key is None:
@@ -1825,16 +1825,10 @@ class ReplSession:
             None,
         )
 
-    def _info_type_env(self, ref: "BindingRef", query_env: "TypeEnvironment") -> "TypeEnvironment":
-        """Return the type environment that owns REF.
-
-        *query_env* is a query-scoped view of the entry module's own env,
-        carrying this reference's own ad-hoc qualifier identities (see
-        :meth:`_resolve_info_reference`); another retained module's env needs
-        no such view, since the ad-hoc parse's node ids are never its own.
-        """
+    def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
+        """Return the retained type environment that owns REF."""
         checked = self._retained_checked_modules.get(ref.module_id)
-        return query_env if checked is None else checked.type_env
+        return self._type_env if checked is None else checked.type_env
 
     def _library_generic_type(self, name: str) -> "GenericTypeDef | None":
         """Return the sole retained generic type named *name*, if any."""

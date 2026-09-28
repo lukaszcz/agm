@@ -1209,7 +1209,7 @@ class TestTypeEnvironment:
         assert current.declared_type_template(ENTRY_ID, "Alias") == TypeTemplate(IntType(), ("T",))
         assert current.get_generic_type("Restored") == previous.get_generic_type("Restored")
 
-    def test_source_type_template_resolves_an_unfrozen_alias(self) -> None:
+    def test_declared_type_template_resolves_an_unfrozen_alias(self) -> None:
         environment = TypeEnvironment()
         environment.register_alias("Alias", IntT(span=mk_span(), node_id=1))
 

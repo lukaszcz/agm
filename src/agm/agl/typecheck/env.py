@@ -118,6 +118,14 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     return tuple(scope_path), declared_name
 
 
+def _join_scoped_type_name(scope_path: ScopePath, name: str) -> str:
+    """Join a scope path and a declared name into a source spelling.
+
+    Inverse of :func:`_split_scoped_type_name`.
+    """
+    return "::".join((*scope_path, name))
+
+
 def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
     """Return whether *typ* is a program's own ``builtin`` declaration of reserved *name*.
 
@@ -1778,6 +1786,9 @@ class TypeEnvironment:
         those identities without retaining them: an ad-hoc parse's node ids
         are not reserved, so merging them into this environment itself could
         collide with a later entry's own.
+
+        Valid only for a sealed *self*: sharing its tables by reference is
+        safe only because a sealed environment's tables never mutate again.
         """
         if not entries:
             return self
@@ -2060,22 +2071,17 @@ class TypeEnvironment:
             return True
         if self._is_program_alias_key(key) or key in self._program_alias_table:
             return True
-        local_name = "::".join((*ref.scope_path, ref.name))
+        local_name = _join_scoped_type_name(ref.scope_path, ref.name)
         return ref.module_id == self._module_id and (
             local_name in self._types
             or local_name in self._generic_types
             or local_name in self._alias_targets
         )
 
-    @staticmethod
-    def _scoped_alias_name(path: ScopePath, source_name: str) -> str:
-        """Join a declaration's scope path and name into its stored alias key."""
-        return "::".join((*path, source_name))
-
     def _own_alias_name_for_key(self, key: DeclKey) -> str | None:
         """Return the root-stored name for an own-module alias identity."""
         module, path, source_name = key
-        local_name = self._scoped_alias_name(path, source_name)
+        local_name = _join_scoped_type_name(path, source_name)
         if module == self._module_id and local_name in self._alias_targets:
             return local_name
         return None
@@ -2097,7 +2103,7 @@ class TypeEnvironment:
             return resolved
         # Not program-tracked, so by this method's invariant *key* names this
         # module's own alias directly -- its stored name, not a re-derivation.
-        alias_name = self._scoped_alias_name(path, source_name)
+        alias_name = _join_scoped_type_name(path, source_name)
         return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
 
     def _resolve_type_key_unapplied(
@@ -2686,7 +2692,7 @@ class TypeEnvironment:
         self._ensure_program_alias_resolved(key, None)
         if self._in_program_type_tables(key):
             return self._program_table_template(key)
-        return self._own_local_template("::".join((*scope_path, name)))
+        return self._own_local_template(_join_scoped_type_name(scope_path, name))
 
     def _in_program_type_tables(self, key: DeclKey) -> bool:
         return (
@@ -2734,12 +2740,12 @@ class TypeEnvironment:
             return cached
         names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
         names.update(
-            "::".join((*scope_path, name))
+            _join_scoped_type_name(scope_path, name)
             for module_id, scope_path, name in self._program_alias_table
             if module_id == self._module_id
         )
         names.update(
-            "::".join((*scope_path, name))
+            _join_scoped_type_name(scope_path, name)
             for module_id, scope_path, name in (
                 *self._program_generic_table,
                 *self._program_type_table,

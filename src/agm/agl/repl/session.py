@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from agm.agent.effort import AgentSpecResolver
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId

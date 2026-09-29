@@ -71,9 +71,9 @@ _ASK_BUILTIN_SOURCE = (
     "builtin\n"
     "enum Agent =\n"
     "  | AgentCommand(command: text)\n"
-    '  | AgentClaude(model: text, thinking: text = "")\n'
-    '  | AgentCodex(model: text, thinking: text = "")\n'
-    '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
+    '  | AgentClaude(model: text = "", thinking: text = "")\n'
+    '  | AgentCodex(model: text = "", thinking: text = "")\n'
+    '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
     "\n"
     "builtin def ask[T](\n"
     "  prompt: text,\n"

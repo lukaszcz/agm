@@ -1,4 +1,4 @@
-"""``agm exec``, ``agm repl`` and registered commands apply the configured agent effort."""
+"""``agm exec``, ``agm repl`` and registered commands apply the configured agent defaults."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import write_file_program
 from tests._package_helpers import install_directory
 from tests.conftest import FakeAgentTransport
+from tests.test_agent_rpc import RpcStub
 
 _AGM_COMMAND = get_command(cli.app)
 
@@ -187,21 +188,25 @@ _BUILTIN_DEFAULT_ASK = (
 )
 
 
+_OPUS_DEFAULT = '[agent.claude]\nmodel = "opus"\n[agent.claude.opus]\neffort = "high"\n'
+
+
 @pytest.mark.parametrize(
-    ("config", "expected"),
+    ("config", "model", "effort"),
     [
-        ('[agent.claude.sonnet]\neffort = "high"\n', ["high"]),
-        ('[agent.claude]\neffort = "low"\n', ["low"]),
-        (None, []),
+        (_OPUS_DEFAULT, ["opus"], ["high"]),
+        ('[agent.claude]\neffort = "low"\n', [], ["low"]),
+        (None, [], []),
     ],
-    ids=["model-table", "cli-table", "unconfigured"],
+    ids=["model-and-effort", "effort-only", "unconfigured"],
 )
-def test_a_plain_ask_on_the_builtin_default_agent_takes_the_configured_effort(
+def test_a_plain_ask_on_the_builtin_default_agent_takes_the_configured_defaults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fake_agent_transport: FakeAgentTransport,
     config: str | None,
-    expected: list[str],
+    model: list[str],
+    effort: list[str],
 ) -> None:
     fake_agent_transport.queue(fake_agent_transport.success("done"))
 
@@ -210,8 +215,116 @@ def test_a_plain_ask_on_the_builtin_default_agent_takes_the_configured_effort(
     assert result.exit_code == 0, result.output
     [(_prompt, argv)] = fake_agent_transport.calls
     assert argv[0] == "claude"
-    assert _flag_values(argv, "--model") == ["sonnet"]
-    assert _flag_values(argv, "--effort") == expected
+    assert _flag_values(argv, "--model") == model
+    assert _flag_values(argv, "--effort") == effort
+
+
+def _ask_with(agent: str) -> str:
+    return _AGENT_ASK.replace('AgentClaude("opus", "")', agent)
+
+
+@pytest.mark.parametrize("config", [_OPUS_DEFAULT, None], ids=["configured", "unconfigured"])
+def test_exec_applies_the_configured_model_and_its_effort_to_claude(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
+    config: str | None,
+) -> None:
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+
+    result = _exec(tmp_path, monkeypatch, _ask_with("AgentClaude()"), home_config=config)
+
+    assert result.exit_code == 0, result.output
+    [(_prompt, argv)] = fake_agent_transport.calls
+    expected = ["--model", "opus", "--effort", "high"] if config else []
+    assert argv == ["claude", "-p", *expected]
+
+
+def test_exec_applies_the_configured_model_to_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_agent_transport: FakeAgentTransport
+) -> None:
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+    config = '[agent.codex]\nmodel = "gpt-5.1-codex"\neffort = "low"\n'
+
+    result = _exec(
+        tmp_path, monkeypatch, _ask_with('AgentCodex(thinking = "high")'), home_config=config
+    )
+
+    assert result.exit_code == 0, result.output
+    [(_prompt, argv)] = fake_agent_transport.calls
+    assert argv == [
+        "codex",
+        "exec",
+        "--model",
+        "gpt-5.1-codex",
+        "-c",
+        "model_reasoning_effort=high",
+        "-",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("agent", "expected"),
+    [
+        ("AgentPi()", ["--provider", "anthropic", "--model", "sonnet", "--thinking", "high"]),
+        (
+            'AgentPi(provider = "openai")',
+            ["--provider", "openai", "--model", "fallback", "--thinking", "low"],
+        ),
+    ],
+)
+def test_exec_applies_the_configured_pi_provider_model_and_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
+    agent: str,
+    expected: list[str],
+) -> None:
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+    config = (
+        '[agent.pi]\nprovider = "anthropic"\nmodel = "fallback"\neffort = "low"\n'
+        '[agent.pi.anthropic]\nmodel = "sonnet"\n'
+        '[agent.pi.anthropic.sonnet]\neffort = "high"\n'
+    )
+
+    source = (
+        f"let session = Session::open({agent}, "
+        "transport = Some(SessionTransport::Cli), sandbox = AgentSandbox::Disabled)\n"
+        'let answer: text = session.ask("hi")\n'
+        "print answer\n"
+    )
+
+    result = _exec(tmp_path, monkeypatch, source, project_config=config)
+
+    assert result.exit_code == 0, result.output
+    [(_prompt, argv)] = fake_agent_transport.calls
+    assert argv[:2] == ["pi", "-p"]
+    assert argv[-len(expected) :] == expected
+
+
+def test_exec_applies_the_configured_pi_defaults_to_a_default_rpc_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(tmp_path, monkeypatch)
+    config = (
+        '[agent.pi]\nprovider = "anthropic"\n[agent.pi.anthropic]\nmodel = "sonnet"\n'
+        '[agent.pi.anthropic.sonnet]\neffort = "high"\n'
+    )
+    source = (
+        "let session = Session::open(AgentPi(), sandbox = AgentSandbox::Disabled)\n"
+        'let answer: text = session.ask("hi")\n'
+        "print answer\n"
+    )
+
+    result = _exec(tmp_path, monkeypatch, source, home_config=config)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "answer\n"
+    [start] = stub.records("starts.jsonl")
+    argv = start["argv"]
+    assert isinstance(argv, list)
+    assert argv[:2] == ["--mode", "rpc"]
+    assert argv[-6:] == ["--provider", "anthropic", "--model", "sonnet", "--thinking", "high"]
 
 
 def test_exec_without_configured_effort_passes_no_effort_flag(
@@ -274,6 +387,8 @@ def test_exec_keeps_the_agent_value_itself_unchanged(
         '[agent]\neffort = "high"\n',
         '[agent.claude]\nefort = "high"\n',
         "[agent.claude.opus]\neffort = 3\n",
+        '[agent.claude.opus]\nmodel = "x"\n',
+        "[agent.pi]\nprovider = 1\n",
         '[agent.opencode]\neffort = "high"\n',
         '[agent.claude.opus.fast]\neffort = "high"\n',
     ],

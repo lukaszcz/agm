@@ -193,7 +193,7 @@ from agm.core.parse import parse_timeout as _parse_timeout
 from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
-    from agm.agent.effort import AgentSpecResolver
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
     from agm.agl.runtime.sessions import SessionHost

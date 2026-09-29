@@ -98,7 +98,7 @@ from agm.sandbox.request import (
 )
 
 if TYPE_CHECKING:
-    from agm.agent.effort import AgentSpecResolver
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.sandbox.prepare import SandboxContext
 
 # ---------------------------------------------------------------------------

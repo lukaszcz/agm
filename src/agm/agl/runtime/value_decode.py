@@ -383,8 +383,8 @@ def host_text_to_json(
     a tagged JSON object, an ``Agent`` member constructor call, or compact
     shorthand, falling back -- when *agent_command_fallback* -- to a
     verbatim command; without the fallback, text matching none of those is a
-    :class:`ValueDecodeError`. A malformed native shorthand prefix
-    (``claude/``, ``codex/``, ``pi/``) is an error even with the fallback.
+    :class:`ValueDecodeError`. Malformed native shorthand (see
+    :func:`parse_agent_shorthand`) is an error even with the fallback.
     Every other target reads strict JSON, falling back to AgL value syntax;
     a failure of both reports both reasons, JSON and value syntax alike,
     since either could be what the writer intended.
@@ -436,7 +436,7 @@ def _decode_agent_text(
     propagates as a :class:`ValueDecodeError` rather than silently falling
     back to a verbatim command. Shorthand is tried after both, so a ``/``
     inside a JSON object or a call is never read as a provider/model split;
-    a malformed native prefix (``claude/``, ``codex/``, ``pi/``) likewise
+    malformed native shorthand (see :func:`parse_agent_shorthand`) likewise
     commits and errors.
 
     Whitespace-only text is always an error, before any other reading is

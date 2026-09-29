@@ -2232,18 +2232,18 @@ _PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
     "ParsePolicy",
     (("Abort", ()), ("Retry", (("n", IntType()),))),
 )
-_AGENT_FIELD_DEFAULTS: Mapping[str, ReservedFieldDefault] = {"thinking": TextValue("")}
+_AGENT_NATIVE_MEMBERS: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = (
+    ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
+    ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
+    ("AgentPi", (("provider", TextType()), ("model", TextType()), ("thinking", TextType()))),
+)
+# Every native member field defaults to ``""``; ``AgentCommand``'s command has none.
+_AGENT_FIELD_DEFAULTS: Mapping[str, ReservedFieldDefault] = {
+    field: TextValue("") for _member, fields in _AGENT_NATIVE_MEMBERS for field, _type in fields
+}
 _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
     "Agent",
-    (
-        ("AgentCommand", (("command", TextType()),)),
-        ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
-        ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
-        (
-            "AgentPi",
-            (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
-        ),
-    ),
+    (("AgentCommand", (("command", TextType()),)), *_AGENT_NATIVE_MEMBERS),
     field_defaults=_AGENT_FIELD_DEFAULTS,
 )
 _SESSION_TRANSPORT_DEF, _SESSION_TRANSPORT_MEMBER_DEFS = _builtin_enum_defs(

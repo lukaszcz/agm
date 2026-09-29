@@ -1478,9 +1478,9 @@ _EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed
 
 _AGENT_VARIANTS = (
     "  | AgentCommand(command: text)\n"
-    '  | AgentClaude(model: text, thinking: text = "")\n'
-    '  | AgentCodex(model: text, thinking: text = "")\n'
-    '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
+    '  | AgentClaude(model: text = "", thinking: text = "")\n'
+    '  | AgentCodex(model: text = "", thinking: text = "")\n'
+    '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
 )
 
 _AGENT_REQUEST_FIELDS = (
@@ -2740,9 +2740,9 @@ class TestRedefinition:
 builtin
 enum Agent
   | AgentCommand(command: text)
-  | AgentClaude(model: text, thinking: text = "")
-  | AgentCodex(model: text, thinking: text = "")
-  | AgentPi(provider: text, model: text, thinking: text = "")
+  | AgentClaude(model: text = "", thinking: text = "")
+  | AgentCodex(model: text = "", thinking: text = "")
+  | AgentPi(provider: text = "", model: text = "", thinking: text = "")
 """
         session = open_session(default_stdlib=False)
         assert session.eval_entry(declaration).ok
@@ -8192,7 +8192,7 @@ class TestSessionOpen:
         config = second_root / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
-                'AgentClaude("sonnet")', 'AgentCommand("second-root")'
+                "AgentClaude()", 'AgentCommand("second-root")'
             ),
             encoding="utf-8",
         )
@@ -8279,7 +8279,7 @@ class TestSessionOpen:
             default_result.value.nominal
         ].display_name
         assert default_display.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
-        assert default_result.value.fields["model"] == TextValue("sonnet")
+        assert default_result.value.fields["model"] == TextValue("")
         assert default_result.value.fields["thinking"] == TextValue("")
 
     def test_reopened_sessions_keep_their_library_values_after_eviction(

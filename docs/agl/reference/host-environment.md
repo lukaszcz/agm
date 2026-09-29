@@ -326,7 +326,7 @@ key:
 | --- | -------- | ---------------- |
 | `trace` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
-| `default-agent` | `Agent` | `AgentClaude("sonnet")` (effort from `[agent]`, else the CLI's own) |
+| `default-agent` | `Agent` | `AgentClaude()` (model and effort from `[agent]`, else the CLI's own) |
 | `default-sandbox` | `AgentSandbox` | `Sandbox` (every field defaulted) |
 | `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
@@ -334,7 +334,7 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: a JSON object, then an `Agent` member constructor call, then compact shorthand, and otherwise a verbatim command. An agent whose `thinking` is `""` takes its effort from the [`[agent]` config section](../../commands/agl.md#agent-effort-defaults) when used. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: a JSON object, then an `Agent` member constructor call, then compact shorthand, and otherwise a verbatim command. A native agent's empty provider, model, or `thinking` field takes its default from the [`[agent]` config section](../../commands/agl.md#agent-defaults) when used. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
 `default-sandbox` is a typed `AgentSandbox` value ([Types](types.md#agentsandbox)). Unlike
 `default-agent`, it is not an `Agent`, so its host CLI/TOML text decodes as
 strict JSON or one [value-syntax](#value-syntax) literal, exactly as any
@@ -419,7 +419,7 @@ AGM's own schema sections — `[agent]`, `[deps]`, `[modules]`, `[packages]`,
 and `[params]` — name user-chosen entries in their nested tables, so no route
 passes through one at any depth. A loose file or module whose stem is `agent`
 therefore has no `[agent]` or `[agent.<program>]` config route: such tables
-are validated as [`[agent]` effort config](../../commands/agl.md#agent-effort-defaults)
+are validated as [`[agent]` defaults config](../../commands/agl.md#agent-defaults)
 instead, and the other schema sections likewise keep their own meaning. A
 package command registered under a schema-section first word by an earlier
 install (validation now rejects one) has no command-path config table, exact
@@ -490,7 +490,7 @@ Tracing records only observable boundaries:
 - stdout emitted by `print`;
 - each agent request and response. A request records the fully composed prompt,
   the selected `Agent` value as given (`agent`, variant and payload), the agent
-  actually dispatched after [`[agent]` effort defaults](../../commands/agl.md#agent-effort-defaults)
+  actually dispatched after [`[agent]` defaults](../../commands/agl.md#agent-defaults)
   (`effective_agent`, a `$case`-tagged object), attempt information, and output
   contract; a response records its full content or transport/cancellation
   outcome;

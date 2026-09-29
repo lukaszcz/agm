@@ -1,4 +1,4 @@
-"""Configured default agent effort: lookup precedence and strict ``[agent]`` validation."""
+"""Configured agent provider, model and effort defaults; strict ``[agent]`` validation."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from agm.agent.effort import (
+from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
+from agm.agent.spec_defaults import (
     AgentConfig,
     AgentConfigError,
-    default_effort_resolver,
-    with_default_effort,
+    configured_defaults_resolver,
+    with_configured_defaults,
 )
-from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 from agm.agent.values import parse_agent_shorthand
 from agm.config.general import load_merged_config
 from agm.core.toml import TomlDict
@@ -29,7 +29,7 @@ _AGENT_TABLE: TomlDict = {
 
 
 def _resolved(spec: AgentSpec, table: TomlDict = _AGENT_TABLE) -> AgentSpec:
-    return default_effort_resolver({"agent": table})(spec)
+    return configured_defaults_resolver({"agent": table})(spec)
 
 
 @pytest.mark.parametrize(
@@ -92,14 +92,105 @@ def test_a_table_without_an_effort_falls_through() -> None:
     assert _resolved(AgentPi("anthropic", "m", ""), table) == AgentPi("anthropic", "m", "low")
 
 
+_MODEL_TABLE: TomlDict = {
+    "claude": {"model": "opus", "effort": "low", "opus": {"effort": "high"}},
+    "codex": {"model": "gpt-5.1-codex", "gpt-5.1-codex": {"effort": "xhigh"}},
+    "pi": {
+        "provider": "anthropic",
+        "model": "fallback",
+        "effort": "low",
+        "anthropic": {"model": "claude-sonnet-4-5", "claude-sonnet-4-5": {"effort": "high"}},
+        "openai": {"effort": "medium"},
+    },
+}
+
+
 @pytest.mark.parametrize(
-    "table",
+    ("spec", "expected"),
     [
+        (AgentClaude("", ""), AgentClaude("opus", "high")),
+        (AgentClaude("", "max"), AgentClaude("opus", "max")),
+        (AgentClaude("sonnet", ""), AgentClaude("sonnet", "low")),
+        (AgentCodex("", ""), AgentCodex("gpt-5.1-codex", "xhigh")),
+        (AgentPi("", "", ""), AgentPi("anthropic", "claude-sonnet-4-5", "high")),
+        (AgentPi("", "custom", ""), AgentPi("anthropic", "custom", "low")),
+        (AgentPi("openai", "", ""), AgentPi("openai", "fallback", "medium")),
+        (AgentPi("anthropic", "", "off"), AgentPi("anthropic", "claude-sonnet-4-5", "off")),
+        (AgentPi("groq", "", ""), AgentPi("groq", "fallback", "low")),
+    ],
+)
+def test_defaults_resolve_provider_then_model_then_effort_on_the_resolved_names(
+    spec: AgentSpec, expected: AgentSpec
+) -> None:
+    assert _resolved(spec, _MODEL_TABLE) == expected
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        AgentClaude("haiku", "low"),
+        AgentCodex("o3", "minimal"),
+        AgentPi("openai", "gpt", "off"),
+    ],
+)
+def test_explicit_names_and_thinking_are_never_overridden(spec: AgentSpec) -> None:
+    assert _resolved(spec, _MODEL_TABLE) == spec
+
+
+@pytest.mark.parametrize(
+    ("table", "spec", "expected"),
+    [
+        ({"claude": {"model": ""}}, AgentClaude("", ""), AgentClaude("", "")),
+        (
+            {"claude": {"model": "", "effort": "low"}},
+            AgentClaude("", ""),
+            AgentClaude("", "low"),
+        ),
+        (
+            {"pi": {"provider": "", "model": "m", "a": {"model": "x"}}},
+            AgentPi("", "", ""),
+            AgentPi("", "m", ""),
+        ),
+        (
+            {"pi": {"provider": "a", "model": "m", "a": {"model": ""}}},
+            AgentPi("", "", ""),
+            AgentPi("a", "", ""),
+        ),
+    ],
+)
+def test_an_explicit_empty_name_stops_the_fall_through(
+    table: TomlDict, spec: AgentSpec, expected: AgentSpec
+) -> None:
+    assert _resolved(spec, table) == expected
+
+
+def test_a_provider_table_without_a_model_falls_through_to_the_pi_model() -> None:
+    table: TomlDict = {"pi": {"provider": "a", "model": "m", "a": {"effort": "high"}}}
+
+    assert _resolved(AgentPi("", "", ""), table) == AgentPi("a", "m", "high")
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "claude",
+        [],
+        ["claude"],
         {"effort": "high"},
         {"opencode": {"effort": "high"}},
         {"claude": "high"},
         {"claude": {"efort": "high"}},
         {"claude": {"opus": {"model": "x"}}},
+        {"claude": {"provider": "x"}},
+        {"claude": {"model": 3}},
+        {"codex": {"o3": {"model": "x"}}},
+        {"codex": {"provider": "x"}},
+        {"pi": {"provider": True}},
+        {"pi": {"model": ["m"]}},
+        {"pi": {"anthropic": {"provider": "x"}}},
+        {"pi": {"anthropic": {"model": 1}}},
+        {"pi": {"anthropic": {"m": {"model": "x"}}}},
+        {"pi": {"anthropic": {"m": {"provider": "x"}}}},
         {"claude": {"effort": 3}},
         {"codex": {"o3": {"effort": True}}},
         {"claude": {"opus": {"fast": {"effort": "high"}}}},
@@ -107,13 +198,14 @@ def test_a_table_without_an_effort_falls_through() -> None:
         {"pi": {"anthropic": {"m": {"deeper": {"effort": "high"}}}}},
     ],
 )
-def test_a_malformed_agent_section_is_rejected(table: TomlDict) -> None:
+def test_a_malformed_agent_section_is_rejected(section: object) -> None:
     with pytest.raises(AgentConfigError):
-        AgentConfig.from_merged({"agent": table})
+        AgentConfig.from_merged({"agent": section})
 
 
 def test_the_full_documented_nesting_is_accepted() -> None:
     AgentConfig.from_merged({"agent": _AGENT_TABLE})
+    AgentConfig.from_merged({"agent": _MODEL_TABLE})
 
 
 def test_the_agent_section_merges_across_config_files(tmp_path: Path) -> None:
@@ -130,12 +222,12 @@ def test_the_agent_section_merges_across_config_files(tmp_path: Path) -> None:
 
     config = AgentConfig.from_merged(load_merged_config(home=home, proj_dir=proj_dir, cwd=tmp_path))
 
-    assert with_default_effort(AgentClaude("opus", ""), config) == AgentClaude("opus", "high")
-    assert with_default_effort(AgentClaude("haiku", ""), config) == AgentClaude("haiku", "low")
-    assert with_default_effort(AgentCodex("gpt-5.1-codex", ""), config) == AgentCodex(
+    assert with_configured_defaults(AgentClaude("opus", ""), config) == AgentClaude("opus", "high")
+    assert with_configured_defaults(AgentClaude("haiku", ""), config) == AgentClaude("haiku", "low")
+    assert with_configured_defaults(AgentCodex("gpt-5.1-codex", ""), config) == AgentCodex(
         "gpt-5.1-codex", "xhigh"
     )
-    assert with_default_effort(AgentCodex("o3", ""), config) == AgentCodex("o3", "low")
+    assert with_configured_defaults(AgentCodex("o3", ""), config) == AgentCodex("o3", "low")
 
 
 def test_a_bracketed_model_table_configures_its_shorthand(tmp_path: Path) -> None:
@@ -148,5 +240,5 @@ def test_a_bracketed_model_table_configures_its_shorthand(tmp_path: Path) -> Non
 
     spec = parse_agent_shorthand("claude/opus[1m]")
     assert spec is not None
-    assert with_default_effort(spec, config) == AgentClaude("opus[1m]", "high")
-    assert with_default_effort(AgentClaude("opus", ""), config) == AgentClaude("opus", "")
+    assert with_configured_defaults(spec, config) == AgentClaude("opus[1m]", "high")
+    assert with_configured_defaults(AgentClaude("opus", ""), config) == AgentClaude("opus", "")

@@ -184,6 +184,33 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert capsys.readouterr().out == "claude opus <>\n"
 
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("claude", 'Agent::AgentClaude(model = "", thinking = "")'),
+            ("Codex:high", 'Agent::AgentCodex(model = "", thinking = "high")'),
+            ("pi/anthropic", 'Agent::AgentPi(provider = "anthropic", model = "", thinking = "")'),
+            ("claude -p", 'Agent::AgentCommand(command = "claude -p")'),
+        ],
+    )
+    def test_agent_flag_reads_a_bare_native_agent_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], token: str, expected: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-named review-agent: Agent) -> unit =\n  print review-agent\n",
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", token])
+            )
+            is None
+        )
+
+        assert capsys.readouterr().out == f"{expected}\n"
+
     def test_agent_flag_malformed_native_shorthand_fails(self, tmp_path: Path) -> None:
         agl_file = _review_agent_program(tmp_path)
 

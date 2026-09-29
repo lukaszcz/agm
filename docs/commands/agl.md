@@ -251,25 +251,30 @@ order (a config value may instead be a native TOML table, read directly as the t
 2. an [AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member
    constructor call (`AgentCodex(model = "o3", thinking = "high")`, `AgentClaude("opus")`, bare
    or qualified `Agent::AgentPi(...)`);
-3. compact shorthand:
-   - `claude/MODEL[:EFFORT]` → `AgentClaude(MODEL, EFFORT)`
-   - `codex/MODEL[:EFFORT]` → `AgentCodex(MODEL, EFFORT)`
-   - `pi/PROVIDER/MODEL[:EFFORT]` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+3. compact shorthand, every name and the effort optional:
+   - `claude[/MODEL][:EFFORT]` → `AgentClaude(MODEL, EFFORT)`
+   - `codex[/MODEL][:EFFORT]` → `AgentCodex(MODEL, EFFORT)`
+   - `pi[/PROVIDER[/MODEL]][:EFFORT]` → `AgentPi(PROVIDER, MODEL, EFFORT)`
    - any other `PROVIDER/MODEL[:EFFORT]` → `AgentPi(PROVIDER, MODEL, EFFORT)`
 4. otherwise a verbatim `AgentCommand` (`--default-agent 'worker --flag'`).
 
-In shorthand the effort follows the last `:` and is optional; omitted, it is `""`
-([configured default effort](#agent-effort-defaults)). Provider and effort use
+In shorthand the effort follows the last `:`. An omitted name or effort is `""`, filled at
+dispatch from the [agent defaults](#agent-defaults): bare `claude` is `AgentClaude()`,
+`claude:high` sets only the effort, and `pi/anthropic` only the provider. Provider and effort use
 `[A-Za-z0-9._@+-]`; a model may also contain `:`, `[`, and `]` (`claude/opus[1m]:high`), so a
 model with a colon needs an explicit effort (`ollama/llama3:8b:high`) or the constructor form.
-Examples: `claude/sonnet:medium`, `codex/o3:high`, `pi/openai/gpt-5:low`, `openrouter/qwen3`.
-The `claude`, `codex`, and `pi` prefixes match in any case; text starting with one that breaks
-its form (`claude/`, `claude/opus:`, `pi/anthropic`, surrounding whitespace) is a host error,
-never a verbatim command. Other two-segment text such as `bin/agent` reads as Pi shorthand, so
-write a relative command path as `./bin/agent`. Generic text with three or more segments
-(`openrouter/anthropic/claude-sonnet-4`) is not shorthand but a verbatim command, and `pi/` takes
-exactly `pi/PROVIDER/MODEL`, so a model id containing `/` needs the constructor form
-(`AgentPi("openrouter", "anthropic/claude-sonnet-4")`).
+Examples: `claude`, `codex:high`, `claude/sonnet:medium`, `pi/anthropic`, `pi/openai/gpt-5:low`,
+`openrouter/qwen3`.
+
+Native text, ignoring surrounding whitespace, starts with `claude`, `codex`, or `pi` in any case,
+followed by the end of the text, `/`, or `:`. Native text that breaks its form (`claude:`,
+`claude/`, `claude/opus:`, `pi/`, `pi/anthropic/`, surrounding whitespace as in ` claude` or
+`claude `) is a host error, never a verbatim command. A name followed by anything else is not
+native: `claude -p` and `claudex` are commands. Other two-segment text
+such as `bin/agent` reads as Pi shorthand, so write a relative command path as `./bin/agent`.
+Generic text with three or more segments (`openrouter/anthropic/claude-sonnet-4`) is not
+shorthand but a verbatim command, and `pi/` takes at most `pi/PROVIDER/MODEL`, so a model id
+containing `/` needs the constructor form (`AgentPi("openrouter", "anthropic/claude-sonnet-4")`).
 
 Text that opens a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`,
 an unknown field, a qualifier naming anything but `Agent` — is a host error, not a verbatim
@@ -298,28 +303,48 @@ let review: Review = ask("Review %{artifact}", agent = reviewer)
 let answer: text = ask("Summarize")
 ```
 
-`AgentCommand(command)`, `AgentClaude(model, thinking = "")`, `AgentCodex(model, thinking = "")`,
-and `AgentPi(provider, model, thinking = "")` each build their own argv; select one with an
-`Agent` value or `default-agent`. An empty `thinking` passes no effort flag unless a configured
-default applies. The built-in `default-agent` is `AgentClaude("sonnet")`, so `[agent]` effort
-defaults apply to it too.
+`AgentCommand(command)`, `AgentClaude(model = "", thinking = "")`,
+`AgentCodex(model = "", thinking = "")`, and `AgentPi(provider = "", model = "", thinking = "")`
+each build their own argv; select one with an `Agent` value or `default-agent`. An empty field
+passes no flag unless a configured [agent default](#agent-defaults) applies. The built-in
+`default-agent` is `AgentClaude()`, so `[agent]` chooses its model and effort; with none set, the
+Claude CLI's own defaults apply.
 
-### Agent effort defaults
+### Agent defaults
 
-The `[agent]` config section supplies the effort for an `AgentClaude`, `AgentCodex`, or `AgentPi`
-whose `thinking` is `""`, when `agm exec`, `agm repl`, or a package-registered command uses it
-(free `ask`, `Agent::ask`, sessions). The most specific table that sets `effort` wins:
+The `[agent]` config section supplies the Pi provider, the model, and the effort (`thinking`) for
+an `AgentClaude`, `AgentCodex`, or `AgentPi` field that is `""`, when `agm exec`, `agm repl`, or a
+package-registered command uses the agent (free `ask`, `Agent::ask`, sessions). Each CLI has one
+table level per name field, and each level allows these keys:
+
+| Table | Keys |
+| --- | --- |
+| `[agent.claude]`, `[agent.codex]` | `effort`, `model`, model tables |
+| `[agent.claude.MODEL]`, `[agent.codex.MODEL]` | `effort` |
+| `[agent.pi]` | `effort`, `provider`, `model`, provider tables |
+| `[agent.pi.PROVIDER]` | `effort`, `model`, model tables |
+| `[agent.pi.PROVIDER.MODEL]` | `effort` |
+
+Empty fields resolve in order, each lookup using the names already resolved:
+
+1. the Pi provider from `[agent.pi]`;
+2. the model: Pi from `[agent.pi.PROVIDER]`, then `[agent.pi]`; Claude and Codex from
+   `[agent.claude]` or `[agent.codex]`;
+3. the effort from the most specific table on the resolved provider and model that sets it.
 
 ```toml
 [agent.claude]                            # every Claude model
+model = "opus"
 effort = "medium"
 [agent.claude.opus]                       # one Claude model
 effort = "high"
 [agent.codex."gpt-5.1-codex"]             # one Codex model ([agent.codex] for all)
 effort = "xhigh"
 [agent.pi]                                # every Pi provider and model
+provider = "anthropic"
 effort = "low"
 [agent.pi.anthropic]                      # one Pi provider
+model = "claude-sonnet-4-5"
 effort = "medium"
 [agent.pi.anthropic."claude-sonnet-4-5"]  # one Pi provider/model
 effort = "high"
@@ -327,12 +352,19 @@ effort = "high"
 effort = ""
 ```
 
-A table that sets `effort`, even to `""`, ends the lookup: `effort = ""` restores the agent CLI's
-own default for that model or provider instead of falling through to a broader table. Only an
-absent `effort` falls through. With nothing set, no effort flag is passed. Quote a model or
-provider name containing any character outside TOML bare keys (`A-Za-z0-9_-`), such as
-`"gpt-5.1-codex"`, `"llama3:8b"`, or `"opus[1m]"`; unquoted, a dot splits it into nested tables
-and other characters are invalid TOML. `effort` shares its table with the model or provider names
+With this config, `AgentClaude()` — the built-in `default-agent`, or `--default-agent claude` —
+passes `--model opus --effort high`: the model comes from `[agent.claude]`, then the effort from
+`[agent.claude.opus]`. `AgentClaude("sonnet")` gets `--effort medium`, `claude:low` runs
+`opus` at `low`, and `AgentPi()` runs provider `anthropic`, model `claude-sonnet-4-5`, effort
+`high`.
+
+A table that sets a key, even to `""`, ends that key's lookup: `effort = ""` restores the agent
+CLI's own default for that model or provider instead of falling through to a broader table, and
+`model = ""` or `provider = ""` passes no flag. Only an absent key falls through; with nothing
+set, no flag is passed. A non-empty field is never overridden, and `AgentCommand` is unaffected.
+Quote a model or provider name containing any character outside TOML bare keys (`A-Za-z0-9_-`),
+such as `"gpt-5.1-codex"`, `"llama3:8b"`, or `"opus[1m]"`; unquoted, a dot splits it into nested
+tables and other characters are invalid TOML. The setting keys share their table with the names
 below it: `[agent.claude.effort]` configures a model named `effort`, but cannot coexist with an
 `effort` key on `[agent.claude]`.
 
@@ -342,15 +374,14 @@ config error (exit 1) before anything runs:
 
 - every key of `[agent]` must be a `claude`, `codex`, or `pi` table (a bare `[agent] effort` is
   an error);
-- inside those, only a text `effort` and model (or Pi provider) sub-tables are allowed;
+- each table allows only the text settings listed above plus its name sub-tables;
 - tables nest no deeper than `[agent.claude.MODEL]`, `[agent.codex.MODEL]`, or
   `[agent.pi.PROVIDER.MODEL]`.
 
-A non-empty `thinking` is never overridden, and `AgentCommand` is unaffected. The AgL value itself
-keeps `thinking = ""` (printing shows it), and so does `Session::open(a).agent`, which is `a` as
-given; `Session::default().agent` instead reports the agent the default session runs with, effort
-applied. Agent trace records carry both: `agent`, the value as given, and `effective_agent`, the
-agent dispatched.
+The AgL value itself keeps its empty fields (printing shows them), and so does
+`Session::open(a).agent`, which is `a` as given; `Session::default().agent` instead reports the
+agent the default session runs with, defaults applied. Agent trace records carry both: `agent`,
+the value as given, and `effective_agent`, the agent dispatched.
 
 ### Agent command interpolation
 
@@ -620,8 +651,8 @@ strictness, and timeout. As in `agm exec`, each typed `Agent` value selects its 
 command, `--default-agent` and `[exec] default-agent` accept [host Agent
 syntax](#host-agent-syntax), `--default-sandbox` and `[exec] default-sandbox` accept [host
 AgentSandbox syntax](#host-agentsandbox-syntax), and all are effective whether or not the session
-loads `std/config` or `--no-stdlib` is given. [`[agent]` effort defaults](#agent-effort-defaults)
-apply as well.
+loads `std/config` or `--no-stdlib` is given. [`[agent]` defaults](#agent-defaults) apply as
+well.
 
 Free `ask` lazily opens one default conversation, snapshotting `default-agent` and
 `default-sandbox` at first use; later free calls reuse them even if the settings change. Explicit

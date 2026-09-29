@@ -98,9 +98,9 @@ _MODULES: dict[str, str] = {
         "builtin\n"
         "enum Agent\n"
         "  | AgentCommand(command: text)\n"
-        '  | AgentClaude(model: text, thinking: text = "")\n'
-        '  | AgentCodex(model: text, thinking: text = "")\n'
-        '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
+        '  | AgentClaude(model: text = "", thinking: text = "")\n'
+        '  | AgentCodex(model: text = "", thinking: text = "")\n'
+        '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
         "\n"
         "builtin\n"
         "enum AgentSandbox\n"

@@ -46,7 +46,7 @@ from agm.core.cleanup import notes_of
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from agm.agent.effort import AgentSpecResolver
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
@@ -372,8 +372,9 @@ class PipelineDriver:
         forgetting it; ``None`` makes a sandboxed ``exec`` raise ``ExecError``.
     resolve_agent_spec : callable or None
         Applies host agent defaults to every decoded ``Agent`` spec before
-        dispatch (see `agm.agent.effort.default_effort_resolver`). Required,
-        like ``get_sandbox_context``; ``None`` dispatches specs as decoded.
+        dispatch (see `agm.agent.spec_defaults.configured_defaults_resolver`).
+        Required, like ``get_sandbox_context``; ``None`` dispatches specs as
+        decoded.
     """
 
     def __init__(

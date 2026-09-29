@@ -113,6 +113,21 @@ def test_agent_argv_omits_empty_field_flags() -> None:
     assert AgentPi("", "", "").argv() == ["pi", "-p"]
 
 
+def test_session_argv_omits_empty_field_flags() -> None:
+    assert AgentClaude("", "").session_argv("s") == ["claude", "-p", "--session-id", "s"]
+    assert AgentCodex("", "").session_argv() == ["codex", "exec", "--json", "-"]
+    assert AgentCodex("", "").session_argv("s") == ["codex", "exec", "resume", "s", "-"]
+    assert AgentPi("", "", "").session_argv("s") == ["pi", "-p", "--session-id", "s"]
+    assert AgentPi("", "", "").rpc_argv() == ["pi", "--mode", "rpc"]
+    assert AgentPi("anthropic", "", "").rpc_argv() == [
+        "pi",
+        "--mode",
+        "rpc",
+        "--provider",
+        "anthropic",
+    ]
+
+
 def test_agent_codex_argv_ends_with_stdin_marker() -> None:
     assert AgentCodex("o3", "high").argv()[-1] == "-"
 

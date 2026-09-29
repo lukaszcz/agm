@@ -76,7 +76,7 @@
     {
       "name": "bad_argument_call_form_is_a_host_error",
       "params": {
-        "worker": "AgentClaude(thinking = \"high\")"
+        "worker": "AgentClaude(effort = \"high\")"
       },
       "expect": {
         "host_error": {

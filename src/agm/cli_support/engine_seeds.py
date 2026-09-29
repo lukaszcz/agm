@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from agm.agent.effort import AgentSpecResolver, default_effort_resolver
+from agm.agent.spec_defaults import AgentSpecResolver, configured_defaults_resolver
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.engine_config import raw_option_str, validate_engine_leaf_value
 from agm.agl.runtime.option import option_text
@@ -102,7 +102,7 @@ def resolve_timeout(
 def host_agent_spec_resolver(merged_config: "TomlDict") -> AgentSpecResolver:
     """Build the ``[agent]`` dispatch defaults; exit 1 naming the key when it is invalid."""
     try:
-        return default_effort_resolver(merged_config)
+        return configured_defaults_resolver(merged_config)
     except ValueError as exc:
         print(f"Error: invalid agent configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

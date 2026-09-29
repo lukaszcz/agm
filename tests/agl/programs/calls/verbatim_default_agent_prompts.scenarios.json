@@ -25,7 +25,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 0,
@@ -46,7 +46,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 1,
@@ -59,7 +59,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 2,
@@ -88,7 +88,7 @@
         ]
       },
       "expect": {
-        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"sonnet\", thinking = \"\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"\") 1 Review\n",
+        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"\", thinking = \"\") 1 Review\ncall Agent::AgentClaude(model = \"\", thinking = \"\") 1 Review\n",
         "calls": {
           "ask": 3,
           "reviewer": 1
@@ -97,7 +97,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 0,
@@ -114,7 +114,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 1,
@@ -127,7 +127,7 @@
           {
             "agent": {
               "$case": "AgentClaude",
-              "model": "sonnet",
+              "model": "",
               "thinking": ""
             },
             "call": 2,

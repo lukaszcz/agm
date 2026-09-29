@@ -421,11 +421,12 @@ corrective retries after the initial attempt.
 ### `Agent`
 
 `Agent` is a built-in enum describing an agent backend. Its members are the
-record types `AgentCommand(command)`, `AgentClaude(model, thinking = "")`,
-`AgentCodex(model, thinking = "")`, and
-`AgentPi(provider, model, thinking = "")`; an empty `thinking` selects no
-effort unless the host configures a default
-([`agm exec`](../../commands/agl.md#agent-effort-defaults)).
+record types `AgentCommand(command)`, `AgentClaude(model = "", thinking = "")`,
+`AgentCodex(model = "", thinking = "")`, and
+`AgentPi(provider = "", model = "", thinking = "")`, so `AgentClaude()` and
+`AgentClaude(thinking = "high")` are valid; an empty field selects no provider,
+model, or effort unless the host configures a default
+([`agm exec`](../../commands/agl.md#agent-defaults)).
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
 member record exposes its own fields and, through the member/enum method rule
 ([Methods](functions.md#methods)), `Agent`'s own methods. Its standard-library

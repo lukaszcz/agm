@@ -349,21 +349,31 @@ def test_builtin_record_shape_must_match_field_default_presence() -> None:
 
 
 @pytest.mark.parametrize(
-    "claude",
+    ("command", "claude"),
     [
-        pytest.param("AgentClaude(model: text, thinking: text)", id="missing-default"),
-        pytest.param('AgentClaude(model: text = "", thinking: text = "")', id="extra-default"),
+        pytest.param(
+            "AgentCommand(command: text)",
+            'AgentClaude(model: text, thinking: text = "")',
+            id="missing-default",
+        ),
+        pytest.param(
+            'AgentCommand(command: text = "")',
+            'AgentClaude(model: text = "", thinking: text = "")',
+            id="extra-default",
+        ),
     ],
 )
-def test_builtin_enum_member_shape_must_match_field_default_presence(claude: str) -> None:
+def test_builtin_enum_member_shape_must_match_field_default_presence(
+    command: str, claude: str
+) -> None:
     """An enum member's field default presence is part of the host contract."""
     with pytest.raises(AglTypeError, match="Builtin type 'Agent' has an invalid definition"):
         _check(
             "builtin enum Agent\n"
-            "  | AgentCommand(command: text)\n"
+            f"  | {command}\n"
             f"  | {claude}\n"
-            '  | AgentCodex(model: text, thinking: text = "")\n'
-            '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
+            '  | AgentCodex(model: text = "", thinking: text = "")\n'
+            '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
             "()\n",
             default_stdlib=False,
         )

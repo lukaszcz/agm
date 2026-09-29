@@ -154,7 +154,8 @@ program def main() -> unit =
   let second-opinion = AgentCodex("o3", "high")
   let scripted = AgentCommand("claude -p")
   let hosted = AgentPi("openai", "gpt-5") # thinking defaults to ""
-  let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted]
+  let configured = AgentClaude() # model and effort from [agent] at dispatch
+  let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted, configured]
   let first-pass: text = review-with(reviewer, "the release notes")
   let second-pass: text = review-with(second-opinion, first-pass)
   print("%{candidates.size()} agents available")
@@ -173,11 +174,11 @@ parse-retry loop, so its initial invocation is:
 | `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
 | `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
 
-`thinking` defaults to `""`. An empty provider, model, or thinking field omits its
-flag, except that an empty `thinking` first takes the effort the host configures in
-its `[agent]` section, if any ([agent effort
-defaults](../../commands/agl.md#agent-effort-defaults)); the value itself keeps
-`""`. `Agent` values are
+Every field except `command` defaults to `""` (`AgentClaude()`,
+`AgentPi(thinking = "low")`). An empty provider, model, or thinking field omits its
+flag, except that it first takes the default the host configures in its `[agent]`
+section, if any ([agent defaults](../../commands/agl.md#agent-defaults)); the value
+itself keeps `""`. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
 inspected, and JSON-encoded like other enum values. At a host boundary, a CLI or TOML
 value whose declared type is `Agent` additionally accepts the compact native-agent and
@@ -196,7 +197,7 @@ Free `ask` uses `Session::default`, which lazily opens one session and snapshots
 the current `std/config::default-agent` when it is first used. Every later free
 `ask` in that run or REPL session uses the same conversation and agent; a later
 `default-agent` write does not switch it. The standard library supplies a
-default; CLI `--default-agent` and `[exec] default-agent` seeds override it, and a
+default, `AgentClaude()`; CLI `--default-agent` and `[exec] default-agent` seeds override it, and a
 source write takes effect before that snapshot is created:
 
 ```agl

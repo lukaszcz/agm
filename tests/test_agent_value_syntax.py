@@ -47,6 +47,16 @@ def _decode(text: str, *, fallback: bool = True) -> object:
         ("Claude/opus", AgentClaude("opus", "")),
         ("CODEX/o3:high", AgentCodex("o3", "high")),
         ("Pi/openai/gpt-5", AgentPi("openai", "gpt-5", "")),
+        ("claude", AgentClaude("", "")),
+        ("CLAUDE", AgentClaude("", "")),
+        ("codex", AgentCodex("", "")),
+        ("pi", AgentPi("", "", "")),
+        ("claude:high", AgentClaude("", "high")),
+        ("Codex:low", AgentCodex("", "low")),
+        ("pi:off", AgentPi("", "", "off")),
+        ("pi/anthropic", AgentPi("anthropic", "", "")),
+        ("pi/anthropic:high", AgentPi("anthropic", "", "high")),
+        ("PI/openai", AgentPi("openai", "", "")),
     ],
 )
 def test_agent_shorthand_selects_a_native_agent(text: str, expected: object) -> None:
@@ -56,7 +66,15 @@ def test_agent_shorthand_selects_a_native_agent(text: str, expected: object) -> 
 @pytest.mark.parametrize(
     "text",
     [
-        "claude",
+        "claude -p",
+        "claude --model x",
+        "claude\t-p",
+        "claudex",
+        "pix:high",
+        "p\u0131",
+        "p\u0130:high",
+        "p\u0131/openai/gpt",
+        "codex-cli --flag",
         "worker --flag",
         "./bin/agent",
         "a/b/c",
@@ -67,8 +85,6 @@ def test_agent_shorthand_selects_a_native_agent(text: str, expected: object) -> 
         "scripts/agent --flag",
         "my provider/model",
         "provider/model:high now",
-        "pi",
-        "codex",
         '"claude/opus"',
         '["a/b"]',
         '{"$case":"AgentPi","model":"a/b"',
@@ -98,7 +114,6 @@ def test_text_outside_the_shorthand_forms_is_not_shorthand(text: str) -> None:
         "codex/",
         "codex/model/high",
         "codex/o3:",
-        "pi/anthropic",
         "pi/a/b/c/d",
         "pi//gpt",
         "pi/openai/",
@@ -112,6 +127,26 @@ def test_text_outside_the_shorthand_forms_is_not_shorthand(text: str) -> None:
         "codex/o3:hi:gh!",
         "claude/opus:hi[gh]",
         "pi/open[ai]/gpt",
+        "claude:",
+        "Codex:",
+        "pi:",
+        "pi/",
+        "pi/anthropic/",
+        "pi/anthropic:",
+        "pi/anthropic:hi:gh",
+        "claude:hi:gh",
+        "claude:hi gh",
+        "claude:/opus",
+        " claude",
+        "\tcodex:high",
+        " pi/anthropic",
+        "claude ",
+        "claude\n",
+        "codex\t",
+        "pi ",
+        "Claude  \n",
+        "claude:high ",
+        "pi/anthropic\t",
     ],
 )
 def test_malformed_native_prefix_is_a_shorthand_error(text: str) -> None:
@@ -149,6 +184,13 @@ def test_spec_shape_tags_each_variant_with_its_own_fields() -> None:
         ("claude/opus:high", AgentClaude("opus", "high")),
         ("codex/o3:high", AgentCodex("o3", "high")),
         ("anthropic/claude-opus:custom", AgentPi("anthropic", "claude-opus", "custom")),
+        ("claude", AgentClaude("", "")),
+        ("Codex", AgentCodex("", "")),
+        ("pi", AgentPi("", "", "")),
+        ("claude:high", AgentClaude("", "high")),
+        ("pi:low", AgentPi("", "", "low")),
+        ("pi/anthropic", AgentPi("anthropic", "", "")),
+        ("pi/anthropic:high", AgentPi("anthropic", "", "high")),
     ],
 )
 def test_shorthand_decodes_through_host_text_to_json(text: str, expected: AgentSpec) -> None:
@@ -157,7 +199,20 @@ def test_shorthand_decodes_through_host_text_to_json(text: str, expected: AgentS
 
 @pytest.mark.parametrize("fallback", [True, False])
 @pytest.mark.parametrize(
-    "text", ["claude/", "claude/opus:", "codex/a/b", "pi/anthropic", " claude/opus", "Claude/"]
+    "text",
+    [
+        "claude/",
+        "claude/opus:",
+        "codex/a/b",
+        "pi/anthropic/",
+        " claude/opus",
+        "Claude/",
+        "claude:",
+        "pi/",
+        " codex",
+        "claude ",
+        "codex\n",
+    ],
 )
 def test_malformed_native_prefix_is_a_decode_error_not_a_command(text: str, fallback: bool) -> None:
     with pytest.raises(ValueDecodeError):
@@ -167,9 +222,11 @@ def test_malformed_native_prefix_is_a_decode_error_not_a_command(text: str, fall
 @pytest.mark.parametrize(
     "command",
     [
-        "claude",
-        "codex",
-        "pi",
+        "claude -p",
+        "claude --model x",
+        "claudex",
+        "p\u0131",
+        "p\u0130:high",
         "worker --flag",
         "./bin/agent",
         "a/b/c",

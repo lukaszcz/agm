@@ -20,7 +20,7 @@ General configuration merges from least to most specific: the install prefix's `
 
 ## Sections
 
-Sections are consumed by specific features — `[loop]`, `[review]`, `[revise]`, `[run]`, `[exec]`, `[agent]`, `[modules]`, `[packages]`. `[agent]` holds default agent efforts keyed by CLI, then provider/model, validated strictly at AgL host startup ([agents.md](agents.md)). Per-command override sub-tables such as `[review.<name>]` merge over their base section. `[packages]` pins exact package versions and overrides global activation for that invocation. The `agm config` command group copies project config files into a workspace, prints the workspace environment as shell statements, and creates missing `config.toml` files.
+Sections are consumed by specific features — `[loop]`, `[review]`, `[revise]`, `[run]`, `[exec]`, `[agent]`, `[modules]`, `[packages]`. `[agent]` holds default Pi provider, model, and effort keyed by CLI, then provider/model, validated strictly at AgL host startup ([agents.md](agents.md)). Per-command override sub-tables such as `[review.<name>]` merge over their base section. `[packages]` pins exact package versions and overrides global activation for that invocation. The `agm config` command group copies project config files into a workspace, prints the workspace environment as shell statements, and creates missing `config.toml` files.
 
 ## AgL Settings
 

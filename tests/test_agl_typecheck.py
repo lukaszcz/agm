@@ -31,7 +31,6 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import (
-    BareContributionSource,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -142,7 +141,6 @@ from agm.agl.typecheck import (
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.env import (
     CheckedModuleImage,
-    GenericAliasDef,
     GenericTypeDef,
     OutputContractSpec,
     UnappliedGenericTypeError,
@@ -792,104 +790,6 @@ class TestTypeEnvironment:
         env.register_type("Foo", rt)
         assert env.get_type("Foo") == rt
 
-    def test_opened_non_generic_type_rejects_type_arguments(self) -> None:
-        scope = ScopeNode(node_id=_mk_node_id())
-        scope.contribute_bare(
-            "Exposed",
-            BindingRef(
-                name="Point",
-                mutable=False,
-                decl_span=mk_span(),
-                decl_node_id=_mk_node_id(),
-                kind=BinderKind.constructor_binding,
-                scope_path=("Shapes",),
-            ),
-            BareContributionSource.IMPORT_TAIL,
-        )
-        env = TypeEnvironment(
-            program_type_table={
-                (ENTRY_ID, ("Shapes",), "Point"): RecordType(name="Point", scope_path=("Shapes",))
-            },
-            scope_nodes={(): scope},
-        )
-        program = parse_program("def value(point: Exposed[int]) -> int = 1")
-        annotation = cast(FuncDef, program.body.items[0]).params[0].type_expr
-
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(annotation)
-
-        alias_env = TypeEnvironment(
-            program_alias_table={
-                (ENTRY_ID, ("Shapes",), "Point"): GenericAliasDef(
-                    type_params=("T",), template=RecordType(name="Point")
-                )
-            },
-            scope_nodes={(): scope},
-        )
-        assert isinstance(alias_env.resolve_type_expr(annotation), RecordType)
-
-        library = ModuleId.from_path("library")
-        foreign_scope = ScopeNode(node_id=_mk_node_id())
-        foreign_scope.contribute_bare(
-            "Exposed",
-            BindingRef(
-                name="Point",
-                mutable=False,
-                decl_span=mk_span(),
-                decl_node_id=_mk_node_id(),
-                kind=BinderKind.constructor_binding,
-                module_id=library,
-                scope_path=("Shapes",),
-            ),
-            BareContributionSource.IMPORT_TAIL,
-        )
-        foreign_env = TypeEnvironment(
-            program_type_table={
-                (library, ("Shapes",), "Point"): RecordType(
-                    name="Point", module_id=library, scope_path=("Shapes",)
-                )
-            },
-            scope_nodes={(): foreign_scope},
-        )
-        with pytest.raises(AglTypeError):
-            foreign_env.resolve_type_expr(annotation)
-
-    def test_resolve_named_type_returns_templates_contributed_by_a_named_region(self) -> None:
-        library = ModuleId.from_path("library")
-        region = ScopeNode(node_id=_mk_node_id(), scope_path=("Region",))
-        for exposed, declared in (("Generic", "Box"), ("Alias", "Wrapped")):
-            region.contribute_bare(
-                exposed,
-                BindingRef(
-                    name=declared,
-                    mutable=False,
-                    decl_span=mk_span(),
-                    decl_node_id=_mk_node_id(),
-                    kind=BinderKind.constructor_binding,
-                    module_id=library,
-                ),
-                BareContributionSource.IMPORT_TAIL,
-            )
-        generic_template = RecordType("Box", module_id=library, decl_id=_mk_node_id())
-        alias_template = ArrayType(TypeVarType("T"))
-        env = TypeEnvironment(
-            program_generic_table={
-                (library, (), "Box"): GenericTypeDef(
-                    kind="record", type_params=("T",), template=generic_template
-                )
-            },
-            program_alias_table={
-                (library, (), "Wrapped"): GenericAliasDef(
-                    type_params=("T",), template=alias_template
-                )
-            },
-            scope_nodes={("Region",): region},
-        )
-
-        with env.type_scope(("Region",)):
-            assert env.resolve_named_type("Generic") == generic_template
-            assert env.resolve_named_type("Alias") == alias_template
-
     def test_enum_owner_forms_track_declarations_until_sealed(self) -> None:
         """An unsealed env re-enumerates; a sealed one serves a stable answer."""
         env = TypeEnvironment()
@@ -906,15 +806,6 @@ class TestTypeEnvironment:
         # Sealed: the enumeration is settled, so repeat asks reuse one answer.
         assert env.enum_owner_forms() is env.enum_owner_forms()
         assert env.blocked_enum_variants() is env.blocked_enum_variants()
-
-    def test_register_alias(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_alias("MyInt", IntT(span=sp, node_id=1))
-        result = env.resolve_type_expr(NameT(name="MyInt", span=sp, node_id=2))
-        assert result == IntType()
 
     def test_resolve_type_expr_text(self) -> None:
         env = TypeEnvironment()
@@ -1001,16 +892,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         with pytest.raises(AglTypeError, match="Unknown type"):
             env.resolve_type_expr(NameT(name="NonExistent", span=mk_span(), node_id=1))
-
-    def test_alias_cycle_detected(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_alias("A", NameT(name="B", span=sp, node_id=1))
-        env.register_alias("B", NameT(name="A", span=sp, node_id=2))
-        with pytest.raises(AglTypeError, match="cycle"):
-            env.resolve_type_expr(NameT(name="A", span=sp, node_id=3))
 
     def test_binding_type_roundtrip(self) -> None:
         env = TypeEnvironment()
@@ -1258,40 +1139,6 @@ class TestTypeEnvironment:
         assert "MyRec" in names
         assert "Abort" in names
 
-    def test_resolve_named_type(self) -> None:
-        env = TypeEnvironment()
-        rt = RecordType(name="R")
-        env.register_type("R", rt)
-        result = env.resolve_named_type("R")
-        assert result == rt
-
-    def test_resolve_named_type_unknown(self) -> None:
-        env = TypeEnvironment()
-        assert env.resolve_named_type("Unknown") is None
-
-    def test_resolve_named_type_reports_multiple_candidates_as_ambiguous(self) -> None:
-        # Two unqualified imports of the same name are ambiguous: the complaint
-        # names the problem better than "unknown type" would.
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.scope.imports import ImportEnv
-
-        mod_a = ModuleId.from_path("moda")
-        mod_b = ModuleId.from_path("modb")
-        color_a = RecordType(name="Color")
-        color_b = RecordType(name="Color")
-        graph_table: dict[tuple[ModuleId, tuple[str, ...], str], RecordType] = {
-            (mod_a, (), "Color"): color_a,
-            (mod_b, (), "Color"): color_b,
-        }
-        # Both modules expose "Color" unqualified.
-        unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
-            "Color": frozenset({(mod_a, "Color"), (mod_b, "Color")}),
-        }
-        import_env = ImportEnv(contributions={}, unqualified=unqualified)
-        env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
-        with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
-            env.resolve_named_type("Color")
-
     def test_get_generic_type_from_module_no_graph_table(self) -> None:
         # Coverage: env.py get_generic_type_from_module — module mode returns None.
         from agm.agl.modules.ids import ModuleId
@@ -1359,29 +1206,6 @@ class TestTypeEnvironment:
             "  | S::Bad => 2)",
         )
         assert compile_program_matches(checked).compiled is not None
-
-    def test_env_resolve_named_type_via_alias(self) -> None:
-        # Exercises the resolve_named_type alias-chain resolution path
-        env = TypeEnvironment()
-        from agm.agl.syntax.types import NameT
-
-        sp = mk_span()
-        env.register_type("R", RecordType(name="R"))
-        env.register_alias("MyR", NameT(name="R", span=sp, node_id=1))
-        result = env.resolve_named_type("MyR")
-        assert result == RecordType(name="R")
-
-    def test_env_resolve_named_type_with_bad_alias(self) -> None:
-        # Exercises the except AglTypeError: return None path in resolve_named_type
-        env = TypeEnvironment()
-        from agm.agl.syntax.types import NameT
-
-        sp = mk_span()
-        # Register a cycle to cause AglTypeError internally
-        env.register_alias("A", NameT(name="B", span=sp, node_id=1))
-        env.register_alias("B", NameT(name="A", span=sp, node_id=2))
-        result = env.resolve_named_type("A")
-        assert result is None
 
 
 class TestCheckedOutputClosure:
@@ -10340,7 +10164,8 @@ class TestStaticParameterBindingValidation:
         assert parameter.type_ann is not None
 
         # Source type syntax cannot name an unbound rigid variable, so adapt the
-        # annotation to a phantom nominal supplied by an earlier entry.
+        # annotation to a phantom nominal supplied by an earlier entry, selected
+        # for the annotation the way scope selects any type name.
         open_type = RecordType(
             "Token",
             (TypeVarType("T"),),
@@ -10359,6 +10184,10 @@ class TestStaticParameterBindingValidation:
                 resolved.program,
                 body=replace(resolved.program.body, items=(record, open_parameter)),
             ),
+            owner_declarations={
+                **resolved.owner_declarations,
+                open_annotation.node_id: (ENTRY_ID, (), "OpenToken"),
+            },
         )
         seed_env = TypeEnvironment()
         seed_env.register_type("OpenToken", open_type)
@@ -10610,14 +10439,13 @@ def _method_header(
         env,
         attributes=resolved.attributes,
     ).collect(resolved.program)
-    with env.type_scope(owner.scope_path):
-        signature, _type, _receiver = resolve_function_header(
-            env,
-            function,
-            result_type=function.return_type,
-            param_zones=resolved.attributes.param_zones,
-            receiver_owner=owner,
-        )
+    signature, _type, _receiver = resolve_function_header(
+        env,
+        function,
+        result_type=function.return_type,
+        param_zones=resolved.attributes.param_zones,
+        receiver_owner=owner,
+    )
     return function, signature.params
 
 
@@ -10890,114 +10718,42 @@ class TestResolveTypeExprTypeVars:
         )
         assert result == TypeVarType("T")
 
-    def test_registered_type_resolves_with_type_vars_ignored(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_type("MyRec", RecordType("MyRec"))
-        result = env.resolve_type_expr(
-            NameT(name="MyRec", span=sp, node_id=1), type_vars=frozenset({"T"})
-        )
+    def test_declared_type_resolves_beside_type_vars(self) -> None:
+        checked = accept_type("record MyRec\n  x: int\ndef f[T](r: MyRec, t: T) -> MyRec = r")
+        result = checked.function_signatures["f"].params[0].type
         assert isinstance(result, RecordType)
         assert result.name == "MyRec"
 
-    def test_applied_t_resolves_generic_type(self) -> None:
-        from agm.agl.syntax.types import AppliedT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        template = RecordType("Box", type_args=(TypeVarType("T"),), decl_id=1)
-        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
-        env.register_generic_type("Box", gdef)
-        env.type_table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=template.module_id,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-                decl_node_id=1,
-            )
-        )
-        result = env.resolve_type_expr(
-            AppliedT(name="Box", args=(IntT(span=sp, node_id=2),), span=sp, node_id=3),
-            type_vars=frozenset(),
-        )
+    def test_applied_generic_record_instantiates_its_fields(self) -> None:
+        checked = accept_type("record Box[T]\n  value: T\nlet b: Box[int] = Box(value = 1)\nb")
+        result = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         assert isinstance(result, RecordType)
         assert result.type_args == (IntType(),)
-        assert env.type_table.record_fields(result)["value"] == IntType()
+        assert checked.type_env.type_table.record_fields(result)["value"] == IntType()
 
-    def test_applied_t_arity_mismatch_raises(self) -> None:
-        from agm.agl.syntax.types import AppliedT
+    @pytest.mark.parametrize(
+        "annotation",
+        ["Box[int, int]", "Wrapper[int, int]", "Plain[int]", "Unknown[int]", "Wrapper"],
+    )
+    def test_misapplied_type_is_rejected(self, annotation: str) -> None:
+        reject_type(
+            "record Box[T]\n  value: T\ntype Wrapper[T] = array[T]\nrecord Plain\n  x: int\n"
+            f"def f(v: {annotation}) -> int = 1"
+        )
 
-        env = TypeEnvironment()
-        sp = mk_span()
-        template = RecordType("Box")
-        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
-        env.register_generic_type("Box", gdef)
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(
-                AppliedT(
-                    name="Box",
-                    args=(IntT(span=sp, node_id=1), IntT(span=sp, node_id=2)),
-                    span=sp,
-                    node_id=3,
-                ),
-            )
+    def test_alias_applied_before_its_declaration_checks_its_arity(self) -> None:
+        reject_type("type A = W[int, int]\ntype W[T] = array[T]")
 
     def test_bare_generic_name_rejected(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        template = RecordType("Box")
-        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
-        env.register_generic_type("Box", gdef)
         with pytest.raises(UnappliedGenericTypeError) as exc_info:
-            env.resolve_type_expr(NameT(name="Box", span=sp, node_id=1))
+            accept_type("record Box[T]\n  value: T\ndef f(b: Box) -> int = 1")
         assert exc_info.value.display_name == "Box"
-        assert exc_info.value.generic_def == gdef
-
-    def test_applied_t_non_generic_raises(self) -> None:
-        from agm.agl.syntax.types import AppliedT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(
-                AppliedT(name="Unknown", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
-            )
+        assert exc_info.value.generic_def.type_params == ("T",)
 
     def test_parameterized_alias_applied(self) -> None:
-        from agm.agl.syntax.types import AppliedT, NameT
-        from agm.agl.syntax.types import ArrayT as _ListT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_alias(
-            "Wrapper",
-            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
-            type_params=("T",),
-        )
-        result = env.resolve_type_expr(
-            AppliedT(name="Wrapper", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
-        )
+        checked = accept_type("type Wrapper[T] = array[T]\nlet w: Wrapper[int] = [1]\nw")
+        result = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         assert result == ArrayType(IntType())
-
-    def test_bare_parameterized_alias_rejected(self) -> None:
-        from agm.agl.syntax.types import ArrayT as _ListT
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_alias(
-            "Wrapper",
-            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
-            type_params=("T",),
-        )
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(NameT(name="Wrapper", span=sp, node_id=2))
 
     def test_seed_from_copies_generic_types(self) -> None:
         env1 = TypeEnvironment()
@@ -11027,59 +10783,12 @@ class TestResolveTypeExprTypeVars:
         with pytest.raises(AglTypeError):
             env.instantiate_nominal("NotRegistered", ())
 
-    def test_applied_t_alias_arity_mismatch_raises(self) -> None:
-        from agm.agl.syntax.types import AppliedT, NameT
-        from agm.agl.syntax.types import ArrayT as _ListT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_alias(
-            "Wrapper",
-            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
-            type_params=("T",),
-        )
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(
-                AppliedT(
-                    name="Wrapper",
-                    args=(IntT(span=sp, node_id=1), IntT(span=sp, node_id=2)),
-                    span=sp,
-                    node_id=3,
-                ),
-            )
-
-    def test_applied_t_on_non_generic_registered_type_raises(self) -> None:
-        from agm.agl.syntax.types import AppliedT
-
-        env = TypeEnvironment()
-        sp = mk_span()
-        env.register_type("Plain", RecordType("Plain"))
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(
-                AppliedT(name="Plain", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
-            )
-
     def test_applied_t_unknown_nested_arg_span_is_arg_span(self) -> None:
-        # Error span for an unknown type inside a type argument must point at
-        # the argument node, not at the outer AppliedT span.
-        from agm.agl.syntax.types import AppliedT, NameT
-
-        env = TypeEnvironment()
-        outer_sp = mk_span(line=1, col=1)
-        arg_sp = mk_span(line=5, col=10)
-        template = RecordType("Box")
-        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
-        env.register_generic_type("Box", gdef)
-        with pytest.raises(AglTypeError) as exc_info:
-            env.resolve_type_expr(
-                AppliedT(
-                    name="Box",
-                    args=(NameT(name="NoSuchType", span=arg_sp, node_id=1),),
-                    span=outer_sp,
-                    node_id=2,
-                ),
-            )
-        assert exc_info.value.span == arg_sp
+        # Error span for an unknown type inside a type argument points at the
+        # argument, not at the outer applied type.
+        err = reject_type("record Box[T]\n  value: T\ndef f(b: Box[NoSuchType]) -> int = 1")
+        assert err.span is not None
+        assert (err.span.start_line, err.span.start_col) == (3, 14)
 
 
 # ---------------------------------------------------------------------------

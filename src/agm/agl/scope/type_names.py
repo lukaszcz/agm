@@ -152,7 +152,7 @@ def leading_name_reading(
     region is decisive wherever it is found, so a farther level's type never
     merges into a nearer region -- falling back to :func:`bare_type_selection`
     when *site* carries no region-aware layer of its own (the default for a
-    site that never sees one, as typecheck's own does). Shared by a bare
+    site built without one, as the type-owner index's own is). Shared by a bare
     type name (:func:`type_name_selection`), a qualifier chain's own leading
     segment, and a method receiver's owner, so the three agree on the same
     nearest level.

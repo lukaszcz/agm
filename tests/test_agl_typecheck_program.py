@@ -2171,20 +2171,29 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
         )
 
 
-def test_resolve_named_type_resolves_imported_parameterized_alias_to_its_template(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.parametrize("annotation", ["lib::Filled[int]", "lib::Filled"])
+def test_module_injected_enum_member_is_not_a_type(tmp_path: Path, annotation: str) -> None:
+    """A member a module's surface injects has no type path under the module qualifier."""
+    with pytest.raises(AglTypeError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": f"import lib\ndef g(x: {annotation}) -> int = 1\n()",
+                "lib": "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
+            },
+        )
+
+
+def test_imported_parameterized_alias_applies_to_its_template(tmp_path: Path) -> None:
     checked = check_agl_program(
         tmp_path,
         {
-            "entry": "import library/remote::{Alias}\n()",
+            "entry": "import library/remote::{Alias}\nlet v: Alias[int] = [1]\nv",
             "library/remote": "type Alias[T] = array[T]",
         },
     )
 
-    assert checked.modules[ENTRY_ID].type_env.resolve_named_type("Alias") == ArrayType(
-        TypeVarType("T")
-    )
+    assert _binding_value_type(checked, ENTRY_ID, "v") == ArrayType(IntType())
 
 
 def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
@@ -2510,20 +2519,17 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     )
 
 
-def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
-    """'::Abort' self-reference in a module falls back to built-in exception type."""
-    modules = {
-        "entry": ("import mylib\nlet e = mylib::boom()\ne"),
-        "mylib": (
-            # ::Abort references the built-in Abort exception type, which is not a
-            # user declaration in the graph's type table.
-            'def boom() -> ::Abort = raise Abort(message = "oops")'
-        ),
-    }
-    cg = check_agl_program(tmp_path, modules)
-    t = _binding_value_type(cg, ENTRY_ID, "e")
-    assert isinstance(t, ExceptionType)
-    assert t.name == "Abort"
+@pytest.mark.parametrize(
+    "mylib",
+    [
+        'def boom() -> ::Abort = raise Abort(message = "oops")',
+        'record Wrapper\n  c: ::ExecResult\ndef mk() -> Wrapper = Wrapper(c = exec("echo hi"))',
+    ],
+)
+def test_anchored_builtin_type_is_not_a_member_of_the_module(tmp_path: Path, mylib: str) -> None:
+    """'::Name' reads the module's own root, which never holds a built-in type."""
+    with pytest.raises(UnknownMemberError):
+        check_agl_program(tmp_path, {"entry": "import mylib\n()", "mylib": mylib})
 
 
 def test_qualified_type_annotation_must_match_the_bound_value(tmp_path: Path) -> None:
@@ -3070,22 +3076,6 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     mylib_id = ModuleId.from_path("mylib")
     cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
-        "Wrapper", module_id=mylib_id
-    )
-
-
-def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
-    """A '::BuiltinType' self-ref in a field resolves to the built-in type."""
-    modules = {
-        "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
-        "mylib": (
-            # ::ExecResult is a built-in prelude type, not a user declaration.
-            'record Wrapper\n  c: ::ExecResult\ndef mk() -> Wrapper = Wrapper(c = exec("echo hi"))'
-        ),
-    }
-    mylib_id = ModuleId.from_path("mylib")
-    cg = check_agl_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
 

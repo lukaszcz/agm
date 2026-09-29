@@ -1258,8 +1258,7 @@ class _Checker:
         # checked, including members collected from named scope regions.
         for item in static_items(program.body.items):
             if isinstance(item, FuncDef):
-                with self._env.type_scope(self._declaration_scope_path(item)):
-                    self._preregister_funcdef(item)
+                self._preregister_funcdef(item)
 
         self._check_block(
             program.body,
@@ -1310,23 +1309,20 @@ class _Checker:
         # --- Declarations ---
         if isinstance(item, FuncDef):
             # Signature already registered in pre-pass; check body now.
-            with self._env.type_scope(self._declaration_scope_path(item)):
-                self._check_funcdef_body(item)
-                if item.is_program:
-                    self._check_program_config(item)
+            self._check_funcdef_body(item)
+            if item.is_program:
+                self._check_program_config(item)
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
-            with self._own_type_scope(item):
-                self._check_builtin_var(item)
+            self._check_builtin_var(item)
             return UnitType()
         if isinstance(item, (ImportDecl, ExportDecl, UseDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
-            with self._own_type_scope(item):
-                binding_type = self._check_binding(item)
+            binding_type = self._check_binding(item)
             self._validate_parameter_binding(item)
             if static_root:
                 require_static_root_constant(
@@ -1337,23 +1333,6 @@ class _Checker:
             return self._check_assign_stmt(item)
         # --- Expr ---
         return self._check_expr(item, expected=expected)
-
-    @contextmanager
-    def _own_type_scope(self, item: LetDecl | VarDecl | BuiltinVarDecl) -> Iterator[None]:
-        """Resolve *item*'s own type expressions in its declared scope path.
-
-        A scope-region member (either spelling — the region form or the
-        declaration-path shorthand) carries its full path on ``item.scope_path``
-        and resolves its type expressions there. A binder with no path of its
-        own — an ordinary ``let``/``var`` local to a block — keeps whatever
-        scope is already ambient (the enclosing ``def``'s, or the root's),
-        since it is not itself a scope member.
-        """
-        if not item.scope_path:
-            yield
-            return
-        with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
-            yield
 
     # ------------------------------------------------------------------
     # Declaration checkers
@@ -1694,8 +1673,7 @@ class _Checker:
         per-module walk, so a re-check there could never observe a different
         (narrow) type.
         """
-        with self._own_type_scope(item):
-            value_type = self._check_boundary_expr(item.value, expected=None)
+        value_type = self._check_boundary_expr(item.value, expected=None)
         declared_type = self._binding_declared_type(item, value_type, ann_type=None)
         if isinstance(item, VarDecl):
             self._reject_narrow_static_var(item, value_type)
@@ -4557,10 +4535,10 @@ class _Checker:
             exc_type: ExceptionType = self._env.type_table.exception_root()
             clause_type = None
         else:
-            # resolve_named_type is used instead of get_type so exception types exposed
-            # by import tails (in cross-module program context) are found as well.
-            resolved = self._env.resolve_named_type(clause.exc_type, span=clause.span)
-            if resolved is None or not isinstance(resolved, ExceptionType):
+            resolved = self._env.resolve_selected_type_name(
+                clause.node_id, clause.exc_type, span=clause.span
+            )
+            if not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
                     f"'{clause.exc_type}' is not a known exception type.",
                     span=clause.span,
@@ -6875,8 +6853,7 @@ def prepare_module_headers(
     )
     for item in static_items(resolved.program.body.items):
         if isinstance(item, FuncDef):
-            with env.type_scope(header_checker._declaration_scope_path(item)):
-                header_checker._preregister_funcdef(item)
+            header_checker._preregister_funcdef(item)
 
 
 def _check_prepared_module(

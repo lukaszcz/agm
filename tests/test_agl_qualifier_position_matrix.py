@@ -1090,21 +1090,20 @@ class TestNearestUseRegionBlocksAmbiguousImportsAsBareTypeName:
     ``X`` is ambiguous between two wildcard-imported records (``m::X``,
     ``n::X``) at the farther, IMPORTED layer; a nearer ``use``-opened scope
     region of the identical spelling (``lib::X``) decides it outright
-    instead, so ``_validate_bare_type_name`` -- unlike the plain, genuinely
-    ambiguous control below -- never raises scope's own ambiguity verdict
-    for it. A region is never itself a type, so the annotation then names
-    no type at all: typecheck's ordinary unknown-type verdict.
+    instead, so -- unlike the plain, genuinely ambiguous control below -- the
+    verdict is never ambiguity. A region is never itself a type, so scope
+    rejects the annotation as naming a region.
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_BARE_NEAREST_HEADER) + 1))
-    def test_scope_never_raises_ambiguity(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_nearer_region_names_no_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         assert_verdict_for_grouping(
             tmp_path,
             _BARE_NEAREST_MODULES,
             (*_BARE_NEAREST_HEADER, "fn(p: X) => 1"),
             sizes,
-            ("typecheck", AglTypeError),
-            span_text="p: X",
+            ("scope", AglScopeError),
+            span_text="X",
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(("import m::*", "import n::*")) + 1))

@@ -363,24 +363,23 @@ def _resolve_body_for_one(
     cross_env = cross_envs[mid]
     builder = per_module_builders[mid]
     display_name = "::".join((*scope_path, name))
-    with cross_env.type_scope(scope_path):
-        match item:
-            case RecordDef():
-                builder.build_record(display_name)
-            case EnumDef():
-                builder.build_enum(display_name)
-            case ExceptionDef():
-                builder.build_exception(display_name)
-            case TypeAlias(type_params=()):
-                tables.types[key] = cross_env.resolve_type_expr(item.type_expr, span=item.span)
-            case TypeAlias(type_params=type_params):
-                builder.validate_alias(item)
-                template = cross_env.resolve_type_expr(
-                    item.type_expr, span=item.span, type_vars=frozenset(type_params)
-                )
-                tables.aliases[key] = GenericAliasDef(type_params=type_params, template=template)
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+    match item:
+        case RecordDef():
+            builder.build_record(display_name)
+        case EnumDef():
+            builder.build_enum(display_name)
+        case ExceptionDef():
+            builder.build_exception(display_name)
+        case TypeAlias(type_params=()):
+            tables.types[key] = cross_env.resolve_type_expr(item.type_expr, span=item.span)
+        case TypeAlias(type_params=type_params):
+            builder.validate_alias(item)
+            template = cross_env.resolve_type_expr(
+                item.type_expr, span=item.span, type_vars=frozenset(type_params)
+            )
+            tables.aliases[key] = GenericAliasDef(type_params=type_params, template=template)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
     # Built nominal bodies reach the program tables here; a generic one has
     # no type-namespace entry and keeps its Step A handle.
     _sync_program_env_extensions(mid, cross_env, tables)
@@ -531,7 +530,6 @@ def _build_program_type_table(
             continue
         env = TypeEnvironment(
             module_id=mid,
-            scope_nodes=rmod.resolved.scope_nodes,
             owner_declarations=rmod.resolved.owner_declarations,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
@@ -599,22 +597,21 @@ def _build_program_type_table(
         resolving_aliases.add(key)
         try:
             env = cross_envs[alias_mid]
-            # An alias forced from elsewhere still names its target the way its
-            # own scope region does, so resolution re-enters the declaring path.
-            with env.type_scope(scope_path):
-                type_params = item.type_params
-                if type_params:
-                    template = env.resolve_type_expr(
-                        item.type_expr,
-                        span=item.span,
-                        type_vars=frozenset(type_params),
-                    )
-                    tables.aliases[key] = GenericAliasDef(
-                        type_params=type_params,
-                        template=template,
-                    )
-                    return None
-                resolved = env.resolve_type_expr(item.type_expr, span=item.span)
+            # An alias forced from elsewhere resolves in its declaring module's
+            # env, which holds scope's selections for the target's type names.
+            type_params = item.type_params
+            if type_params:
+                template = env.resolve_type_expr(
+                    item.type_expr,
+                    span=item.span,
+                    type_vars=frozenset(type_params),
+                )
+                tables.aliases[key] = GenericAliasDef(
+                    type_params=type_params,
+                    template=template,
+                )
+                return None
+            resolved = env.resolve_type_expr(item.type_expr, span=item.span)
             tables.types[key] = resolved
             return resolved
         finally:
@@ -633,7 +630,6 @@ def _build_program_type_table(
             program_alias_table=tables.aliases,
             program_aliases=program_aliases,
             import_env=import_env,
-            scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=shared_type_table,
             owner_declarations=rmod.resolved.owner_declarations,
@@ -752,7 +748,6 @@ def _build_program_func_sig_table(
             program_generic_table=tables.generics,
             program_alias_table=tables.aliases,
             import_env=import_env,
-            scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=type_table,
             owner_declarations=rmod.resolved.owner_declarations,
@@ -782,14 +777,13 @@ def _build_program_func_sig_table(
             if item.return_type is None:
                 continue
 
-            with env.type_scope(tuple(segment.name for segment in item.scope_path)):
-                signature, function_type, _receiver = resolve_function_header(
-                    env,
-                    item,
-                    result_type=item.return_type,
-                    param_zones=rmod.resolved.attributes.param_zones,
-                    receiver_owner=receiver_owner,
-                )
+            signature, function_type, _receiver = resolve_function_header(
+                env,
+                item,
+                result_type=item.return_type,
+                param_zones=rmod.resolved.attributes.param_zones,
+                receiver_owner=receiver_owner,
+            )
             result[item.node_id] = FunctionSignatureRecord(
                 declaration_node_id=item.node_id,
                 name=item.name,
@@ -904,11 +898,9 @@ def _build_program_static_binding_table(
         for decl_node_id in _constant_dependency_order(bindings, constants):
             item = bindings[decl_node_id]
             if item.type_ann is not None:
-                scope_path = tuple(segment.name for segment in item.scope_path)
-                with env.type_scope(scope_path):
-                    binding_type = env.resolve_type_expr(
-                        item.type_ann, span=item.span, type_vars=frozenset()
-                    )
+                binding_type = env.resolve_type_expr(
+                    item.type_ann, span=item.span, type_vars=frozenset()
+                )
             else:
                 require_static_root_constant(item.value, module_resolved, constants=constants)
                 if checker is None:
@@ -958,11 +950,9 @@ def _build_program_builtin_var_table(
                             key_type = declared.handle(type_args=type_args)
                     result[item.node_id] = key_type
                 continue
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            with env.type_scope(scope_path):
-                result[item.node_id] = env.resolve_type_expr(
-                    item.type_ann, span=item.span, type_vars=frozenset()
-                )
+            result[item.node_id] = env.resolve_type_expr(
+                item.type_ann, span=item.span, type_vars=frozenset()
+            )
     return result
 
 
@@ -1078,7 +1068,6 @@ def _prepare_module_environment(
         program_generic_table=tables.generics,
         program_alias_table=tables.aliases,
         import_env=import_env_map[mid],
-        scope_nodes=resolved.scope_nodes,
         module_id=mid,
         type_table=type_table,
         declared_seed=declared_seed,
@@ -1343,14 +1332,13 @@ def _prepare_program(
             record = (retained.published_signatures or {}).get(item.node_id)
             if item.return_type is not None or owner is None or record is None:
                 continue
-            with env.type_scope(tuple(segment.name for segment in item.scope_path)):
-                signature, _, receiver = resolve_function_header(
-                    env,
-                    item,
-                    result_type=record.signature.result,
-                    param_zones=rmod.attributes.param_zones,
-                    receiver_owner=owner,
-                )
+            signature, _, receiver = resolve_function_header(
+                env,
+                item,
+                result_type=record.signature.result,
+                param_zones=rmod.attributes.param_zones,
+                receiver_owner=owner,
+            )
             register_method_header(env, item, signature, receiver, mid)
 
     validate_builtin_declaration_uniqueness(

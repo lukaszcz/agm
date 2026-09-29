@@ -1091,12 +1091,10 @@ class _Lowerer:
             funcdef, fn_id
         )
         captures = self._compute_captures(funcdef, param_decl_ids)
-        declaration_scope_path = tuple(segment.name for segment in funcdef.scope_path)
         body = cast(Expr, funcdef.body)
         with (
             self._return_context(sig.result),
             self._function_body(fn_id),
-            self._checked.type_env.type_scope(declaration_scope_path),
         ):
             body_ir: IrExpr
             if funcdef.is_synthetic:
@@ -3242,7 +3240,9 @@ class _Lowerer:
         else:
             resolved = cast(
                 ExceptionType,
-                self._checked.type_env.resolve_named_type(exc_type, span=clause.span),
+                self._checked.type_env.resolve_selected_type_name(
+                    clause.node_id, exc_type, span=clause.span
+                ),
             )
             nominal = (
                 None

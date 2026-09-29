@@ -529,11 +529,6 @@ def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
 
     for item in static_type_items(cm.resolved.program.body.items):
         scope_path = tuple(segment.name for segment in item.scope_path)
-        with rehydrated.type_env.type_scope(scope_path):
-            re_named = rehydrated.type_env.resolve_named_type(item.name)
-        with cm.type_env.type_scope(scope_path):
-            cm_named = cm.type_env.resolve_named_type(item.name)
-        assert re_named == cm_named
         assert rehydrated.type_env.declared_type_template(
             lib_id, item.name, scope_path=scope_path
         ) == cm.type_env.declared_type_template(lib_id, item.name, scope_path=scope_path)

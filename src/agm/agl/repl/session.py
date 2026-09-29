@@ -50,7 +50,13 @@ if TYPE_CHECKING:
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode, TypeOwner
+    from agm.agl.scope.symbols import (
+        BindingRef,
+        ConstructorRef,
+        DeclarationKey,
+        ScopeNode,
+        TypeOwner,
+    )
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
     from agm.agl.syntax.nodes import (
@@ -63,11 +69,11 @@ if TYPE_CHECKING:
         VarRef,
     )
     from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import (
         CheckedModule,
         ConstructorSignature,
         FunctionSignature,
-        GenericTypeDef,
         TypeEnvironment,
     )
     from agm.packages.model import PackageInfo
@@ -118,11 +124,11 @@ class _BootstrapSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class _InfoReference:
-    """Binding, constructor, and alias declaration one ``:info`` name selects, and its spelling."""
+    """Binding, constructor, and type declaration one ``:info`` name selects, and its spelling."""
 
     binding: "BindingRef | None"
     constructor: "ConstructorRef | None"
-    alias: "TypeAlias | None"
+    type_key: "DeclarationKey | None"
     reference: "VarRef"
     # Query-scoped view carrying this reference's own ad-hoc qualifier
     # identities; read only by :meth:`ReplSession._constructor_signature`.
@@ -748,30 +754,20 @@ class ReplSession:
         from agm.agl.parser import AglSyntaxError, parse_type_expr_seeded
         from agm.agl.repl.type_display import format_generic_type_def_for_repl
         from agm.agl.scope import AglScopeError
-        from agm.agl.syntax.nodes import Block, Program, TypeAlias
         from agm.agl.typecheck import AglTypeError, UnappliedGenericTypeError
 
         host_env = self._runtime.host_environment()
-        # A bare type has no program-level syntax of its own, so it is
-        # probed as a fresh alias's body -- the same position
-        # ``type X = <type-expr>`` resolves through.
         try:
             with spaced_qualifier_collector() as spaced_sink:
                 type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
         except AglSyntaxError:
             return None
         type_span = type_expr.span
-        spaced_qualifiers = tuple(spaced_sink)
-        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
-        alias = TypeAlias(
-            name=fresh_name, type_expr=type_expr, span=type_span, node_id=next_node_id
-        )
-        block = Block(items=(alias,), span=type_span, node_id=next_node_id + 1)
-        program = Program(body=block, span=type_span, node_id=next_node_id + 2)
+        program, fresh_name, next_node_id = self._type_probe_program(type_expr, next_node_id)
 
         try:
             checked_program = self._entry_pipeline.resolve_and_check_program(
-                program, next_node_id + 3, host_env, spaced_qualifiers=spaced_qualifiers
+                program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
             )
         except (HiddenMemberError, ReferencedMemberError) as exc:
             return self._fail_static(exc, [])
@@ -817,6 +813,23 @@ class ReplSession:
             ok=True,
             type_table=checked.type_env.type_table,
         )
+
+    @staticmethod
+    def _type_probe_program(type_expr: "TypeExpr", start_id: int) -> tuple["Program", str, int]:
+        """Wrap *type_expr* as the target of a fresh ``type <name> = ...`` program.
+
+        A bare type has no program-level syntax of its own, so it is probed as
+        a fresh alias's target -- the same position ``type X = <type-expr>``
+        resolves through. Returns the program, the fresh alias name, and the
+        next free node id.
+        """
+        from agm.agl.syntax.nodes import Block, Program, TypeAlias
+
+        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
+        span = type_expr.span
+        alias = TypeAlias(name=fresh_name, type_expr=type_expr, span=span, node_id=start_id)
+        block = Block(items=(alias,), span=span, node_id=start_id + 1)
+        return Program(body=block, span=span, node_id=start_id + 2), fresh_name, start_id + 3
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
@@ -1659,18 +1672,11 @@ class ReplSession:
         visible declaration.
         """
         from agm.agl.repl.render import _render_value_or_cyclic_message
-        from agm.agl.repl.type_display import (
-            format_generic_type_def_for_repl,
-            format_type_for_repl,
-        )
         from agm.agl.semantics.values import Cell
-        from agm.agl.syntax.types import render_type_expr
 
         parts = tuple(name.split("::"))
         if not name or any(not part for part in parts):
             return None
-
-        scope_path, local_name = parts[:-1], parts[-1]
         resolved_reference = self._resolve_info_reference(name)
         ref = None if resolved_reference is None else resolved_reference.binding
         location = (
@@ -1679,7 +1685,7 @@ class ReplSession:
             else None
         )
         if ref is not None and ref.kind.value != "constructor_binding":
-            type_env = self._info_type_env(ref)
+            type_env = self._info_type_env(ref.module_id)
             signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
                 return "\n".join(
@@ -1709,34 +1715,10 @@ class ReplSession:
                 )
             )
 
-        alias = None if resolved_reference is None else resolved_reference.alias
-        if alias is not None:
-            params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
-            definition = f"type {name}{params} = {render_type_expr(alias.type_expr)}"
-            return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
-        type_path = (*scope_path, local_name)
-        type_name = "::".join(type_path)
-        typ = self._type_env.get_type(type_name)
-        if typ is not None:
-            definition = format_type_for_repl(typ, self._type_env.type_table)
-            display = _format_info_section("Type", definition, location)
-            return f"{name} is a {typ.kind} type.\n{display}"
-        generic = self._type_env.get_generic_type(type_name)
-        if generic is not None:
-            definition = format_generic_type_def_for_repl(name, generic, self._type_env.type_table)
-            return "\n".join(
-                (
-                    f"{name} is a generic {generic.kind} type.",
-                    _format_info_section("Type", definition, location),
-                )
-            )
-        library_generic = self._library_generic_type(local_name)
-        if library_generic is not None:
-            definition = format_generic_type_def_for_repl(
-                name, library_generic, self._type_env.type_table
-            )
-            display = _format_info_section("Type", definition)
-            return f"{name} is a generic {library_generic.kind} type.\n{display}"
+        if resolved_reference is not None:
+            described = self._describe_type_declaration(name, resolved_reference, location)
+            if described is not None:
+                return described
         if resolved_reference is None or resolved_reference.constructor is None:
             return None
         constructor_signature = self._constructor_signature(
@@ -1759,6 +1741,7 @@ class ReplSession:
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import VarRef
+        from agm.agl.syntax.types import NameT
 
         try:
             with spaced_qualifier_collector() as spaced_sink:
@@ -1770,10 +1753,11 @@ class ReplSession:
         if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
             return None
         reference = program.body.items[0]
+        spaced_qualifiers = tuple(spaced_sink)
         type_env = self._type_env
         try:
             resolved = self._entry_pipeline.resolve_program(
-                program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
+                program, next_node_id, spaced_qualifiers=spaced_qualifiers
             )
         except AglError:
             binding, constructor = self._canonical_library_identities(reference)
@@ -1789,10 +1773,27 @@ class ReplSession:
             # ``_InfoReference.type_env``) without risking a later entry's
             # colliding node ids reading them back.
             type_env = type_env.with_owner_declarations(entry.owner_declarations)
+        # The same name as a type: scope selects its declaration in the one
+        # type position a bare type entry probes too.
+        type_name = NameT(
+            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
+        )
+        type_program, _fresh_name, type_next_id = self._type_probe_program(type_name, next_node_id)
+        try:
+            type_resolved = self._entry_pipeline.resolve_program(
+                type_program, type_next_id, spaced_qualifiers=spaced_qualifiers
+            )
+        except AglError:
+            type_key = None
+        else:
+            type_entry = type_resolved.modules[type_resolved.entry_id].resolved
+            type_key = self._type_env.with_owner_declarations(
+                type_entry.owner_declarations
+            ).type_name_declaration(type_name)
         return _InfoReference(
             binding=binding,
             constructor=constructor,
-            alias=self._alias_declaration(reference),
+            type_key=type_key,
             reference=reference,
             type_env=type_env,
         )
@@ -1817,24 +1818,59 @@ class ReplSession:
         )
         return binding, candidates[0] if len(candidates) == 1 else None
 
-    def _alias_declaration(self, reference: "VarRef") -> "TypeAlias | None":
-        """Return the alias declaration REFERENCE names as a type, by identity.
+    def _describe_type_declaration(
+        self, name: str, reference: _InfoReference, location: str | None
+    ) -> str | None:
+        """Describe the type declaration NAME selects as a type, if it reads as one.
 
-        ``None`` when it names no alias, or several declarations at once.
+        An alias reads as its declaration wherever it is declared; a type this
+        session declares, and a generic type from anywhere, as its definition.
+        Any other selection -- an imported plain type, or a member reached
+        through an applied owner (an instantiated member, not its generic
+        declaration) -- reads as its value instead.
         """
-        from agm.agl.syntax.nodes import TypeAlias, static_type_items
-        from agm.agl.syntax.types import NameT
-        from agm.agl.typecheck import AglTypeError
-
-        type_name = NameT(
-            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
+        from agm.agl.repl.type_display import (
+            format_generic_type_def_for_repl,
+            format_type_for_repl,
         )
-        try:
-            key = self._type_env.type_name_declaration(type_name, span=reference.span)
-        except AglTypeError:
-            return None
+        from agm.agl.syntax.types import render_type_expr
+
+        key = reference.type_key
         if key is None:
             return None
+        alias = self._alias_declaration(key)
+        if alias is not None:
+            params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
+            definition = f"type {name}{params} = {render_type_expr(alias.type_expr)}"
+            return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
+        qualifier = reference.reference.qualifier
+        if qualifier is not None and any(
+            segment.type_args is not None for segment in qualifier.segments
+        ):
+            return None
+        module_id, scope_path, decl_name = key
+        type_env = self._info_type_env(module_id)
+        local_name = "::".join((*scope_path, decl_name))
+        typ = type_env.get_type(local_name) if module_id.is_entry else None
+        if typ is not None:
+            definition = format_type_for_repl(typ, self._type_env.type_table)
+            display = _format_info_section("Type", definition, location)
+            return f"{name} is a {typ.kind} type.\n{display}"
+        generic = type_env.get_generic_type(local_name)
+        if generic is None:
+            return None
+        definition = format_generic_type_def_for_repl(name, generic, self._type_env.type_table)
+        return "\n".join(
+            (
+                f"{name} is a generic {generic.kind} type.",
+                _format_info_section("Type", definition, location),
+            )
+        )
+
+    def _alias_declaration(self, key: "DeclarationKey") -> "TypeAlias | None":
+        """Return the alias declaration *key* identifies, if it is an alias."""
+        from agm.agl.syntax.nodes import TypeAlias, static_type_items
+
         module_id, scope_path, name = key
         if module_id.is_entry:
             owner = self._session_type_paths.get((*scope_path, name))
@@ -1851,19 +1887,10 @@ class ReplSession:
             None,
         )
 
-    def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
-        """Return the retained type environment that owns REF."""
-        checked = self._retained_checked_modules.get(ref.module_id)
+    def _info_type_env(self, module_id: "ModuleId") -> "TypeEnvironment":
+        """Return the retained type environment of *module_id*'s declarations."""
+        checked = self._retained_checked_modules.get(module_id)
         return self._type_env if checked is None else checked.type_env
-
-    def _library_generic_type(self, name: str) -> "GenericTypeDef | None":
-        """Return the sole retained generic type named *name*, if any."""
-        matches = [
-            generic
-            for checked in self._retained_checked_modules.values()
-            if (generic := checked.type_env.get_generic_type(name)) is not None
-        ]
-        return matches[0] if len(matches) == 1 else None
 
     def _constructor_signature(
         self, reference: _InfoReference, constructor: "ConstructorRef"

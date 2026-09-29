@@ -164,7 +164,7 @@ def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Pa
     """A same-path scope in replacement ``std/prelude`` cannot impersonate Session."""
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "prelude.agl").write_text(
-        "scope Session\n  builtin def default() -> Session\nend Session\n",
+        "scope Session\n  builtin def default() -> int\nend Session\n",
         encoding="utf-8",
     )
 

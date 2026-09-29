@@ -1086,13 +1086,15 @@ class ModuleResolution:
         For a REPL entry, the :class:`TypeOwner` each type it declares resolved
         to, keyed by type path; the session retains them for later entries.
     ``owner_declarations``
-        Maps a qualified type-owner chain's node id (the ``QualifierChain`` on
-        a ``NameT``/``AppliedT``/``ConstructorPattern``/``IsTest``) to the
-        declaration identity its full ``owner::member`` path selects, by
-        suffix resolution -- the same one verdict every position shares.
-        Typecheck reads the owner from here (peeling the trailing name off
-        when it names no separate owner) instead of re-resolving the
-        qualifier.
+        Maps a node id to the declaration identity scope selected for it -- the
+        same one verdict every position shares: a qualified chain's node id
+        (the ``QualifierChain`` on a ``NameT``/``AppliedT``/
+        ``ConstructorPattern``/``IsTest``) to what its full ``owner::member``
+        path selects, and a bare type name's node (``NameT``/``AppliedT``,
+        catch clause, ``exception ... extends`` declaration) to the type its
+        nearest-level lookup selects. Typecheck resolves every named type and
+        owner from here (peeling the trailing name off a chain when it names
+        no separate owner) instead of re-resolving the name.
     """
 
     program: Program

@@ -597,15 +597,15 @@ class TestTypeEnvironmentPrelude:
         assert fields["message"] == TextType()
         assert fields["limit"] == IntType()
 
-    def test_resolve_named_type_exec_result(self) -> None:
+    def test_exec_result_is_a_builtin_record(self) -> None:
         env = TypeEnvironment()
-        t = env.resolve_named_type("ExecResult")
+        t = env.get_type("ExecResult")
         assert isinstance(t, RecordType)
         assert t.name == "ExecResult"
 
-    def test_resolve_named_type_parse_policy(self) -> None:
+    def test_parse_policy_is_a_builtin_enum(self) -> None:
         env = TypeEnvironment()
-        t = env.resolve_named_type("ParsePolicy")
+        t = env.get_type("ParsePolicy")
         assert isinstance(t, EnumType)
         assert t.name == "ParsePolicy"
 

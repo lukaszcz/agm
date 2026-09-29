@@ -554,14 +554,13 @@ def _infer_function_component(
         receiver_owner = module.resolved.receiver_owner_for(module.module_id, node)
         checker._validate_funcdef_header(node, is_method=receiver_owner is not None)
         result = engine.fresh(f"{node.name} result")
-        with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
-            signature, function_type, receiver = resolve_function_header(
-                module.env,
-                node,
-                result_type=result,
-                param_zones=module.resolved.attributes.param_zones,
-                receiver_owner=receiver_owner,
-            )
+        signature, function_type, receiver = resolve_function_header(
+            module.env,
+            node,
+            result_type=result,
+            param_zones=module.resolved.attributes.param_zones,
+            receiver_owner=receiver_owner,
+        )
         register_method_header(module.env, node, signature, receiver, module.module_id)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
@@ -591,10 +590,7 @@ def _infer_function_component(
             checker._slot_constructor_refs.update(
                 session.slot_constructor_ref_snapshots[module.module_id]
             )
-            with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
-                candidate_type = checker.check_candidate_funcdef_body(
-                    node, body, signature, session
-                )
+            candidate_type = checker.check_candidate_funcdef_body(node, body, signature, session)
             try:
                 engine.unify(
                     result,

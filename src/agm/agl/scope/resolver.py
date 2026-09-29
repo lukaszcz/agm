@@ -3118,9 +3118,15 @@ class _Resolver:
         # lexical owner layer.
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
-                self._validate_qualifier_chains(node, node.type_params)
+                self._validate_type_decl(node)
         else:
-            self._validate_qualifier_chains(node, node.type_params)
+            self._validate_type_decl(node)
+
+    def _validate_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
+        """Validate *node*'s type names in the current layer, an exception's base included."""
+        self._validate_qualifier_chains(node, node.type_params)
+        if isinstance(node, ExceptionDef) and node.base is not None:
+            self._select_type_name(node.base, node.span, node.node_id)
 
     # ------------------------------------------------------------------
     # Binder handlers
@@ -3746,7 +3752,7 @@ class _Resolver:
             )
             if chain is None:
                 if isinstance(node, (NameT, AppliedT)) and node.name not in type_param_set:
-                    self._validate_bare_type_name(node, type_params)
+                    self._select_type_name(node.name, node.span, node.node_id)
                 return
             nonleading_segments = chain.segments[1:]
             if any(segment.anchored or "/" in segment.name for segment in nonleading_segments) or (
@@ -3763,38 +3769,55 @@ class _Resolver:
                     "as a qualifier route.",
                     span=chain.segments[0].span,
                 )
-            if isinstance(node, (NameT, AppliedT, VariantRef)) and chain.segments:
-                self._select_qualified(chain, chain.member)
+            if isinstance(node, (NameT, AppliedT, VariantRef)):
+                if chain.segments:
+                    self._select_qualified(chain, chain.member)
+                else:
+                    # A chain without segments is ``::member``: the anchored length-zero case.
+                    self._select_type_name(chain.member, chain.span, chain.node_id, anchor=chain)
 
         walk(root, validate)
 
-    def _validate_bare_type_name(self, node: NameT | AppliedT, type_params: Iterable[str]) -> None:
-        """Decide a bare (unqualified) type name's ambiguity, here in scope.
+    def _select_type_name(
+        self,
+        name: str,
+        span: SourceSpan,
+        node_id: int,
+        *,
+        anchor: QualifierChain | None = None,
+    ) -> None:
+        """Decide what type name *name*, spelled by node *node_id*, selects, and record it.
 
-        Uses the same layered type-name lookup typecheck resolves a single
-        surviving candidate through (``type_name_selection``), region-aware
-        (:meth:`_leading_site`) so a nearer ``use``-opened region stops a
-        farther same-spelled type from ever merging into the ambiguity check
-        below, exactly as the qualifier leading segment and a receiver's
-        owner agree it does; this module's own nearest declaration always
-        goes first, so a local declaration is never diluted by a same-spelled
-        import contribution either way. An ambiguous name -- more than one
-        equally ranked route contributing it -- raises the
-        :class:`AmbiguousQualificationError` here, identically in every
-        position and independent of REPL entry grouping, instead of
-        typecheck's own later, position-specific raise. A name with at most
-        one candidate is left to typecheck's resolution unchanged.
+        The length-zero case of :meth:`_select_qualified`, behind every bare
+        type name -- an annotation, alias target, type argument, applied
+        type, caught exception type and ``extends`` base -- and every
+        ``::Name`` one (*anchor*, read at this module's root alone). The one
+        leading lookup (:meth:`_leading_reading`) reads it: a scope region
+        at the nearest level names no type and stops the lookup, several
+        equally near types are ambiguous, and the one selected type's
+        identity is recorded in ``owner_declarations`` under *node_id*, so
+        typecheck reads it back instead of re-resolving the name. A bare name
+        no level reads records nothing: typecheck resolves only the
+        built-in fallback names from there. A ``::Name`` the root lacks
+        names no member there, exactly like the value ``::Name``.
         """
-        site = self._leading_site(self._scope.scope_path, type_params)
-        selected = type_name_selection(site, node)
-        if len(selected) > 1:
+        reading = self._leading_reading(self._named_scope_path(), name, rooted=anchor is not None)
+        if anchor is not None and (reading is None or reading.is_region):
+            raise self._own_root_miss(anchor, name, span, node_id)
+        if reading is None:
+            return
+        if reading.is_region:
+            raise AglScopeError(f"'{name}' names a scope region, not a type.", span=span)
+        if len(reading.types) > 1:
             raise AmbiguousQualificationError.for_origins(
                 (),
-                (node.name,),
-                (self._declaration_origin(qname) for qname in selected),
-                span=node.span,
+                (name,),
+                (self._declaration_origin(qname) for qname in reading.types),
+                span=span,
                 local_to=self._module_id,
             )
+        (qname,) = reading.types
+        self._owner_declarations[node_id] = self._qname_decl_key(qname)
 
     def _select_qualified(self, chain: QualifierChain, member: str) -> QualifiedTarget:
         """Decide what ``chain::member`` selects, in every position, and record its identity.
@@ -4750,11 +4773,10 @@ class _Resolver:
     ) -> LeadingReading | None:
         """Return leading *name*'s nearest reading as written at *scope_path*.
 
-        Shared by a bare type name, a qualifier chain's own leading segment
-        (both via :func:`type_name_selection`, seeded through
-        :meth:`_leading_site`), and a method receiver's owner
-        (:meth:`_leading_receiver_owner`), so the three agree on the same
-        nearest level. *rooted* mirrors a current-module (``::``) anchor: the
+        Shared by a bare type name (:meth:`_select_type_name`), a qualifier
+        chain's own leading segment (:meth:`_local_reading`), and a method
+        receiver's owner (:meth:`_leading_receiver_owner`), so the three agree
+        on the same nearest level. *rooted* mirrors a current-module (``::``) anchor: the
         module root alone, never a fall-back beyond it.
         """
         return leading_name_reading(self._leading_site(scope_path), name, rooted=rooted)
@@ -4955,9 +4977,8 @@ class _Resolver:
         return bool(self._visible_type_selection(spelling))
 
     def _visible_type_selection(self, spelling: NameT) -> frozenset[QName]:
-        """Return the declarations type name *spelling* selects at its use."""
-        site = self._type_owners.site(self._module_id, self._named_scope_path())
-        return type_name_selection(site, spelling)
+        """Return the declarations type name *spelling* selects at its use, by the one lookup."""
+        return type_name_selection(self._leading_site(self._named_scope_path()), spelling)
 
     def _spaced_qualifier_at(self, span: SourceSpan) -> SpacedQualifier | None:
         """Return the advisory for a self-qualified reference whose ``::`` is at *span*."""
@@ -5137,6 +5158,8 @@ class _Resolver:
             self._resolve_catch_clause(clause)
 
     def _resolve_catch_clause(self, clause: CatchClause) -> None:
+        if clause.exc_type is not None:
+            self._select_type_name(clause.exc_type, clause.span, clause.node_id)
         with self._child_scope(clause.node_id) as catch_scope:
             if clause.binding is not None:
                 self._check_not_reserved(clause.binding, clause.span)

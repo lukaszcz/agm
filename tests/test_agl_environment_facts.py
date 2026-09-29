@@ -113,8 +113,7 @@ def _record_register_type(env: TypeEnvironment) -> None:
 
 
 def _query_register_type(env: TypeEnvironment) -> object:
-    with env.type_scope(("Shapes",)):
-        resolved = env.resolve_named_type("Color")
+    resolved = env.get_type("Shapes::Color")
     # blocked_enum_variants() needs module routes only a program-context env has,
     # so it is trivially equal here; program-level parity covers it.
     return (resolved, env.enum_owner_forms())
@@ -125,7 +124,7 @@ def _record_register_generic_type(env: TypeEnvironment) -> None:
 
 
 def _query_register_generic_type(env: TypeEnvironment) -> object:
-    return (env.all_generic_types(), env.resolve_named_type("Widget"))
+    return (env.all_generic_types(), env.get_generic_type("Widget"))
 
 
 def _record_register_alias(env: TypeEnvironment) -> None:
@@ -133,12 +132,11 @@ def _record_register_alias(env: TypeEnvironment) -> None:
 
 
 def _query_register_alias(env: TypeEnvironment) -> object:
-    resolved = env.resolve_named_type("Alias")
+    registered = env.has_alias_registration("Alias", _ALIAS_TARGET, ())
     # ``declared_type_template`` assumes the caller already knows the type is
-    # declared; a never-mutated comparison environment has no "Alias" at all,
-    # which ``resolve_named_type`` reports back as ``None``.
-    template = env.declared_type_template(ENTRY_ID, "Alias") if resolved is not None else None
-    return (template, resolved)
+    # declared; a never-mutated comparison environment has no "Alias" at all.
+    template = env.declared_type_template(ENTRY_ID, "Alias") if registered else None
+    return (template, registered)
 
 
 def _setup_unregister_name(env: TypeEnvironment) -> None:
@@ -259,8 +257,7 @@ class TestFactScenarios:
         facts = source.own_facts()
 
         target = _prepared(scenario)
-        with target.type_scope(("Elsewhere",)):
-            target.replay(facts)
+        target.replay(facts)
 
         fresh = _prepared(scenario)
 

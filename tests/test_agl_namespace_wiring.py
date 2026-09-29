@@ -20,10 +20,8 @@ from agm.agl.scope.symbols import (
     UnknownQualifierError,
     UseDeclarationOrigin,
 )
-from agm.agl.semantics.types import RecordType
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import (
     base_caps,
     make_graph_from_files,
@@ -1362,96 +1360,6 @@ def test_regional_use_type_shadows_root_import_tail(
     )
 
     check_program(resolve_program(graph), base_caps())
-
-
-def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path: Path) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": ("import lib::*\nuse S::*\n\nscope S\n  record R\n    value: text\nend S\n"),
-            "lib": "record R\n  value: int\n",
-        },
-    )
-
-    checked = check_program(resolve_program(graph), base_caps())
-
-    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
-        checked.modules[graph.entry_id].type_env.resolve_named_type("R")
-
-
-def test_ambiguous_caught_exception_is_reported_as_ambiguous(tmp_path: Path) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
-                "let _ = try\n  ()\ncatch Boom as e =>\n  ()\n"
-            ),
-            "m/a": "exception Boom extends Exception\n",
-            "m/b": "exception Boom extends Exception\n",
-        },
-    )
-
-    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
-        check_program(resolve_program(graph), base_caps())
-
-    assert "m/a::Boom" in str(raised.value)
-    assert "m/b::Boom" in str(raised.value)
-    assert raised.value.span is not None
-
-
-def test_ambiguous_exception_base_is_reported_as_ambiguous(tmp_path: Path) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\nexception Local extends Boom\n()\n"
-            ),
-            "m/a": "exception Boom extends Exception\n",
-            "m/b": "exception Boom extends Exception\n",
-        },
-    )
-
-    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
-        check_program(resolve_program(graph), base_caps())
-
-    # The report names the contested base and both contributing routes, and
-    # points at the declaration that named it.
-    message = str(raised.value)
-    assert "Boom" in message
-    assert "m/a" in message
-    assert "m/b" in message
-    assert raised.value.span is not None
-    assert raised.value.span.start_line == 5
-
-
-def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Path) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": "import lib::*\nuse lib::*\n",
-            "lib": "record R\n  value: int\n",
-        },
-    )
-
-    checked = check_program(resolve_program(graph), base_caps())
-
-    resolved = checked.modules[graph.entry_id].type_env.resolve_named_type("R")
-    assert strip_decl_ids(resolved) == RecordType("R", module_id=ModuleId.from_path("lib"))
-
-    # Negative control: two routes to *different* origins are not deduplicated.
-    rival = make_graph_from_files(
-        tmp_path / "rival",
-        {
-            "entry": "import lib::*\nimport other::*\n",
-            "lib": "record R\n  value: int\n",
-            "other": "record R\n  value: int\n",
-        },
-        default_stdlib=False,
-    )
-    rival_checked = check_program(resolve_program(rival), base_caps())
-    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
-        rival_checked.modules[rival.entry_id].type_env.resolve_named_type("R")
 
 
 def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:

@@ -294,16 +294,14 @@ class _TypeBuilder:
         self.reconcile_inline_member_arities()
 
         for item in self._static_type_items(program.body.items):
-            path = tuple(segment.name for segment in item.scope_path)
-            with self._env.type_scope(path):
-                if isinstance(item, RecordDef):
-                    self._build_record(item)
-                elif isinstance(item, EnumDef):
-                    self._build_enum(item)
-                elif isinstance(item, ExceptionDef):
-                    self._build_exception(item)
-                else:
-                    self._validate_alias(item)
+            if isinstance(item, RecordDef):
+                self._build_record(item)
+            elif isinstance(item, EnumDef):
+                self._build_enum(item)
+            elif isinstance(item, ExceptionDef):
+                self._build_exception(item)
+            else:
+                self._validate_alias(item)
 
         self._finalize_exceptions()
         self._finalize_enums()
@@ -392,21 +390,18 @@ class _TypeBuilder:
         """
         for stmt in self._enum_defs.values():
             type_vars = frozenset(stmt.type_params)
-            path = tuple(segment.name for segment in stmt.scope_path)
-            with self._env.type_scope(path):
-                for member in stmt.members:
-                    if not isinstance(member, VariantDef):
-                        continue
-                    field_types = tuple(
-                        self._resolve_field_type(field, type_vars=type_vars)
-                        for field in member.fields
-                    )
-                    captured_params = tuple(
-                        param
-                        for param in stmt.type_params
-                        if any(param in free_type_vars(field_type) for field_type in field_types)
-                    )
-                    self._replace_inline_member_handle(stmt, member, captured_params)
+            for member in stmt.members:
+                if not isinstance(member, VariantDef):
+                    continue
+                field_types = tuple(
+                    self._resolve_field_type(field, type_vars=type_vars) for field in member.fields
+                )
+                captured_params = tuple(
+                    param
+                    for param in stmt.type_params
+                    if any(param in free_type_vars(field_type) for field_type in field_types)
+                )
+                self._replace_inline_member_handle(stmt, member, captured_params)
 
     def _clear_inline_member_names(self, enum: EnumDef) -> None:
         """Release member record names from a superseded enum declaration."""
@@ -570,10 +565,8 @@ class _TypeBuilder:
         if derived:
             return
         for alias in self._builtin_alias_defs.values():
-            path = tuple(segment.name for segment in alias.scope_path)
             if not alias.type_params:
-                with self._env.type_scope(path):
-                    target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
+                target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
                 if target == BUILTIN_ALIAS_TARGETS[_bare_name(alias.name)]:
                     continue
             raise AglTypeError(
@@ -847,7 +840,9 @@ class _TypeBuilder:
         if base_name is None and not stmt.is_builtin:
             base_type = self._env.type_table.exception_root()
         elif base_name is not None:
-            resolved_base = self._env.resolve_named_type(base_name, span=stmt.span)
+            resolved_base = self._env.resolve_selected_type_name(
+                stmt.node_id, base_name, span=stmt.span
+            )
             if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
                     f"Exception '{stmt.name}' extends unknown exception '{base_name}'.",

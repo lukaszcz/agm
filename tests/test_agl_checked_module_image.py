@@ -270,7 +270,7 @@ class TestRehydrationParity:
                         param.node_id
                     ) == cm.type_env.get_binding_type(param.node_id)
 
-    def test_named_type_and_template_queries_match(
+    def test_declared_type_template_queries_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
     ) -> None:
         for mid in _non_entry_module_ids(compiled):
@@ -278,11 +278,6 @@ class TestRehydrationParity:
             cm = compiled.checked.modules[mid]
             for item in static_type_items(cm.resolved.program.body.items):
                 scope_path = tuple(segment.name for segment in item.scope_path)
-                with rehydrated_module.type_env.type_scope(scope_path):
-                    re_named = rehydrated_module.type_env.resolve_named_type(item.name)
-                with cm.type_env.type_scope(scope_path):
-                    cm_named = cm.type_env.resolve_named_type(item.name)
-                assert re_named == cm_named
                 assert rehydrated_module.type_env.declared_type_template(
                     mid, item.name, scope_path=scope_path
                 ) == cm.type_env.declared_type_template(mid, item.name, scope_path=scope_path)

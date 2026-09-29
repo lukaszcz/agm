@@ -1681,12 +1681,7 @@ def _module_param_infos(
                     cli=cli,
                     doc=attributes.docs.get(item.node_id),
                     is_path=_annotates_path(
-                        checked,
-                        module_id,
-                        tuple(segment.name for segment in item.scope_path),
-                        item.type_ann,
-                        binding_type,
-                        alias_index,
+                        checked, module_id, item.type_ann, binding_type, alias_index
                     ),
                 )
             )
@@ -1709,7 +1704,6 @@ def _program_param_infos(
     """
     checked_module = checked.modules[module_id]
     signature = checked_module.type_env.function_signature_of(funcdef.node_id)
-    scope_path = tuple(segment.name for segment in funcdef.scope_path)
     return tuple(
         ProgramParamInfo(
             name=param_spec.name,
@@ -1719,7 +1713,7 @@ def _program_param_infos(
             span=ast_param.span,
             cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
             is_path=_annotates_path(
-                checked, module_id, scope_path, ast_param.type_expr, param_spec.type, aliases
+                checked, module_id, ast_param.type_expr, param_spec.type, aliases
             ),
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
@@ -1764,7 +1758,6 @@ class _TypeAliasIndex:
 def _annotates_path(
     checked: "CheckedProgram",
     module_id: "ModuleId",
-    scope_path: tuple[str, ...],
     type_expr: "TypeExpr | None",
     resolved: "Type",
     aliases: "_TypeAliasIndex",
@@ -1785,9 +1778,7 @@ def _annotates_path(
 
     if not isinstance(type_expr, (NameT, AppliedT)):
         return False
-    env = checked.modules[module_id].type_env
-    with env.type_scope(scope_path):
-        key = env.type_name_declaration(type_expr)
+    key = checked.modules[module_id].type_env.type_name_declaration(type_expr)
     if key is None:
         return isinstance(type_expr, NameT) and type_expr.name == PATH_TYPE_NAME
     decl_module, decl_path, decl_name = key
@@ -1796,15 +1787,13 @@ def _annotates_path(
         if alias.is_builtin:
             return alias.name == PATH_TYPE_NAME
         return not alias.type_params and _annotates_path(
-            checked, decl_module, decl_path, alias.type_expr, resolved, aliases
+            checked, decl_module, alias.type_expr, resolved, aliases
         )
     return (
         isinstance(type_expr, AppliedT)
         and (is_standard_option_enum(resolved) or is_standard_optional_enum(resolved))
         and len(type_expr.args) == len(resolved.type_args) == 1
-        and _annotates_path(
-            checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0], aliases
-        )
+        and _annotates_path(checked, module_id, type_expr.args[0], resolved.type_args[0], aliases)
     )
 
 

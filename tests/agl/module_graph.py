@@ -495,7 +495,7 @@ def check_resolved(
     """
     if capabilities is None:
         capabilities = _DEFAULT_CAPABILITIES
-    env = TypeEnvironment(scope_nodes=resolved.scope_nodes)
+    env = TypeEnvironment(owner_declarations=resolved.owner_declarations)
     if seed_env is not None:
         env.seed_from(seed_env)
     return _check_prepared_module(resolved, capabilities, env=env)

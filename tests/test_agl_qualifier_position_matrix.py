@@ -2,27 +2,39 @@
 
 Scope, not typecheck, decides which declaration a qualified type name
 selects and whether a qualifier selects none at all, identically across the
-value, pattern, ``is``, annotation, alias, type-argument and applied
+value, pattern, ``is``, cast, annotation, alias, type-argument and applied
 positions, and identically in file mode and the REPL (independent of how a
 REPL session groups its declarations into entries). ``assert_verdict_everywhere``
 (see :mod:`tests.agl.qualifier_support`) is the one assertion helper behind
 both this file's hand-written cases and (via ``_assert_matrix_verdict``) its
-own generated matrix; every accepted case's *identity* is asserted non-``None``,
-proof scope's resolution reached real, checked node types.
+own generated matrix; every accepted case's *identity* is asserted against
+its exact expected rendering (``_accepted_identity``), not merely non-``None``
+-- proof scope's resolution reached real, checked node types naming the
+declaration it actually picked, and (since ``assert_verdict_everywhere``
+compares them) that file mode and every REPL grouping agree on it exactly.
 
 ``_matrix_params`` (file mode) and ``_matrix_cases`` (REPL mode, feeding
-:func:`~tests.agl.qualifier_support.repl_matrix_verdicts`'s session-sharing)
-reuse one probe program per outcome across five owner spellings (a module
+:func:`~tests.agl.qualifier_support.repl_matrix_verdict_for_grouping`'s
+session-sharing) reuse one probe program per outcome across five owner
+spellings (a module
 route, a wildcard-imported bare name, a wildcard-imported generic owner
 applied to a type argument -- proving the owner is instantiated from
 scope's recorded key rather than re-resolved by name, with a member that
 mentions ``T`` so its accepted identity proves the substitution too -- a
-locally ``use``d scope region, and a module-level ``use`` alias) and six
-syntactic positions; the seventh position (an owner itself carrying type
+locally ``use``d scope region, and a module-level ``use`` alias) and seven
+syntactic positions; the eighth position (an owner itself carrying type
 arguments, ``Owner[T]::Member``) is exercised by the generic-owner
 spelling, whose member is *always* written applied. The ``pattern``
 position uses an as-pattern so its own accepted identity is the bound
-value's real type, not a literal's.
+value's real type, not a literal's. The ``is`` position's own accepted
+identity is always ``bool``, the only identity an ``is`` test itself can
+bear; ``cast`` probes the definitionally equivalent ``v as? {q}`` (``x is
+T`` holds exactly when ``x as? T`` is ``Some``) separately, since ``is``
+goes through scope's own is-test constructor-candidate path while ``as?``
+goes through the cast's type position -- different code that must still
+agree, so both are checked -- and its own accepted identity is ``Option``
+of the resolved declaration instead.
+
 ``TestLocalScopeShadowsSameNamedImport`` and
 ``TestImportedScopeRegionMemberIsAccepted`` cover the local-scope-vs-import
 case for a record owner (so ``is`` and applying type arguments, meaningless
@@ -79,7 +91,7 @@ from tests.agl.qualifier_support import (
     all_groupings,
     assert_verdict_everywhere,
     file_verdict,
-    repl_matrix_verdicts,
+    repl_matrix_verdict_for_grouping,
 )
 
 # ---------------------------------------------------------------------------
@@ -146,6 +158,7 @@ _POS: dict[str, str] = {
     "value": "{q}",
     "pattern": "case v of\n  | {q} as bound => bound\n  | _ => v",
     "is": "v is {q}",
+    "cast": "v as? {q}",
     "annot": "fn(x: {q}) => 1",
     "alias": "type CC = {q}\nfn(x: CC) => 1",
     "tyarg": "fn(x: array[{q}]) => 1",
@@ -157,7 +170,7 @@ _POS: dict[str, str] = {
 # internals): "other" is a real member of a structurally
 # distinct nominal type, so it is a genuine typecheck mismatch wherever the
 # position actually checks the referenced value/pattern against ``v``'s type
-# (pattern, ``is``) and otherwise just a legal type reference; "amb" is
+# (pattern, ``is``, ``cast``) and otherwise just a legal type reference; "amb" is
 # always scope's ambiguity verdict; "missing" is scope's selects-none
 # verdict everywhere: the same-level ambiguity of an owner's own spelling --
 # whether a bare unqualified name or a routed one (``route::Owner``) -- is
@@ -172,21 +185,92 @@ _AMBIGUOUS: tuple[FilePhase, type[BaseException] | type[None]] = (
 )
 _MISSING: tuple[FilePhase, type[BaseException] | type[None]] = ("scope", UnknownMemberError)
 
-_EXPECTED: dict[tuple[str, str, str], tuple[str, type[BaseException] | type[None]]] = {}
+# The canonical, fully qualified case type each (form, outcome) resolves to --
+# the base every accepted position's own identity derives from (see
+# ``_accepted_identity``). Spelled out directly (tests/CLAUDE.md: assert
+# behavior, not internals) rather than derived from ``_FORMS``, since which
+# real module or scope ends up owning each case is exactly what scope's own
+# resolution decides.
+_CASE_TYPE: dict[tuple[str, str], str] = {
+    ("route", "unique"): "one/types::Color::Green",
+    ("route", "other"): "two/types::Color::Blue",
+    ("bare", "unique"): "m::Color::Green",
+    ("bare", "other"): "n::Color::Blue",
+    ("applied", "unique"): "gm::Box::Full[int]",
+    ("applied", "other"): "gn::Box::Other",
+    ("localuse", "unique"): "a::E::Y",
+    ("localuse", "other"): "b::E::Z",
+    ("moduse", "unique"): "m::Color::Green",
+    ("moduse", "other"): "n::Color::Blue",
+}
+
+# ``value``'s own identity: a nullary case's bare reference is a value of the
+# case's own record type, but "applied"'s "unique" case (``Full``) carries a
+# payload, so its bare reference is the constructor function instead -- the
+# one case the ``record {case_type}`` template cannot derive uniformly.
+_VALUE_IDENTITY_OVERRIDE: dict[tuple[str, str], str] = {
+    ("applied", "unique"): "int -> gm::Box::Full[int]",
+}
+
+# ``pattern``'s own identity: the as-pattern's bound value is always the whole
+# matched *owner* enum (proof scope picked the right declaration among
+# same-named candidates), never the specific case alone -- only "unique" is
+# ever accepted at this position (see the ``_EXPECTED`` loop below).
+_ENUM_IDENTITY: dict[str, str] = {
+    "route": "enum one/types::Color\n  | Red\n  | Green",
+    "bare": "enum m::Color\n  | Red\n  | Green",
+    "applied": "enum gm::Box[int]\n  | Full(value: int)\n  | Both\n  | Empty",
+    "localuse": "enum a::E\n  | X\n  | Y",
+    "moduse": "enum m::Color\n  | Red\n  | Green",
+}
+
+
+def _accepted_identity(form_name: str, outcome: str, pos_name: str) -> str:
+    """The expected identity for one accepted ``(form, outcome, pos)`` matrix case.
+
+    ``annot``/``alias`` reference the case's own canonical type
+    (``_CASE_TYPE``) as a function parameter, ``tyarg`` wraps it in
+    ``array[...]``, and ``cast`` (``v as? {q}``) reports the ``Option`` it
+    casts to -- all four derive uniformly from the template. ``is`` is
+    always ``bool``, the only identity an ``is`` test itself can bear.
+    ``value`` and ``pattern`` are spelled out (``_VALUE_IDENTITY_OVERRIDE``/
+    ``_ENUM_IDENTITY``) since their own rendering depends on whether the case
+    carries a payload, or shows the whole owner enum, not just the template.
+    """
+    case_type = _CASE_TYPE[(form_name, outcome)]
+    if pos_name == "value":
+        return _VALUE_IDENTITY_OVERRIDE.get((form_name, outcome), f"record {case_type}")
+    if pos_name == "pattern":
+        return _ENUM_IDENTITY[form_name]
+    if pos_name == "is":
+        return "bool"
+    if pos_name == "cast":
+        return f"enum std/option::Option[{case_type}]\n  | None\n  | Some(value: {case_type})"
+    if pos_name == "tyarg":
+        return f"array[{case_type}] -> int"
+    return f"{case_type} -> int"  # annot, alias
+
+
+_ExpectedCase = tuple[str, type[BaseException] | type[None], str | None]
+
+_EXPECTED: dict[tuple[str, str, str], _ExpectedCase] = {}
 for _form in _FORMS:
     for _pos in _POS:
-        _EXPECTED[(_form, "unique", _pos)] = _ACCEPTED
+        _EXPECTED[(_form, "unique", _pos)] = (*_ACCEPTED, _accepted_identity(_form, "unique", _pos))
+        _other_accepted = _pos not in ("pattern", "is", "cast")
         _EXPECTED[(_form, "other", _pos)] = (
-            _OTHER_MISMATCH if _pos in ("pattern", "is") else _ACCEPTED
+            (*_ACCEPTED, _accepted_identity(_form, "other", _pos))
+            if _other_accepted
+            else (*_OTHER_MISMATCH, None)
         )
-        _EXPECTED[(_form, "amb", _pos)] = _AMBIGUOUS
-        _EXPECTED[(_form, "missing", _pos)] = _MISSING
-del _form, _pos
+        _EXPECTED[(_form, "amb", _pos)] = (*_AMBIGUOUS, None)
+        _EXPECTED[(_form, "missing", _pos)] = (*_MISSING, None)
+del _form, _pos, _other_accepted
 
 # The span of a raised error covers exactly the qualifier chain's own text
-# (``owner::member``), except an ``is``-test's mismatch error, whose span
-# covers the whole ``subject is owner::member`` expression.
-_IS_MISMATCH_SPAN_PREFIX = "v is "
+# (``owner::member``), except an ``is``/``cast`` mismatch error, whose span
+# covers the whole ``subject is/as? owner::member`` expression.
+_MISMATCH_SPAN_PREFIX: dict[str, str] = {"is": "v is ", "cast": "v as? "}
 
 
 def _matrix_case(
@@ -228,10 +312,16 @@ _LOCALUSE_HEADER_LEN = len(_FORMS["localuse"][1])
 # must share one entry; the fifth (the ``let``) is unconstrained. Legality is
 # over the header plus one merged final (tail + probe) entry, so the total
 # item count is the header's own length plus one.
-_LOCALUSE_HEADER_LEGAL = _prefix_required_legal_groupings(_LOCALUSE_HEADER_LEN, 4)
 _EXPECTED_LEGAL_GROUPINGS: dict[str, LegalGroupings] = {
     "localuse": _prefix_required_legal_groupings(_LOCALUSE_HEADER_LEN + 1, 4),
 }
+
+
+def _expected_legal_full_groupings(form_name: str) -> frozenset[tuple[int, ...]]:
+    """*form_name*'s own legal-grouping set, over its header plus one merged final entry."""
+    _, header, _, _ = _FORMS[form_name]
+    expected = _EXPECTED_LEGAL_GROUPINGS.get(form_name, "ALL")
+    return frozenset(all_groupings(len(header) + 1)) if expected == "ALL" else expected
 
 
 def _matrix_cases(form_name: str) -> list[tuple[str, str]]:
@@ -272,7 +362,7 @@ def _assert_matrix_verdict(
     identical case must have raised the same class (see :mod:`qualifier_support`).
     """
     phase, cls, span, identity = verdict
-    expected_phase, expected_cls = _EXPECTED[(form_name, outcome, pos_name)]
+    expected_phase, expected_cls, expected_identity = _EXPECTED[(form_name, outcome, pos_name)]
     if is_file:
         assert (phase, cls) == (expected_phase, expected_cls)
     else:
@@ -280,13 +370,15 @@ def _assert_matrix_verdict(
         assert cls == expected_cls
     if expected_phase == "accepted":
         # An accepted entry's echoed type is always the real, checked type of
-        # its final item -- proof scope's resolution actually reached typecheck
-        # and lowering-ready node types, not just "did not raise".
-        assert identity is not None
+        # its final item, matched exactly -- proof scope's resolution reached
+        # real, checked node types naming the declaration it actually picked,
+        # not just "did not raise".
+        assert identity == expected_identity
         return
     assert span is not None
     text = source[span.start_offset : span.end_offset]
-    expected_text = _IS_MISMATCH_SPAN_PREFIX + q if pos_name == "is" and outcome == "other" else q
+    prefix = _MISMATCH_SPAN_PREFIX.get(pos_name)
+    expected_text = prefix + q if prefix is not None and outcome == "other" else q
     assert text == expected_text
 
 
@@ -301,16 +393,31 @@ def test_qualifier_decision_matrix_file(
     _assert_matrix_verdict(src, verdict, form_name, outcome, pos_name, q, is_file=True)
 
 
-@pytest.mark.parametrize("form_name", sorted(_FORMS))
-def test_qualifier_decision_matrix_repl(tmp_path: Path, form_name: str) -> None:
-    """The file-mode verdict above holds identically across every REPL grouping.
+def _matrix_repl_params() -> list[object]:
+    return [
+        pytest.param(form_name, sizes, id=f"{form_name}-{'.'.join(map(str, sizes))}")
+        for form_name in sorted(_FORMS)
+        for sizes in all_groupings(len(_FORMS[form_name][1]) + 1)
+    ]
 
-    Shares one REPL session per way of grouping this form's own header across
-    every outcome/position probe (see
-    :func:`~tests.agl.qualifier_support.repl_matrix_verdicts`): a
-    ``check_only`` probe never promotes session state, so this is a pure
-    reparametrization of trying every grouping for every probe separately,
-    never a narrower check.
+
+@pytest.mark.parametrize(("form_name", "sizes"), _matrix_repl_params())
+def test_qualifier_decision_matrix_repl(
+    tmp_path: Path, form_name: str, sizes: tuple[int, ...]
+) -> None:
+    """*sizes*'s own legality matches its expected set; a legal grouping also matches file mode.
+
+    One REPL session, opened once against this test's own directory,
+    replays *sizes*'s own setup prefix (``sizes[:-1]``, grouping this form's
+    header) and asserts that succeeding is exactly equivalent to *sizes*
+    being one of ``_expected_legal_full_groupings(form_name)``'s own
+    members (see :func:`~tests.agl.qualifier_support.repl_matrix_verdict_for_grouping`)
+    -- covering every candidate grouping, legal or not, with no separate
+    legality-only pass. Only when legal does the same session go on to
+    answer every outcome/position probe as its own final entry, checked
+    against the file-mode verdict exactly as before; a ``check_only`` probe
+    never promotes session state, so this is a pure reparametrization of
+    trying every probe against this one grouping separately.
     """
     modules, header, own, outcomes = _FORMS[form_name]
     cases = _matrix_cases(form_name)
@@ -318,30 +425,28 @@ def test_qualifier_decision_matrix_repl(tmp_path: Path, form_name: str) -> None:
         (outcome, pos_name): _POS[pos_name].format(q=f"{own}::{outcomes[outcome]}")
         for outcome, pos_name in cases
     }
-    expected_legal = _EXPECTED_LEGAL_GROUPINGS.get(form_name, "ALL")
-    # Every grouping of a form's own header-plus-probe items builds its own
-    # session (up to 32, for "moduse"'s 5-item header, across 24 probes): the
-    # matrix's forms never reference stdlib names, and loading stdlib into
-    # each of that many sessions pushes this test's own CPU cost well past
-    # the per-test budget, so this one call keeps the pre-existing
-    # stdlib=False rather than the default.
-    verdicts = repl_matrix_verdicts(
-        tmp_path,
-        modules,
-        tuple(header),
-        probes,
-        stdlib=False,
-        expected_legal_groupings=expected_legal,
+    is_legal, verdicts = repl_matrix_verdict_for_grouping(
+        tmp_path, modules, tuple(header), sizes, probes
     )
+    assert is_legal == (sizes in _expected_legal_full_groupings(form_name))
+    if not is_legal:
+        return
+    tail = header[sum(sizes[:-1]) :]
     for outcome, pos_name in cases:
         q = f"{own}::{outcomes[outcome]}"
-        # The combined verdict's span is always relative to the probe's own
-        # text alone: `repl_matrix_verdicts` always returns the grouping
-        # whose final entry is the probe by itself (the header fully
-        # consumed by prior entries), never one merged with header text.
-        probe = probes[(outcome, pos_name)]
+        # A grouping's own final entry is the header's own unconsumed tail
+        # plus the probe, joined exactly as `repl_matrix_verdict_for_grouping`
+        # joined it -- the returned span is relative to that whole text, not
+        # the probe alone, whenever the tail is non-empty.
+        final_text = "\n".join((*tail, probes[(outcome, pos_name)]))
         _assert_matrix_verdict(
-            probe, verdicts[(outcome, pos_name)], form_name, outcome, pos_name, q, is_file=False
+            final_text,
+            verdicts[(outcome, pos_name)],
+            form_name,
+            outcome,
+            pos_name,
+            q,
+            is_file=False,
         )
 
 
@@ -640,9 +745,8 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
         )
         local = "scope Geo\n  record Point\n    y: int\n  enum Shape\n    | Tri\nend Geo"
         entry = "fn(p: Geo::Shape) => 1"
-        src = "\n".join(["import shapes::*", local, entry])
-        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": lib})
-        assert phase == "accepted"
+        decls = ("import shapes::*", local, entry)
+        assert_verdict_everywhere(tmp_path, {"shapes": lib}, decls, _ACCEPTED)
 
 
 # ---------------------------------------------------------------------------
@@ -658,16 +762,20 @@ def test_nested_generic_alias_owner_is_instantiated_by_substitution(tmp_path: Pa
     ``Rows[int]::Filled`` instantiates to ``Slot::Filled[array[int]]``, not
     ``Slot::Filled[int]``.
     """
-    src = "\n".join(
-        [
-            "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
-            "type Rows[A] = Slot[array[A]]",
-            "let row: Slot[array[int]] = Slot::Filled(value = [1, 2])",
-            "case row of\n  | Rows[int]::Filled(value) => value.size() + 1\n  | Slot::Empty => 0",
-        ]
+    decls = (
+        "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
+        "type Rows[A] = Slot[array[A]]",
+        "let row: Slot[array[int]] = Slot::Filled(value = [1, 2])",
+        "case row of\n  | Rows[int]::Filled(value) => value.size() + 1\n  | Slot::Empty => 0",
     )
-    phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src})
-    assert phase == "accepted"
+    # The case expression's own arms both return ``int``, so the substitution
+    # proof is behavioral, not visible in this identity directly: had
+    # ``Rows[int]::Filled`` instantiated to ``Slot::Filled[int]`` instead, the
+    # pattern's own bound ``value`` would be ``int``, and ``.size()`` (an
+    # array-only method) would fail to typecheck rather than silently
+    # accepting -- so acceptance itself is the proof; the identity is
+    # asserted exactly anyway, per this module's own no-discard rule.
+    assert_verdict_everywhere(tmp_path, {}, decls, _ACCEPTED, expected_identity="int")
 
 
 # ---------------------------------------------------------------------------
@@ -1096,11 +1204,10 @@ class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
     """
 
     @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN2_POS))
-    def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
+    def test_length_two(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_CHAIN_LEN2_POS[pos_name]
-        src = "\n".join([_CHAIN_LIB, entry])
-        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src})
-        assert phase == "accepted"
+        decls = (_CHAIN_LIB, entry)
+        assert_verdict_everywhere(tmp_path, {}, decls, _ACCEPTED)
 
     @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN3_POS))
     def test_length_three(self, tmp_path: Path, pos_name: str) -> None:

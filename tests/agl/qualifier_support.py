@@ -8,8 +8,9 @@ identity)``:
     ``"scope"``/``"typecheck"``/``"matchcompile"``/``"accepted"``, classified
     by which real pipeline call raised -- never by the raised exception's
     class alone, since more than one phase can raise the same class. REPL
-    mode (:func:`repl_verdict_all_groupings`, :func:`repl_matrix_verdicts`)
-    has no phase-by-phase call of its own -- :class:`~agm.agl.repl.entry.EntryResult`
+    mode (:func:`repl_verdict_all_groupings`,
+    :func:`repl_matrix_verdict_for_grouping`) has no phase-by-phase call of
+    its own -- :class:`~agm.agl.repl.entry.EntryResult`
     carries one ``check_only`` outcome -- so its own phase is only
     ``"accepted"``/``"rejected"``; a REPL verdict's *class* and *span* are
     asserted to match a fresh file-mode verdict for the identical case
@@ -35,17 +36,24 @@ grouping must reach the identical verdict, and the exact set of legal
 groupings must equal *expected_legal_groupings* -- ``"ALL"`` when every
 grouping tried is legal, otherwise the literal set.
 
-:func:`repl_matrix_verdicts` answers many probes (for example every
-outcome/position combination for one qualifier form) over the same *header*
-declarations at once: since a ``check_only`` probe never promotes state, one
-session per way of grouping *header*'s own leading items checks every probe
-as its own final entry, instead of rebuilding a session per probe -- a pure
-reparametrization of calling :func:`repl_verdict_all_groupings` once per
-probe, trying the identical set of (probe, grouping) combinations.
+:func:`repl_matrix_verdict_for_grouping` answers many probes (for example
+every outcome/position combination for one qualifier form) over the same
+*header* declarations at once, for one caller-chosen full grouping (over
+``len(header) + 1`` items, the ``+ 1`` standing in for whichever probe
+follows): its own last item is never built from *header* alone, so whether
+the grouping's leading entries (``sizes[:-1]``) even set up successfully
+*is* that grouping's own legality, decided in the very same session that
+then answers every probe -- reusing :func:`legal_groupings`'s
+one-session-per-candidate mechanism with a single candidate, so a caller
+checking many candidate groupings (legal and illegal alike) never replays
+one grouping's setup twice to get both its legality and its probe
+verdicts.
 
 :func:`assert_verdict_everywhere` is the one assertion helper: it computes
 the file verdict, asserts it against an expected ``(phase, cls)``, then
-asserts every REPL grouping's own verdict agrees.
+asserts every REPL grouping's own verdict agrees -- including, when
+accepted, that file mode's and every REPL grouping's own *identity* are
+equal (and, when the caller supplies one, equal to an expected literal too).
 
 :func:`all_groupings`, :func:`eval_setup_entries`, :func:`eval_grouped_final`
 and :func:`legal_groupings` are the general-purpose entry-grouping helpers
@@ -254,14 +262,12 @@ def _verdict_over_groupings(
     canonical: tuple[type[BaseException] | type[None], str | None, str | None] | None = None
     combined: ReplVerdict | None = None
     verdicts: dict[tuple[int, ...], tuple[ReplVerdict, str]] = {}
-    counter = 0
+    # One shared directory: every session's bootstrap cache key includes its roots.
+    session_dir = tmp_path / "repl"
+    session_dir.mkdir()
+    _write_modules(session_dir, modules)
 
     def make_session() -> ReplSession:
-        nonlocal counter
-        session_dir = tmp_path / str(counter)
-        counter += 1
-        session_dir.mkdir()
-        _write_modules(session_dir, modules)
         session = ReplSession(cwd=session_dir, default_stdlib=stdlib)
         session.open()
         return session
@@ -323,78 +329,48 @@ def repl_verdict_all_groupings(
     )
 
 
-def repl_matrix_verdicts(
+def repl_matrix_verdict_for_grouping(
     tmp_path: Path,
     modules: dict[str, str],
     header: tuple[str, ...],
+    sizes: tuple[int, ...],
     probes: Mapping[K, str],
     *,
     stdlib: bool = True,
-    expected_legal_groupings: LegalGroupings = "ALL",
-) -> dict[K, ReplVerdict]:
-    """Evaluate every *probes* value as its own entry after *header*, over every REPL grouping.
+) -> tuple[bool, dict[K, ReplVerdict]]:
+    """Decide *sizes*'s own legality and, when legal, every *probes* verdict, in one session.
 
-    A pure reparametrization of calling :func:`repl_verdict_all_groupings`
-    once per probe on ``(*header, probe)``: enumerating every grouping of
-    ``len(header) + 1`` items bijects with choosing how many of *header*'s
-    own leading items (``m``) are grouped ahead of a merged final entry
-    (*header*'s own remaining tail plus one probe), then a grouping of just
-    those ``m`` items. Since a ``check_only`` entry never promotes state,
-    the session built for one such ``(m, prefix grouping)`` pair answers
-    every probe's own final entry without being rebuilt -- every (probe,
-    grouping) combination is still tried, at the identical verdict, only
-    the session that answers it is shared across probes.
-
-    Returns, for each key in *probes*, the verdict from whichever grouping
-    fully consumes *header* ahead of its own probe (so the probe is always
-    that grouping's own final, standalone entry -- the returned span, when
-    rejected, is always relative to the probe's own text alone), after
-    asserting every other legal grouping reaches the identical verdict for
-    that probe, and that the exact set of legal groupings (over
-    ``len(header) + 1`` items, as for :func:`repl_verdict_all_groupings`)
-    equals *expected_legal_groupings*.
+    *sizes* is a full grouping over ``len(header) + 1`` items (the ``+ 1``
+    standing in for whichever probe follows): ``sizes[:-1]`` groups
+    *header*'s own leading items into that many setup entries, and whether
+    they all succeed *is* this grouping's own legality -- decided in the
+    same session that then, only when legal, answers every *probes* value
+    as its own ``check_only`` final entry against *header*'s own
+    unconsumed tail (never promoting state). Reuses
+    :func:`legal_groupings`'s one-session-per-candidate mechanism with a
+    single candidate, so a caller trying many candidate groupings (legal
+    and illegal alike) never replays one grouping's own setup twice to get
+    both its legality and its probe verdicts. Returns ``(False, {})`` when
+    illegal.
     """
-    canonical: dict[K, tuple[type[BaseException] | type[None], str | None, str | None]] = {}
-    combined: dict[K, ReplVerdict] = {}
-    legal: set[tuple[int, ...]] = set()
-    counter = 0
+    _write_modules(tmp_path, modules)
+    verdicts: dict[K, ReplVerdict] = {}
 
-    for m in range(len(header) + 1):
-        tail = header[m:]
-        for prefix_sizes in all_groupings(m):
-            session_dir = tmp_path / str(counter)
-            counter += 1
-            session_dir.mkdir()
-            _write_modules(session_dir, modules)
-            session = ReplSession(cwd=session_dir, default_stdlib=stdlib)
-            session.open()
-            if not eval_setup_entries(session, header[:m], prefix_sizes):
-                continue
-            sizes = (*prefix_sizes, len(tail) + 1)
-            legal.add(sizes)
-            for key, probe in probes.items():
-                final_text = "\n".join((*tail, probe))
-                verdict = _check_only_verdict(session, final_text)
-                _phase, cls, span, identity = verdict
-                sliced = (
-                    final_text[span.start_offset : span.end_offset] if span is not None else None
-                )
-                current = (cls, sliced, identity)
-                if key not in canonical:
-                    canonical[key] = current
-                else:
-                    assert current == canonical[key], (key, sizes, current, canonical[key])
-                if m == len(header):
-                    combined[key] = verdict
+    def make_session() -> ReplSession:
+        session = ReplSession(cwd=tmp_path, default_stdlib=stdlib)
+        session.open()
+        return session
 
-    expected = (
-        frozenset(all_groupings(len(header) + 1))
-        if expected_legal_groupings == "ALL"
-        else expected_legal_groupings
-    )
-    assert legal == expected, (legal, expected)
-    assert set(combined) == set(probes), (set(combined), set(probes))
-    return combined
+    def is_legal(session: ReplSession, s: tuple[int, ...]) -> bool:
+        if not eval_setup_entries(session, header, s[:-1]):
+            return False
+        tail = header[sum(s[:-1]) :]
+        for key, probe in probes.items():
+            verdicts[key] = _check_only_verdict(session, "\n".join((*tail, probe)))
+        return True
+
+    legal = legal_groupings((sizes,), make_session, is_legal)
+    return sizes in legal, verdicts
 
 
 def assert_verdict_everywhere(
@@ -404,6 +380,7 @@ def assert_verdict_everywhere(
     expected: tuple[FilePhase, type[BaseException] | type[None]],
     *,
     span_text: str | None = None,
+    expected_identity: str | None = None,
     stdlib: bool = True,
     expected_legal_groupings: LegalGroupings = "ALL",
 ) -> None:
@@ -412,9 +389,12 @@ def assert_verdict_everywhere(
     *expected* is a file-mode ``(phase, cls)`` pair; REPL's own phase is
     normalized to ``"accepted"``/``"rejected"`` before comparison (see
     module docstring). When ``expected[0] == "accepted"``, *span_text* must
-    be ``None`` and both modes' own *identity* must be set instead;
-    otherwise *span_text* is the exact text the raised error's span must
-    slice out of *decls*, joined by newline, in both modes.
+    be ``None`` and both modes' own *identity* must be set and equal to each
+    other -- proof file mode and every REPL grouping resolve to the identical
+    declaration, not merely that neither raised -- and, when *expected_identity*
+    is given, equal to it too; otherwise *span_text* is the exact text the
+    raised error's span must slice out of *decls*, joined by newline, in both
+    modes.
     """
     src = "\n".join(decls)
     expected_phase, expected_cls = expected
@@ -434,7 +414,9 @@ def assert_verdict_everywhere(
     if expected_phase == "accepted":
         assert span_text is None
         assert file_identity is not None
-        assert repl_identity is not None
+        assert file_identity == repl_identity
+        if expected_identity is not None:
+            assert file_identity == expected_identity
         return
     assert span_text is not None
     assert file_span is not None

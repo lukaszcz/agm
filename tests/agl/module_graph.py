@@ -290,6 +290,30 @@ def resolve_entry(
     return _without_synthetic_import(resolved, import_node_id)
 
 
+def build_inline_entry_graph(
+    source: str,
+    *,
+    origin_path: Path | None = None,
+    default_stdlib: bool = True,
+) -> tuple[ModuleGraph, int | None]:
+    """Parse test-only inline source and build its real graph, with the ``agm exec -c`` transform.
+
+    Shared by :func:`resolve_inline_entry` and
+    :func:`resolve_and_check_inline_entry`, and by a caller that wants the
+    graph itself (for :func:`~tests.agl.qualifier_support.graph_verdict`,
+    which classifies by phase without needing this module's own item-view
+    stripping).
+    """
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    return build_module_graph_from_program(
+        parsed.program,
+        next_node_id=parsed.next_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
+    )
+
+
 def resolve_inline_entry(
     source: str,
     *,
@@ -304,13 +328,8 @@ def resolve_inline_entry(
     admit executable root statements, while static-root tests must retain the
     file source unchanged.
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
-    graph, import_node_id = build_module_graph_from_program(
-        parsed.program,
-        next_node_id=parsed.next_id,
-        origin_path=origin_path,
-        default_stdlib=default_stdlib,
-        spaced_qualifiers=parsed.spaced_qualifiers,
+    graph, import_node_id = build_inline_entry_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
         graph,
@@ -385,13 +404,8 @@ def resolve_and_check_inline_entry(
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check test-only inline source with the ``agm exec -c`` transform."""
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
-    graph, import_node_id = build_module_graph_from_program(
-        parsed.program,
-        next_node_id=parsed.next_id,
-        origin_path=origin_path,
-        default_stdlib=default_stdlib,
-        spaced_qualifiers=parsed.spaced_qualifiers,
+    graph, import_node_id = build_inline_entry_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
         graph,

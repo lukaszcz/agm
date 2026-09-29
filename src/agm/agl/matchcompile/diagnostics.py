@@ -6,6 +6,7 @@ import decimal
 from dataclasses import dataclass
 from typing import TypeAlias, cast
 
+from agm.agl.diagnostics import AglError
 from agm.agl.scope.imports import render_qualifier
 from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.syntax.spans import SourceSpan
@@ -139,6 +140,14 @@ class RedundantArmIssue:
 MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
 
 
+class NonExhaustiveMatchError(AglError):
+    """Static error for a :class:`NonExhaustiveIssue`: one case has a reachable failure path."""
+
+
+class RedundantArmError(AglError):
+    """Static error for a :class:`RedundantArmIssue`: one arm is unreachable."""
+
+
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
     if kind is LiteralKind.TEXT:
         return quote_text(cast(str, value))
@@ -181,6 +190,21 @@ def render_witness(witness: MatchWitness) -> str:
     return f"a {domain} value other than {excluded}"
 
 
+def match_issue_error(issue: MatchIssue) -> AglError:
+    """Build the one real static error a compiled match issue is reported as.
+
+    The sole synthesis of a match issue's user-facing message and span, so
+    every consumer (a raised failure, or a rendered ``Diagnostic`` via
+    :func:`~agm.agl.matchcompile.stage.diagnostic_from_match_issue`) derives
+    from this.
+    """
+    if isinstance(issue, NonExhaustiveIssue):
+        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
+        return NonExhaustiveMatchError(message, span=issue.span)
+    message = "Redundant case arm; this pattern can never be selected."
+    return RedundantArmError(message, span=issue.span)
+
+
 def issue_sort_key(issue: MatchIssue) -> tuple[str, int, int, int, int, int, int]:
     """Return the deterministic cross-source ordering key used by the stage adapter."""
     if isinstance(issue, NonExhaustiveIssue):
@@ -209,12 +233,15 @@ __all__ = [
     "MatchIssue",
     "MatchWitness",
     "NonExhaustiveIssue",
+    "NonExhaustiveMatchError",
     "OpenComplementWitness",
     "RedundantArmIssue",
+    "RedundantArmError",
     "RecordWitness",
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",
+    "match_issue_error",
     "qualified_owner_name",
     "render_witness",
 ]

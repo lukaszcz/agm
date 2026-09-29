@@ -71,11 +71,13 @@ class EntryResult:
         during evaluation; ``None`` otherwise.
     ``failure``
         The static (pre-execution) ``AglError`` that produced ``diagnostics``
-        (parse, scope, typecheck, match-compile, contract), for a
+        (parse, scope, typecheck, match-compile, lowering), for a
         programmatic caller that wants the structured error and its span
-        rather than rendered text; ``None`` on success and for a runtime
-        failure (``error``) or a diagnostic with no single originating
-        exception. The REPL renderer keeps using ``diagnostics``.
+        rather than rendered text; ``None`` on success, for a runtime failure
+        (``error``), and for a diagnostic with no single originating
+        ``AglError`` (a lowering ``ResourceError``, a param/environment/
+        extern diagnostic, or a contract materialization error). The REPL
+        renderer keeps using ``diagnostics``.
     ``ok``
         ``True`` iff there are no error diagnostics AND no runtime error.
     ``trace_path``

@@ -1640,10 +1640,10 @@ class TestScopedImportBareNarrowing:
     ) -> None:
         """A same-named top-level exception keeps its bare name; the variant is skipped.
 
-        Regression: expanding a bare-exposed enum into its variants must
-        check the *plain* atom a standalone exception would occupy, not the
-        variant's own owner-path-qualified key, or a same-named exception
-        and enum variant both contributed bare produce a spurious clash.
+        Expanding a bare-exposed enum into its variants checks the *plain*
+        atom a standalone exception would occupy, not the variant's own
+        owner-path-qualified key, so a same-named exception and enum
+        variant both contributed bare do not clash.
         """
         graph = _make_graph_from_files(
             tmp_path,

@@ -177,7 +177,7 @@ class EntryPipeline:
                 spaced_qualifiers=spaced_qualifiers,
             )
         except AglError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings, failure=exc)
+            return self._ctx._fail_static(exc, tab_warnings)
 
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
@@ -197,6 +197,7 @@ class EntryPipeline:
             cached_module_sites,
             compile_program_matches,
             diagnostics_from_match_issues,
+            match_issue_error,
         )
 
         match_result = compile_program_matches(
@@ -205,13 +206,13 @@ class EntryPipeline:
         if match_result.compiled is None:
             # Match compilation reports structured issues, not a raised
             # ``AglError``; the first (already deterministically ordered)
-            # issue's own message and span stand in for the entry's failure.
+            # issue's own real static error stands in for the entry's
+            # failure, while every issue is still reported as a diagnostic.
             match_diagnostics = list(diagnostics_from_match_issues(match_result.issues))
-            first_issue = match_result.issues[0]
             return self._ctx._fail(
                 match_diagnostics,
                 warnings,
-                failure=AglError(match_diagnostics[0].message, span=first_issue.span),
+                failure=match_issue_error(match_result.issues[0]),
             )
         compiled = match_result.compiled
         # Retained for the next entry: its library modules are the same checked
@@ -229,12 +230,11 @@ class EntryPipeline:
             host_env.codecs,
         )
         if contract_errors:
-            # As the match-compile site above: contract materialization
-            # reports plain diagnostics (no source span), not a raised
-            # ``AglError``.
-            return self._ctx._fail(
-                contract_errors, warnings, failure=AglError(contract_errors[0].message)
-            )
+            # Contract materialization reports plain diagnostics with no
+            # source span and no originating static error at all: unlike
+            # match compilation, there is no real ``AglError`` to stand in
+            # for ``failure``, which stays ``None``.
+            return self._ctx._fail(contract_errors, warnings)
 
         return self._evaluate_ir_program(
             text=text,
@@ -575,18 +575,19 @@ class EntryPipeline:
                     source_text=text,
                     contract_payloads=contract_payloads,
                 )
-        except (NestingTooDeepError, ResourceError) as exc:
+        except NestingTooDeepError as exc:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail_static(exc, warnings)
+        except ResourceError as exc:
+            # A plain lowering-time ``ValueError``, not a static ``AglError``:
+            # no ``failure`` to report.
             self._ctx._link_image.restore_state(link_snapshot)
             diagnostic = (
                 diagnostic_from_span(str(exc), exc.span)
                 if exc.span is not None
                 else Diagnostic(message=str(exc), line=1)
             )
-            # Only ``NestingTooDeepError`` is a static ``AglError``;
-            # ``ResourceError`` is a plain lowering-time ``ValueError``.
-            return self._ctx._fail(
-                [diagnostic], warnings, failure=exc if isinstance(exc, AglError) else None
-            )
+            return self._ctx._fail([diagnostic], warnings)
         host_contracts = materialize_ir_contracts(lowered.program, host_env.codecs)
         from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 

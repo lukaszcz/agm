@@ -25,7 +25,10 @@ from agm.agl.diagnostics import (
     type_name_not_a_value,
 )
 from agm.agl.ir.static_keys import StaticBindingKey
+from agm.agl.matchcompile import NonExhaustiveMatchError
 from agm.agl.modules.ids import ModuleId
+from agm.agl.parser import AglSyntaxError
+from agm.agl.recursion import NestingTooDeepError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
@@ -72,7 +75,12 @@ from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
-from tests.agl.qualifier_support import all_groupings, eval_grouped_final, eval_setup_entries
+from tests.agl.qualifier_support import (
+    all_groupings,
+    eval_grouped_final,
+    eval_setup_entries,
+    legal_groupings,
+)
 
 # ---------------------------------------------------------------------------
 # Session construction
@@ -1395,32 +1403,6 @@ def _setup_groupings(expected: frozenset[tuple[int, ...]]) -> list[object]:
     that no test collects a session or writes a file before it even runs.
     """
     return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in sorted(expected)]
-
-
-def _grouping_legality(
-    decls: tuple[str, ...],
-    make_session: Callable[[], ReplSession] = ReplSession,
-    probe: str | None = None,
-) -> frozenset[tuple[int, ...]]:
-    """Every grouping of *decls* into REPL entries whose entries all set up.
-
-    Trying each grouping against a fresh session and keeping only the ones
-    every entry accepts is more robust than hand-enumerating the legal
-    splits. *decls* must hold only setup declarations; an assertion the
-    caller cares about goes in *probe* instead, checked (but not used to
-    build further entries) after each grouping sets up -- conflating the two
-    would let a setup-unrelated *probe* failure silently drop a grouping
-    that is otherwise perfectly legal.
-    """
-    valid: list[tuple[int, ...]] = []
-    for sizes in all_groupings(len(decls)):
-        session = make_session()
-        ok = eval_setup_entries(session, decls, sizes)
-        if ok and probe is not None:
-            ok = session.eval_entry(probe).ok
-        if ok:
-            valid.append(sizes)
-    return frozenset(valid)
 
 
 def _color_and_n_session(tmp_path: Path) -> ReplSession:
@@ -3026,13 +3008,20 @@ def test_declaration_groupings_are_exactly_their_expected_legal_set(
 ) -> None:
     """Every ``_setup_groupings`` call site's expected set matches a fresh
     determination of its declaration sequence's actual legal groupings
-    (:func:`_grouping_legality`), so a stale hand-picked set -- one that
-    silently drops or over-admits a grouping -- fails loudly here instead of
-    only ever showing up as a missing parametrization elsewhere."""
+    (:func:`~tests.agl.qualifier_support.legal_groupings`), so a stale
+    hand-picked set -- one that silently drops or over-admits a grouping --
+    fails loudly here instead of only ever showing up as a missing
+    parametrization elsewhere."""
     session_factory = (
         (lambda: _color_and_n_session(tmp_path)) if make_session is None else make_session
     )
-    assert _grouping_legality(decls, session_factory, probe) == expected
+
+    def is_legal(session: ReplSession, sizes: tuple[int, ...]) -> bool:
+        if not eval_setup_entries(session, decls, sizes):
+            return False
+        return probe is None or session.eval_entry(probe).ok
+
+    assert legal_groupings(all_groupings(len(decls)), session_factory, is_legal) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -7218,6 +7207,7 @@ class TestContractError:
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
         assert any("bad contract" in d.message for d in r.diagnostics)
+        assert r.failure is None
         # Atomic: nothing promoted.
         assert s.bindings() == []
 
@@ -7230,6 +7220,139 @@ class TestEntryResultShape:
         assert r.trace_path is None  # no --trace-file → no trace path
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.ok = False
+
+
+class TestEntryResultFailure:
+    """``failure`` carries the structured static error behind a rejected entry.
+
+    One test per site that sets it, plus the required ``None`` cases: success,
+    a runtime raise, and the diagnostic paths with no originating ``AglError``
+    (a malformed module parameter, a surrogate-escaped environment variable, a
+    failed extern companion import, and contract materialization).
+    """
+
+    def test_parse_error_sets_failure(self) -> None:
+        s = open_session()
+        text = "let = oops"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglSyntaxError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "="
+
+    def test_transcript_parse_error_sets_failure(self, tmp_path: Path) -> None:
+        text = "let = oops\n"
+        f = tmp_path / "syntax.agl"
+        f.write_text(text, encoding="utf-8")
+        s = open_session()
+        results = s.load_file(f)
+        assert len(results) == 1
+        assert not results[0].ok
+        failure = results[0].failure
+        assert isinstance(failure, AglSyntaxError)
+        span = failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "="
+
+    def test_scope_error_sets_failure(self) -> None:
+        s = open_session()
+        text = "undefined_name_xyz"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglScopeError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_typecheck_error_sets_failure(self) -> None:
+        s = open_session()
+        text = 'let b: int = "oops"'
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglTypeError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_match_compile_error_sets_failure(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Shape\n  | Circle\n  | Square").ok
+        text = "let f = fn(s: Shape) => case s of | Circle => 1"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, NonExhaustiveMatchError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "case s of | Circle => 1"
+
+    def test_lowering_nesting_too_deep_sets_failure_with_no_span(self) -> None:
+        s = open_session()
+        text = "let deep: int = " + "+".join(["1"] * 1200)
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, NestingTooDeepError)
+        # Stack exhaustion has no single originating source location.
+        assert r.failure.span is None
+
+    def test_type_entry_hidden_member_sets_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "m.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+        s = repl_session_with_root(tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        text = "C::Red"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, HiddenMemberError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_successful_entry_has_no_failure(self) -> None:
+        s = open_session()
+        r = s.eval_entry("1 + 1")
+        assert r.ok
+        assert r.failure is None
+
+    def test_runtime_error_has_no_failure(self) -> None:
+        s = open_session()
+        r = s.eval_entry("let z: decimal = 1 / 0")
+        assert not r.ok
+        assert r.error is not None
+        assert r.failure is None
+
+    def test_malformed_module_parameter_has_no_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {params[0].key: "oops"}
+
+        s = repl_session_with_root(tmp_path, param_seed_resolver=resolve)
+        r = s.eval_entry("import settings\nsettings::value")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
+
+    def test_surrogate_environment_variable_has_no_failure(self) -> None:
+        s = ReplSession(process_environment={"LEGACY": "a" + "\udc00" + "b"})
+        s.open()
+        r = s.eval_entry("1 + 1")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
+
+    def test_failed_extern_companion_import_has_no_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "extlib.agl").write_text(
+            "extern def add_one(x: int) -> int\n", encoding="utf-8"
+        )
+        (tmp_path / "extlib.py").write_text("def add_one(x)\n  return x + 1\n", encoding="utf-8")
+        s = repl_session_with_root(tmp_path)
+        r = s.eval_entry("import extlib::*")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
 
 
 # ---------------------------------------------------------------------------

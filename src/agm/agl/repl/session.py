@@ -53,7 +53,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode, TypeOwner
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
-    from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -703,31 +702,6 @@ class ReplSession:
                 return type_result
         return result
 
-    def _type_entry_program(
-        self, text: str
-    ) -> tuple[Program, int, tuple[SpacedQualifier, ...], str, SourceSpan]:
-        """Parse *text* as a type expression, wrapped as a synthetic ``type <fresh> = text`` alias.
-
-        A bare type has no program-level syntax of its own, so it is probed as
-        a fresh alias's body -- the same position ``type X = <type-expr>``
-        resolves through. Used by :meth:`_try_type_entry`'s REPL-only
-        bare-type fallback. Raises the underlying ``AglSyntaxError`` when
-        *text* is not a type expression at all.
-        """
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.parser import parse_type_expr_seeded
-        from agm.agl.syntax.nodes import Block, Program, TypeAlias
-
-        with spaced_qualifier_collector() as spaced_sink:
-            type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
-        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
-        alias = TypeAlias(
-            name=fresh_name, type_expr=type_expr, span=type_expr.span, node_id=next_node_id
-        )
-        block = Block(items=(alias,), span=type_expr.span, node_id=next_node_id + 1)
-        program = Program(body=block, span=type_expr.span, node_id=next_node_id + 2)
-        return program, next_node_id + 3, tuple(spaced_sink), fresh_name, type_expr.span
-
     def _try_type_entry(self, text: str) -> EntryResult | None:
         """Attempt to interpret *text* as a bare type-expression entry.
 
@@ -764,31 +738,43 @@ class ReplSession:
         is discarded once its resolved type (or generic definition) is read.
         """
         from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
+        from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.parser import AglSyntaxError
+        from agm.agl.parser import AglSyntaxError, parse_type_expr_seeded
         from agm.agl.repl.type_display import format_generic_type_def_for_repl
         from agm.agl.scope import AglScopeError
+        from agm.agl.syntax.nodes import Block, Program, TypeAlias
         from agm.agl.typecheck import AglTypeError, UnappliedGenericTypeError
 
         host_env = self._runtime.host_environment()
+        # A bare type has no program-level syntax of its own, so it is
+        # probed as a fresh alias's body -- the same position
+        # ``type X = <type-expr>`` resolves through.
         try:
-            program, next_node_id, spaced_qualifiers, fresh_name, type_span = (
-                self._type_entry_program(text)
-            )
+            with spaced_qualifier_collector() as spaced_sink:
+                type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
         except AglSyntaxError:
             return None
+        type_span = type_expr.span
+        spaced_qualifiers = tuple(spaced_sink)
+        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
+        alias = TypeAlias(
+            name=fresh_name, type_expr=type_expr, span=type_span, node_id=next_node_id
+        )
+        block = Block(items=(alias,), span=type_span, node_id=next_node_id + 1)
+        program = Program(body=block, span=type_span, node_id=next_node_id + 2)
 
         try:
             checked_program = self._entry_pipeline.resolve_and_check_program(
                 program, next_node_id + 3, host_env, spaced_qualifiers=spaced_qualifiers
             )
         except (HiddenMemberError, ReferencedMemberError) as exc:
-            return self._fail([exc.to_diagnostic()], [], failure=exc)
+            return self._fail_static(exc, [])
         except UnappliedGenericTypeError as exc:
             if exc.span != type_span:
                 # The unapplied generic is nested inside the entry (e.g. a type
@@ -854,7 +840,7 @@ class ReplSession:
                     text, start_id=self._next_node_id, resolve_infix=False
                 )
             except AglSyntaxError as exc:
-                return self._fail([exc.to_diagnostic()], list(tab_sink), failure=exc)
+                return self._fail_static(exc, list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
         spaced_qualifiers = tuple(spaced_sink)
 
@@ -896,6 +882,15 @@ class ReplSession:
             ok=False,
             failure=failure,
         )
+
+    def _fail_static(self, exc: AglError, warnings: list[Diagnostic]) -> EntryResult:
+        """Build a failure result whose single diagnostic is derived from *exc* itself.
+
+        The common case at every static-rejection site that raises one
+        ``AglError`` and reports exactly its own diagnostic: see
+        ``EntryResult.failure``.
+        """
+        return self._fail([exc.to_diagnostic()], warnings, failure=exc)
 
     @property
     def _default_strict_json(self) -> bool:
@@ -1610,15 +1605,14 @@ class ReplSession:
         from agm.agl.matchcompile import (
             cached_module_sites,
             compile_program_matches,
-            diagnostics_from_match_issues,
+            match_issue_error,
         )
 
         match_result = compile_program_matches(
             checked_program, cached_module_sites(self._last_match_compilation)
         )
         if match_result.compiled is None:
-            diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
-            raise AglError(diagnostic.message, span=match_result.issues[0].span)
+            raise match_issue_error(match_result.issues[0])
         # The resolved program holds the expression with its infix chains resolved.
         typ = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         from agm.agl.repl.type_display import format_type_for_repl
@@ -2018,7 +2012,7 @@ class ReplSession:
         try:
             program = parse_repl_transcript(normalized)
         except AglSyntaxError as exc:
-            return [self._fail([exc.to_diagnostic()], [], failure=exc)]
+            return [self._fail_static(exc, [])]
 
         results: list[EntryResult] = []
         for item in program.body.items:

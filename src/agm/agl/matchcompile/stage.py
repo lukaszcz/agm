@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypeAlias, assert_never
+from typing import TypeAlias
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Case, Program
@@ -16,13 +16,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
 
 from .compiler import CompiledMatchSite, compile_match_site, validate_compiled_case
-from .diagnostics import (
-    MatchIssue,
-    NonExhaustiveIssue,
-    RedundantArmIssue,
-    issue_sort_key,
-    render_witness,
-)
+from .diagnostics import MatchIssue, issue_sort_key, match_issue_error
 from .model import CaseSite, MatchCaseContext, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
@@ -187,14 +181,7 @@ def compile_program_matches(
 
 def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
     """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
-    match issue:
-        case NonExhaustiveIssue():
-            message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
-        case RedundantArmIssue():
-            message = "Redundant case arm; this pattern can never be selected."
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-    return diagnostic_from_span(message, issue.span)
+    return match_issue_error(issue).to_diagnostic()
 
 
 def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagnostic, ...]:

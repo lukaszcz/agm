@@ -25,6 +25,11 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.typecheck import AglTypeError
+from agm.agl.typecheck.program import check_program
+from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.module_graph import build_inline_entry_graph, resolve_inline_entry
+from tests.agl.qualifier_support import file_verdict, graph_verdict
 
 Outcome = Literal["accepted", "scope", "typecheck"]
 
@@ -75,31 +80,24 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 
 def _module_outcome(source: str) -> Outcome:
-    """A phase-accurate verdict: which of two phase-ordered calls raised, not which class.
+    """A phase-accurate verdict: which phase, if any, first rejects *source*.
 
-    *source* is a tiny inline snippet, resolved (and separately, resolved
-    and checked) through :mod:`tests.agl.module_graph`'s inline-entry helpers
-    rather than a :class:`~agm.agl.modules.loader.ModuleGraph` (see
-    :func:`~tests.agl.qualifier_support.phase_verdict` for the shared
-    classification).
+    *source* is a tiny inline snippet; its graph is built through
+    :func:`~tests.agl.module_graph.build_inline_entry_graph` and classified
+    by :func:`~tests.agl.qualifier_support.graph_verdict`.
     """
-    from tests.agl.ir_harness import base_caps
-    from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
-    from tests.agl.qualifier_support import phase_verdict
-
-    phase, _cls, _span = phase_verdict(
-        lambda: resolve_inline_entry(source),
-        lambda: resolve_and_check_inline_entry(source, base_caps()),
-    )
-    assert phase in ("accepted", "scope", "typecheck")
+    graph, _import_node_id = build_inline_entry_graph(source)
+    phase, _cls, _span, _identity = graph_verdict(graph)
+    if phase == "matchcompile":
+        raise AssertionError(f"unexpected matchcompile phase for {source!r}")
     return phase
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     """A phase-accurate verdict: which call raised, not which class."""
-    from tests.agl.qualifier_support import file_verdict
-
     phase, _cls, _span, _identity = file_verdict(tmp_path, modules)
+    if phase == "matchcompile":
+        raise AssertionError(f"unexpected matchcompile phase for {modules!r}")
     return phase
 
 
@@ -299,10 +297,6 @@ def test_a_one_liner_def_body_validates_its_qualifier_chains(
     the shadowed segment's own span; a typecheck-phase row's is
     :class:`AglTypeError`, at the whole rejected pattern's span.
     """
-    from agm.agl.typecheck import AglTypeError
-    from agm.agl.typecheck.program import check_program
-    from tests.agl.ir_harness import base_caps, make_graph_from_files
-
     modules = {
         "entry": entry,
         "types": "enum Color\n  | Red\n  | Green",
@@ -368,8 +362,6 @@ def test_scoped_binder_shorthand_matches_its_region_form(
     ``scope S ... let x ... end S`` does: same phase, same precise class, and a span
     over the same rejected sub-expression -- not the whole annotation or binder.
     """
-    from tests.agl.module_graph import resolve_inline_entry
-
     for source in (shorthand, region):
         with pytest.raises(error) as excinfo:
             resolve_inline_entry(source)
@@ -422,7 +414,7 @@ def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path)
             "import pal\nlet value: pal::Color = pal::Color::Red\n"
             "case value of | pal::Color::Red => 1 | _ => 2"
         ),
-        "pal": "enum Color\n  | Red",
+        "pal": "enum Color\n  | Red\n  | Green",
     }
 
     assert _program_outcome(tmp_path, modules) == "accepted"
@@ -557,9 +549,6 @@ def test_applied_generic_owner_ambiguity_resolves_by_full_member_path(tmp_path: 
 
 
 def _ambiguity_span(tmp_path: Path, modules: dict[str, str]) -> SourceSpan:
-    from agm.agl.typecheck.program import check_program
-    from tests.agl.ir_harness import base_caps, make_graph_from_files
-
     graph = make_graph_from_files(tmp_path, modules)
     with pytest.raises(AmbiguousQualificationError) as excinfo:
         check_program(resolve_program(graph), base_caps())

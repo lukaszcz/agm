@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl.entry import EntryResult
 from agm.core.cleanup import notes_of
@@ -169,8 +169,6 @@ class EntryPipeline:
         the full scope/typecheck/match-compilation passes with the session
         context, then returns a check-only result or lowers and evaluates.
         """
-        from agm.agl.diagnostics import AglError
-
         try:
             loaded = self.load_and_check_program(
                 pipeline_program=pipeline_program,
@@ -179,7 +177,7 @@ class EntryPipeline:
                 spaced_qualifiers=spaced_qualifiers,
             )
         except AglError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
+            return self._ctx._fail([exc.to_diagnostic()], tab_warnings, failure=exc)
 
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
@@ -205,8 +203,15 @@ class EntryPipeline:
             checked_program, cached_module_sites(self._ctx._last_match_compilation)
         )
         if match_result.compiled is None:
+            # Match compilation reports structured issues, not a raised
+            # ``AglError``; the first (already deterministically ordered)
+            # issue's own message and span stand in for the entry's failure.
+            match_diagnostics = list(diagnostics_from_match_issues(match_result.issues))
+            first_issue = match_result.issues[0]
             return self._ctx._fail(
-                list(diagnostics_from_match_issues(match_result.issues)), warnings
+                match_diagnostics,
+                warnings,
+                failure=AglError(match_diagnostics[0].message, span=first_issue.span),
             )
         compiled = match_result.compiled
         # Retained for the next entry: its library modules are the same checked
@@ -224,7 +229,12 @@ class EntryPipeline:
             host_env.codecs,
         )
         if contract_errors:
-            return self._ctx._fail(contract_errors, warnings)
+            # As the match-compile site above: contract materialization
+            # reports plain diagnostics (no source span), not a raised
+            # ``AglError``.
+            return self._ctx._fail(
+                contract_errors, warnings, failure=AglError(contract_errors[0].message)
+            )
 
         return self._evaluate_ir_program(
             text=text,
@@ -572,7 +582,11 @@ class EntryPipeline:
                 if exc.span is not None
                 else Diagnostic(message=str(exc), line=1)
             )
-            return self._ctx._fail([diagnostic], warnings)
+            # Only ``NestingTooDeepError`` is a static ``AglError``;
+            # ``ResourceError`` is a plain lowering-time ``ValueError``.
+            return self._ctx._fail(
+                [diagnostic], warnings, failure=exc if isinstance(exc, AglError) else None
+            )
         host_contracts = materialize_ir_contracts(lowered.program, host_env.codecs)
         from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 

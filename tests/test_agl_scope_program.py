@@ -647,7 +647,7 @@ class TestQualifiedAccess:
 
         assert result["result"] == IntValue(2)
 
-    def test_anchor_repairs_nested_scope_and_complete_import_route_clash(
+    def test_anchored_nested_scope_and_complete_import_route_clash_is_accepted(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(
@@ -700,7 +700,7 @@ class TestQualifiedAccess:
 
         assert result["result"] == BoolValue(True)
 
-    def test_anchor_repairs_constructor_path_and_complete_import_route_clash(
+    def test_anchored_constructor_path_and_complete_import_route_clash_is_accepted(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(

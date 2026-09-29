@@ -53,6 +53,7 @@ from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir_graph
 from tests.agl.qualifier_support import (
+    LegalGroupings,
     Verdict,
     all_groupings,
     eval_setup_entries,
@@ -126,7 +127,7 @@ _POS: dict[str, str] = {
     "pattern": "case v of\n  | {q} => 1\n  | _ => 2",
     "is": "v is {q}",
     "annot": "fn(x: {q}) => 1",
-    "alias": "type CC = {q}\n1",
+    "alias": "type CC = {q}\nfn(x: CC) => 1",
     "tyarg": "fn(x: array[{q}]) => 1",
 }
 
@@ -183,14 +184,44 @@ def _matrix_params() -> list[object]:
     ]
 
 
+def _prefix_required_legal_groupings(total: int, prefix: int) -> frozenset[tuple[int, ...]]:
+    """Legal groupings of *total* items whose first entry must span at least *prefix* items.
+
+    Matches a header whose leading ``use`` declarations forward-reference
+    ``scope`` regions declared later in the same header: a REPL entry
+    resolves its own items together, so every legal grouping's first entry
+    must include that whole leading run; the remaining items impose no
+    further constraint and may split any way.
+    """
+    return frozenset(
+        (first, *rest)
+        for first in range(prefix, total + 1)
+        for rest in all_groupings(total - first)
+    )
+
+
+_LOCALUSE_HEADER_LEN = len(_FORMS["localuse"][1])
+# The header's first four items (two ``use``s, then the ``scope``s they name)
+# must share one entry; the fifth (the ``let``) is unconstrained.
+_LOCALUSE_HEADER_LEGAL = _prefix_required_legal_groupings(_LOCALUSE_HEADER_LEN, 4)
+# repl_verdict_all_groupings may also merge the trailing probe into the
+# header's own last entry; reptype_verdict_all_groupings never does (the
+# probe is always its own final entry), so only a new size-1 entry is added.
+_EXPECTED_LEGAL_GROUPINGS: dict[str, LegalGroupings] = {
+    "localuse": _prefix_required_legal_groupings(_LOCALUSE_HEADER_LEN + 1, 4),
+}
+_EXPECTED_REPTYPE_LEGAL_GROUPINGS: dict[str, LegalGroupings] = {
+    "localuse": frozenset((*header_sizes, 1) for header_sizes in _LOCALUSE_HEADER_LEGAL),
+}
+
+
 def _matrix_params_repl() -> list[object]:
     # "moduse"'s ambiguity outcome is excluded: a ``use`` contribution from an
     # earlier REPL entry does not compose with one the probing entry declares
     # itself, so the ambiguity that every other grouping (and file mode)
-    # reports is missed whenever the two share an entry -- a pre-existing,
-    # separately tracked REPL divergence, not one of this module's own
-    # position/grouping invariants (see
-    # ``test_moduse_ambiguity_depends_on_repl_grouping`` below).
+    # reports is missed whenever the two share an entry -- a REPL-only
+    # divergence pinned by ``test_moduse_ambiguity_depends_on_repl_grouping``
+    # below, not one of this module's own position/grouping invariants.
     return [
         pytest.param(form_name, outcome, pos_name, id=f"{form_name}-{outcome}-{pos_name}")
         for form_name, (_, _, _, outcomes) in _FORMS.items()
@@ -201,12 +232,35 @@ def _matrix_params_repl() -> list[object]:
 
 
 def _assert_matrix_verdict(
-    source: str, verdict: Verdict, form_name: str, outcome: str, pos_name: str, q: str
+    source: str,
+    verdict: Verdict,
+    form_name: str,
+    outcome: str,
+    pos_name: str,
+    q: str,
+    *,
+    is_file: bool,
 ) -> None:
-    phase, cls, span = verdict
+    """Assert *verdict* matches ``_EXPECTED``.
+
+    FILE mode's ``phase`` distinguishes ``"scope"``/``"typecheck"``; a REPL
+    entry's single ``check_only`` outcome cannot, so its own phase is only
+    ``"accepted"``/``"rejected"`` -- asserted class and span still pin down
+    which phase would have raised, since ``file_verdict`` computed for the
+    identical case must have raised the same class (see :mod:`qualifier_support`).
+    """
+    phase, cls, span, identity = verdict
     expected_phase, expected_cls = _EXPECTED[(form_name, outcome, pos_name)]
-    assert (phase, cls) == (expected_phase, expected_cls)
+    if is_file:
+        assert (phase, cls) == (expected_phase, expected_cls)
+    else:
+        assert phase == ("accepted" if expected_phase == "accepted" else "rejected")
+        assert cls == expected_cls
     if expected_phase == "accepted":
+        # An accepted entry's echoed type is always the real, checked type of
+        # its final item -- proof scope's resolution actually reached typecheck
+        # and lowering-ready node types, not just "did not raise".
+        assert identity is not None
         return
     assert span is not None
     text = source[span.start_offset : span.end_offset]
@@ -222,7 +276,7 @@ def test_qualifier_decision_matrix_file(
     modules, header, entry, q = _matrix_case(form_name, outcome, pos_name)
     src = "\n".join([*header, entry])
     verdict = file_verdict(tmp_path, {"entry": src, **modules})
-    _assert_matrix_verdict(src, verdict, form_name, outcome, pos_name, q)
+    _assert_matrix_verdict(src, verdict, form_name, outcome, pos_name, q, is_file=True)
 
 
 @pytest.mark.parametrize(("form_name", "outcome", "pos_name"), _matrix_params_repl())
@@ -232,13 +286,21 @@ def test_qualifier_decision_matrix_repl(
     """The file-mode verdict above holds identically across every REPL grouping."""
     modules, header, entry, q = _matrix_case(form_name, outcome, pos_name)
     decls = (*header, entry)
-    verdict = repl_verdict_all_groupings(tmp_path, modules, decls)
-    _assert_matrix_verdict("\n".join(decls), verdict, form_name, outcome, pos_name, q)
+    expected_legal = _EXPECTED_LEGAL_GROUPINGS.get(form_name, "ALL")
+    # The matrix's forms never reference stdlib names; skipping its load keeps
+    # the combinatorial per-grouping session cost (up to 32 fresh sessions for
+    # "moduse"'s six declarations) well under the per-test CPU budget.
+    verdict = repl_verdict_all_groupings(
+        tmp_path, modules, decls, stdlib=False, expected_legal_groupings=expected_legal
+    )
+    _assert_matrix_verdict(
+        "\n".join(decls), verdict, form_name, outcome, pos_name, q, is_file=False
+    )
 
 
 def _matrix_params_reptype() -> list[object]:
     # As `_matrix_params_repl`, "moduse"'s ambiguity outcome is excluded for
-    # the same pre-existing, separately tracked REPL-grouping divergence.
+    # the same REPL-only divergence.
     return [
         pytest.param(form_name, outcome, id=f"{form_name}-{outcome}")
         for form_name, (_, _, _, outcomes) in _FORMS.items()
@@ -258,8 +320,16 @@ def test_qualifier_decision_matrix_reptype(tmp_path: Path, form_name: str, outco
     structurally mismatched member) is accepted, not a typecheck mismatch.
     """
     modules, header, probe, q = _matrix_case(form_name, outcome, "value")
-    verdict = reptype_verdict_all_groupings(tmp_path, modules, tuple(header), probe)
-    _assert_matrix_verdict(probe, verdict, form_name, outcome, "reptype", q)
+    expected_legal = _EXPECTED_REPTYPE_LEGAL_GROUPINGS.get(form_name, "ALL")
+    verdict = reptype_verdict_all_groupings(
+        tmp_path,
+        modules,
+        tuple(header),
+        probe,
+        stdlib=False,
+        expected_legal_groupings=expected_legal,
+    )
+    _assert_matrix_verdict(probe, verdict, form_name, outcome, "reptype", q, is_file=False)
 
 
 def test_localuse_header_legal_groupings_are_exactly_their_expected_set(tmp_path: Path) -> None:
@@ -276,7 +346,6 @@ def test_localuse_header_legal_groupings_are_exactly_their_expected_set(tmp_path
     """
     _, header, _, _ = _FORMS["localuse"]
     decls = tuple(header)
-    expected = frozenset({(4, 1), (5,)})
     legal: set[tuple[int, ...]] = set()
     for index, sizes in enumerate(all_groupings(len(decls))):
         session_dir = tmp_path / str(index)
@@ -285,20 +354,20 @@ def test_localuse_header_legal_groupings_are_exactly_their_expected_set(tmp_path
         session.open()
         if eval_setup_entries(session, decls, sizes):
             legal.add(sizes)
-    assert legal == expected
+    assert legal == _LOCALUSE_HEADER_LEGAL
 
 
 def test_moduse_ambiguity_depends_on_repl_grouping(tmp_path: Path) -> None:
-    """Pre-existing REPL divergence: a shared entry misses an earlier entry's ``use``.
+    """A shared entry misses an earlier entry's ``use``, unlike every other grouping.
 
     ``Color::Red`` is ambiguous between ``m``'s and ``n``'s wildcard-``use``d
     ``Color`` in file mode, and when ``use n::*`` is evaluated as its own
     REPL entry -- but is wrongly accepted when ``use n::*`` instead shares an
     entry with the reference: the probing entry's own ``use`` does not
-    compose with one an earlier entry already committed. This is a known,
-    separately tracked limitation of REPL entry evaluation, not one of this
-    module's own position/grouping invariants; it is pinned here so a fix
-    (or a regression sharpening it) is visible.
+    compose with one an earlier entry already committed. Pinned here so a fix
+    (or a regression sharpening it) is visible; not one of this module's own
+    position/grouping invariants, so it is excluded from the REPL and
+    reptype matrix parametrizations above rather than asserted there.
     """
     for name, source in _MN.items():
         (tmp_path / f"{name}.agl").write_text(source, encoding="utf-8")
@@ -328,7 +397,7 @@ _RECORD_POS: dict[str, str] = {
     "value": "{q}(x = 1)",
     "pattern": "case 1 of\n  | {q}(x) => x\n  | _ => 2",
     "annot": "fn(p: {q}) => 1",
-    "alias": "type A = {q}\n1",
+    "alias": "type A = {q}\nfn(x: A) => 1",
     "tyarg": "fn(p: array[{q}]) => 1",
 }
 
@@ -336,7 +405,7 @@ _ACCEPTED_RECORD_POS: dict[str, str] = {
     "value": "{q}(x = 1)",
     "pattern": "let v: {q} = {q}(x = 1)\ncase v of\n  | {q}(x) => x",
     "annot": "fn(p: {q}) => 1",
-    "alias": "type A = {q}\n1",
+    "alias": "type A = {q}\nfn(x: A) => 1",
     "tyarg": "fn(p: array[{q}]) => 1",
 }
 
@@ -353,7 +422,9 @@ class TestLocalScopeShadowsSameNamedImport:
     def test_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _RECORD_POS[pos_name].format(q="Geo::Point")
         src = "\n".join(["import shapes::*", _GEO_LOCAL_ONLY, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _GEO_IMPORTED})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _GEO_IMPORTED}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Point"
@@ -363,8 +434,10 @@ class TestLocalScopeShadowsSameNamedImport:
         """The rejection holds across every REPL grouping, not just one file-like entry."""
         entry = _RECORD_POS[pos_name].format(q="Geo::Point")
         decls = ("import shapes::*", _GEO_LOCAL_ONLY, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"shapes": _GEO_IMPORTED}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _GEO_IMPORTED}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Point"
 
@@ -382,14 +455,18 @@ class TestImportedScopeRegionMemberIsAccepted:
     def test_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_RECORD_POS[pos_name].format(q="Geo::Point")
         src = "\n".join(["import shapes::*", entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src, "shapes": _GEO_IMPORTED})
+        phase, _cls, _span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _GEO_IMPORTED}
+        )
         assert phase == "accepted"
 
     @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_RECORD_POS))
     def test_repl(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_RECORD_POS[pos_name].format(q="Geo::Point")
         decls = ("import shapes::*", entry)
-        phase, _cls, _span = repl_verdict_all_groupings(tmp_path, {"shapes": _GEO_IMPORTED}, decls)
+        phase, _cls, _span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _GEO_IMPORTED}, decls
+        )
         assert phase == "accepted"
 
 
@@ -429,7 +506,7 @@ class TestLocalTypeWinsOverAmbiguousBareImports:
     )
     def test_file(self, tmp_path: Path, entry: str) -> None:
         src = "\n".join([*_TWO_IMPORT_HEADER, entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src, **_TWO_IMPORT_LIB})
+        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src, **_TWO_IMPORT_LIB})
         assert phase == "accepted"
 
     @pytest.mark.parametrize(
@@ -443,7 +520,7 @@ class TestLocalTypeWinsOverAmbiguousBareImports:
     )
     def test_repl(self, tmp_path: Path, entry: str) -> None:
         decls = (*_TWO_IMPORT_HEADER, entry)
-        phase, _cls, _span = repl_verdict_all_groupings(tmp_path, _TWO_IMPORT_LIB, decls)
+        phase, _cls, _span, _identity = repl_verdict_all_groupings(tmp_path, _TWO_IMPORT_LIB, decls)
         assert phase == "accepted"
 
 
@@ -474,29 +551,33 @@ class TestLocalEnumCaseWalkAgreesAcrossGroupings:
 
     def test_file_unanchored(self, tmp_path: Path) -> None:
         src = "\n".join([*_ENUM_CASE_CLASH_HEADER, "Foo::E::A"])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, **_ENUM_CASE_CLASH_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, **_ENUM_CASE_CLASH_LIB})
         assert (phase, cls) == ("scope", RouteClashError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Foo::E::A"
 
     def test_repl_unanchored(self, tmp_path: Path) -> None:
         decls = (*_ENUM_CASE_CLASH_HEADER, "Foo::E::A")
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, _ENUM_CASE_CLASH_LIB, decls)
-        assert (phase, cls) == ("scope", RouteClashError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, _ENUM_CASE_CLASH_LIB, decls
+        )
+        assert (phase, cls) == ("rejected", RouteClashError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Foo::E::A"
 
     def test_file_anchored(self, tmp_path: Path) -> None:
         src = "\n".join([*_ENUM_CASE_CLASH_HEADER, "::Foo::E::A"])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, **_ENUM_CASE_CLASH_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, **_ENUM_CASE_CLASH_LIB})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "::Foo::E::A"
 
     def test_repl_anchored(self, tmp_path: Path) -> None:
         decls = (*_ENUM_CASE_CLASH_HEADER, "::Foo::E::A")
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, _ENUM_CASE_CLASH_LIB, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, _ENUM_CASE_CLASH_LIB, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "::Foo::E::A"
 
@@ -545,7 +626,9 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
     )
     def test_file(self, tmp_path: Path, entry: str) -> None:
         src = "\n".join([*_LOCAL_WINS_HEADER, entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src, "shapes": _LOCAL_WINS_LIB})
+        phase, _cls, _span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _LOCAL_WINS_LIB}
+        )
         assert phase == "accepted"
 
     @pytest.mark.parametrize(
@@ -559,7 +642,7 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
     )
     def test_repl(self, tmp_path: Path, entry: str) -> None:
         decls = (*_LOCAL_WINS_HEADER, entry)
-        phase, _cls, _span = repl_verdict_all_groupings(
+        phase, _cls, _span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _LOCAL_WINS_LIB}, decls
         )
         assert phase == "accepted"
@@ -599,7 +682,7 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
         local = "scope Geo\n  record Point\n    y: int\n  enum Shape\n    | Tri\nend Geo"
         entry = "fn(p: Geo::Shape) => 1"
         src = "\n".join(["import shapes::*", local, entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src, "shapes": lib})
+        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": lib})
         assert phase == "accepted"
 
 
@@ -626,7 +709,7 @@ def test_nested_generic_alias_owner_is_instantiated_by_substitution(tmp_path: Pa
             "case row of\n  | Rows[int]::Filled(value) => value.size() + 1\n  | Slot::Empty => 0",
         ]
     )
-    phase, _cls, _span = file_verdict(tmp_path, {"entry": src})
+    phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src})
     assert phase == "accepted"
 
 
@@ -652,7 +735,7 @@ class TestUnknownQualifierRouteAcrossPositions:
     @pytest.mark.parametrize("pos_name", sorted(_UNKNOWN_ROUTE_POS))
     def test_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _UNKNOWN_ROUTE_POS[pos_name]
-        phase, cls, span = file_verdict(tmp_path, {"entry": entry})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": entry})
         assert (phase, cls) == ("scope", UnknownQualifierError)
         assert span is not None
         assert entry[span.start_offset : span.end_offset] == "missing::Item"
@@ -660,8 +743,8 @@ class TestUnknownQualifierRouteAcrossPositions:
     @pytest.mark.parametrize("pos_name", sorted(_UNKNOWN_ROUTE_POS))
     def test_repl(self, tmp_path: Path, pos_name: str) -> None:
         entry = _UNKNOWN_ROUTE_POS[pos_name]
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {}, (entry,))
-        assert (phase, cls) == ("scope", UnknownQualifierError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(tmp_path, {}, (entry,))
+        assert (phase, cls) == ("rejected", UnknownQualifierError)
         assert span is not None
         assert entry[span.start_offset : span.end_offset] == "missing::Item"
 
@@ -690,7 +773,7 @@ class TestLocalEnumShadowsImportedEnum:
     def test_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ENUM_POS[pos_name].format(q="Shape::Circle")
         src = "\n".join(["import lib::*", _ENUM_LOCAL, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "lib": _ENUM_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, "lib": _ENUM_LIB})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Shape::Circle"
@@ -699,8 +782,10 @@ class TestLocalEnumShadowsImportedEnum:
     def test_repl(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ENUM_POS[pos_name].format(q="Shape::Circle")
         decls = ("import lib::*", _ENUM_LOCAL, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"lib": _ENUM_LIB}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"lib": _ENUM_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Shape::Circle"
 
@@ -728,7 +813,7 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
     @pytest.mark.parametrize("entry", ["fn(p: Geo::Inner) => 1", "Geo::Inner(y = 1)"])
     def test_file_nested_type_is_accepted(self, tmp_path: Path, entry: str) -> None:
         src = "\n".join(["import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry])
-        phase, _cls, _span = file_verdict(
+        phase, _cls, _span, _identity = file_verdict(
             tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB}
         )
         assert phase == "accepted"
@@ -736,7 +821,7 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
     @pytest.mark.parametrize("entry", ["fn(p: Geo::Inner) => 1", "Geo::Inner(y = 1)"])
     def test_repl_nested_type_is_accepted(self, tmp_path: Path, entry: str) -> None:
         decls = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry)
-        phase, _cls, _span = repl_verdict_all_groupings(
+        phase, _cls, _span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _DEFPATH_TYPE_OWNER_LIB}, decls
         )
         assert phase == "accepted"
@@ -744,7 +829,9 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
     @pytest.mark.parametrize("entry", ["fn(p: Geo::Nope) => 1", "Geo::Nope(y = 1)"])
     def test_file_missing_member_is_rejected(self, tmp_path: Path, entry: str) -> None:
         src = "\n".join(["import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Nope"
@@ -752,10 +839,10 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
     @pytest.mark.parametrize("entry", ["fn(p: Geo::Nope) => 1", "Geo::Nope(y = 1)"])
     def test_repl_missing_member_is_rejected(self, tmp_path: Path, entry: str) -> None:
         decls = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry)
-        phase, cls, span = repl_verdict_all_groupings(
+        phase, cls, span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _DEFPATH_TYPE_OWNER_LIB}, decls
         )
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Nope"
 
@@ -778,7 +865,9 @@ class TestCurrentModuleAnchoredDefCreatedPathIsAnOwnRootMiss:
     def test_file(self, tmp_path: Path, shape: str, member: str) -> None:
         entry = shape.format(member)
         src = "\n".join(["import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _DEFPATH_TYPE_OWNER_LIB}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == f"::Geo::{member}"
@@ -788,10 +877,10 @@ class TestCurrentModuleAnchoredDefCreatedPathIsAnOwnRootMiss:
     def test_repl(self, tmp_path: Path, shape: str, member: str) -> None:
         entry = shape.format(member)
         decls = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF, entry)
-        phase, cls, span = repl_verdict_all_groupings(
+        phase, cls, span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _DEFPATH_TYPE_OWNER_LIB}, decls
         )
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == f"::Geo::{member}"
 
@@ -811,7 +900,7 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
     @pytest.mark.parametrize("entry", ["fn(p: Stored::Saved::X) => 1", "Stored::Saved::X"])
     def test_file(self, tmp_path: Path, entry: str) -> None:
         src = "\n".join([*_REFERENCED_MEMBER_HEADER, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src})
         assert (phase, cls) == ("scope", ReferencedMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Stored::Saved::X"
@@ -819,8 +908,8 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
     @pytest.mark.parametrize("entry", ["fn(p: Stored::Saved::X) => 1", "Stored::Saved::X"])
     def test_repl(self, tmp_path: Path, entry: str) -> None:
         decls = (*_REFERENCED_MEMBER_HEADER, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {}, decls)
-        assert (phase, cls) == ("scope", ReferencedMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(tmp_path, {}, decls)
+        assert (phase, cls) == ("rejected", ReferencedMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Stored::Saved::X"
 
@@ -857,7 +946,7 @@ class TestDefCreatedPathIsPlainLocalNamespace:
     def test_file_without_import(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH_MISSING_POS[pos_name]
         src = "\n".join([_DEFPATH_DEF, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Point"
@@ -866,8 +955,8 @@ class TestDefCreatedPathIsPlainLocalNamespace:
     def test_repl_without_import(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH_MISSING_POS[pos_name]
         decls = (_DEFPATH_DEF, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(tmp_path, {}, decls)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Point"
 
@@ -875,7 +964,7 @@ class TestDefCreatedPathIsPlainLocalNamespace:
     def test_file_with_imported_region(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH_MISSING_POS[pos_name]
         src = "\n".join(["import shapes::*", _DEFPATH_DEF, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH_LIB})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Point"
@@ -884,8 +973,10 @@ class TestDefCreatedPathIsPlainLocalNamespace:
     def test_repl_with_imported_region(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH_MISSING_POS[pos_name]
         decls = ("import shapes::*", _DEFPATH_DEF, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"shapes": _DEFPATH_LIB}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _DEFPATH_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Point"
 
@@ -912,19 +1003,22 @@ _DEFPATH3_MISSING_POS: dict[str, str] = {
 }
 
 
-class TestDefCreatedPathIsPlainLocalNamespaceAtEveryChainLength:
+class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
     """The plain-local-namespace verdict holds for a 3-segment chain too.
 
-    Regression: the value position used to give ``UnknownQualifierError``
-    while the annotation was wrongly accepted; both must reject with the
-    ordinary unknown-member verdict, identically to the 2-segment case.
+    The value position and the annotation position must reject with the
+    same, ordinary unknown-member verdict, identically to the 2-segment case
+    above, whether the def path is declared at the outer scope (``Geo``) or
+    one level deeper (``Geo::In``).
     """
 
     @pytest.mark.parametrize("pos_name", sorted(_DEFPATH3_POS))
     def test_file_import_is_not_merged_at_length_three(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH3_POS[pos_name]
         src = "\n".join(["import shapes::*", "def Geo::f() -> int = 1", entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::In::Point"
@@ -933,8 +1027,10 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtEveryChainLength:
     def test_repl_import_is_not_merged_at_length_three(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH3_POS[pos_name]
         decls = ("import shapes::*", "def Geo::f() -> int = 1", entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"shapes": _DEFPATH3_LIB}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _DEFPATH3_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::In::Point"
 
@@ -942,7 +1038,9 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtEveryChainLength:
     def test_file_missing_member_at_length_three(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH3_MISSING_POS[pos_name]
         src = "\n".join(["import shapes::*", "def Geo::f() -> int = 1", entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::In::Nope"
@@ -951,7 +1049,9 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtEveryChainLength:
     def test_file_def_path_nested_one_level_deeper(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH3_POS[pos_name]
         src = "\n".join(["import shapes::*", "def Geo::In::f() -> int = 1", entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB})
+        phase, cls, span, _identity = file_verdict(
+            tmp_path, {"entry": src, "shapes": _DEFPATH3_LIB}
+        )
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::In::Point"
@@ -960,8 +1060,10 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtEveryChainLength:
     def test_repl_def_path_nested_one_level_deeper(self, tmp_path: Path, pos_name: str) -> None:
         entry = _DEFPATH3_POS[pos_name]
         decls = ("import shapes::*", "def Geo::In::f() -> int = 1", entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"shapes": _DEFPATH3_LIB}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _DEFPATH3_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::In::Point"
 
@@ -988,7 +1090,7 @@ class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
         src = "\n".join(
             ["import shapes::*", "def Geo::In::f() -> int = 1", "fn(x: Geo::Other) => 1"]
         )
-        phase, cls, span = file_verdict(
+        phase, cls, span, _identity = file_verdict(
             tmp_path, {"entry": src, "shapes": _DEFPATH_EMPTY_PREFIX_LIB}
         )
         assert (phase, cls) == ("scope", UnknownMemberError)
@@ -997,16 +1099,16 @@ class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
 
     def test_repl_annotation(self, tmp_path: Path) -> None:
         decls = ("import shapes::*", "def Geo::In::f() -> int = 1", "fn(x: Geo::Other) => 1")
-        phase, cls, span = repl_verdict_all_groupings(
+        phase, cls, span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _DEFPATH_EMPTY_PREFIX_LIB}, decls
         )
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Other"
 
     def test_file_is(self, tmp_path: Path) -> None:
         src = "\n".join(["import shapes::*", "def Geo::In::f() -> int = 1", "1 is Geo::Other"])
-        phase, cls, span = file_verdict(
+        phase, cls, span, _identity = file_verdict(
             tmp_path, {"entry": src, "shapes": _DEFPATH_EMPTY_PREFIX_LIB}
         )
         assert (phase, cls) == ("scope", UnknownMemberError)
@@ -1015,10 +1117,10 @@ class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
 
     def test_repl_is(self, tmp_path: Path) -> None:
         decls = ("import shapes::*", "def Geo::In::f() -> int = 1", "1 is Geo::Other")
-        phase, cls, span = repl_verdict_all_groupings(
+        phase, cls, span, _identity = repl_verdict_all_groupings(
             tmp_path, {"shapes": _DEFPATH_EMPTY_PREFIX_LIB}, decls
         )
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Other"
 
@@ -1059,7 +1161,7 @@ class TestLocalScopeChainLengthsAgree:
     def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _CHAIN_LEN2_POS[pos_name]
         src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Point"
@@ -1068,7 +1170,7 @@ class TestLocalScopeChainLengthsAgree:
     def test_length_three_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _CHAIN_LEN3_POS[pos_name]
         src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Shape::Circle"
@@ -1077,8 +1179,10 @@ class TestLocalScopeChainLengthsAgree:
     def test_length_three_repl(self, tmp_path: Path, pos_name: str) -> None:
         entry = _CHAIN_LEN3_POS[pos_name]
         decls = ("import shapes::*", _CHAIN_LOCAL, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {"shapes": _CHAIN_LIB}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"shapes": _CHAIN_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Shape::Circle"
 
@@ -1091,7 +1195,7 @@ class TestLocalScopeChainLengthsAgree:
         """
         entry = "Geo::Shape::Missing::X"
         src = "\n".join([_CHAIN_NESTED_LOCAL, entry])
-        phase, cls, span = file_verdict(tmp_path, {"entry": src})
+        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src})
         assert (phase, cls) == ("scope", UnknownMemberError)
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
@@ -1099,8 +1203,8 @@ class TestLocalScopeChainLengthsAgree:
     def test_length_four_misses_one_level_past_a_walked_hit_repl(self, tmp_path: Path) -> None:
         entry = "Geo::Shape::Missing::X"
         decls = (_CHAIN_NESTED_LOCAL, entry)
-        phase, cls, span = repl_verdict_all_groupings(tmp_path, {}, decls)
-        assert (phase, cls) == ("scope", UnknownMemberError)
+        phase, cls, span, _identity = repl_verdict_all_groupings(tmp_path, {}, decls)
+        assert (phase, cls) == ("rejected", UnknownMemberError)
         assert span is not None
         assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
 
@@ -1119,7 +1223,7 @@ def test_local_scope_partial_miss_clashes_with_a_same_named_route_file(tmp_path:
     at all is a clash.
     """
     src = "\n".join(["import Geo", _CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X"])
-    phase, cls, span = file_verdict(
+    phase, cls, span, _identity = file_verdict(
         tmp_path, {"entry": src, **_ROUTE_AND_PARTIAL_LOCAL_MISS_LIB}, stdlib=False
     )
     assert (phase, cls) == ("scope", RouteClashError)
@@ -1130,10 +1234,10 @@ def test_local_scope_partial_miss_clashes_with_a_same_named_route_file(tmp_path:
 def test_local_scope_partial_miss_clashes_with_a_same_named_route_repl(tmp_path: Path) -> None:
     """As the file-mode case above, identically across every legal REPL grouping."""
     decls = ("import Geo", _CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X")
-    phase, cls, span = repl_verdict_all_groupings(
+    phase, cls, span, _identity = repl_verdict_all_groupings(
         tmp_path, _ROUTE_AND_PARTIAL_LOCAL_MISS_LIB, decls, stdlib=False
     )
-    assert (phase, cls) == ("scope", RouteClashError)
+    assert (phase, cls) == ("rejected", RouteClashError)
     assert span is not None
     assert "\n".join(decls)[span.start_offset : span.end_offset] == "Geo::Shape::Missing::X"
 
@@ -1167,21 +1271,21 @@ class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
     def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_CHAIN_LEN2_POS[pos_name]
         src = "\n".join([_CHAIN_LIB, entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src})
+        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src})
         assert phase == "accepted"
 
     @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN3_POS))
     def test_length_three_file(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_CHAIN_LEN3_POS[pos_name]
         src = "\n".join([_CHAIN_LIB, entry])
-        phase, _cls, _span = file_verdict(tmp_path, {"entry": src})
+        phase, _cls, _span, _identity = file_verdict(tmp_path, {"entry": src})
         assert phase == "accepted"
 
     @pytest.mark.parametrize("pos_name", sorted(_ACCEPTED_CHAIN_LEN3_POS))
     def test_length_three_repl(self, tmp_path: Path, pos_name: str) -> None:
         entry = _ACCEPTED_CHAIN_LEN3_POS[pos_name]
         decls = (_CHAIN_LIB, entry)
-        phase, _cls, _span = repl_verdict_all_groupings(tmp_path, {}, decls)
+        phase, _cls, _span, _identity = repl_verdict_all_groupings(tmp_path, {}, decls)
         assert phase == "accepted"
 
 
@@ -1222,26 +1326,30 @@ class TestLocalScopeFullyMatchingRouteLeadingSegmentClashesAtFullChainLength:
     def test_file_same_leaf(self, tmp_path: Path, pos_name: str) -> None:
         entry = _LEN4_POS[pos_name]
         src = "\n".join(["import pkg/Foo", _LEN4_LOCAL_SAME_LEAF, entry])
-        phase, cls, _span = file_verdict(tmp_path, {"entry": src, "pkg/Foo": _LEN4_LIB})
+        phase, cls, _span, _identity = file_verdict(tmp_path, {"entry": src, "pkg/Foo": _LEN4_LIB})
         assert (phase, cls) == ("scope", RouteClashError)
 
     @pytest.mark.parametrize("pos_name", sorted(_LEN4_POS))
     def test_file_different_leaf(self, tmp_path: Path, pos_name: str) -> None:
         entry = _LEN4_POS[pos_name]
         src = "\n".join(["import pkg/Foo", _LEN4_LOCAL_DIFFERENT_LEAF, entry])
-        phase, cls, _span = file_verdict(tmp_path, {"entry": src, "pkg/Foo": _LEN4_LIB})
+        phase, cls, _span, _identity = file_verdict(tmp_path, {"entry": src, "pkg/Foo": _LEN4_LIB})
         assert (phase, cls) == ("scope", RouteClashError)
 
     @pytest.mark.parametrize("pos_name", sorted(_LEN4_POS))
     def test_repl_same_leaf(self, tmp_path: Path, pos_name: str) -> None:
         entry = _LEN4_POS[pos_name]
         decls = ("import pkg/Foo", _LEN4_LOCAL_SAME_LEAF, entry)
-        phase, cls, _span = repl_verdict_all_groupings(tmp_path, {"pkg/Foo": _LEN4_LIB}, decls)
-        assert (phase, cls) == ("scope", RouteClashError)
+        phase, cls, _span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"pkg/Foo": _LEN4_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", RouteClashError)
 
     @pytest.mark.parametrize("pos_name", sorted(_LEN4_POS))
     def test_repl_different_leaf(self, tmp_path: Path, pos_name: str) -> None:
         entry = _LEN4_POS[pos_name]
         decls = ("import pkg/Foo", _LEN4_LOCAL_DIFFERENT_LEAF, entry)
-        phase, cls, _span = repl_verdict_all_groupings(tmp_path, {"pkg/Foo": _LEN4_LIB}, decls)
-        assert (phase, cls) == ("scope", RouteClashError)
+        phase, cls, _span, _identity = repl_verdict_all_groupings(
+            tmp_path, {"pkg/Foo": _LEN4_LIB}, decls
+        )
+        assert (phase, cls) == ("rejected", RouteClashError)

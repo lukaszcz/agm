@@ -710,10 +710,9 @@ class ReplSession:
 
         A bare type has no program-level syntax of its own, so it is probed as
         a fresh alias's body -- the same position ``type X = <type-expr>``
-        resolves through. Shared construction for :meth:`_try_type_entry`'s
-        REPL-only bare-type fallback and :meth:`resolve_type_entry`/
-        :meth:`resolve_and_check_type_entry` below. Raises the underlying
-        ``AglSyntaxError`` when *text* is not a type expression at all.
+        resolves through. Used by :meth:`_try_type_entry`'s REPL-only
+        bare-type fallback. Raises the underlying ``AglSyntaxError`` when
+        *text* is not a type expression at all.
         """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_type_expr_seeded
@@ -789,7 +788,7 @@ class ReplSession:
                 program, next_node_id + 3, host_env, spaced_qualifiers=spaced_qualifiers
             )
         except (HiddenMemberError, ReferencedMemberError) as exc:
-            return self._fail([exc.to_diagnostic()], [])
+            return self._fail([exc.to_diagnostic()], [], failure=exc)
         except UnappliedGenericTypeError as exc:
             if exc.span != type_span:
                 # The unapplied generic is nested inside the entry (e.g. a type
@@ -855,7 +854,7 @@ class ReplSession:
                     text, start_id=self._next_node_id, resolve_infix=False
                 )
             except AglSyntaxError as exc:
-                return self._fail([exc.to_diagnostic()], list(tab_sink))
+                return self._fail([exc.to_diagnostic()], list(tab_sink), failure=exc)
         tab_warnings: list[Diagnostic] = list(tab_sink)
         spaced_qualifiers = tuple(spaced_sink)
 
@@ -874,8 +873,18 @@ class ReplSession:
             spaced_qualifiers=spaced_qualifiers,
         )
 
-    def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
-        """Build a clean pre-execution failure result (no promotion)."""
+    def _fail(
+        self,
+        diagnostics: list[Diagnostic],
+        warnings: list[Diagnostic],
+        *,
+        failure: AglError | None = None,
+    ) -> EntryResult:
+        """Build a clean pre-execution failure result (no promotion).
+
+        *failure* is the static ``AglError`` that produced *diagnostics*, when
+        one exists (see ``EntryResult.failure``).
+        """
         return EntryResult(
             kind="statement",
             name=None,
@@ -885,6 +894,7 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=False,
+            failure=failure,
         )
 
     @property
@@ -1563,25 +1573,6 @@ class ReplSession:
     # type_of — type without evaluation
     # ------------------------------------------------------------------
 
-    def _parse_throwaway_entry(self, text: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:
-        """Parse *text* as a throwaway REPL entry, seeded at the session's node-id counter.
-
-        Shared prologue for :meth:`type_of`, :meth:`resolve_entry`, and
-        :meth:`resolve_and_check_entry`: none of them promote or advance the
-        session counter, so seeding at ``_next_node_id`` is safe -- all
-        promoted ids are strictly below it, making this parse's ids disjoint
-        from the session's. Raises the underlying ``AglSyntaxError`` on
-        failure.
-        """
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.parser import parse_program_seeded
-
-        with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
-        return program, next_node_id, tuple(spaced_sink)
-
     def type_of(self, text: str) -> str:
         """Return the canonical display type of *text* as an expression entry.
 
@@ -1590,11 +1581,23 @@ class ReplSession:
         lowers, evaluates, promotes, or advances the node-id counter. Raises the
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
+
+        Parses *text* as a throwaway REPL entry, seeded at the session's
+        node-id counter: this never promotes or advances the session
+        counter, so seeding at ``_next_node_id`` is safe -- all promoted ids
+        are strictly below it, making this parse's ids disjoint from the
+        session's.
         """
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import Binder, Declaration
 
         host_env = self._runtime.host_environment()
-        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, resolve_infix=False
+            )
+        spaced_qualifiers = tuple(spaced_sink)
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
@@ -1621,69 +1624,6 @@ class ReplSession:
         from agm.agl.repl.type_display import format_type_for_repl
 
         return format_type_for_repl(typ, checked.type_env.type_table)
-
-    def resolve_entry(self, text: str) -> None:
-        """Resolve *text* as a throwaway entry against the session's state, without checking it.
-
-        As :meth:`resolve_and_check_entry`, but stops after scope resolution:
-        raises the underlying ``AglSyntaxError``/``AglScopeError`` (or, for a
-        type-name-as-value mistake caught while resolving, ``AglTypeError``)
-        on failure and returns normally on success.
-        """
-        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
-        self._entry_pipeline.resolve_program(
-            program, next_node_id, spaced_qualifiers=spaced_qualifiers
-        )
-
-    def resolve_and_check_entry(self, text: str) -> None:
-        """Resolve and type-check *text* as a throwaway entry against the session's state.
-
-        Unlike :meth:`type_of`, accepts any program body (a binding,
-        declaration, or statement, not only a single expression) and reports
-        no result: raises the underlying
-        ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on failure and
-        returns normally on success. Never lowers, evaluates, promotes, or
-        advances the node-id counter.
-        """
-        host_env = self._runtime.host_environment()
-        program, next_node_id, spaced_qualifiers = self._parse_throwaway_entry(text)
-        self._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
-        )
-
-    def resolve_type_entry(self, text: str) -> None:
-        """Resolve *text* as a bare type-entry probe against the session's state.
-
-        As :meth:`resolve_entry`, but probes *text* the way
-        :meth:`_try_type_entry`'s REPL-only bare-type-entry fallback does
-        (as a fresh alias's body): raises the underlying
-        ``AglSyntaxError``/``AglScopeError`` (or, for a type-name-as-value
-        mistake caught while resolving, ``AglTypeError``) on failure and
-        returns normally on success.
-        """
-        program, next_node_id, spaced_qualifiers, _fresh_name, _span = self._type_entry_program(
-            text
-        )
-        self._entry_pipeline.resolve_program(
-            program, next_node_id, spaced_qualifiers=spaced_qualifiers
-        )
-
-    def resolve_and_check_type_entry(self, text: str) -> None:
-        """Resolve and type-check *text* as a bare type-entry probe against the session's state.
-
-        As :meth:`resolve_and_check_entry`, but probes *text* the way
-        :meth:`_try_type_entry`'s REPL-only bare-type-entry fallback does.
-        Raises the underlying
-        ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on failure and
-        returns normally on success.
-        """
-        host_env = self._runtime.host_environment()
-        program, next_node_id, spaced_qualifiers, _fresh_name, _span = self._type_entry_program(
-            text
-        )
-        self._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
-        )
 
     # ------------------------------------------------------------------
     # Introspection
@@ -2078,7 +2018,7 @@ class ReplSession:
         try:
             program = parse_repl_transcript(normalized)
         except AglSyntaxError as exc:
-            return [self._fail([exc.to_diagnostic()], [])]
+            return [self._fail([exc.to_diagnostic()], [], failure=exc)]
 
         results: list[EntryResult] = []
         for item in program.body.items:

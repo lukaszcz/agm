@@ -75,36 +75,31 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 
 def _module_outcome(source: str) -> Outcome:
-    """A phase-accurate verdict: which of the two calls raised, not which class.
+    """A phase-accurate verdict: which of two phase-ordered calls raised, not which class.
 
-    Resolves *source* once for its own scope-phase verdict, then separately
-    for the full type-checked verdict -- a second, independent parse and
-    resolve of the same tiny inline snippet, since :func:`resolve_and_check_inline_entry`
-    does not expose its intermediate resolution for reuse. The second call
-    re-resolves scope deterministically over the same source the first call
-    already resolved without raising, so it cannot raise ``AglScopeError``
-    either; only ``AglTypeError`` is a genuine typecheck-phase verdict.
+    *source* is a tiny inline snippet, resolved (and separately, resolved
+    and checked) through :mod:`tests.agl.module_graph`'s inline-entry helpers
+    rather than a :class:`~agm.agl.modules.loader.ModuleGraph` (see
+    :func:`~tests.agl.qualifier_support.phase_verdict` for the shared
+    classification).
     """
-    from agm.agl.typecheck import AglTypeError
     from tests.agl.ir_harness import base_caps
     from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
+    from tests.agl.qualifier_support import phase_verdict
 
-    try:
-        resolve_inline_entry(source)
-    except AglScopeError:
-        return "scope"
-    try:
-        resolve_and_check_inline_entry(source, base_caps())
-    except AglTypeError:
-        return "typecheck"
-    return "accepted"
+    phase, _cls, _span = phase_verdict(
+        lambda: resolve_inline_entry(source),
+        lambda: resolve_and_check_inline_entry(source, base_caps()),
+    )
+    assert phase in ("accepted", "scope", "typecheck")
+    return phase
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     """A phase-accurate verdict: which call raised, not which class."""
     from tests.agl.qualifier_support import file_verdict
 
-    phase, _cls, _span = file_verdict(tmp_path, modules)
+    phase, _cls, _span, _identity = file_verdict(tmp_path, modules)
     return phase
 
 

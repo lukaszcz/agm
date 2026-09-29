@@ -920,6 +920,6 @@ class TestRouteAndLocalScopeQualifiers:
 
     @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: str, sizes: tuple[int, ...]
+        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, _SCENARIOS[scenario], sizes)
+        assert_scenario_for_grouping(tmp_path, scenario, sizes)

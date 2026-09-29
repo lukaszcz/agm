@@ -79,7 +79,7 @@ shared with ``tests/test_agl_repl_session.py``.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -519,13 +519,28 @@ class Scenario:
     legal: LegalGroupings = "ALL"
 
 
+_PROBES_PER_CASE = 12
+"""Probes one scenario test case checks: each probe costs a file build and a REPL entry."""
+
+
 def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
-    """``pytest.param(name, sizes)`` per scenario and grouping of its header plus one probe."""
-    return [
-        pytest.param(name, sizes, id=f"{name}-{gid}")
-        for name, scenario in scenarios.items()
-        for gid, sizes in grouping_cases(len(scenario.header) + 1)
-    ]
+    """``pytest.param(scenario, sizes)`` per scenario, grouping and chunk of its probes.
+
+    Every chunk replays the scenario's header in its own session, so a large
+    probe table spreads over several cheap test cases instead of one costly one.
+    """
+    params: list[object] = []
+    for name, scenario in scenarios.items():
+        keys = list(scenario.probes)
+        chunks = [keys[i : i + _PROBES_PER_CASE] for i in range(0, len(keys), _PROBES_PER_CASE)]
+        for index, chunk in enumerate(chunks):
+            part = replace(scenario, probes={key: scenario.probes[key] for key in chunk})
+            suffix = "" if len(chunks) == 1 else f"-part{index + 1}"
+            params.extend(
+                pytest.param(part, sizes, id=f"{name}{suffix}-{gid}")
+                for gid, sizes in grouping_cases(len(scenario.header) + 1)
+            )
+    return params
 
 
 def assert_scenario_for_grouping(

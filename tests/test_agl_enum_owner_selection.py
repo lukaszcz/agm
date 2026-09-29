@@ -117,6 +117,8 @@ def _check(tmp_path: Path, entry: str, *, stdlib: bool = False) -> None:
         # Values.
         pytest.param(_LOCAL + "Status::Saved(id = 1)", "Saved", id="value-owner"),
         pytest.param(_LOCAL + "Current::Saved(id = 1)", "Saved", id="value-alias"),
+        pytest.param(_LOCAL + "Current::Saved::X", "Saved", id="value-through-alias"),
+        pytest.param("import library::*\nStatus::Saved::X", "Saved", id="value-through-import"),
         pytest.param(_LOCAL + "Stored[int]::Saved(id = 1)", "Saved", id="value-applied"),
         pytest.param(_LOCAL + "::Status::Saved(id = 1)", "Saved", id="value-anchored"),
         pytest.param(_LOCAL + "Verdict::Pass", "Pass", id="value-other-enum-inline"),
@@ -1073,7 +1075,7 @@ def test_module_qualified_declared_record_constructs_the_record(tmp_path: Path) 
             "case p of | /dup::B::Red => 0 | _ => 1", AglTypeError, id="other-enum-pattern"
         ),
         pytest.param(
-            "case p of | funcs::pick::Pass => 0 | _ => 1", AglTypeError, id="not-a-type-pattern"
+            "case p of | funcs::pick::Pass => 0 | _ => 1", AglScopeError, id="not-a-type-pattern"
         ),
         pytest.param(
             "case p of | ::Nope::Pass => 0 | _ => 1", AglScopeError, id="unknown-own-owner-pattern"

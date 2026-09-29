@@ -5,7 +5,7 @@ scope palette
 end palette
 
 program def main() -> unit =
-  let c: /palette::Color = palette::Color::Red
+  let c: /palette::Color = /palette::Color::Red
   print(
     case c of
     | palette::Red => 1

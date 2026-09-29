@@ -22,6 +22,7 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     RouteClashError,
+    UnknownMemberError,
     UnknownQualifierError,
     qualification_repair_guidance,
 )
@@ -423,7 +424,6 @@ _TYPE_NAMES = (
         (f"{_TYPE_NAMES}print(S::C)", "S::C"),
         (f"{_TYPE_NAMES}print(S::N::Dir)", "S::N::Dir"),
         (f"{_TYPE_NAMES}print(S::T)", "S::T"),
-        (f"{_TYPE_NAMES}print(S::T::Red)", "S::T"),
         (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(Col)\nend S", "Col"),
         (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(N::Dir)\nend S", "N::Dir"),
         ("type A::Count = int\nA::Count", "A::Count"),
@@ -451,7 +451,6 @@ _TYPE_NAME_LIB = (
         ("lib::T", "lib::T"),
         ("lib::S::E", "lib::S::E"),
         ("lib::S::U", "lib::S::U"),
-        ("lib::S::U::X", "lib::S::U"),
         ("/lib::S::E", "/lib::S::E"),
     ),
 )
@@ -465,6 +464,16 @@ def test_imported_type_name_without_a_constructor_is_not_a_value(
         _entry_resolution(tmp_path, modules)
 
     assert str(exc_info.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
+
+
+def test_structural_alias_owner_has_no_member(tmp_path: Path) -> None:
+    """A structural alias owns no member, local or imported, at any scope depth."""
+    with pytest.raises(UnknownMemberError):
+        resolve_inline_entry(f"{_TYPE_NAMES}print(S::T::Red)")
+    with pytest.raises(UnknownMemberError):
+        _entry_resolution(
+            tmp_path, {"entry": "import lib\nprint(lib::S::U::X)\n", "lib": _TYPE_NAME_LIB}
+        )
 
 
 _PALETTE_SCOPE = (

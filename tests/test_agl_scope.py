@@ -2579,6 +2579,7 @@ class TestParentScopeSeam:
             "Review::Pass()",
             parent_scope=prior.root_scope,
             retained_type_owners=prior.type_owners,
+            retained_scope_nodes=prior.scope_nodes,
         )
         from agm.agl.syntax.nodes import Call as _Call
         from agm.agl.syntax.nodes import VarRef as _VarRef

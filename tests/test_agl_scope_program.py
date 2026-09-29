@@ -35,10 +35,10 @@ from agm.agl.scope.symbols import (
     ImmutableAssignmentError,
     ImportedModuleOrigin,
     ReceiverOwner,
+    UnknownMemberError,
 )
 from agm.agl.semantics.values import BoolValue, IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
-from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
@@ -2078,15 +2078,23 @@ class TestAssignStmtModuleId:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
+    @pytest.mark.parametrize(
+        "target",
+        [
+            pytest.param("lib::Color::Red", id="declaring-enum"),
+            pytest.param("lib::Shade::Red", id="alias-owner"),
+            pytest.param("lib::Red", id="module-surface"),
+        ],
+    )
     def test_qualified_assign_to_an_imported_enum_member_names_its_constructor(
-        self, tmp_path: Path
+        self, tmp_path: Path, target: str
     ) -> None:
-        """The rejection classifies an imported enum member by its own declaration."""
+        """The rejection classifies an imported enum member as a constructor, however selected."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib\nlib::Color::Red := lib::Color::Blue",
-                "lib": "enum Color =\n  | Red\n  | Blue",
+                "entry": f"import lib\n{target} := lib::Color::Blue",
+                "lib": "enum Color =\n  | Red\n  | Blue\ntype Shade = Color",
             },
         )
         with pytest.raises(ImmutableAssignmentError) as caught:
@@ -2730,9 +2738,7 @@ class TestQualifiedConstructorReferences:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
-    def test_is_test_defers_non_constructible_imported_owner_to_typecheck(
-        self, tmp_path: Path
-    ) -> None:
+    def test_is_test_through_an_imported_function_selects_no_member(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2741,10 +2747,11 @@ class TestQualifiedConstructorReferences:
             },
         )
 
-        assert resolve_program(graph).entry_id == ENTRY_ID
+        with pytest.raises(UnknownMemberError):
+            resolve_program(graph)
 
-    def test_non_constructible_qualified_type_is_a_type_name(self, tmp_path: Path) -> None:
-        """A structural alias qualifying a constructor is a type name, as a local one is."""
+    def test_non_constructible_qualified_type_owns_no_member(self, tmp_path: Path) -> None:
+        """A structural alias owns no member, as a local one does not."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2752,7 +2759,7 @@ class TestQualifiedConstructorReferences:
                 "entry": "import mylib::*\nlet x = mylib::Alias::Ctor\nx",
             },
         )
-        with pytest.raises(AglTypeError):
+        with pytest.raises(UnknownMemberError):
             resolve_program(graph)
 
     def test_qualified_non_type_owns_no_constructor(self, tmp_path: Path) -> None:

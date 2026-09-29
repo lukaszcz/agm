@@ -1116,14 +1116,12 @@ def test_ambiguous_routed_owner_selects_its_one_hidden_candidate(tmp_path: Path)
         resolve_program(graph)
 
 
-def test_ambiguous_routed_owner_reports_ambiguity_when_every_candidate_hides_it(
+def test_ambiguous_routed_owner_reports_hidden_when_every_candidate_hides_it(
     tmp_path: Path,
 ) -> None:
     """A routed owner ambiguous in isolation, whose requested member every
 
-    candidate both declares and hides, stays the owner's own ambiguity: more
-    than one candidate could still supply the member, so hiding decides
-    nothing between them.
+    candidate both declares and hides, selects nothing: the member is hidden.
     """
     graph = make_graph_from_files(
         tmp_path,
@@ -1138,7 +1136,7 @@ def test_ambiguous_routed_owner_reports_ambiguity_when_every_candidate_hides_it(
         },
     )
 
-    with pytest.raises(AmbiguousQualificationError):
+    with pytest.raises(HiddenMemberError):
         resolve_program(graph)
 
 
@@ -1162,13 +1160,13 @@ def test_ambiguous_bare_owner_selects_its_one_hidden_candidate(tmp_path: Path) -
         resolve_program(graph)
 
 
-def test_ambiguous_bare_owner_reports_ambiguity_when_every_candidate_hides_it(
+def test_ambiguous_bare_owner_reports_hidden_when_every_candidate_hides_it(
     tmp_path: Path,
 ) -> None:
     """A bare ``use``-opened owner ambiguous in isolation, whose requested
 
-    member every candidate both declares and hides, stays the owner's own
-    ambiguity, mirroring the routed case.
+    member every candidate both declares and hides, selects nothing, mirroring
+    the routed case.
     """
     graph = make_graph_from_files(
         tmp_path,
@@ -1184,7 +1182,7 @@ def test_ambiguous_bare_owner_reports_ambiguity_when_every_candidate_hides_it(
         },
     )
 
-    with pytest.raises(AmbiguousQualificationError):
+    with pytest.raises(HiddenMemberError):
         resolve_program(graph)
 
 
@@ -1915,7 +1913,7 @@ def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Pat
         {"entry": "import lib::Alias\nAlias::value", "lib": "type Alias = int"},
     )
 
-    with pytest.raises(UnknownQualifierError):
+    with pytest.raises(UnknownMemberError):
         resolve_program(graph)
 
 
@@ -2086,7 +2084,7 @@ def test_anchored_qualified_enum_variant_typechecks(tmp_path: Path) -> None:
 
 
 def test_qualified_pattern_owner_naming_a_non_type_is_rejected(tmp_path: Path) -> None:
-    """A pattern qualifier whose owner names a function, not a type, is a type error."""
+    """A pattern qualifier routed through a function, not a type, selects no member."""
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -2102,7 +2100,7 @@ def test_qualified_pattern_owner_naming_a_non_type_is_rejected(tmp_path: Path) -
         },
     )
 
-    with pytest.raises(AglTypeError):
+    with pytest.raises(UnknownMemberError):
         check_program(resolve_program(graph), base_caps())
 
 

@@ -251,6 +251,7 @@ def resolve_entry(
     *,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
+    retained_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     origin_path: Path | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
@@ -264,8 +265,9 @@ def resolve_entry(
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
-    *parent_scope* and *retained_type_owners* forward to that function's
-    ``entry_repl_session_scope`` and ``entry_repl_session_type_paths``
+    *parent_scope*, *retained_type_owners* and *retained_scope_nodes* forward
+    to that function's ``entry_repl_session_scope``,
+    ``entry_repl_session_type_paths`` and ``entry_repl_session_scope_nodes``
     respectively; *origin_path* forwards to ``build_repl_graph``'s ``path``.
 
     *default_stdlib* controls whether ``std/prelude`` is imported into the
@@ -285,6 +287,7 @@ def resolve_entry(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
         entry_repl_session_scope=parent_scope,
+        entry_repl_session_scope_nodes=retained_scope_nodes,
     )
     resolved = resolved_program.modules[graph.entry_id].resolved
     return _without_synthetic_import(resolved, import_node_id)

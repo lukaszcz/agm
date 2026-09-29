@@ -333,22 +333,9 @@ def _expected_legal_full_groupings(form_name: str) -> frozenset[tuple[int, ...]]
 
 
 def _matrix_cases(form_name: str) -> list[tuple[str, str]]:
-    """Every ``(outcome, pos_name)`` pair this form's REPL matrix probes.
-
-    "moduse"'s ambiguity outcome is excluded: a ``use`` contribution from an
-    earlier REPL entry does not compose with one the probing entry declares
-    itself, so the ambiguity that every other grouping (and file mode)
-    reports is missed whenever the two share an entry -- a REPL-only
-    divergence pinned by ``test_moduse_ambiguity_depends_on_repl_grouping``
-    below, not one of this module's own position/grouping invariants.
-    """
+    """Every ``(outcome, pos_name)`` pair this form's REPL matrix probes."""
     _, _, _, outcomes = _FORMS[form_name]
-    return [
-        (outcome, pos_name)
-        for outcome in outcomes
-        for pos_name in _POS
-        if not (form_name == "moduse" and outcome == "amb")
-    ]
+    return [(outcome, pos_name) for outcome in outcomes for pos_name in _POS]
 
 
 def _assert_matrix_verdict(
@@ -456,28 +443,6 @@ def test_qualifier_decision_matrix_repl(
             q,
             is_file=False,
         )
-
-
-def test_moduse_ambiguity_depends_on_repl_grouping(tmp_path: Path) -> None:
-    """A shared entry misses an earlier entry's ``use``, unlike every other grouping.
-
-    ``Color::Red`` is ambiguous between ``m``'s and ``n``'s wildcard-``use``d
-    ``Color`` in file mode, and when ``use n::*`` is evaluated as its own
-    REPL entry -- but is wrongly accepted when ``use n::*`` instead shares an
-    entry with the reference: the probing entry's own ``use`` does not
-    compose with one an earlier entry already committed. Pinned here so a fix
-    (or a regression sharpening it) is visible; not one of this module's own
-    position/grouping invariants, so it is excluded from the REPL matrix
-    parametrization above rather than asserted there.
-    """
-    for name, source in _MN.items():
-        (tmp_path / f"{name}.agl").write_text(source, encoding="utf-8")
-    session = ReplSession(cwd=tmp_path, default_stdlib=True)
-    session.open()
-    for decl in ("import m", "import n", "use m::*"):
-        assert session.eval_entry(decl).ok
-    result = session.eval_entry("use n::*\nColor::Red")
-    assert result.ok
 
 
 class TestBareTypeEntryFallback:
@@ -1017,11 +982,11 @@ class TestNearestUseRegionBlocksFartherImportedTypeAsQualifierLeadingSegment:
     ``tl::Geo`` (an imported type) and ``shapes::Geo`` (a locally ``use``d
     scope region) share a spelling; only the region -- the nearer
     contribution -- ever decides ``Geo``'s own leading reading, so a value
-    reference to ``Geo::f()`` (naming no member of either) reports the
-    unknown-*qualifier* verdict, not the farther type's own unknown-*member*
-    one (contrast ``test_control_without_the_nearer_region``, whose
-    identical spelling, absent the ``use``, resolves to the farther type
-    instead and so does report an unknown member).
+    reference to ``Geo::f()`` (naming no member of either) is a member the
+    region lacks, exactly as for a region this module declares itself --
+    never merged with the farther type (contrast
+    ``test_control_without_the_nearer_region``, whose identical spelling,
+    absent the ``use``, resolves to the farther type instead).
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
@@ -1033,7 +998,7 @@ class TestNearestUseRegionBlocksFartherImportedTypeAsQualifierLeadingSegment:
             _NEAREST_MODULES,
             (*_NEAREST_HEADER, "Geo::f()"),
             sizes,
-            ("scope", UnknownQualifierError),
+            ("scope", UnknownMemberError),
             span_text="Geo::f",
         )
 

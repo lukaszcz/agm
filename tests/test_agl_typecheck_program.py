@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a_value
+from agm.agl.diagnostics import (
+    AglError,
+    HiddenMemberError,
+    ReferencedMemberError,
+    type_name_not_a_value,
+)
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -385,17 +390,12 @@ def test_nested_value_construction_below_a_root_local_owner_resolves_over_a_def_
 def test_nested_structural_alias_below_a_root_local_owner_is_not_a_constructor(
     tmp_path: Path,
 ) -> None:
-    """The leading-lookup's full-path hit still needs a constructible owner.
+    """A method path ``def Geo::m`` leaves ``Geo::Inner`` naming the nested alias.
 
-    ``Geo::Inner`` is a real nested declaration -- the same shape the
-    ``Geo::Inner`` record in the sibling test above resolves through the
-    leading-lookup's full-path hit -- but here it is a structural alias
-    (``type Geo::Inner = int``), which qualifies no constructor at all. The
-    leading-lookup must keep looking rather than mistake it for the owner a
-    constructor call needs, so the reference fails as an unknown member of
-    ``Geo``'s own scope, not with a false accept.
+    ``type Geo::Inner = int`` qualifies no constructor, so the value
+    spelling is a type name, exactly as it is without the method.
     """
-    with pytest.raises(UnknownMemberError):
+    with pytest.raises(AglTypeError):
         check_agl_program(
             tmp_path,
             {
@@ -1619,7 +1619,7 @@ def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
 
 
 def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Path) -> None:
-    with pytest.raises(AglScopeError):
+    with pytest.raises(HiddenMemberError):
         check_agl_program(
             tmp_path,
             {
@@ -1640,14 +1640,14 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child_in_is_positi
     tmp_path: Path,
 ) -> None:
     """The same hiding is honoured for the ``is`` spelling, not only construction."""
-    with pytest.raises(AglScopeError):
+    with pytest.raises(HiddenMemberError):
         check_agl_program(
             tmp_path,
             {
                 "entry": (
                     "import lib\n"
                     "use lib::* hiding Alias::some\n"
-                    "let value: Alias = lib::Alias::some(value = 1)\n"
+                    "let value: Alias = lib::Option::some(value = 1)\n"
                     "let result = value is Alias::some\n"
                     "result"
                 ),
@@ -1849,27 +1849,18 @@ _TYPE_PARAMETER_ALIASES = (
 )
 
 
-@pytest.mark.parametrize(
-    "use",
-    (
-        "%sG::Red",
-        "%sG::Paint(n = 1)",
-        "%sH(x = 1)",
-        "%sH::Pt(x = 1)",
-    ),
-)
-def test_alias_of_its_own_type_parameter_is_a_type_name(tmp_path: Path, use: str) -> None:
+def test_alias_of_its_own_type_parameter_is_a_type_name(tmp_path: Path) -> None:
     """An alias whose target is its own type parameter qualifies no constructor.
 
     In value position this names a type, not a value or constructor.
     """
     with pytest.raises(AglTypeError):
-        check_agl_program(tmp_path / "local", {"entry": f"{_TYPE_PARAMETER_ALIASES}\n{use % ''}"})
+        check_agl_program(tmp_path / "local", {"entry": f"{_TYPE_PARAMETER_ALIASES}\nH(x = 1)"})
     with pytest.raises(AglTypeError):
         check_agl_program(
             tmp_path / "imported",
             {
-                "entry": f"import lib\nlet c: lib::Col = lib::Col::Red\n{use % 'lib::'}",
+                "entry": "import lib\nlet c: lib::Col = lib::Col::Red\nlib::H(x = 1)",
                 "lib": _TYPE_PARAMETER_ALIASES,
             },
         )
@@ -1878,20 +1869,22 @@ def test_alias_of_its_own_type_parameter_is_a_type_name(tmp_path: Path, use: str
 @pytest.mark.parametrize(
     "use",
     (
+        "%sG::Red",
+        "%sG::Paint(n = 1)",
+        "%sH::Pt(x = 1)",
         "c is %sG::Red",
         "case c of | %sG::Red => 1 | _ => 2",
     ),
 )
-def test_alias_of_its_own_type_parameter_has_no_pattern_member(tmp_path: Path, use: str) -> None:
-    """A pattern/``is`` owner chain into an alias of its own type parameter selects no member.
+def test_alias_of_its_own_type_parameter_has_no_member(tmp_path: Path, use: str) -> None:
+    """An owner chain into an alias of its own type parameter selects no member.
 
     Its target is an unresolved type parameter, so no owner ever declares
-    ``Red``: the same unknown-member verdict scope reports for every
-    position, not a type-name-as-value misuse.
+    the member: the same unknown-member verdict in every position.
     """
-    with pytest.raises(AglScopeError):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(tmp_path / "local", {"entry": f"{_TYPE_PARAMETER_ALIASES}\n{use % ''}"})
-    with pytest.raises(AglScopeError):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(
             tmp_path / "imported",
             {
@@ -2252,7 +2245,7 @@ def test_type_qualified_through_an_imported_function_is_rejected(tmp_path: Path)
         "entry": "import mylib\nlet n: mylib::getValue::Point = mylib::Point(x = 1)\nn",
         "mylib": "record Point\n  x: int\ndef getValue() -> int = 42",
     }
-    with pytest.raises(AglTypeError):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(tmp_path, modules)
 
 

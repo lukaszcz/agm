@@ -2238,8 +2238,12 @@ def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_p
 @pytest.mark.parametrize(
     ("probe", "expected_error"),
     (
-        ("Foo::Old::E::A", (UnknownQualifierError,)),
-        ("fn(x: Foo::Old::E::A) => 1", (UnknownQualifierError,)),
+        # The live ``Foo`` (or a leftover ``Old``) lacks the next segment: the
+        # unknown-member verdict a live owner missing a member gives anywhere.
+        # One setup entry holding all three declarations fails outright
+        # (``Foo`` twice), leaving no ``Foo`` at all: an unknown qualifier.
+        ("Foo::Old::E::A", (UnknownQualifierError, UnknownMemberError)),
+        ("fn(x: Foo::Old::E::A) => 1", (UnknownQualifierError, UnknownMemberError)),
         # A grouping whose combined setup entry fails to redeclare ``Foo``
         # (name-clash inside one entry) leaves ``Old`` declared but never
         # nested with ``E`` at all, rather than genuinely retired: scope

@@ -5234,22 +5234,12 @@ class _Checker:
         is the declaration, never the name, so two declarations sharing one
         name path (a REPL redeclaration) are unrelated enums.
         """
-        local_owner = render_qualifier_path(qualifier)
-        owner_type, _type_params = self._owner_type_or_error(qualifier, local_owner, span)
-        if not isinstance(owner_type, EnumType):
-            return AglTypeError(f"'{local_owner}' is not an enum type.", span=span)
-        return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
-
-    def _owner_type_or_error(
-        self, qualifier: QualifierChain, rendered_owner: str, span: SourceSpan
-    ) -> tuple[Type, tuple[str, ...]]:
-        """Resolve *qualifier*'s owner by scope's recorded identity, or raise it is unknown."""
-        owner = self._env.owner_type_for_qualifier(
-            qualifier, span=span, type_vars=self._current_type_vars
-        )
+        owner = self._local_qualified_enum(qualifier, span)
         if owner is None:
-            raise AglTypeError(f"'{rendered_owner}' is not a known type.", span=span)
-        return owner
+            local_owner = render_qualifier_path(qualifier)
+            return AglTypeError(f"'{local_owner}' is not an enum type.", span=span)
+        local_owner, owner_type, _type_params = owner
+        return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
 
     def _local_qualified_enum(
         self, qualifier: QualifierChain, span: SourceSpan

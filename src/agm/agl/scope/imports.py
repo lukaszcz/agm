@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
@@ -48,7 +48,6 @@ __all__ = [
     "qualifier_scope_paths",
     "render_qualifier",
     "resolve_qualified",
-    "resolve_qualified_member",
     "route_spelling",
     "declares_bare_constructor",
     "try_resolve_qualified_member",
@@ -667,27 +666,6 @@ def route_spelling(env: ImportEnv, origin: QName) -> str | None:
         if try_resolve_qualified_member(env, qualifier, atom, anchored=anchored) == origin
     )
     return min(spellings, key=len, default=None)
-
-
-def resolve_qualified_member(
-    env: ImportEnv,
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    *,
-    anchored: bool = False,
-    unknown_qualifier: Callable[[str], Exception],
-    missing_member: Callable[[str], Exception],
-    ambiguous: Callable[[tuple[ModuleId, ...]], Exception],
-) -> QName:
-    result = resolve_qualified(env, qualifier, member, anchored=anchored)
-    if isinstance(result, QualResolutionFound):
-        return result.qname
-    rendered = render_qualifier(qualifier, anchored=anchored)
-    if isinstance(result, QualResolutionUnknownQualifier):
-        raise unknown_qualifier(rendered)
-    if isinstance(result, QualResolutionMissingMember):
-        raise missing_member(rendered)
-    raise ambiguous(result.candidates)
 
 
 def resolve_qualified(

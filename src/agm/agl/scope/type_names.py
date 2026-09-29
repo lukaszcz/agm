@@ -44,7 +44,6 @@ __all__ = [
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
-    "OwnerRoute",
     "TypeContributions",
     "TypeNameSite",
     "bare_type_selection",
@@ -78,12 +77,14 @@ class LeadingReading:
 
     ``is_region`` marks a scope region's reading: decisive on its own, so
     ``types`` is always empty then -- a farther level's type never merges
-    into a nearer region.
+    into a nearer region. ``path`` is the declaring scope path of a
+    ``DECLARED`` reading, region or type, and ``None`` for every other layer.
     """
 
     layer: ContributionLayer
     is_region: bool
     types: frozenset[QName] = frozenset()
+    path: ScopePath | None = None
 
 
 TypeContributions = Callable[[NameAtom], tuple[ScopePath, frozenset[QName]] | None]
@@ -159,10 +160,13 @@ def leading_name_reading(
     for base in enclosing_scope_bases(site.scope_path, rooted=rooted):
         path = (*base, name)
         if site.declares_region(path):
-            return LeadingReading(ContributionLayer.DECLARED, True)
+            return LeadingReading(ContributionLayer.DECLARED, True, path=path)
         if site.declares(path):
             return LeadingReading(
-                ContributionLayer.DECLARED, False, frozenset({(site.module_id, _atom(path))})
+                ContributionLayer.DECLARED,
+                False,
+                frozenset({(site.module_id, _atom(path))}),
+                path=path,
             )
     if rooted:
         return None
@@ -192,11 +196,11 @@ def _type_name_selection(
     """
     qualifier = type_expr.qualifier
     if qualifier is None:
-        return _leading_type_name_selection(site, type_expr.name, None, None)
+        return _leading_type_name_selection(site, type_expr.name, None)
     anchor = qualifier.anchor
     segments = qualifier.route_segments
     if not segments:
-        return _leading_type_name_selection(site, type_expr.name, qualifier, anchor)
+        return _leading_type_name_selection(site, type_expr.name, anchor)
     if anchor is not QualifierAnchor.MODULE:
         for base in enclosing_scope_bases(
             site.scope_path, rooted=anchor is QualifierAnchor.CURRENT_MODULE
@@ -212,20 +216,14 @@ def _type_name_selection(
 
 
 def _leading_type_name_selection(
-    site: TypeNameSite,
-    name: str,
-    qualifier: QualifierChain | None,
-    anchor: QualifierAnchor | None,
+    site: TypeNameSite, name: str, anchor: QualifierAnchor | None
 ) -> tuple[frozenset[QName], bool]:
-    """Return a leading name's selection: a bare name, or a qualifier's own leading segment.
+    """Return a bare or ``::``-anchored name's selection.
 
     Delegates to :func:`leading_name_reading`, the one nearest-level lookup
     shared with a qualifier chain's leading segment and a method receiver's
-    owner. A module-anchored leading segment is a route only, never a local
-    or contributed reading; a scope-region reading selects no type.
+    owner; a scope-region reading selects no type.
     """
-    if anchor is QualifierAnchor.MODULE and qualifier is not None:
-        return _routed_selection(site, qualifier, (name,)), True
     reading = leading_name_reading(site, name, rooted=anchor is QualifierAnchor.CURRENT_MODULE)
     if reading is None:
         return frozenset(), True
@@ -343,14 +341,6 @@ def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
 
 
 @dataclass(frozen=True, slots=True)
-class OwnerRoute:
-    """How a use site spells an owner: resolved at *site* through *owner_expr*."""
-
-    site: TypeNameSite
-    owner_expr: NameT | AppliedT
-
-
-@dataclass(frozen=True, slots=True)
 class MemberReferenced:
     """*owner*'s enum only references ``member``; it selects nothing at *owner*'s own path."""
 
@@ -371,21 +361,14 @@ repeating that lookup only to relabel it.
 """
 
 
-def owner_member_selection(
-    owner: TypeOwner, member: str, route: OwnerRoute | None
-) -> MemberSelection:
+def owner_member_selection(owner: TypeOwner, member: str) -> MemberSelection:
     """Return what ``owner::member`` selects: *owner* being what the spelling selects, by identity.
 
-    Declared members come from *owner* alone: ``members`` (inline members, or
-    an alias's already-filtered reachable projection), ``hidden`` (what that
-    projection subtracted), and ``referenced`` (names the enum only
-    references). An alias's ``hidden`` set already encodes its own use-site
-    filter, so it is never re-filtered here. A nominal (non-alias) enum
-    reached indirectly -- through a ``use`` contribution or an import route --
-    carries no such set of its own, so *route*, when given, filters it fresh
-    at the current site through :func:`imported_member_selection`; a direct
-    lexical hit (``route`` reporting no indirection) is never filtered. A
-    direct owner's referenced name declared at its own path
+    Declared members come from *owner* alone: ``hidden`` (what an alias's
+    already-filtered reachable projection subtracted) and ``referenced``
+    (names the enum only references). A nominal owner's own member hidden at
+    the site is the caller's to decide, from what the site's contributions
+    select. A direct owner's referenced name declared at its own path
     (``owner.own_path_referenced``) selects like a declared member instead;
     an alias never carries that set (see :class:`~agm.agl.scope.symbols.TypeOwner`),
     so the same name stays referenced through one.
@@ -396,16 +379,4 @@ def owner_member_selection(
         return MemberReferenced()
     if member in owner.hidden:
         return MemberHidden()
-    constructor = owner.members.get(member)
-    if constructor is None:
-        return None
-    if route is not None and owner.alias is None:
-        reached = nominal_selection(route.site, route.owner_expr)
-        if (
-            reached is not None
-            and reached[1]
-            and constructor.qname
-            not in imported_member_selection(route.site, route.owner_expr, member)
-        ):
-            return MemberHidden()
     return None

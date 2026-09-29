@@ -47,7 +47,7 @@ def _roots(*, loose: Path | None = None, package: Path = _PACKAGE) -> RootSet:
 
 def _run(source: str, *, loose: Path | None = None, package: Path = _PACKAGE) -> RunResult:
     return run_inline_code(
-        PipelineDriver(get_sandbox_context=None),
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         source,
         roots=_roots(loose=loose, package=package),
         default_stdlib=False,

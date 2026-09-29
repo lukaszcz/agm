@@ -226,9 +226,9 @@ def _reserved_default_resolver(nominal: "NominalId", field_index: int) -> "Value
     yet at this boundary, unlike an ordinary program's own field default
     (filled by ``IrInterpreter.default_for_field`` against the real, fully
     linked ``NominalDescriptor`` table); a reserved record's default is
-    instead a plain constant the seeded ``TypeDef`` carries directly (see
-    :func:`~agm.agl.semantics.type_table.reserved_field_default`), which is
-    all ``Sandbox`` (the first engine-key type with defaulted fields) needs.
+    instead a plain host-side constant in
+    :data:`~agm.agl.semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES` (see
+    :func:`~agm.agl.semantics.type_table.reserved_field_default`).
     """
     from agm.agl.semantics.type_table import reserved_field_default
 
@@ -261,7 +261,8 @@ def convert_host_value(
     enum has an ordinary wire schema, dispatched through its own shorthand
     and constructor-call reading. *type_table* resolves record/enum
     field/variant shapes for *type_obj*. An omitted defaulted field (e.g.
-    ``Sandbox``'s) fills through :func:`_reserved_default_resolver`.
+    ``Sandbox``'s or an ``Agent`` member's) fills through
+    :func:`_reserved_default_resolver`.
     """
     from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError

@@ -41,7 +41,9 @@ def _prepare_graph(
 
 def _compiled(source: str) -> tuple[PreparedProgram, ProgramDiscovery]:
     prepared = _prepare_graph(source)
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
     assert discovery.compiled is not None
     return prepared, discovery
 
@@ -61,7 +63,7 @@ def _change_capabilities(runtime: PipelineDriver) -> None:
 def test_single_run_rejects_cached_artifact_from_different_prepared_program(
     check_only: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared_a = prepare_inline_code('let a = 1\nprint "stale %{a}"')
     discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.compiled is not None
@@ -82,7 +84,7 @@ def test_program_discovery_rejects_cached_artifact_from_different_prepared_progr
     prepared_b = _prepare_graph('let b = "b"\nb')
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver(get_sandbox_context=None).discover_programs(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
             prepared_b, compiled=discovery_a.compiled
         )
 
@@ -100,7 +102,7 @@ def test_program_discovery_rejects_cached_artifact_with_different_entry_identity
     )
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver(get_sandbox_context=None).discover_programs(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
             prepared,
             compiled=wrong_entry_compiled,
         )
@@ -114,12 +116,14 @@ def test_program_discovery_rejects_cached_artifact_with_different_module_set(
         "import helper\nlet value = 1\nvalue",
         extra_roots=frozenset({tmp_path}),
     )
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared_with_import)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared_with_import
+    )
     assert discovery.compiled is not None
     prepared_without_import = _prepare_graph("let value = 2\nvalue")
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver(get_sandbox_context=None).discover_programs(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
             prepared_without_import,
             compiled=discovery.compiled,
         )
@@ -134,7 +138,7 @@ def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> 
             return "extra"
 
     source = "let value = 1\nvalue"
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = prepare_inline_code(source)
     discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None
@@ -147,7 +151,7 @@ def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> 
 
 
 def test_graph_cache_derives_capability_provenance_from_checked() -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepare_graph("let value = 1\nvalue")
     assert prepared.resolved is not None
     compiled = compile_program_matches(
@@ -161,7 +165,7 @@ def test_graph_cache_derives_capability_provenance_from_checked() -> None:
 
 
 def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepare_graph("let value = 1\nvalue")
     assert prepared.resolved is not None
     compiled = compile_program_matches(
@@ -177,7 +181,7 @@ def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
 
 
 def test_program_run_rechecks_prechecked_artifact_when_host_capabilities_change() -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepare_graph("let value = 1\nvalue")
     discovery = runtime.discover_programs(prepared)
     assert discovery.checked is not None
@@ -189,7 +193,7 @@ def test_program_run_rechecks_prechecked_artifact_when_host_capabilities_change(
 
 
 def test_program_run_rechecks_compiled_artifact_when_host_capabilities_change() -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepare_graph("let value = 1\nvalue")
     assert prepared.resolved is not None
     compiled = compile_program_matches(
@@ -211,7 +215,7 @@ def test_program_run_rejects_cached_artifact_from_different_prepared_program(
     prepared_b = _prepare_graph('print "fresh"')
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver(get_sandbox_context=None).run_prepared(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run_prepared(
             prepared_b,
             check_only=check_only,
             compiled=discovery_a.compiled,
@@ -221,7 +225,7 @@ def test_program_run_rejects_cached_artifact_from_different_prepared_program(
 
 
 def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths() -> None:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     single_prepared = prepare_inline_code("let value = 1\nvalue")
     single_discovery = runtime.discover_programs(single_prepared)
     assert single_discovery.checked is not None
@@ -243,7 +247,7 @@ def test_production_path_reuses_cached_artifacts_without_verifying_provenance(
     self_validation_disabled: None,
 ) -> None:
     """With the self-checks off, every cached-artifact seam trusts its input."""
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     single_prepared = prepare_inline_code("let value = 1\nvalue")
     single_discovery = runtime.discover_programs(single_prepared)
     assert single_discovery.compiled is not None

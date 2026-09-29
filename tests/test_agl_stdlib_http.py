@@ -103,7 +103,7 @@ def _run(
 ) -> tuple[RunResult, FakeHttp]:
     adapter = install(monkeypatch, outcomes)
     result = run_inline_code(
-        PipelineDriver(get_sandbox_context=None),
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         source,
         entry_path=tmp_path / "entry.agl",
         **kwargs,
@@ -662,7 +662,9 @@ program def main() -> unit =
   ()
 """
     result = run_inline_code(
-        PipelineDriver(get_sandbox_context=None), source, entry_path=tmp_path / "entry.agl"
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        source,
+        entry_path=tmp_path / "entry.agl",
     )
     assert result.ok, result.error
     adapter.assert_complete()

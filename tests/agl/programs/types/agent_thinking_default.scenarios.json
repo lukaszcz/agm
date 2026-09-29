@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "empty_explicit_thinking_equals_default",
+      "params": {
+        "model": "opus",
+        "provider": "anthropic",
+        "effort": ""
+      },
+      "expect": {
+        "stdout": "Agent::AgentClaude(model = \"opus\", thinking = \"\")\nAgent::AgentCodex(model = \"opus\", thinking = \"\")\nAgent::AgentPi(provider = \"anthropic\", model = \"opus\", thinking = \"\")\n[][][]\ntrue\ntrue\nclaude[]\ntrue\ncodex[]\npi[]\n"
+      }
+    },
+    {
+      "name": "explicit_thinking_overrides_default",
+      "params": {
+        "model": "o3",
+        "provider": "openai",
+        "effort": "high"
+      },
+      "expect": {
+        "stdout": "Agent::AgentClaude(model = \"o3\", thinking = \"\")\nAgent::AgentCodex(model = \"o3\", thinking = \"\")\nAgent::AgentPi(provider = \"openai\", model = \"o3\", thinking = \"\")\n[][][]\ntrue\ntrue\nclaude[high]\nfalse\ncodex[high]\npi[]\n"
+      }
+    }
+  ]
+}

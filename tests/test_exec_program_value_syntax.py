@@ -60,6 +60,18 @@ def _agent_program(tmp_path: Path) -> Path:
     return agl_file
 
 
+def _review_agent_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(
+        agl_file,
+        "program def main(@arg-named review-agent: Agent) -> unit =\n"
+        "  print (case review-agent of\n"
+        '    | AgentClaude(model, thinking) => "claude %{model} <%{thinking}>"\n'
+        '    | _ => "other")\n',
+    )
+    return agl_file
+
+
 def _numeric_program(tmp_path: Path) -> Path:
     agl_file = tmp_path / "prog.agl"
     write_file_program(
@@ -149,7 +161,7 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert (
             exec_command.run(
-                _exec_args_no_trace(agl_file, argument_tokens=["--backup", "claude/opus-high"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--backup", "claude/opus:high"])
             )
             is None
         )
@@ -157,10 +169,35 @@ class TestValueSyntaxOnHostSurfaces:
         out = capsys.readouterr().out
         assert out.splitlines()[-1] == "claude opus high"
 
+    def test_agent_flag_shorthand_without_effort_selects_the_native_agent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Regression: ``claude/opus`` omits the effort; it was once read as a command."""
+        agl_file = _review_agent_program(tmp_path)
+
+        assert (
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", "claude/opus"])
+            )
+            is None
+        )
+
+        assert capsys.readouterr().out == "claude opus <>\n"
+
+    def test_agent_flag_malformed_native_shorthand_fails(self, tmp_path: Path) -> None:
+        agl_file = _review_agent_program(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", "claude/"])
+            )
+
+        assert exc_info.value.code not in (0, None)
+
     def test_agent_typed_toml_string_reads_host_agent_shorthand(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        _config_home(tmp_path, monkeypatch, '[prog.main]\nworker = "codex/o3-high"\n')
+        _config_home(tmp_path, monkeypatch, '[prog.main]\nworker = "codex/o3:high"\n')
         agl_file = _agent_program(tmp_path)
 
         assert exec_command.run(_exec_args_no_trace(agl_file)) is None

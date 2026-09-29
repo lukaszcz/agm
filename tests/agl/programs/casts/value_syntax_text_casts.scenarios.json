@@ -87,7 +87,7 @@
     },
     {
       "name": "agent_shorthand_spelling",
-      "params": {"target": "agent", "value": "claude/sonnet-high"},
+      "params": {"target": "agent", "value": "claude/sonnet:high"},
       "expect": {"stdout": "claude sonnet high\nas?: false\n"}
     },
     {

@@ -58,7 +58,10 @@ review-tools/
   prompts/            # resources: anything outside the module tree
 ```
 
-The package name is one AgL identifier segment and not a reserved keyword. Package modules may
+The package name is one AgL identifier segment and not a reserved keyword. `pkg check`,
+`pkg create`, and `pkg install` also reject a name AGM reserves: a built-in command or root alias
+(`wsp`, `wt`), or one of AGM's own config sections (`agent`, `deps`, `modules`, `packages`,
+`params`). Package modules may
 import only their own tree, packages declared in `[dependencies]`, and `std`.
 
 ## Manifest
@@ -72,7 +75,7 @@ misspelled field is an error rather than silently ignored.
 
 ```toml
 [package]
-name = "review-tools"          # required: one AgL identifier segment, not a keyword
+name = "review-tools"          # required: one AgL identifier segment, not a keyword or reserved name
 version = "1.0.0"              # required: complete semantic version
 description = "Review workflows"
 license = "MIT"
@@ -138,7 +141,9 @@ program = "review-tools/main::batch"
 
 - Nested table components become command words: `[commands.devel.review]` registers `devel
   review`. The equivalent quoted flat form, `[commands."devel review"]`, is also accepted. A path
-  cannot start with a built-in command or root alias (`wsp`, `wt`).
+  cannot start with a built-in command or root alias (`wsp`, `wt`). `pkg check`/`create`/`install`
+  also reject a path (including an `@command` path) starting with one of AGM's config sections,
+  like a package name; an already-installed registration still loads, dispatches, and uninstalls.
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its signature arguments and closure module

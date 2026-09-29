@@ -187,8 +187,10 @@ module ([Packages](packages.md#commands)). Its argument is a command path:
 space-separated words naming the command a reader invokes, so
 `@command("devel review")` is invoked as `devel review`. A path whose first
 word is one of the host's own commands, or any word of which looks like an
-option, is a static error. It appears at most once, and on a `program def`
-alone.
+option, is a static error; validating the package also rejects a first word
+naming one of AGM's config sections
+([`agm pkg`](../../commands/pkg.md#commands)). It appears at most once, and on
+a `program def` alone.
 
 A command is a way to refer to a program, so the registration carries no prose
 of its own: the program's `@doc` describes it wherever it runs, the listing of

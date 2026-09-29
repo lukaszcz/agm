@@ -39,6 +39,7 @@ from agm.cli_support.args import ReplArgs
 from agm.cli_support.engine_seeds import (
     build_host_engine_seeds,
     execution_cli_values,
+    host_agent_spec_resolver,
     resolve_timeout,
 )
 from agm.cli_support.param_config import resolve_module_param_values
@@ -75,6 +76,7 @@ def run(args: ReplArgs) -> None:
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    resolve_agent_spec = host_agent_spec_resolver(merged_config)
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
@@ -149,6 +151,7 @@ def run(args: ReplArgs) -> None:
             agent_dispatcher=runner_agent,
             session_host=session_host,
             get_sandbox_context=get_sandbox_context,
+            resolve_agent_spec=resolve_agent_spec,
             shell_exec_timeout=timeout,
             trace_path=trace_path,
             engine_base=engine_seeds,

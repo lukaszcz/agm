@@ -29,7 +29,8 @@ review-tools/
 ```
 
 The package name must be a single AgL identifier segment and not a reserved
-keyword. It is the mandatory first segment of every module the package
+keyword; validating a package also rejects a name AGM reserves for its own
+commands or config sections ([`agm pkg`](../../commands/pkg.md#layout)). It is the mandatory first segment of every module the package
 provides: `review-tools/src/review.agl` has identity `review-tools/review`,
 both inside the package and from any importer. The `src/` tree is mounted
 under the package name; the package root itself is not a search root, so a

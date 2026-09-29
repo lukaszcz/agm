@@ -315,7 +315,7 @@ def test_check_only_never_imports_the_companion(tmp_path: Path) -> None:
         f"    open({str(marker)!r}, 'a').write('called')\n"
         "    return x + 1\n",
     )
-    driver = PipelineDriver(get_sandbox_context=None)
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
@@ -330,7 +330,7 @@ def test_check_only_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
-    driver = PipelineDriver(get_sandbox_context=None)
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
@@ -492,7 +492,7 @@ def test_runtime_state_closer_runs_once_when_process_exit_raises_system_exit(
     (tmp_path / "entry.py").write_text(companion)
 
     with pytest.raises(SystemExit):
-        PipelineDriver(get_sandbox_context=None).run(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
             source, entry_path=entry_path, roots=agl_roots()
         )
 
@@ -551,7 +551,7 @@ def test_pipeline_run_surfaces_a_failing_companion_closer_as_a_run_error_note(
     entry_path.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 
-    result = PipelineDriver(get_sandbox_context=None).run(
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
         source, entry_path=entry_path, roots=agl_roots()
     )
 

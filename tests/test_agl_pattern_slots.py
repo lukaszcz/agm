@@ -41,7 +41,7 @@ def _run(source: str) -> tuple[bool, str, list[str]]:
     """Run *source*, returning its success flag, stdout, and diagnostics."""
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         result = run_inline_code(runtime, source, param_values={})
     return result.ok, buffer.getvalue(), [d.message for d in result.diagnostics]
 

@@ -131,14 +131,14 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("claude/sonnet-medium", agent_value("AgentClaude", model="sonnet", thinking="medium")),
-        ("codex/o3-high", agent_value("AgentCodex", model="o3", thinking="high")),
+        ("claude/sonnet:medium", agent_value("AgentClaude", model="sonnet", thinking="medium")),
+        ("codex/o3:high", agent_value("AgentCodex", model="o3", thinking="high")),
         (
-            "pi/openai/gpt-5-low",
+            "pi/openai/gpt-5:low",
             agent_value("AgentPi", provider="openai", model="gpt-5", thinking="low"),
         ),
         (
-            "anthropic/claude-opus-custom",
+            "anthropic/claude-opus:custom",
             agent_value("AgentPi", provider="anthropic", model="claude-opus", thinking="custom"),
         ),
         ("worker --flag", agent_value("AgentCommand", command="worker --flag")),
@@ -172,7 +172,7 @@ def test_toml_default_agent_decodes_through_the_same_host_text_dispatch() -> Non
         timeout=None,
         trace=False,
         trace_file=None,
-        default_agent="claude/sonnet-experimental",
+        default_agent="claude/sonnet:experimental",
     )
 
     seeds = build_host_engine_seeds(

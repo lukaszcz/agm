@@ -115,6 +115,7 @@ def test_ask_dispatches_each_agent_value_under_disabled_sandbox(
     """``AgentSandbox::Disabled`` reproduces the un-sandboxed argv byte for byte."""
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -179,6 +180,7 @@ def test_ask_dispatches_each_agent_value_selects_each_spec_permission_flag(
     """
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -243,6 +245,7 @@ def test_disabled_and_native_sandbox_modes_never_wrap_the_argv(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -302,6 +305,7 @@ def test_ask_dispatches_claude_and_codex_under_native_sandbox_mode(
     """``AgentSandbox::Native`` selects each agent's own all-permissions flag, unsandboxed."""
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -331,6 +335,7 @@ def test_agent_transport_failures_become_typed_errors(
         )
     )
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -366,6 +371,7 @@ def test_undecodable_agent_stdout_becomes_a_protocol_failure(
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -398,6 +404,7 @@ def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
         fake_agent_transport.failure(returncode=2, stderr="boom", elapsed=1.0)
     )
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -424,6 +431,7 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
 ) -> None:
     """User exception provenance is nominal-keyed, not reserved for host errors."""
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -455,6 +463,7 @@ def test_nonzero_exit_message_includes_the_exit_code(
         fake_agent_transport.failure(returncode=7, stderr="boom", elapsed=1.0)
     )
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -692,6 +701,7 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
 
     result = run_inline_code(
         PipelineDriver(
+            resolve_agent_spec=None,
             agent_dispatcher=value_driven_agent_factory(
                 idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
             ),
@@ -729,6 +739,7 @@ def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
 def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
     """`\\%{` in AgL source passes the hole through for the host to resolve."""
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -749,6 +760,7 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
 
 def test_invalid_agent_value_becomes_typed_error() -> None:
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
@@ -776,7 +788,9 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         requests.append(value)
         return "not an integer"
 
-    runtime = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
+    runtime = PipelineDriver(
+        resolve_agent_spec=None, agent_dispatcher=agent, get_sandbox_context=None
+    )
     result = run_inline_code(
         runtime,
         "import std/config\n"
@@ -862,6 +876,7 @@ def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
     )
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
@@ -902,6 +917,7 @@ def test_sandbox_preparation_receives_the_asks_evaluated_environment(
     )
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
@@ -943,6 +959,7 @@ def test_interpolated_agent_command_sandboxes_under_the_real_executable(
     )
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
@@ -1037,6 +1054,7 @@ def test_sandbox_context_is_built_at_most_once_per_get_sandbox_context(
     assert load_calls == []
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=get_sandbox_context
         ),
@@ -1069,6 +1087,7 @@ def test_explicit_settings_file_selects_that_file_over_the_profile_candidate(
     )
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
@@ -1105,6 +1124,7 @@ def test_missing_srt_becomes_an_agent_call_error_carrying_the_library_message(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fail_run_capture_result)
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
@@ -1149,6 +1169,7 @@ def test_temp_settings_cleanup_runs_after_success_and_failure(
     )
 
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, get_sandbox_context=session_sandbox_context(home, proj_dir=proj_dir)
         ),

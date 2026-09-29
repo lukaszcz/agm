@@ -5,16 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from agm.command_catalog import RESERVED_COMMAND_NAMES
+from agm.command_catalog import RESERVED_CONFIG_SECTION_NAMES, SCHEMA_CONFIG_SECTION_NAMES
 from agm.config.general import GeneralConfig
 from agm.core.toml import TomlDict
 
-# These tables describe AGM's configuration schema rather than AgL modules, and
-# key their own nested tables by user-chosen names — a dependency, a module
-# root, a package pin. ``params`` is retained here to prevent the removed legacy
-# ``[params.*]`` namespace from being interpreted as an AgL module route.
-SCHEMA_CONFIG_SECTION_NAMES = frozenset({"deps", "modules", "packages", "params"})
-RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | SCHEMA_CONFIG_SECTION_NAMES
 _MISSING = object()
 
 

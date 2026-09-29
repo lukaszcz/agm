@@ -573,7 +573,7 @@ class TestMalformedAgentCommandAtConstruction:
     """
 
     def test_seeded_malformed_command_text_is_a_pre_execution_diagnostic(self) -> None:
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code("()", entry_path=None, roots=agl_roots())
         result = driver.run_prepared(
             prepared,

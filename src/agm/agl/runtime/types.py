@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agm.agent.effort import AgentSpecResolver
     from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -44,6 +45,10 @@ class HostEnvironment:
         (see `agm.sandbox.prepare.lazy_sandbox_context`). ``None`` when the
         host wires no sandbox context, in which case a sandboxed ``exec``
         call cannot run.
+    ``resolve_agent_spec``
+        Applies host agent defaults (see `agm.agent.effort.default_effort_resolver`)
+        to every decoded ``Agent`` spec before it is dispatched. ``None``
+        dispatches specs as decoded.
     ``capabilities``
         The ``HostCapabilities`` static catalog derived from codecs — consumed
         by the type checker.
@@ -62,6 +67,7 @@ class HostEnvironment:
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"
     get_sandbox_context: "Callable[[], SandboxContext] | None" = None
+    resolve_agent_spec: "AgentSpecResolver | None" = None
 
 
 @dataclass(frozen=True, slots=True)

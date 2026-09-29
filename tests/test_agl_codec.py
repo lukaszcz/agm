@@ -146,9 +146,9 @@ def _ask_builtin_items() -> tuple[Item, ...]:
         "builtin\n"
         "enum Agent =\n"
         "  | AgentCommand(command: text)\n"
-        "  | AgentClaude(model: text, thinking: text)\n"
-        "  | AgentCodex(model: text, thinking: text)\n"
-        "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        '  | AgentClaude(model: text, thinking: text = "")\n'
+        '  | AgentCodex(model: text, thinking: text = "")\n'
+        '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
         "\n"
         "builtin def ask[T](\n"
         "  prompt: text,\n"
@@ -2848,7 +2848,7 @@ class TestRecordEnumParams:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = run_inline_code(
-            PipelineDriver(get_sandbox_context=None),
+            PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
             """
 record Issue
   title: text
@@ -2875,7 +2875,7 @@ program def main(issue: Issue) -> unit =
         assert result.value.nominal == NominalId(table.enum_member_names(typ)["Done"].decl_id)
 
     def test_array_program_argument_parsed_from_json_string(self) -> None:
-        rt = PipelineDriver(get_sandbox_context=None)
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         result = run_inline_code(
             rt,
             "program def main(tags: array[text]) -> unit = print tags",
@@ -3595,7 +3595,11 @@ class TestRegisterCodec:
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
 
-        rt = PipelineDriver(agent_dispatcher=lambda request: "response", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None,
+            agent_dispatcher=lambda request: "response",
+            get_sandbox_context=None,
+        )
 
         class AltTextCodec(TC):
             @property
@@ -3642,18 +3646,18 @@ class TestRegisterCodec:
             ) -> PR:
                 raise NotImplementedError
 
-        rt = PipelineDriver(get_sandbox_context=None)
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         rt.register_codec(CustomCodec())
         with pytest.raises(ValueError, match="custom_dup"):
             rt.register_codec(CustomCodec())
 
     def test_register_reserved_codec_name_text_raises(self) -> None:
-        rt = PipelineDriver(get_sandbox_context=None)
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         with pytest.raises(ValueError, match="text"):
             rt.register_codec(TextCodec())
 
     def test_register_reserved_codec_name_json_raises(self) -> None:
-        rt = PipelineDriver(get_sandbox_context=None)
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         with pytest.raises(ValueError, match="json"):
             rt.register_codec(JsonCodec())
 
@@ -3710,7 +3714,9 @@ class TestRegisterCodec:
             received.append(req)
             return "hello"
 
-        rt = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=agent, get_sandbox_context=None
+        )
         rt.register_codec(TagCodec())
         #  format: arg takes the codec name as a string; let needs a continuation.
         result = run_inline_code(rt, 'let y: text = ask("Q", format = "tagcodec")\ny')
@@ -3757,7 +3763,9 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "7", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "7", get_sandbox_context=None
+        )
         rt.register_codec(IntCodec())
         result = run_inline_code(rt, 'let y: int = ask("Q", format = "intcodec")\ny')
         assert result.ok is True
@@ -3801,7 +3809,9 @@ class TestRegisterCodec:
                 seen_parse_targets.append(repr(target_type))
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "11", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "11", get_sandbox_context=None
+        )
         rt.register_codec(LegacyCodec())
         result = run_inline_code(rt, 'let y: int = ask("Q", format = "legacy-int")\ny')
 
@@ -3851,7 +3861,9 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "12", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "12", get_sandbox_context=None
+        )
         rt.register_codec(LegacyBoxCodec())
         result = run_inline_code(
             rt,
@@ -3892,7 +3904,9 @@ class TestRegisterCodec:
             def parse(self, raw: str) -> ParseResult:
                 return ParseResult.success(TextValue(raw))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "unused", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "unused", get_sandbox_context=None
+        )
         rt.register_codec(SchemaTextCodec())
 
         result = run_inline_code(
@@ -3934,7 +3948,9 @@ class TestRegisterCodec:
             'let y: text = ask("Q", format = "graph-schema-text")\ny',
             roots=roots,
         )
-        rt = PipelineDriver(agent_dispatcher=lambda req: "unused", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "unused", get_sandbox_context=None
+        )
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run_prepared(prepared, check_only=True)
@@ -4126,7 +4142,9 @@ class TestRegisterCodec:
             received.append(req)
             return "3"
 
-        rt = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=agent, get_sandbox_context=None
+        )
         rt.register_codec(ArrayIntCodec())
         result = run_inline_code(
             rt,
@@ -4193,7 +4211,9 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "5", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "5", get_sandbox_context=None
+        )
         rt.register_codec(ShapeCodec())
         result = run_inline_code(
             rt,
@@ -4628,12 +4648,16 @@ class TestRuntimeBuildsCodecKinds:
         #  format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
-        rt_unreg = PipelineDriver(agent_dispatcher=lambda req: "ok", get_sandbox_context=None)
+        rt_unreg = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "ok", get_sandbox_context=None
+        )
         unreg = run_inline_code(rt_unreg, src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "ok", get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "ok", get_sandbox_context=None
+        )
         rt.register_codec(AltCodec())
         reg = run_inline_code(rt, src)
         assert reg.ok is True

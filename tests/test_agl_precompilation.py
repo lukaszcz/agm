@@ -143,7 +143,7 @@ def compile_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[
         clear_parsed_module_cache()
         clear_retained_artifacts()
         return run_inline_code(
-            PipelineDriver(get_sandbox_context=None),
+            PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
             source,
             roots=RootSet(roots=frozenset({tmp_path})),
             default_stdlib=False,
@@ -454,7 +454,7 @@ def test_cache_eviction_does_not_invalidate_an_inflight_compilation(
     (tmp_path / "library.agl").write_text(
         "builtin def print[T](value: T) -> unit\ndef answer() -> int = 42\n"
     )
-    driver = PipelineDriver(get_sandbox_context=None)
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import library::*\nprogram def main() -> unit = print(answer())"
     roots = RootSet(roots=frozenset({tmp_path}))
     assert driver.run(source, roots=roots, default_stdlib=False).ok

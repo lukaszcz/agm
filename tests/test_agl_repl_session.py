@@ -1478,9 +1478,9 @@ _EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed
 
 _AGENT_VARIANTS = (
     "  | AgentCommand(command: text)\n"
-    "  | AgentClaude(model: text, thinking: text)\n"
-    "  | AgentCodex(model: text, thinking: text)\n"
-    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    '  | AgentClaude(model: text, thinking: text = "")\n'
+    '  | AgentCodex(model: text, thinking: text = "")\n'
+    '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
 )
 
 _AGENT_REQUEST_FIELDS = (
@@ -2740,9 +2740,9 @@ class TestRedefinition:
 builtin
 enum Agent
   | AgentCommand(command: text)
-  | AgentClaude(model: text, thinking: text)
-  | AgentCodex(model: text, thinking: text)
-  | AgentPi(provider: text, model: text, thinking: text)
+  | AgentClaude(model: text, thinking: text = "")
+  | AgentCodex(model: text, thinking: text = "")
+  | AgentPi(provider: text, model: text, thinking: text = "")
 """
         session = open_session(default_stdlib=False)
         assert session.eval_entry(declaration).ok

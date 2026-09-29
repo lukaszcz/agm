@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl import PipelineDriver
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
     RESERVED_ENUM_MEMBER_IDS,
@@ -25,6 +26,7 @@ from agm.agl.semantics.type_table import (
     OPTION_TYPE_DEF,
     OPTIONAL_TYPE_DEF,
     RESERVED_FIELD_DEFAULT_VALUES,
+    TypeDef,
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
@@ -37,7 +39,8 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
 )
-from tests._agl_helpers import run_program, shapes_match
+from agm.agl.semantics.values import Value
+from tests._agl_helpers import agl_roots, run_inline_code, run_program, shapes_match
 
 
 def _decl_id(t: Type) -> int:
@@ -158,7 +161,43 @@ class TestSeededTypeDefsCarryReservedIds:
         assert _decl_id(fields["agent"]) == reserved_nominal_id("Agent")
 
 
-@pytest.mark.parametrize("decl_id", sorted(RESERVED_FIELD_DEFAULT_VALUES))
+def _reserved_typedef(decl_id: int) -> TypeDef:
+    """Return the seeded definition of the reserved record *decl_id*."""
+    typedef = create_seeded_type_table().get_by_id(decl_id)
+    assert typedef is not None
+    return typedef
+
+
+_RESERVED_DEFAULTED = pytest.mark.parametrize(
+    "decl_id",
+    [
+        pytest.param(decl_id, id=_reserved_typedef(decl_id).name)
+        for decl_id in sorted(RESERVED_FIELD_DEFAULT_VALUES)
+    ],
+)
+
+
+def _defaults_omitting_call(decl_id: int) -> tuple[str, Value]:
+    """Return a reserved record's constructor call omitting every defaulted field.
+
+    Assumes every required field is ``text`` and supplies an empty text for
+    it. Also returns the host's own value-syntax decode of that call against
+    the seeded table.
+    """
+    type_table = create_seeded_type_table()
+    typedef = _reserved_typedef(decl_id)
+    required = ", ".join(
+        f'{name} = ""'
+        for (name, _type), has_default in zip(
+            typedef.fields, typedef.field_has_default or (), strict=True
+        )
+        if not has_default
+    )
+    call = f"{typedef.name}({required})"
+    return call, convert_host_value(typedef.name, call, typedef.handle(), type_table)
+
+
+@_RESERVED_DEFAULTED
 def test_reserved_field_defaults_match_the_stdlib_source(decl_id: int) -> None:
     """A reserved record's host-side default constants must match its own AgL source.
 
@@ -167,24 +206,33 @@ def test_reserved_field_defaults_match_the_stdlib_source(decl_id: int) -> None:
     boundary (``runtime.engine_config.convert_host_value``'s
     ``default_resolver``), since no evaluator is reachable there. Nothing
     else compares those constants against the real stdlib source's own
-    declared defaults, so this runs the real stdlib's bare constructor
-    (through the ordinary evaluator) and the host's own bare value-syntax
-    decode of the same constructor side by side, and checks they agree field
-    by field. Parametrized over every reserved record carrying host-side
-    defaults, so a future one (today, only ``Sandbox``) is covered
-    automatically -- this is the one guard against silent divergence between
-    ``sandbox.agl``'s declared defaults and ``semantics/type_table.py``'s
-    host-side constants.
+    declared defaults, so this runs the real stdlib's constructor with every
+    defaulted field omitted (through the ordinary evaluator) and the host's
+    own value-syntax decode of the same constructor call side by side, and
+    checks they agree field by field. Parametrized over every reserved record
+    carrying host-side defaults, so a future one is covered automatically --
+    this is the one guard against silent divergence between the stdlib's
+    declared defaults and ``semantics/type_table.py``'s host-side constants.
     """
-    type_table = create_seeded_type_table()
-    typedef = type_table.get_by_id(decl_id)
-    assert typedef is not None
-    type_name = typedef.name
+    call, host_value = _defaults_omitting_call(decl_id)
 
-    result = run_program(f"let probe = {type_name}()\nprobe\n")
+    result = run_program(f"let probe = {call}\nprobe\n")
     assert result.ok
-    program_value = result.bindings["probe"]
 
-    host_value = convert_host_value(type_name, f"{type_name}()", typedef.handle(), type_table)
+    assert shapes_match(result.bindings["probe"], host_value)
 
-    assert shapes_match(program_value, host_value)
+
+@_RESERVED_DEFAULTED
+def test_no_stdlib_constructor_fills_reserved_field_defaults(decl_id: int) -> None:
+    """Without the stdlib, a reserved record's constructor fills its host-side defaults."""
+    call, host_value = _defaults_omitting_call(decl_id)
+
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        f"let probe = {call}\nprobe\n",
+        roots=agl_roots(include_stdlib=False),
+        default_stdlib=False,
+    )
+    assert result.ok
+
+    assert result.bindings["probe"] == host_value

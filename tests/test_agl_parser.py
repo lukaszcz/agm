@@ -5319,7 +5319,9 @@ class TestVerbatimTextLiteral:
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_code(PipelineDriver(get_sandbox_context=None), "exec $ true")
+            result = run_inline_code(
+                PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None), "exec $ true"
+            )
 
         assert result.ok
 

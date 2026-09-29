@@ -24,7 +24,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
 from agm.agl.syntax.types import UnitT
 from agm.agl.syntax.visitor import walk
-from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
+from agm.command_catalog import RESERVED_CONFIG_SECTION_NAMES, invalid_command_path
 from agm.config.engine_keys import ENGINE_KEY_NAMES
 from agm.config.qualified_keys import display_table_path, param_spellings_for
 from agm.core import fs
@@ -400,9 +400,9 @@ def _resource_calls(resolution: ModuleResolution) -> list[tuple[Call, BuiltinKin
 
 
 def validate_unreserved_package_name(name: str) -> None:
-    """Reject a package name that AGM's own built-in command surface reserves."""
+    """Reject a package name that AGM's own commands or config sections reserve."""
 
-    if name in RESERVED_COMMAND_NAMES:
+    if name in RESERVED_CONFIG_SECTION_NAMES:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
 
@@ -440,10 +440,16 @@ def _package_module_id(name: str, relative: str) -> ModuleId:
 
 
 def _validate_command_paths(manifest: PackageManifest) -> None:
-    for command_path in manifest.commands:
-        invalid = invalid_command_path(command_path)
-        if invalid is not None:
-            raise DisciplineError(f"command path {command_path!r} {invalid}")
+    """Hold command and alias paths to every reserved name, config sections included.
+
+    Loading tolerates a path that only collides with a config section, so an
+    installed package stays runnable; a validated package may not register one.
+    """
+    for kind, paths in (("command", manifest.commands), ("alias", manifest.aliases)):
+        for path in paths:
+            invalid = invalid_command_path(path, reserved=RESERVED_CONFIG_SECTION_NAMES)
+            if invalid is not None:
+                raise DisciplineError(f"{kind} path {path!r} {invalid}")
 
 
 def _validate_command_programs(manifest: PackageManifest, resolutions: _ModuleResolutions) -> None:

@@ -104,7 +104,7 @@ from agm.agl.semantics.types import (
     substitute,
     type_children,
 )
-from agm.agl.semantics.values import BoolValue, RecordValue, Value
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
@@ -2175,14 +2175,24 @@ def _standard(fields: tuple[tuple[str, Type], ...]) -> tuple[ParamZone, ...]:
     return (ParamZone.STANDARD,) * len(fields)
 
 
+#: A reserved field's host-side default: a scalar, or a nullary enum member by identity.
+type ReservedFieldDefault = BoolValue | TextValue | NominalId
+
+
 def _builtin_enum_defs(
     name: str,
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
     *,
     type_params: tuple[str, ...] = (),
     module_id: ModuleId = RESERVED_ID,
+    field_defaults: Mapping[str, ReservedFieldDefault] = MappingProxyType({}),
 ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
-    """Build canonical enum and scoped record-member definitions for the prelude."""
+    """Build canonical enum and scoped record-member definitions for the prelude.
+
+    A member field named in *field_defaults* has that declared default; pass
+    the same mapping to :func:`_member_field_default_values` for
+    :data:`RESERVED_FIELD_DEFAULT_VALUES`.
+    """
     scope_path = (name,)
     member_defs = tuple(
         TypeDef(
@@ -2197,6 +2207,7 @@ def _builtin_enum_defs(
             ),
             fields=fields,
             field_kinds=_standard(fields),
+            field_has_default=tuple(field in field_defaults for field, _type in fields),
             decl_node_id=require_reserved_enum_member_id(name, member_name),
         )
         for member_name, fields in variants
@@ -2221,6 +2232,7 @@ _PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
     "ParsePolicy",
     (("Abort", ()), ("Retry", (("n", IntType()),))),
 )
+_AGENT_FIELD_DEFAULTS: Mapping[str, ReservedFieldDefault] = {"thinking": TextValue("")}
 _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
     "Agent",
     (
@@ -2232,6 +2244,7 @@ _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
             (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
         ),
     ),
+    field_defaults=_AGENT_FIELD_DEFAULTS,
 )
 _SESSION_TRANSPORT_DEF, _SESSION_TRANSPORT_MEMBER_DEFS = _builtin_enum_defs(
     "SessionTransport", (("Cli", ()), ("Rpc", ()))
@@ -2539,27 +2552,41 @@ BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
 # (``IrInterpreter.default_for_field`` against ``NominalDescriptor.field_defaults``
 # — see ``runtime.convert.decode_value``'s ``default_resolver``). A host
 # engine setting decodes from a CLI flag or config entry *before* any program
-# exists, so no evaluator is reachable there; ``Sandbox``'s defaults are
-# nevertheless plain constants (``Default``, ``None``, ``true``), so the
-# seeded ``TypeDef`` simply carries each one as the ``Value`` it would
-# evaluate to. Confined to this reserved/seeded boundary: an ordinary
-# program's own ``Sandbox`` construction (with stdlib loaded) always fills an
-# omitted field through the real evaluator instead, never this table.
+# exists, so no evaluator is reachable there; the defaults of ``Sandbox`` and
+# of the ``Agent`` members are nevertheless plain constants (``Default``,
+# ``None``, ``true``, ``""``). The seeded ``TypeDef`` carries only
+# ``field_has_default``; this table holds each default as a constant (a
+# nullary enum member by its identity). The lowerer gives the reserved
+# descriptors the same constants as IR (``lower.lowerer.reserved_field_defaults``),
+# so a program loaded without the standard library constructs these types
+# with them too; a standard declaration supersedes the reserved one, so its
+# own source defaults win.
 # ---------------------------------------------------------------------------
 
-RESERVED_FIELD_DEFAULT_VALUES: Mapping[DeclId, Mapping[int, Value]] = {
+
+def _member_field_default_values(
+    member_defs: tuple[TypeDef, ...], field_defaults: Mapping[str, ReservedFieldDefault]
+) -> dict[DeclId, Mapping[int, ReservedFieldDefault]]:
+    """Index *field_defaults* by field position for each member declaring one of them."""
+    return {
+        member.decl_node_id: {
+            index: field_defaults[field]
+            for index, (field, _type) in enumerate(member.fields)
+            if field in field_defaults
+        }
+        for member in member_defs
+        if any(field in field_defaults for field, _type in member.fields)
+    }
+
+
+RESERVED_FIELD_DEFAULT_VALUES: Mapping[DeclId, Mapping[int, ReservedFieldDefault]] = {
     _reserved_id("Sandbox"): {
-        0: RecordValue(
-            nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
-        ),
-        1: RecordValue(
-            nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
-        ),
-        2: RecordValue(
-            nominal=NominalId(require_reserved_enum_member_id("Option", "None")), fields={}
-        ),
+        0: NominalId(require_reserved_enum_member_id("Optional", "Default")),
+        1: NominalId(require_reserved_enum_member_id("Optional", "Default")),
+        2: NominalId(require_reserved_enum_member_id("Option", "None")),
         3: BoolValue(True),
     },
+    **_member_field_default_values(_AGENT_MEMBER_DEFS, _AGENT_FIELD_DEFAULTS),
 }
 
 
@@ -2568,15 +2595,16 @@ def reserved_field_default(decl_id: DeclId, field_index: int) -> Value:
 
     The decode-time default-fill seam for a host engine setting
     (``runtime.engine_config.convert_host_value``'s ``default_resolver``);
-    see :data:`RESERVED_FIELD_DEFAULT_VALUES`. *decl_id* is expected to name a
-    reserved record with defaulted fields (``Sandbox`` today) — the only
-    shape this decode path can ever reach, since no other engine key's type
-    has a defaulted field yet. Keyed sparsely by field index, so a field with
-    no default is simply absent rather than representable as ``None``.
+    see :data:`RESERVED_FIELD_DEFAULT_VALUES`. *decl_id* names a reserved
+    record with defaulted fields (``Sandbox`` or an ``Agent`` member). Keyed
+    sparsely by field index, so a field with no default is simply absent
+    rather than representable as ``None``.
     """
-    defaults = RESERVED_FIELD_DEFAULT_VALUES.get(decl_id)
-    assert defaults is not None, f"compiler bug: reserved decl {decl_id} has no field defaults"
-    return defaults[field_index]
+    match RESERVED_FIELD_DEFAULT_VALUES[decl_id][field_index]:
+        case NominalId() as member:
+            return RecordValue(nominal=member, fields={})
+        case scalar:
+            return scalar
 
 
 def source_nominal_decl_id(

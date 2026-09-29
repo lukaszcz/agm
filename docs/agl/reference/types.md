@@ -421,8 +421,11 @@ corrective retries after the initial attempt.
 ### `Agent`
 
 `Agent` is a built-in enum describing an agent backend. Its members are the
-record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
-`AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
+record types `AgentCommand(command)`, `AgentClaude(model, thinking = "")`,
+`AgentCodex(model, thinking = "")`, and
+`AgentPi(provider, model, thinking = "")`; an empty `thinking` selects no
+effort unless the host configures a default
+([`agm exec`](../../commands/agl.md#agent-effort-defaults)).
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
 member record exposes its own fields and, through the member/enum method rule
 ([Methods](functions.md#methods)), `Agent`'s own methods. Its standard-library
@@ -1146,7 +1149,7 @@ may raise `CastError`.
 | exception type `T` | `T` itself, or any descendant of `T` in its `extends` chain | total identity upcast (no-op) — includes casting to the root `Exception` |
 | exception type `T` | any ancestor of `T` in its `extends` chain | fallible identity downcast — checks that the runtime type is `T` or a descendant of `T` |
 | exception type | `text`, `json` | **static cast error** — an exception cannot be decoded from text or JSON |
-| `Agent` | `text` | fallible — shorthand, a JSON object, or an `Agent` member constructor call; no verbatim command fallback |
+| `Agent` | `text` | fallible — a JSON object, an `Agent` member constructor call, or shorthand; no verbatim command fallback |
 | `Agent` | `json` | fallible — validates a tagged `Agent` member object |
 | any type | `unit`, function type | **static cast error** |
 | `unit`, function type | any type | **static cast error** |
@@ -1213,7 +1216,7 @@ exactly one well-formed JSON value, or exactly one value-syntax literal, with
 no surrounding prose, no Markdown fences, and no recovery either way — and
 the result is then validated the same way. This contrasts with agent-output
 parsing, which uses lenient recovery by default. A cast to `Agent` from
-`text` accepts the same shorthand, JSON object, or member constructor call a
+`text` accepts the same JSON object, member constructor call, or shorthand a
 host `Agent` parameter reads, but never falls back to a verbatim command; a
 cast to `Agent` from `json` validates a tagged member object the same way any
 other enum does. `parse`/`try-parse` apply the same rule under a different

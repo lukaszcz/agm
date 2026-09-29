@@ -52,6 +52,7 @@ class BuiltinMemberContract:
     fields: tuple[tuple[str, Type], ...]
     mutable_fields: frozenset[str]
     field_kinds: tuple[ParamZone, ...]
+    field_has_default: tuple[bool, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +121,7 @@ def contract_for_typedef(
             ),
             table.record_mutable_fields(member),
             tuple(zone for _name, zone in table.field_kinds(member)),
+            tuple(has_default for _name, has_default in table.field_has_default(member)),
         )
         for member in typedef.members
     )

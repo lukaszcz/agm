@@ -97,6 +97,7 @@ from agm.sandbox.request import (
 )
 
 if TYPE_CHECKING:
+    from agm.agent.effort import AgentSpecResolver
     from agm.sandbox.prepare import SandboxContext
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ class EffectCtx(Protocol):
     _agent_dispatcher: AgentFn | None
     _session_host: SessionHost
     _get_sandbox_context: "Callable[[], SandboxContext] | None"
+    _resolve_agent_spec: "AgentSpecResolver | None"
     _strict_json: bool
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
@@ -477,17 +479,20 @@ class EffectHandlers:
         )
 
     def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
-        """Decode *agent* into its host specification, or raise ``SessionAgentError``.
+        """Decode *agent* into its dispatched host specification, or raise ``SessionAgentError``.
 
         The interpreter decodes an ``Agent`` value to its host specification
-        exactly once, here, before any session host sees it; an invalid value
-        surfaces as the same AgL-visible ``SessionAgentError`` a session
-        ``open`` reports.
+        exactly once, here, before any session host sees it, and applies the
+        host's agent defaults (``_resolve_agent_spec``) to the result -- never
+        to the AgL value itself. An invalid value surfaces as the same
+        AgL-visible ``SessionAgentError`` a session ``open`` reports.
         """
         try:
-            return decode_agent_value(agent, self._ctx._program.builtin_nominals)
+            spec = decode_agent_value(agent, self._ctx._program.builtin_nominals)
         except ValueError as error:
             raise SessionAgentError(str(error), "open") from error
+        resolve = self._ctx._resolve_agent_spec
+        return spec if resolve is None else resolve(spec)
 
     def _resolve_session_transport(self, spec: AgentSpec, transport: Value | None) -> str:
         """Resolve the transport for an already-decoded *spec*.

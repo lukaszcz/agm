@@ -444,10 +444,10 @@ class TestDecodeParamValue:
     @pytest.mark.parametrize(
         ("raw", "case", "fields"),
         [
-            ("claude/sonnet-medium", "AgentClaude", {"model": "sonnet", "thinking": "medium"}),
-            ("codex/o3-high", "AgentCodex", {"model": "o3", "thinking": "high"}),
+            ("claude/sonnet:medium", "AgentClaude", {"model": "sonnet", "thinking": "medium"}),
+            ("codex/o3:high", "AgentCodex", {"model": "o3", "thinking": "high"}),
             (
-                "pi/openai/gpt-5-low",
+                "pi/openai/gpt-5:low",
                 "AgentPi",
                 {"provider": "openai", "model": "gpt-5", "thinking": "low"},
             ),
@@ -516,7 +516,7 @@ class TestDecodeParamValue:
 
     def test_option_some_of_agent_uses_host_syntax(self) -> None:
         value = decode_param_value(
-            _decoder(_option_type(BUILTIN_PRELUDE_TYPES["Agent"])), OptionSome("codex/o3-high")
+            _decoder(_option_type(BUILTIN_PRELUDE_TYPES["Agent"])), OptionSome("codex/o3:high")
         )
 
         assert isinstance(value, RecordValue)

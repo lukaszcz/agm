@@ -116,7 +116,7 @@ def probe(state: json) -> unit =
   let keyed-score = jev::ask-score::[Level]("Level?", state, api-key = None)
   ()
 """
-    result = PipelineDriver(get_sandbox_context=None).check_prepared(
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).check_prepared(
         prepare_inline_code(source, roots=jev_roots())
     )
 
@@ -126,7 +126,8 @@ def probe(state: json) -> unit =
 def test_registry_returns_the_loaded_jev_companion() -> None:
     registry = ExternRegistry()
     companion = load_jev_companion(
-        PipelineDriver(extern_registry=registry, get_sandbox_context=None), registry
+        PipelineDriver(resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None),
+        registry,
     )
 
     assert callable(companion.open_client)
@@ -242,7 +243,9 @@ def test_scripted_timeout_reports_the_request_timeout(monkeypatch: pytest.Monkey
 
 def test_transport_installs_into_a_callers_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = ExternRegistry()
-    driver = PipelineDriver(extern_registry=registry, get_sandbox_context=None)
+    driver = PipelineDriver(
+        resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None
+    )
 
     transport = install_jev_transport(monkeypatch, driver, registry, [_NOUL_EXCHANGE])
     companion = registry.loaded_companion(JEV_MODULE)

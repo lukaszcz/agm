@@ -226,7 +226,8 @@ _EMPTY_DEFS: Mapping[str, DecodeSchema] = MappingProxyType({})
 #: fully-linked descriptor (``IrInterpreter.default_for_field`` is the
 #: canonical implementation). A reserved record decoded before any program
 #: exists (a host engine setting from a CLI flag or config entry) instead
-#: resolves from its seeded ``TypeDef``'s own host-side constant
+#: resolves from its host-side constant in
+#: ``semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES``
 #: (``semantics.type_table.reserved_field_default``, wrapped by
 #: ``runtime.engine_config``'s own resolver) — no evaluator is reachable
 #: there. ``None`` (a compile-time contract preview, which decodes nothing):

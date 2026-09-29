@@ -19,7 +19,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # Uncomment and adjust as needed; all fields are optional.
 #
 # [exec]
-# default-agent = "claude/sonnet-medium" # native agent shorthand or custom command
+# default-agent = "claude/sonnet:medium" # native agent shorthand or custom command
 # default-sandbox = "Native"    # AgentSandbox: bare member or Sandbox(...) call (default: Sandbox)
 # strict-json = false           # require bare JSON from agents (default: lenient recovery)
 # max-call-depth = 256          # recursion call-depth limit (default: 256)
@@ -28,6 +28,21 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # trace-file = "trace.jsonl"    # explicit trace path (omit for auto timestamped path)
 # debug = false                 # keep std/fs temp paths after exit; trace unless trace is set
 #
+
+# [agent] — default effort for AgL agents whose thinking is empty; the most
+# specific table setting `effort` wins, and `effort = ""` keeps the agent CLI's
+# own default. Quote a model name containing dots.
+#
+# [agent.claude]                             # every Claude model
+# effort = "medium"
+# [agent.claude.opus]                        # one Claude model
+# effort = "high"
+# [agent.codex."gpt-5.1-codex"]              # one Codex model
+# effort = "xhigh"
+# [agent.pi.anthropic]                       # one Pi provider ([agent.pi] for all)
+# effort = "medium"
+# [agent.pi.anthropic."claude-sonnet-4-5"]   # one Pi provider/model
+# effort = "high"
 
 # [repl] — AgL REPL settings (agm repl).
 #

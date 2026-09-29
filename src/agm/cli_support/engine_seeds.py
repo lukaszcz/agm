@@ -8,7 +8,8 @@ an :class:`EngineSeedTiers`; :meth:`EngineSeedTiers.merged` flattens them, with
 room for a caller-supplied middle tier, into the one mapping the engine seeds
 from, and :meth:`EngineSeedTiers.trace_decision` reads the same resolution back
 as the host's own trace-file decision, so a run's log file and its readable
-``trace`` setting can never disagree.
+``trace`` setting can never disagree. :func:`host_agent_spec_resolver` builds
+the dispatch-time agent defaults both hosts apply from ``[agent]``.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+from agm.agent.effort import AgentSpecResolver, default_effort_resolver
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.engine_config import raw_option_str, validate_engine_leaf_value
 from agm.agl.runtime.option import option_text
@@ -36,11 +38,13 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
     from agm.cli_support.args import ExecutionOptionValues
     from agm.config.general import ExecConfig
+    from agm.core.toml import TomlDict
 
 __all__ = [
     "EngineSeedTiers",
     "build_host_engine_seeds",
     "execution_cli_values",
+    "host_agent_spec_resolver",
     "resolve_timeout",
 ]
 
@@ -92,6 +96,15 @@ def resolve_timeout(
     except ValueError as exc:
         origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
         print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def host_agent_spec_resolver(merged_config: "TomlDict") -> AgentSpecResolver:
+    """Build the ``[agent]`` dispatch defaults; exit 1 naming the key when it is invalid."""
+    try:
+        return default_effort_resolver(merged_config)
+    except ValueError as exc:
+        print(f"Error: invalid agent configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 

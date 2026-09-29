@@ -1823,11 +1823,13 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             *,
             default_call_depth_limit: int | None = None,
             get_sandbox_context: Any | None = None,
+            resolve_agent_spec: Any | None = None,
         ) -> None:
             captured["default_call_depth_limit"] = default_call_depth_limit
             super().__init__(
                 default_call_depth_limit=default_call_depth_limit,
                 get_sandbox_context=get_sandbox_context,
+                resolve_agent_spec=resolve_agent_spec,
             )
 
         def configure_execution_services(
@@ -1838,6 +1840,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             session_host: Any | None,
             shell_exec_timeout: float | None,
             get_sandbox_context: Any | None,
+            resolve_agent_spec: Any | None,
         ) -> None:
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
@@ -1848,6 +1851,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 get_sandbox_context=get_sandbox_context,
+                resolve_agent_spec=resolve_agent_spec,
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", RecordingRuntime)
@@ -3400,7 +3404,7 @@ class TestProgramValueArguments:
         assert (
             exec_command.run(
                 _exec_args_no_trace(
-                    agl_file, argument_tokens=["--worker", "claude/sonnet-experimental"]
+                    agl_file, argument_tokens=["--worker", "claude/sonnet:experimental"]
                 )
             )
             is None
@@ -3417,7 +3421,7 @@ class TestProgramValueArguments:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[prog.main]\nworker = "pi/openai/gpt-5-low"\n')
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nworker = "pi/openai/gpt-5:low"\n')
         monkeypatch.setattr(
             exec_engine,
             "current_config_context",

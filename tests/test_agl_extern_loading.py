@@ -166,7 +166,7 @@ class TestCompanionPathDerivation:
 
         assert graph.modules[ENTRY_ID].companion_path == companion
 
-        result = PipelineDriver(get_sandbox_context=None).run(
+        result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
             file_program(source),
             entry_path=tmp_path / "entry.agl",
             roots=_roots(tmp_path),
@@ -985,7 +985,7 @@ class TestFailFastDiagnostics:
         """The same wiring runs from the real pipeline entry point, cleanly (no crash)."""
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
@@ -1007,7 +1007,7 @@ class TestOrdering:
             "lib/mod",
             f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code(
             'import lib/mod::*\n1 + "a"',
             roots=_roots(tmp_path / "root"),
@@ -1038,7 +1038,7 @@ class TestOrdering:
                 [Diagnostic(message=_INJECTED_CONTRACT_DIAGNOSTIC, line=1)],
             ),
         )
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
@@ -1056,7 +1056,7 @@ class TestRegistryPopulatedViaPipeline:
     ) -> None:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
@@ -1080,7 +1080,7 @@ class TestRegistryPopulatedViaPipeline:
         """``run_prepared`` itself performs real-run extern wiring."""
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
-        driver = PipelineDriver(get_sandbox_context=None)
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),

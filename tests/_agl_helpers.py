@@ -851,7 +851,7 @@ def run_program(
     ``default-sandbox``, the generic restamp tests).
     """
     result = run_inline_code(
-        PipelineDriver(get_sandbox_context=None),
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         source,
         roots=agl_roots(),
         builtin_host_settings=seed,

@@ -58,7 +58,7 @@ def run(args: CheckArgs) -> None:
     from agm.agl.diagnostics import format_diagnostic
 
     ctx = current_config_context()
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None)
     had_error = False
 
     for file in args.files:

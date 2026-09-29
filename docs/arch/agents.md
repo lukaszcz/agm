@@ -12,7 +12,11 @@ AgL's value-driven dispatcher (`agl/runtime/agents.py::value_driven_agent_factor
 
 ## Host Agent Values
 
-Every CLI token or TOML string whose checked type is the standard `Agent` accepts one shared host syntax (`agent/values.py`), including `--default-agent` and the `default-agent` config key, which decode through the identical dispatch as a program parameter. `claude/MODEL-EFFORT` and `codex/MODEL-EFFORT` select their native CLIs; `pi/PROVIDER/MODEL-EFFORT` selects Pi explicitly, while an otherwise matching `PROVIDER/MODEL-EFFORT` defaults to Pi. The final hyphen separates an opaque effort suffix. Failing shorthand, text is read as canonical tagged JSON, then an AgL value-syntax constructor call; text matching none of these forms is a verbatim `AgentCommand`.
+Every CLI token or TOML string whose checked type is the standard `Agent` accepts one shared host syntax, including `--default-agent` and the `default-agent` config key, which decode through the identical dispatch as a program parameter (`agl/runtime/value_decode.py`): canonical tagged JSON, then an AgL value-syntax constructor call, then compact shorthand (`agent/values.py`: `claude/MODEL[:EFFORT]`, `codex/MODEL[:EFFORT]`, `pi/PROVIDER/MODEL[:EFFORT]`, any other `PROVIDER/MODEL[:EFFORT]` for Pi), then a verbatim `AgentCommand`. A native prefix commits: text starting with one that breaks its form is an error, never a command.
+
+## Default Effort
+
+A provider member's `thinking` defaults to `""`. `agent/effort.py` fills an empty one from the most specific `[agent.<cli>[.<provider>][.<model>]]` table that sets `effort` (an explicit `""` stops the lookup) when the agent is *used*, never when its AgL value is built. `agm exec`, `agm repl`, and registered commands validate `[agent]` strictly and build the resolver once at startup from the merged config they already load (`cli_support/engine_seeds.py:host_agent_spec_resolver` over `effort.py:default_effort_resolver`; invalid config exits 1). It is a required `PipelineDriver` host service (`resolve_agent_spec`), applied once per decode in `agl/eval/effects.py:_decode_agent_spec`; `None` dispatches the spec unchanged.
 
 ## Sessions
 
@@ -32,7 +36,7 @@ The `loop` group drives iterative agent work over a set of tasks: a *selector* c
 
 ## Code Entry Points
 
-- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `values.py` — host Agent-value syntax; `defaults.py` — the built-in runner floor.
+- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `values.py` — host Agent shorthand; `effort.py` — configured default effort; `defaults.py` — the built-in runner floor.
 - `src/agm/agent/runner.py` — runner parsing, prompt attachment, subprocess execution with idle timeout, run results.
 - `src/agm/agent/session/` — the session protocol, service, CLI adapters, and the Pi RPC backend.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, output formatting.

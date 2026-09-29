@@ -44,7 +44,15 @@ from agm.agl.ir.contracts import (
     DecodePlan,
     TypeTree,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import (
+    HOST_SOURCE_ID,
+    ContractId,
+    FunctionId,
+    Location,
+    NominalId,
+    SourceId,
+    SymbolId,
+)
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -182,7 +190,13 @@ from agm.agl.scope.symbols import (
     builtin_type_static_kind,
 )
 from agm.agl.semantics.arguments import positional_field_names
-from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
+from agm.agl.semantics.type_table import (
+    RESERVED_FIELD_DEFAULT_VALUES,
+    MethodDef,
+    ReservedFieldDefault,
+    TypeDef,
+    TypeTable,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -202,6 +216,7 @@ from agm.agl.semantics.types import (
     Type,
     UnitType,
 )
+from agm.agl.semantics.values import BoolValue
 from agm.agl.syntax.nodes import (
     ArrayLit,
     AssignStmt,
@@ -310,6 +325,41 @@ def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
     return type_table.standard_builtin_declaration(name) is not None
 
 
+#: Location of host-constant IR, which has no source text and never raises.
+_HOST_CONSTANT_LOCATION = Location(
+    source_id=HOST_SOURCE_ID, start_offset=0, end_offset=0, start_line=1, start_col=0
+)
+
+
+def _host_constant_ir(value: ReservedFieldDefault) -> IrExpr:
+    """Lower one host-side reserved field default to the IR that rebuilds it."""
+    match value:
+        case NominalId() as member:
+            return IrMakeRecord(location=_HOST_CONSTANT_LOCATION, nominal=member, fields=())
+        case BoolValue(value=flag):
+            return IrConstBool(location=_HOST_CONSTANT_LOCATION, value=flag)
+        case text:
+            return IrConstText(location=_HOST_CONSTANT_LOCATION, value=text.value)
+
+
+def reserved_field_defaults(typedef: TypeDef) -> tuple[IrExpr | None, ...] | None:
+    """Lower a reserved record's host-side field defaults into its descriptor defaults.
+
+    A reserved fallback has no source default expression; its descriptor
+    instead gets the constants of
+    :data:`~agm.agl.semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES`, the
+    same values host engine-setting decode fills. ``None`` when *typedef*
+    has none.
+    """
+    defaults = RESERVED_FIELD_DEFAULT_VALUES.get(typedef.decl_node_id)
+    if defaults is None:
+        return None
+    return tuple(
+        None if (value := defaults.get(index)) is None else _host_constant_ir(value)
+        for index in range(len(typedef.fields))
+    )
+
+
 def _add_builtin_nominals(
     nominals: dict[NominalId, NominalDescriptor],
     type_table: TypeTable,
@@ -321,9 +371,9 @@ def _add_builtin_nominals(
     resolved through *type_table* (every built-in prelude and exception type
     is seeded into every table by ``create_seeded_type_table``). *field_defaults*
     is the same accumulated link-state table every other nominal descriptor
-    reads (see ``_LinkState.field_defaults``); threading it here rather than
-    an empty mapping keeps a reserved identity's defaults live should one ever
-    be declared with a default, instead of a second silent "no defaults" spot.
+    reads (see ``_LinkState.field_defaults``), holding a reserved identity's
+    host-constant defaults (:func:`reserved_field_defaults`) once
+    ``lower_program`` has registered them.
 
     A reserved identity a standard-library declaration supersedes is left out:
     the source declaration bears that name path, and nothing can reach the

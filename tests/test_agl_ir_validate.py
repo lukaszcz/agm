@@ -92,7 +92,7 @@ from agm.agl.ir.contracts import (
     TypeNodeRef,
     TypeTree,
 )
-from agm.agl.ir.ids import ContractId
+from agm.agl.ir.ids import HOST_SOURCE_ID, ContractId
 from agm.agl.ir.nodes import IrContract, IrExpr
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError, validate_ir
@@ -1047,6 +1047,11 @@ class TestDeepTierLocationSourceId:
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog)
+
+    def test_host_source_location_has_no_source_to_check(self) -> None:
+        node = IrConstInt(location=loc(source_id=HOST_SOURCE_ID), value=0)
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog)  # no exception
 
     def test_location_source_id_missing_skipped_cheap(self) -> None:
         bad_loc = loc(source_id=SID1)

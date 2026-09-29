@@ -21,7 +21,9 @@ def _discover(source: str, tmp_path: Path) -> ProgramDiscovery:
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
     )
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
     assert discovery.diagnostics == ()
     return discovery
 
@@ -183,7 +185,7 @@ class TestParamSeeds:
     def test_executable_exposes_a_binding_and_decoder_for_every_inventory_key(
         self, tmp_path: Path
     ) -> None:
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             """
 @param let root: int = 1
@@ -211,7 +213,7 @@ program def main() -> unit = ()
     def test_preflight_decodes_all_param_values_and_reports_all_failures(
         self, tmp_path: Path
     ) -> None:
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             """
 @param let number: int = 1
@@ -240,7 +242,7 @@ program def main() -> unit = ()
     def test_imported_param_decode_failure_points_to_its_declaration(self, tmp_path: Path) -> None:
         library = tmp_path / "library.agl"
         library.write_text("@param let retries: int = 1\n", encoding="utf-8")
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "import library\nprogram def main() -> unit = ()\n",
             tmp_path,
@@ -264,7 +266,7 @@ program def main() -> unit = ()
 """,
             encoding="utf-8",
         )
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(
             """
 import library
@@ -317,7 +319,7 @@ program def main() -> unit =
     def test_unseeded_param_uses_its_default(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(
             """
 @param let value: int = 7
@@ -337,7 +339,7 @@ program def main() -> unit = print value
     def test_check_only_never_binds_preflighted_seeds(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(
             """
 @param let value: int = 7
@@ -381,7 +383,7 @@ class TestParamValueTierMerge:
     def test_lower_is_used_when_upper_and_config_are_silent(self, tmp_path: Path) -> None:
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
         )
@@ -396,7 +398,7 @@ class TestParamValueTierMerge:
     def test_upper_overrides_lower(self, tmp_path: Path) -> None:
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
         )
@@ -417,7 +419,7 @@ class TestParamValueTierMerge:
     def test_config_overrides_lower(self, tmp_path: Path) -> None:
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
             tmp_path,
@@ -433,7 +435,7 @@ class TestParamValueTierMerge:
     def test_upper_overrides_config(self, tmp_path: Path) -> None:
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
             tmp_path,
@@ -451,7 +453,7 @@ class TestParamValueTierMerge:
         surface a decode diagnostic — exactly as a program-route override today."""
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
             tmp_path,
@@ -469,7 +471,7 @@ class TestParamValueTierMerge:
     def test_a_lower_value_overridden_by_upper_is_never_decoded(self, tmp_path: Path) -> None:
         from agm.agl.semantics.values import IntValue
 
-        runtime = PipelineDriver(get_sandbox_context=None)
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         prepared = _prepared(
             "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
         )

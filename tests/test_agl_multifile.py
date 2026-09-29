@@ -34,6 +34,7 @@ def _make_runtime(
     from agm.agl import PipelineDriver
 
     return PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=default_agent,
         get_sandbox_context=None,
     )
@@ -65,7 +66,9 @@ def _run_program(
             assert isinstance(spec, AgentCommand)
             return agents[spec.command](request)
 
-        rt = PipelineDriver(agent_dispatcher=dispatch, get_sandbox_context=None)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=dispatch, get_sandbox_context=None
+        )
     else:
         rt = _make_runtime(default_agent=default_agent)
     if entry_path is None:
@@ -135,7 +138,7 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=agl_roots(library_root),
     )
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
     selected = next(
         program

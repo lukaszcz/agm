@@ -1827,9 +1827,9 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             "builtin enum Agent =\n"
             "  | AgentCommand(command: int)\n"
-            "  | AgentClaude(model: text, thinking: text)\n"
-            "  | AgentCodex(model: text, thinking: text)\n"
-            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            '  | AgentClaude(model: text, thinking: text = "")\n'
+            '  | AgentCodex(model: text, thinking: text = "")\n'
+            '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
             "()\n",
             default_stdlib=False,
         )
@@ -1844,9 +1844,9 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             "builtin enum Agent =\n"
             "  | AgentCommand(@arg-named command: text)\n"
-            "  | AgentClaude(model: text, thinking: text)\n"
-            "  | AgentCodex(model: text, thinking: text)\n"
-            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            '  | AgentClaude(model: text, thinking: text = "")\n'
+            '  | AgentCodex(model: text, thinking: text = "")\n'
+            '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
             "()\n",
             default_stdlib=False,
         )
@@ -2091,9 +2091,9 @@ class TestScopedBuiltinTypes:
             "scope A\n"
             "  builtin enum Agent\n"
             "    | AgentCommand(command: text)\n"
-            "    | AgentClaude(model: text, thinking: text)\n"
-            "    | AgentCodex(model: text, thinking: text)\n"
-            "    | AgentPi(provider: text, model: text, thinking: text)\n"
+            '    | AgentClaude(model: text, thinking: text = "")\n'
+            '    | AgentCodex(model: text, thinking: text = "")\n'
+            '    | AgentPi(provider: text, model: text, thinking: text = "")\n'
             "  builtin enum ParsePolicy\n"
             "    | Abort\n"
             "    | Retry(n: int)\n"
@@ -9149,9 +9149,9 @@ class TestParsePolicy:
 
 _AGENT_VARIANTS_TC = (
     "  | AgentCommand(command: text)\n"
-    "  | AgentClaude(model: text, thinking: text)\n"
-    "  | AgentCodex(model: text, thinking: text)\n"
-    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    '  | AgentClaude(model: text, thinking: text = "")\n'
+    '  | AgentCodex(model: text, thinking: text = "")\n'
+    '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
 )
 
 _AGENT_REQUEST_FIELDS_TC = (

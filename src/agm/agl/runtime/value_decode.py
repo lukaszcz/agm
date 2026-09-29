@@ -14,9 +14,9 @@ result flows through the SAME normalize + JSON-Schema-validate +
 
 :func:`host_text_to_json` is the single host-text dispatch built on top of
 it: a ``text`` target is taken verbatim, the standard ``Agent`` enum reads
-its own text conventions (shorthand, a tagged JSON object, an ``Agent``
-member constructor call, or -- optionally -- a verbatim command), and every
-other target reads strict JSON, falling back to value syntax.
+its own text conventions (a tagged JSON object, an ``Agent`` member
+constructor call, shorthand, or -- optionally -- a verbatim command), and
+every other target reads strict JSON, falling back to value syntax.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from types import MappingProxyType
 from typing import assert_never, cast
 
 from agm.agent.spec import AgentCommand
-from agm.agent.values import agent_spec_shape, parse_agent_shorthand
+from agm.agent.values import AgentShorthandError, agent_spec_shape, parse_agent_shorthand
 from agm.agl.ir.contracts import (
     ArrayDecode,
     DecodeSchema,
@@ -380,12 +380,14 @@ def host_text_to_json(
     """Decode one host-supplied text token into a JSON-native object per *schema*.
 
     A ``text`` target is taken verbatim. The standard ``Agent`` enum reads
-    compact shorthand, a tagged JSON object, or an ``Agent`` member
-    constructor call, falling back -- when *agent_command_fallback* -- to a
+    a tagged JSON object, an ``Agent`` member constructor call, or compact
+    shorthand, falling back -- when *agent_command_fallback* -- to a
     verbatim command; without the fallback, text matching none of those is a
-    :class:`ValueDecodeError`. Every other target reads strict JSON, falling
-    back to AgL value syntax; a failure of both reports both reasons, JSON
-    and value syntax alike, since either could be what the writer intended.
+    :class:`ValueDecodeError`. A malformed native shorthand prefix
+    (``claude/``, ``codex/``, ``pi/``) is an error even with the fallback.
+    Every other target reads strict JSON, falling back to AgL value syntax;
+    a failure of both reports both reasons, JSON and value syntax alike,
+    since either could be what the writer intended.
     """
     resolved = _resolve(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.TEXT:
@@ -426,22 +428,22 @@ def _agent_ctor_probe(text: str, schema: EnumDecode) -> bool:
 def _decode_agent_text(
     text: str, schema: EnumDecode, defs: DefsMap, *, agent_command_fallback: bool
 ) -> object:
-    """Decode one host Agent text token: shorthand, JSON, a member call, or a command.
+    """Decode one host Agent text token: JSON, a member call, shorthand, or a command.
 
     Text that lexically opens a member call (:func:`_agent_ctor_probe`)
     commits to that reading: a read or bind failure inside the call --
     including a wrong qualifier, which ``_convert_enum`` already rejects --
     propagates as a :class:`ValueDecodeError` rather than silently falling
-    back to a verbatim command.
+    back to a verbatim command. Shorthand is tried after both, so a ``/``
+    inside a JSON object or a call is never read as a provider/model split;
+    a malformed native prefix (``claude/``, ``codex/``, ``pi/``) likewise
+    commits and errors.
 
     Whitespace-only text is always an error, before any other reading is
     tried: an empty command is never a meaningful ``AgentCommand`` fallback.
     """
     if not text.strip():
         raise ValueDecodeError(f"expected a non-empty Agent value, got {text!r}")
-    shorthand = parse_agent_shorthand(text)
-    if shorthand is not None:
-        return agent_spec_shape(shorthand)
     try:
         parsed = parse_json_strict(text)
     except StrictJsonParseError:
@@ -454,6 +456,12 @@ def _decode_agent_text(
         except ValueSyntaxError as exc:
             raise ValueDecodeError(exc.message, exc.start) from exc
         return _convert_enum(node, schema, defs)
+    try:
+        shorthand = parse_agent_shorthand(text)
+    except AgentShorthandError as exc:
+        raise ValueDecodeError(str(exc)) from exc
+    if shorthand is not None:
+        return agent_spec_shape(shorthand)
     if agent_command_fallback:
         return agent_spec_shape(AgentCommand(text))
     raise ValueDecodeError(f"cannot read {text!r} as an Agent value")

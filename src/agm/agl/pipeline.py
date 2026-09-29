@@ -46,6 +46,7 @@ from agm.core.cleanup import notes_of
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agent.effort import AgentSpecResolver
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
@@ -369,6 +370,10 @@ class PipelineDriver:
         (see `agm.sandbox.prepare.lazy_sandbox_context`). Required, so a host
         with no sandbox capability passes ``None`` deliberately rather than
         forgetting it; ``None`` makes a sandboxed ``exec`` raise ``ExecError``.
+    resolve_agent_spec : callable or None
+        Applies host agent defaults to every decoded ``Agent`` spec before
+        dispatch (see `agm.agent.effort.default_effort_resolver`). Required,
+        like ``get_sandbox_context``; ``None`` dispatches specs as decoded.
     """
 
     def __init__(
@@ -381,12 +386,14 @@ class PipelineDriver:
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
         get_sandbox_context: "Callable[[], SandboxContext] | None",
+        resolve_agent_spec: "AgentSpecResolver | None",
     ) -> None:
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
         self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._default_call_depth_limit = (
             default_call_depth_limit
             if default_call_depth_limit is not None
@@ -441,6 +448,7 @@ class PipelineDriver:
         session_host: "SessionHost | None",
         shell_exec_timeout: float | None,
         get_sandbox_context: "Callable[[], SandboxContext] | None",
+        resolve_agent_spec: "AgentSpecResolver | None",
     ) -> None:
         """Replace this driver's execution-time services before ``run_prepared``.
 
@@ -457,13 +465,15 @@ class PipelineDriver:
         environment so the new dispatcher/session host take effect.
         ``get_sandbox_context`` is required (``None`` is a deliberate "no
         sandbox capability"), so a sandboxed ``exec`` raises ``ExecError``
-        instead of crashing when a host forgets to wire one.
+        instead of crashing when a host forgets to wire one. Likewise
+        ``resolve_agent_spec`` is required; ``None`` applies no agent defaults.
         """
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
         self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._host_env_cache = None
 
     def host_environment(self) -> HostEnvironment:
@@ -481,6 +491,7 @@ class PipelineDriver:
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
             get_sandbox_context=self._get_sandbox_context,
+            resolve_agent_spec=self._resolve_agent_spec,
         )
         return self._host_env_cache
 
@@ -666,6 +677,7 @@ class PipelineDriver:
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
                 get_sandbox_context=host_env.get_sandbox_context,
+                resolve_agent_spec=host_env.resolve_agent_spec,
                 strict_json=self._default_strict_json,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
@@ -2203,6 +2215,7 @@ def assemble_host_environment(
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
     get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+    resolve_agent_spec: "AgentSpecResolver | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
@@ -2236,6 +2249,7 @@ def assemble_host_environment(
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
         get_sandbox_context=get_sandbox_context,
+        resolve_agent_spec=resolve_agent_spec,
     )
 
 

@@ -193,6 +193,7 @@ from agm.core.parse import parse_timeout as _parse_timeout
 from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
+    from agm.agent.effort import AgentSpecResolver
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
     from agm.agl.runtime.sessions import SessionHost
@@ -478,6 +479,7 @@ class IrInterpreter:
         agent_dispatcher: AgentFn | None = None,
         session_host: "SessionHost | None" = None,
         get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        resolve_agent_spec: "AgentSpecResolver | None" = None,
         close_sessions: bool = True,
         strict_json: bool = False,
         shell_exec_timeout: float | None = None,
@@ -514,6 +516,7 @@ class IrInterpreter:
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
         self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._close_sessions = close_sessions
         # Once the free-ask default session exists, its environment is fixed
         # forever: skip evaluating and decoding ``environ`` on every later

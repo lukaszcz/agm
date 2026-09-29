@@ -728,7 +728,7 @@ class TestParseOption:
     @pytest.mark.parametrize(
         "token",
         [
-            "claude/sonnet-custom",
+            "claude/sonnet:custom",
             '{"$case":"AgentCommand","command":"worker --flag"}',
         ],
     )
@@ -1012,7 +1012,7 @@ class TestNativeRawValue:
         """A native string value is boxed, not resolved: decoding is deferred."""
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
 
-        assert native_raw_value(projected, "codex/o3-high") == OptionSome("codex/o3-high")
+        assert native_raw_value(projected, "codex/o3:high") == OptionSome("codex/o3:high")
 
     def test_config_agent_option_keeps_a_native_tagged_object(self) -> None:
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))

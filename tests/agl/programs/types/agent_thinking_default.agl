@@ -1,0 +1,28 @@
+# The standard 'Agent' members default 'thinking' to "": positional and named
+# omission, equality with the explicit empty spelling, an explicit override,
+# a record update of the defaulted field, and matching on the filled field.
+# 'effort' selects between an empty and a non-empty explicit thinking.
+
+def describe(agent: Agent) -> text =
+  case agent of
+    | AgentClaude(_, thinking) => "claude[%{thinking}]"
+    | AgentCodex(_, thinking) => "codex[%{thinking}]"
+    | AgentPi(_, _, thinking) => "pi[%{thinking}]"
+    | AgentCommand(command) => "command[%{command}]"
+
+program def main(model: text, provider: text, effort: text) -> unit =
+  let claude = AgentClaude(model)
+  let codex = AgentCodex(model = model)
+  let pi = AgentPi(provider, model)
+  print claude
+  print codex
+  print pi
+  print "[%{claude.thinking}][%{codex.thinking}][%{pi.thinking}]"
+  print(claude == AgentClaude(model, ""))
+  print(pi == AgentPi(provider = provider, model = model, thinking = ""))
+
+  let tuned = AgentClaude(model, effort)
+  print describe(tuned)
+  print(tuned == claude)
+  print describe((codex with thinking = effort))
+  print describe(pi)

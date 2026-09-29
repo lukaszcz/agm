@@ -40,7 +40,9 @@ def _prepare_stdlib_module(tmp_path: Path, module: str, source: str) -> Prepared
 )
 def test_invalid_builtin_method_receivers_are_rejected(source: str) -> None:
     prepared = PipelineDriver.prepare_program(source, default_stdlib=False)
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
     assert discovery.checked is None
     assert discovery.diagnostics
 
@@ -51,7 +53,9 @@ def test_bare_array_scope_is_not_a_builtin_receiver_head() -> None:
         default_stdlib=False,
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is None
     assert discovery.diagnostics
@@ -101,7 +105,9 @@ def test_owning_stdlib_modules_accept_builtin_method_declarations(
 ) -> None:
     prepared = _prepare_stdlib_module(tmp_path, module, source)
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -115,7 +121,9 @@ def test_builtin_receiver_declaration_accepts_any_module(tmp_path: Path) -> None
 
     assert prepared.resolved is not None, prepared.diagnostics
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -127,7 +135,9 @@ def test_builtin_receiver_host_declaration_requires_a_supported_route(tmp_path: 
         "builtin def text::host(self) -> text\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is None
     assert discovery.diagnostics
@@ -145,7 +155,9 @@ def test_builtin_receiver_host_declaration_must_match_its_route(
 ) -> None:
     prepared = _prepare_stdlib_module(tmp_path, module, source)
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is None
     assert discovery.diagnostics
@@ -158,7 +170,9 @@ def test_builtin_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_path:
         "def array[_]::count(self) -> int = 0\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/array")
@@ -188,7 +202,9 @@ def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
         default_stdlib=False,
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -200,7 +216,9 @@ def test_generic_builtin_receiver_binds_its_receiver_slot(tmp_path: Path) -> Non
         "def array[E]::map[U](self, f: (E) -> U) -> array[U] = []\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/array")
@@ -215,7 +233,9 @@ def test_builtin_dict_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_
         "def dict[text, _]::size(self) -> int = 0\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/dict")
@@ -231,7 +251,9 @@ def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
         "def dict[text, V]::size(self) -> int = 0\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/dict")
@@ -248,7 +270,9 @@ def test_scalar_builtin_receiver_may_be_declared_in_a_named_region() -> None:
         default_stdlib=False,
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -260,7 +284,9 @@ def test_scalar_builtin_receiver_has_its_declared_type(tmp_path: Path) -> None:
         "builtin def int::copy(self) -> int\n",
     )
 
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+    discovery = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).discover_programs(
+        prepared
+    )
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/math")

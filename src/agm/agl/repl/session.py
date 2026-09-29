@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
+    from agm.agent.effort import AgentSpecResolver
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
@@ -235,6 +236,7 @@ class ReplSession:
         agent_dispatcher: "AgentFn | None" = None,
         session_host: "SessionHost | None" = None,
         get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        resolve_agent_spec: "AgentSpecResolver | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
@@ -356,6 +358,7 @@ class ReplSession:
             agent_dispatcher=agent_dispatcher,
             session_host=effective_session_host,
             get_sandbox_context=get_sandbox_context,
+            resolve_agent_spec=resolve_agent_spec,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default

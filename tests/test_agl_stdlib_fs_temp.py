@@ -26,7 +26,7 @@ def os_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _run(source: str, entry: Path, *, host_settings: dict[str, Value] | None = None) -> RunResult:
-    runtime = PipelineDriver(get_sandbox_context=None)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = PipelineDriver.prepare_program(source, entry_path=entry, roots=agl_roots())
     discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None

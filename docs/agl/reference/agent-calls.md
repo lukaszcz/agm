@@ -153,7 +153,7 @@ program def main() -> unit =
   let reviewer: Agent = AgentClaude("sonnet", "medium")
   let second-opinion = AgentCodex("o3", "high")
   let scripted = AgentCommand("claude -p")
-  let hosted = AgentPi("openai", "gpt-5", "low")
+  let hosted = AgentPi("openai", "gpt-5") # thinking defaults to ""
   let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted]
   let first-pass: text = review-with(reviewer, "the release notes")
   let second-pass: text = review-with(second-opinion, first-pass)
@@ -173,7 +173,11 @@ parse-retry loop, so its initial invocation is:
 | `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
 | `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
 
-An empty provider, model, or thinking field omits its flag. `Agent` values are
+`thinking` defaults to `""`. An empty provider, model, or thinking field omits its
+flag, except that an empty `thinking` first takes the effort the host configures in
+its `[agent]` section, if any ([agent effort
+defaults](../../commands/agl.md#agent-effort-defaults)); the value itself keeps
+`""`. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
 inspected, and JSON-encoded like other enum values. At a host boundary, a CLI or TOML
 value whose declared type is `Agent` additionally accepts the compact native-agent and

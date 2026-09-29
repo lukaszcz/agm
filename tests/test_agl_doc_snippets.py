@@ -119,7 +119,9 @@ def _statically_compiles(source: str) -> tuple[bool, list[str]]:
     """
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        driver = PipelineDriver(agent_dispatcher=_unused_agent, get_sandbox_context=None)
+        driver = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=_unused_agent, get_sandbox_context=None
+        )
         prepared = driver.prepare_program(source)
         result = driver.check_prepared(prepared)
     diagnostics = [diag.message for diag in result.diagnostics]

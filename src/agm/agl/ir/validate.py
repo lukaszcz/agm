@@ -23,8 +23,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
     5. The root symbol of every ``IrAssign`` is mutable (``mutable=True``).
-    6. Every ``Location`` on every node: its
-       ``source_id`` exists in ``program.sources``; and
+    6. Every ``Location`` on every node: its ``source_id`` is
+       ``HOST_SOURCE_ID`` or exists in ``program.sources``; and
        ``0 <= start_offset <= end_offset <= len(normalized_text)``.
     7. ``program.functions`` contains every callable descriptor. A reference
        from ``IrMakeClosure``/``IrDirectCall`` (or a symbol owner) must resolve
@@ -95,7 +95,15 @@ from agm.agl.ir.contracts import (
     TypeTreeEntry,
     forwarded_encode_key,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import (
+    HOST_SOURCE_ID,
+    ContractId,
+    FunctionId,
+    Location,
+    NominalId,
+    SourceId,
+    SymbolId,
+)
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -281,8 +289,13 @@ def _check_location_cheap(loc: Location) -> None:
 
 
 def _check_location_deep(loc: Location, ctx: _Context) -> None:
-    """Validate cross-reference invariants on a ``Location`` (deep tier)."""
+    """Validate cross-reference invariants on a ``Location`` (deep tier).
+
+    A :data:`~agm.agl.ir.ids.HOST_SOURCE_ID` location has no source to check.
+    """
     source_id: SourceId = loc.source_id
+    if source_id == HOST_SOURCE_ID:
+        return
     if source_id not in ctx.program.sources:
         raise InvalidIrError(
             f"Location references source_id={source_id!r} which is not in program.sources"

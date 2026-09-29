@@ -78,6 +78,7 @@ from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import (
     build_host_engine_seeds,
     execution_cli_values,
+    host_agent_spec_resolver,
     resolve_timeout,
 )
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
@@ -549,6 +550,7 @@ def run(
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    resolve_agent_spec = host_agent_spec_resolver(merged_config)
 
     # Resolve max call depth: CLI > config.  ``None`` (nothing set at
     # any layer) lets the driver apply its canonical default.
@@ -598,7 +600,9 @@ def run(
     # selected program's own ``@config`` entries are known (see
     # ``configure_execution_services``); discovery and preflight never read them.
     runtime = PipelineDriver(
-        default_call_depth_limit=resolved_call_depth_limit, get_sandbox_context=None
+        default_call_depth_limit=resolved_call_depth_limit,
+        get_sandbox_context=None,
+        resolve_agent_spec=None,
     )
     discovery = (
         cached_pipeline.discovery
@@ -742,6 +746,7 @@ def run(
         session_host=session_host,
         shell_exec_timeout=resolved_timeout,
         get_sandbox_context=get_sandbox_context,
+        resolve_agent_spec=resolve_agent_spec,
     )
 
     # Resolve and validate the trace log file up front. A source

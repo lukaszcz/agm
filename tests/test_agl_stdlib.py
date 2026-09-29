@@ -348,6 +348,27 @@ def test_builtin_record_shape_must_match_field_default_presence() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "claude",
+    [
+        pytest.param("AgentClaude(model: text, thinking: text)", id="missing-default"),
+        pytest.param('AgentClaude(model: text = "", thinking: text = "")', id="extra-default"),
+    ],
+)
+def test_builtin_enum_member_shape_must_match_field_default_presence(claude: str) -> None:
+    """An enum member's field default presence is part of the host contract."""
+    with pytest.raises(AglTypeError, match="Builtin type 'Agent' has an invalid definition"):
+        _check(
+            "builtin enum Agent\n"
+            "  | AgentCommand(command: text)\n"
+            f"  | {claude}\n"
+            '  | AgentCodex(model: text, thinking: text = "")\n'
+            '  | AgentPi(provider: text, model: text, thinking: text = "")\n'
+            "()\n",
+            default_stdlib=False,
+        )
+
+
 def test_std_core_source_builtin_shape_is_not_masked_by_seed(
     tmp_path: Path,
 ) -> None:
@@ -534,7 +555,8 @@ def test_builtin_exception_own_fields_are_standard_zone(
     """A builtin exception's own fields follow the standard zone, so they
     accept positional arguments in a constructor call."""
     result = run_inline_code(
-        PipelineDriver(get_sandbox_context=None), 'print(IndexError(1, 2, message = "m").index)\n'
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        'print(IndexError(1, 2, message = "m").index)\n',
     )
 
     assert list(result.diagnostics) == [], " | ".join(d.message for d in result.diagnostics)

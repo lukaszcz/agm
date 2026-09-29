@@ -282,6 +282,7 @@ def run_inline_ir(
     agent call fails instead of reaching a real agent.
     """
     runtime = PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=agent_dispatcher,
         shell_exec_timeout=shell_exec_timeout,
         get_sandbox_context=get_sandbox_context,

@@ -34,6 +34,7 @@ from agm.agl.lower.lowerer import (
     _Lowerer,
     builtin_nominals_from_declarations,
     reserved_fallback_superseded,
+    reserved_field_defaults,
 )
 from agm.agl.lower.nominal_descriptors import exception_descriptor
 from agm.agl.matchcompile import MatchCompiledProgram
@@ -485,11 +486,13 @@ def lower_program(
     # that the extern boundary later uses to resolve a companion's bare/dotted
     # nominal lookup. A seeded reserved shape a standard-library declaration
     # supersedes is skipped: the source declaration is the identity the host
-    # mints for that name.
+    # mints for that name. A reserved fallback's defaults are host constants.
     for typedef in type_table.entries():
         if _superseded_reserved(typedef, type_table):
             continue
         nominal = NominalId(typedef.decl_node_id)
+        if (reserved_defaults := reserved_field_defaults(typedef)) is not None:
+            link.field_defaults[nominal] = reserved_defaults
         bears_name_path = (
             type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
         )

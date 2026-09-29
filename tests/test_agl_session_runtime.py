@@ -306,7 +306,9 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
         requests.append(request)
         return AgentResponse(["not a number", "7"][len(requests) - 1])
 
-    result = PipelineDriver(agent_dispatcher=dispatch, get_sandbox_context=None).run(
+    result = PipelineDriver(
+        resolve_agent_spec=None, agent_dispatcher=dispatch, get_sandbox_context=None
+    ).run(
         "program def main() -> unit =\n"
         '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n'
     )
@@ -321,7 +323,7 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
 def _run(
     source: str, host: _Host, *, process_environment: dict[str, str] | None = None
 ) -> RunResult:
-    return PipelineDriver(session_host=host, get_sandbox_context=None).run(
+    return PipelineDriver(resolve_agent_spec=None, session_host=host, get_sandbox_context=None).run(
         source, process_environment=process_environment
     )
 
@@ -1032,7 +1034,7 @@ _CLOSE_AFTER_DEFAULT = (
     [pytest.param(_CLOSE_AFTER_OPEN, id="open"), pytest.param(_CLOSE_AFTER_DEFAULT, id="default")],
 )
 def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -> None:
-    assert PipelineDriver(get_sandbox_context=None).run(source).ok
+    assert PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(source).ok
 
 
 def test_a_failing_default_becomes_a_catchable_session_error() -> None:
@@ -1180,7 +1182,9 @@ def test_production_session_host_carries_the_stream_decode_offset(
     )
     # This test targets the decode-offset diagnostic, not sandbox preparation, so
     # it seeds ``Disabled`` explicitly rather than exercising the default sandbox.
-    result = PipelineDriver(session_host=host, get_sandbox_context=None).run(
+    result = PipelineDriver(
+        resolve_agent_spec=None, session_host=host, get_sandbox_context=None
+    ).run(
         "program def main() -> unit =\n"
         '  let answer: text = ask("hello", agent = AgentCommand("runner"), sandbox = Disabled)\n'
         "  print(answer)\n"

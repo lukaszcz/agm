@@ -111,9 +111,9 @@ syntax literal** (externally supplied values are not chatty agent output, so
 no lenient recovery applies), validated against the declared type: a token
 that parses as strict JSON is read as JSON; any other token is read as one
 [value syntax](#value-syntax) literal instead. An `Agent`-typed value
-([Agents](#agents) above) instead reads compact shorthand, then a JSON
-object, then an `Agent` member constructor call, and otherwise falls back to
-a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
+([Agents](#agents) above) instead reads a JSON object, then an `Agent`
+member constructor call, then compact shorthand (`claude/opus:high`), and
+otherwise falls back to a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
 
 A CLI token, an `@opt-env` variable's value, and a qualified config-table
 string ([Config-file schema](#config-file-schema) below) must all be valid
@@ -131,8 +131,8 @@ the variable, rather than letting the failure surface later at a print or
 
 A `text`-to-structured-type cast (`as`/`as?`, [Types](types.md#strict-parsing-in-text-and-json-casts))
 accepts the same value-syntax literal alongside strict JSON, with no lenient
-recovery either way; a cast to `Agent` accepts shorthand, a JSON object, or a
-member constructor call, but never falls back to a verbatim command the way a
+recovery either way; a cast to `Agent` accepts a JSON object, a member
+constructor call, or shorthand, but never falls back to a verbatim command the way a
 host `Agent` parameter does.
 
 A value-syntax literal is a data-only subset of AgL's own expression syntax:
@@ -334,7 +334,7 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: a JSON object, then an `Agent` member constructor call, then compact shorthand, and otherwise a verbatim command. An agent whose `thinking` is `""` takes its effort from the [`[agent]` config section](../../commands/agl.md#agent-effort-defaults) when used. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
 `default-sandbox` is a typed `AgentSandbox` value ([Types](types.md#agentsandbox)). Unlike
 `default-agent`, it is not an `Agent`, so its host CLI/TOML text decodes as
 strict JSON or one [value-syntax](#value-syntax) literal, exactly as any

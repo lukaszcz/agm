@@ -28,7 +28,7 @@ def _roots() -> RootSet:
 
 
 def _run(source: str, *, trace_file: Path | None = None) -> RunResult:
-    return PipelineDriver(get_sandbox_context=None).run(
+    return PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
         source, roots=_roots(), trace_file=trace_file
     )
 

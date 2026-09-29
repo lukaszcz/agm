@@ -55,7 +55,9 @@ class TestPrepareProgramDefaultRootsVersionMismatch:
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
 
         prepared = PipelineDriver.prepare_program("program def main() -> unit = ()")
-        discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
+        discovery = PipelineDriver(
+            resolve_agent_spec=None, get_sandbox_context=None
+        ).discover_programs(prepared)
 
         assert discovery.programs == ()
         assert discovery.diagnostics

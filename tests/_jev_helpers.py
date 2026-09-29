@@ -163,7 +163,9 @@ class JevMount(NamedTuple):
 def mount_jev(monkeypatch: pytest.MonkeyPatch, outcomes: Sequence[Mapping[str, Any]]) -> JevMount:
     """A fresh driver whose ``sysone/jev`` clients are answered by scripted *outcomes*."""
     registry = ExternRegistry()
-    driver = PipelineDriver(extern_registry=registry, get_sandbox_context=None)
+    driver = PipelineDriver(
+        resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None
+    )
     transport = install_jev_transport(monkeypatch, driver, registry, outcomes)
     companion = registry.loaded_companion(JEV_MODULE)
     assert companion is not None

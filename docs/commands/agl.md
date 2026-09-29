@@ -243,25 +243,34 @@ For module parameter precedence and configuration routes, see
 
 ### Host Agent syntax
 
-Every CLI argument or TOML string of the standard `Agent` type accepts (a config value may
-instead be a native TOML table, read directly as the tagged JSON object below):
+Every CLI argument or TOML string of the standard `Agent` type — an Agent-typed program
+parameter, `Agent`-typed flag, `--default-agent`, or the `default-agent` config key — is read, in
+order (a config value may instead be a native TOML table, read directly as the tagged JSON object):
 
-- `claude/MODEL-EFFORT` → `AgentClaude(MODEL, EFFORT)`
-- `codex/MODEL-EFFORT` → `AgentCodex(MODEL, EFFORT)`
-- `pi/PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
-- any other `PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+1. a JSON object;
+2. an [AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member
+   constructor call (`AgentCodex(model = "o3", thinking = "high")`, `AgentClaude("opus")`, bare
+   or qualified `Agent::AgentPi(...)`);
+3. compact shorthand:
+   - `claude/MODEL[:EFFORT]` → `AgentClaude(MODEL, EFFORT)`
+   - `codex/MODEL[:EFFORT]` → `AgentCodex(MODEL, EFFORT)`
+   - `pi/PROVIDER/MODEL[:EFFORT]` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+   - any other `PROVIDER/MODEL[:EFFORT]` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+4. otherwise a verbatim `AgentCommand` (`--default-agent 'worker --flag'`).
 
-The last hyphen separates the model from an opaque, non-empty effort suffix of any vocabulary.
-Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Failing shorthand, an
-Agent-typed program parameter, `Agent`-typed flag, `--default-agent`, or the `default-agent` config
-key is read, in order: as a JSON object; then as an
-[AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member constructor
-call (`AgentCodex(model = "o3", thinking = "high")`, bare or qualified `Agent::AgentPi(...)`); text
-naming no member this way, with no `(` following it, is a verbatim `AgentCommand`
-(`--default-agent 'worker --flag'`). Text that does open a member call but fails to read or bind —
-an unclosed `AgentClaude(model = "x"`, an unknown field, a qualifier naming anything but `Agent` —
-is a host error, not a verbatim command. Whitespace-only text is always a host error, never a
-verbatim empty command.
+In shorthand the effort follows the last `:` and is optional; omitted, it is `""`
+([configured default effort](#agent-effort-defaults)). Provider and effort use
+`[A-Za-z0-9._@+-]`; a model may also contain `:`, so a model with a colon needs an explicit
+effort (`ollama/llama3:8b:high`) or the constructor form. Examples: `claude/sonnet:medium`,
+`codex/o3:high`, `pi/openai/gpt-5:low`, `openrouter/qwen3`. The `claude`, `codex`, and `pi`
+prefixes match in any case; text starting with one that breaks its form (`claude/`,
+`claude/opus:`, `pi/anthropic`, surrounding whitespace) is a host error, never a verbatim
+command. Other two-segment text such as `bin/agent` reads as Pi shorthand, so write a relative
+command path as `./bin/agent`.
+
+Text that opens a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`,
+an unknown field, a qualifier naming anything but `Agent` — is a host error, not a verbatim
+command. Whitespace-only text is always a host error, never a verbatim empty command.
 
 ### Host AgentSandbox syntax
 
@@ -286,9 +295,54 @@ let review: Review = ask("Review %{artifact}", agent = reviewer)
 let answer: text = ask("Summarize")
 ```
 
-`AgentCommand(command)`, `AgentClaude(model, thinking)`, `AgentCodex(model, thinking)`, and
-`AgentPi(provider, model, thinking)` each build their own argv; select one with an `Agent` value
-or `default-agent`.
+`AgentCommand(command)`, `AgentClaude(model, thinking = "")`, `AgentCodex(model, thinking = "")`,
+and `AgentPi(provider, model, thinking = "")` each build their own argv; select one with an
+`Agent` value or `default-agent`. An empty `thinking` passes no effort flag unless a configured
+default applies.
+
+### Agent effort defaults
+
+The `[agent]` config section supplies the effort for an `AgentClaude`, `AgentCodex`, or `AgentPi`
+whose `thinking` is `""`, when `agm exec`, `agm repl`, or a package-registered command uses it
+(free `ask`, `Agent::ask`, sessions). The most specific table that sets `effort` wins:
+
+```toml
+[agent.claude]                            # every Claude model
+effort = "medium"
+[agent.claude.opus]                       # one Claude model
+effort = "high"
+[agent.codex."gpt-5.1-codex"]             # one Codex model ([agent.codex] for all)
+effort = "xhigh"
+[agent.pi]                                # every Pi provider and model
+effort = "low"
+[agent.pi.anthropic]                      # one Pi provider
+effort = "medium"
+[agent.pi.anthropic."claude-sonnet-4-5"]  # one Pi provider/model
+effort = "high"
+[agent.pi.anthropic.claude-haiku-4]       # narrower table: the Pi CLI's own default
+effort = ""
+```
+
+A table that sets `effort`, even to `""`, ends the lookup: `effort = ""` restores the agent CLI's
+own default for that model or provider instead of falling through to a broader table. Only an
+absent `effort` falls through. With nothing set, no effort flag is passed. Quote a model or
+provider name containing dots (`[agent.codex."gpt-5.1-codex"]`); unquoted, TOML splits it into
+nested tables. `effort` shares its table with the model or provider names below it, so a model
+literally named `effort` cannot be configured at that level.
+
+The section layers like any other config (install, home, project, workspace) and is read once,
+at startup, from the merged config. It is validated strictly; an invalid section is a fatal
+config error (exit 1) before anything runs:
+
+- every key of `[agent]` must be a `claude`, `codex`, or `pi` table (a bare `[agent] effort` is
+  an error);
+- inside those, only a text `effort` and model (or Pi provider) sub-tables are allowed;
+- tables nest no deeper than `[agent.claude.MODEL]`, `[agent.codex.MODEL]`, or
+  `[agent.pi.PROVIDER.MODEL]`.
+
+A non-empty `thinking` is never overridden, and `AgentCommand` is unaffected. The AgL value itself keeps
+`thinking = ""` (printing shows it); `Session::default().agent` reports the agent the default
+session runs with, effort applied.
 
 ### Agent command interpolation
 
@@ -319,7 +373,7 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 
 ```toml
 [exec]
-default-agent = "claude/sonnet-medium" # native shorthand or custom command
+default-agent = "claude/sonnet:medium" # native shorthand or custom command
 default-sandbox = "Native"  # bare member name or a Sandbox(...) constructor call
 strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
@@ -558,7 +612,8 @@ strictness, and timeout. As in `agm exec`, each typed `Agent` value selects its 
 command, `--default-agent` and `[exec] default-agent` accept [host Agent
 syntax](#host-agent-syntax), `--default-sandbox` and `[exec] default-sandbox` accept [host
 AgentSandbox syntax](#host-agentsandbox-syntax), and all are effective whether or not the session
-loads `std/config` or `--no-stdlib` is given.
+loads `std/config` or `--no-stdlib` is given. [`[agent]` effort defaults](#agent-effort-defaults)
+apply as well.
 
 Free `ask` lazily opens one default conversation, snapshotting `default-agent` and
 `default-sandbox` at first use; later free calls reuse them even if the settings change. Explicit

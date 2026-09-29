@@ -1,9 +1,9 @@
 scope A
   builtin enum Agent
     | AgentCommand(command: text)
-    | AgentClaude(model: text, thinking: text)
-    | AgentCodex(model: text, thinking: text)
-    | AgentPi(provider: text, model: text, thinking: text)
+    | AgentClaude(model: text, thinking: text = "")
+    | AgentCodex(model: text, thinking: text = "")
+    | AgentPi(provider: text, model: text, thinking: text = "")
 
   builtin
   exception AgentCallError extends Exception

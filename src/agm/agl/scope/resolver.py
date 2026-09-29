@@ -67,6 +67,7 @@ from agm.agl.scope.imports import (
     QName,
     QualResolutionAmbiguous,
     QualResolutionFound,
+    ScopeOrigins,
     declares_bare_constructor,
     qualifier_candidates,
     qualifier_members,
@@ -2661,15 +2662,33 @@ class _Resolver:
             (candidate for routes in targets for candidate in routes), key=_keyed_bare_route
         )
         for imported_route, members in candidates:
-            module, path = imported_route
-            origins = self._import_env.scope_origins_by_route.get(
-                imported_route, frozenset({(module, _bare_atom(path))})
-            )
+            origins = self._scope_route_origins(imported_route)
             _representative, merged = grouped.setdefault(origins, (imported_route, {}))
             for atom, qname in members.items():
                 merged.setdefault(atom, qname)
 
         return tuple(sorted(grouped.values(), key=_keyed_bare_route))
+
+    def _scope_route_origins(self, route: BareRoute) -> ScopeOrigins:
+        """Return the declarations scope route *route* reaches, through any number of re-exports."""
+        module, path = route
+        return self._import_env.scope_origins_by_route.get(
+            route, frozenset({(module, _bare_atom(path))})
+        )
+
+    def _scope_routes_reach_region(self, routes: Iterable[BareRoute]) -> bool:
+        """Whether any of *routes* reaches a scope region rather than a type's own path.
+
+        Decided by canonical declaration identity (:meth:`_scope_route_origins`):
+        every type's own path is also a scope identity, so a route whose
+        declaration is a type -- re-exported or re-rooted under another
+        module's scope region or not -- exposes that type, never a region.
+        """
+        return any(
+            not self._type_owners.is_declared(origin)
+            for route in routes
+            for origin in self._scope_route_origins(route)
+        )
 
     def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:
         """Resolve a use target through exact lexical scope paths."""
@@ -2934,6 +2953,11 @@ class _Resolver:
                 scope_routes=exposed_scope_routes,
                 bindings={atom: frozenset(refs) for atom, refs in contributed_bindings.items()},
                 hidden_prefixes=frozenset(_item_path(item) for item in decl.hidden),
+                regions=frozenset(
+                    atom
+                    for atom, routes in exposed_scope_routes.items()
+                    if self._scope_routes_reach_region(routes)
+                ),
             )
         )
 
@@ -4731,17 +4755,12 @@ class _Resolver:
     def _layer_region_source(self, layer: ScopeNode, name: NameAtom) -> bool:
         """Whether *layer* contributes *name* as a scope region through one of its own uses.
 
-        A route target that is itself a declared type is never a competing
-        region: every type's own path is also a scope-export identity (it is
-        always walkable further, for its own members and methods), so a
-        ``use`` exposing it exposes that same type, not a distinct namespace
-        sharing its spelling (mirrors :meth:`_declares_region`'s own
-        exclusion for this module's own declarations).
+        An imported use's regions are classified when it is contributed
+        (:meth:`_scope_routes_reach_region`); a local use's target is this
+        module's own region exactly when :meth:`_declares_region` says so.
         """
         return any(
-            not self._type_owners.is_declared((module_id, _bare_atom(path)))
-            for contribution in layer.imported_use_contributions
-            for module_id, path in contribution.scope_routes.get(name, frozenset())
+            name in contribution.regions for contribution in layer.imported_use_contributions
         ) or any(
             exposed == name
             and isinstance(source, _LocalScopeRoute)

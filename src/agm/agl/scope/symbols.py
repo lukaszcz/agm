@@ -704,7 +704,9 @@ class ImportedUseContribution:
     ``use`` hid instead of reinstating it from the import environment.
     ``constructors`` snapshots the constructor candidates it exposed; it
     starts empty, since headers are read before type owners are known, and is
-    filled in once they are.
+    filled in once they are. ``regions`` holds the ``scope_routes`` spellings
+    that reach a scope region rather than a type's own path, classified by
+    canonical declaration identity when the contribution is built.
     """
 
     declaration: UseDecl
@@ -712,6 +714,7 @@ class ImportedUseContribution:
     refreshes_all_members: bool
     members: Mapping[BareAtom, QName]
     scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
+    regions: frozenset[BareAtom]
     bindings: Mapping[BareAtom, frozenset[BindingRef]]
     hidden_prefixes: frozenset[ScopePath]
     constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)

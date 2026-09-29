@@ -12,7 +12,6 @@ from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -44,22 +43,8 @@ def test_use_target_without_tail_or_alias_is_a_syntax_error() -> None:
         parse_program("use Tools")
 
 
-def test_use_bare_target_route_clash_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:
+def test_anchored_use_targets_pick_the_module_route_or_the_own_scope(tmp_path: Path) -> None:
     modules = {"library": "scope Scope\n  def remote() -> int = 1\nend Scope"}
-    ambiguous = _graph(
-        tmp_path,
-        "import library::{Scope}\nuse Scope::*\n\nscope Scope\n  def local() -> int = 2\nend Scope",
-        modules,
-    )
-
-    with pytest.raises(RouteClashError) as raised:
-        resolve_repl_graph(ambiguous)
-
-    diagnostic = str(raised.value)
-    assert "/library::Scope" in diagnostic
-    assert "::Scope" in diagnostic
-    assert "/Scope" not in diagnostic
-
     module_route = _graph(
         tmp_path,
         "import library::{Scope}\nuse /library::Scope::*\nremote()",

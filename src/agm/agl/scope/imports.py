@@ -44,6 +44,7 @@ __all__ = [
     "matching_atoms",
     "qualifier_candidates",
     "qualifier_contributes",
+    "qualifier_hides",
     "qualifier_members",
     "qualifier_scope_paths",
     "render_qualifier",
@@ -121,6 +122,8 @@ class ModuleContribution:
     alias_members: Mapping[str, Mapping[NameAtom, QName]] = field(default_factory=dict)
     path_scope_paths: frozenset[NameAtom] = frozenset()
     alias_scope_paths: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
+    path_hidden: frozenset[NameAtom] = frozenset()
+    alias_hidden: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         members: Mapping[NameAtom, QName] = MappingProxyType(
@@ -171,6 +174,8 @@ class ImportEnv:
     the name's first use, not raised here. ``unqualified_scope_routes`` and
     ``decl_bare_scope_routes`` carry the parallel namespace-only contribution
     for scopes that have no declaration member to put in a bare table.
+    ``decl_hidden`` holds, per tailed declaration, the bare atoms its
+    ``hiding`` removed from its tail.
     """
 
     contributions: Mapping[ModuleId, ModuleContribution]
@@ -184,6 +189,7 @@ class ImportEnv:
     decl_bare_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
+    decl_hidden: Mapping[int, frozenset[NameAtom]] = field(default_factory=dict)
     facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
     # Where each imported module was first named in this module's source, so a
@@ -239,6 +245,8 @@ class ImportEnv:
         object.__setattr__(self, "decl_bare_routes", decl_bare_routes)
         object.__setattr__(self, "unqualified_scope_routes", unqualified_scope_routes)
         object.__setattr__(self, "decl_bare_scope_routes", decl_bare_scope_routes)
+        decl_hidden: Mapping[int, frozenset[NameAtom]] = MappingProxyType(dict(self.decl_hidden))
+        object.__setattr__(self, "decl_hidden", decl_hidden)
         scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = MappingProxyType(
             dict(self.scope_origins_by_route)
         )
@@ -316,6 +324,8 @@ class _ContributionAccumulator:
     alias_members: dict[str, dict[NameAtom, QName]]
     path_scope_paths: set[NameAtom]
     alias_scope_paths: dict[str, set[NameAtom]]
+    path_hidden: set[NameAtom]
+    alias_hidden: dict[str, set[NameAtom]]
 
 
 def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
@@ -399,6 +409,7 @@ def build_import_env(
     decl_bare_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
+    decl_hidden: dict[int, set[NameAtom]] = {}
     facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
     canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
@@ -436,16 +447,19 @@ def build_import_env(
             hidden_scope_paths = set(hidden_scopes)
             acc = accumulators.setdefault(
                 module,
-                _ContributionAccumulator({}, False, set(), {}, {}, set(), {}),
+                _ContributionAccumulator({}, False, set(), {}, {}, set(), {}, set(), {}),
             )
             if decl.alias is None:
                 route_members = acc.path_members
                 route_scope_paths = acc.path_scope_paths
+                route_hidden = acc.path_hidden
                 acc.path_enabled = True
             else:
                 route_members = acc.alias_members.setdefault(decl.alias, {})
                 route_scope_paths = acc.alias_scope_paths.setdefault(decl.alias, set())
+                route_hidden = acc.alias_hidden.setdefault(decl.alias, set())
                 acc.aliases.add(decl.alias)
+            route_hidden.update(hidden)
             for source, qname in module_exports.items():
                 if source not in hidden:
                     acc.members[source] = qname
@@ -456,7 +470,13 @@ def build_import_env(
             route_scope_paths.update(visible_scope_paths)
             for source in visible_scope_paths:
                 scope_origins_by_route[(module, _path(source))] = module_scopes[source]
-            for exposed, source in _tail_exposures(decl, hidden, selected_exports):
+            exposures = _tail_exposures(decl, hidden, selected_exports)
+            removed = set(_tail_exposures(decl, set(), selected_exports)) - set(exposures)
+            if removed:
+                decl_hidden.setdefault(decl.node_id, set()).update(
+                    exposed for exposed, _source in removed
+                )
+            for exposed, source in exposures:
                 qname = module_exports[source]
                 route = (module, _path(source))
                 if decl.scope_path:
@@ -487,6 +507,11 @@ def build_import_env(
             acc.alias_members,
             frozenset(acc.path_scope_paths),
             {alias: frozenset(scope_paths) for alias, scope_paths in acc.alias_scope_paths.items()},
+            frozenset(acc.path_hidden - acc.path_members.keys()),
+            {
+                alias: frozenset(hidden - acc.alias_members[alias].keys())
+                for alias, hidden in acc.alias_hidden.items()
+            },
         )
     return ImportEnv(
         contributions=contributions,
@@ -507,6 +532,7 @@ def build_import_env(
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_scope_routes.items()
         },
+        decl_hidden={node_id: frozenset(atoms) for node_id, atoms in decl_hidden.items()},
         facade_aliases={
             alias: {
                 origin_node_id: frozenset(modules)
@@ -633,6 +659,28 @@ def qualifier_scope_paths(
         )
         result.append((module, scope_paths))
     return tuple(result)
+
+
+def qualifier_hides(
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
+) -> bool:
+    """Whether a ``hiding`` removed *member* from every route *qualifier* names that had it."""
+    return any(
+        member in _route_hidden(env.contributions[module], route)
+        for module in qualifier_candidates(env, qualifier, anchored=anchored)
+        for route in _matching_contribution_routes(
+            env.contributions[module], qualifier, anchored=anchored
+        )
+    )
+
+
+def _route_hidden(contribution: ModuleContribution, route: str | None) -> frozenset[NameAtom]:
+    """Project one import route's hidden members; ``None`` selects the path route."""
+    return (
+        contribution.path_hidden
+        if route is None
+        else contribution.alias_hidden.get(route, frozenset())
+    )
 
 
 def qualifier_contributes(

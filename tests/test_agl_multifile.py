@@ -1022,40 +1022,25 @@ class TestCrossModuleScopedPaths:
         )
         assert repaired.ok is True
 
-    def test_scope_and_module_route_clash_are_repaired_by_anchors(
+    def test_own_scope_beats_module_route_and_anchors_select_either(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
 
-        ambiguous = _run_program(
+        result = _run_program(
             "import Point\n"
             "\n"
             "scope Point\n"
             "  def distance() -> int = 7\n"
             "end Point\n"
             "\n"
-            "Point::distance()\n",
-            roots_dirs=[tmp_path],
-        )
-        assert ambiguous.ok is False
-        assert any(
-            "Point" in diagnostic.message and "module route" in diagnostic.message.lower()
-            for diagnostic in ambiguous.diagnostics
-        )
-
-        repaired = _run_program(
-            "import Point\n"
-            "\n"
-            "scope Point\n"
-            "  def distance() -> int = 7\n"
-            "end Point\n"
-            "\n"
+            "print Point::distance()\n"
             "print /Point::distance()\n"
             "print ::Point::distance()\n",
             roots_dirs=[tmp_path],
         )
-        assert repaired.ok is True
-        assert capsys.readouterr().out == "9\n7\n"
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n9\n7\n"
 
     def test_import_tail_exposes_scoped_paths_without_a_module_route(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

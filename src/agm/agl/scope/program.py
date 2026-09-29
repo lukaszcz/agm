@@ -53,6 +53,7 @@ from agm.agl.scope.imports import (
     declares_bare_constructor,
     matching_atoms,
 )
+from agm.agl.scope.lookup import contributed_types
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AglScopeError,
@@ -66,11 +67,9 @@ from agm.agl.scope.symbols import (
     ScopePath,
     TypeOwner,
     UnknownMemberError,
-    binding_qname,
+    anchored_layers,
     builtin_type_static_kind,
-    contributed_declarations,
     dedupe_constructor_candidates,
-    resolve_bare_contribution_layer,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
@@ -863,17 +862,25 @@ def resolve_program(
     resolvers: dict[ModuleId, _Resolver] = {}
 
     def type_contributions(
-        module_id: ModuleId, scope_path: ScopePath, name: NameAtom, is_type: Callable[[QName], bool]
-    ) -> tuple[ScopePath, frozenset[QName]] | None:
+        module_id: ModuleId,
+        scope_path: ScopePath,
+        path: ScopePath,
+        is_type: Callable[[QName], bool],
+    ) -> frozenset[QName]:
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.type_contributions(scope_path, name, is_type)
-        nearest = resolve_bare_contribution_layer(
-            resolved_modules[module_id].resolved.scope_nodes[scope_path],
-            name,
-            predicate=lambda ref: ref.contributes_a_type and is_type(binding_qname(ref)),
+            return resolver.type_contributions(scope_path, path, is_type)
+        scope_nodes = resolved_modules[module_id].resolved.scope_nodes
+        return contributed_types(
+            scope_path,
+            path,
+            is_type,
+            lambda step, full: (
+                ref
+                for layer, atom in anchored_layers(scope_nodes, step, full)
+                for ref in layer.bare_contributions.get(atom, ())
+            ),
         )
-        return None if nearest is None else contributed_declarations(*nearest)
 
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT

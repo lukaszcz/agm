@@ -39,12 +39,12 @@ goes through the cast's type position -- different code that must still
 agree, so both are checked -- and its own accepted identity is ``Option``
 of the resolved declaration instead.
 
-``TestLocalScopeShadowsSameNamedImport`` and
+``TestLocalScopeBesideSameNamedImport`` and
 ``TestImportedScopeRegionMemberIsAccepted`` cover the local-scope-vs-import
 case for a record owner (so ``is`` and applying type arguments, meaningless
-for a non-generic record, are left to the matrix above): a local scope
-region lacking a member beats a same-spelled imported one, and a member
-uniquely selected through a scope-region prefix is accepted.
+for a non-generic record, are left to the matrix above): a member selected
+through an imported scope-region prefix is accepted, with or without a
+same-spelled local region lacking it.
 
 The "applied" form's ``is``/pattern positions cover an ``AppliedT`` owner
 (``Box[int]``) resolved by its recorded ``gm::Box[int]`` key rather than
@@ -80,9 +80,7 @@ import pytest
 from agm.agl.diagnostics import ReferencedMemberError
 from agm.agl.repl import ReplSession
 from agm.agl.scope.symbols import (
-    AglScopeError,
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -487,10 +485,9 @@ class TestBareTypeEntryFallback:
 
 
 # ---------------------------------------------------------------------------
-# A local scope region beats a same-named imported nested region, identically
-# whether the local declaration wins the position (rejecting a member it
-# doesn't have) or nothing local conflicts at all (accepting the sole
-# imported member).
+# A local scope region never hides a same-named imported region's members:
+# the imported member is accepted identically with or without the local
+# region.
 # ---------------------------------------------------------------------------
 
 _GEO_LOCAL_ONLY = "scope Geo\n  enum Kind = Round | Flat\nend Geo"
@@ -500,14 +497,6 @@ _GEO_IMPORTED = "scope Geo\n  record Point\n    x: int\nend Geo\n"
 # types are not ``is``-testable) and applying type arguments (the record
 # takes none) are exercised instead by the "applied" form above, whose
 # owner is generic.
-_RECORD_POS: dict[str, str] = {
-    "value": "{q}(x = 1)",
-    "pattern": "case 1 of\n  | {q}(x) => x\n  | _ => 2",
-    "annot": "fn(p: {q}) => 1",
-    "alias": "type A = {q}\nfn(x: A) => 1",
-    "tyarg": "fn(p: array[{q}]) => 1",
-}
-
 _ACCEPTED_RECORD_POS: dict[str, str] = {
     "value": "{q}(x = 1)",
     "pattern": "let v: {q} = {q}(x = 1)\ncase v of\n  | {q}(x) => x",
@@ -521,26 +510,22 @@ _SHADOW_HEADER = ("import shapes::*", _GEO_LOCAL_ONLY)
 _IMPORTED_MEMBER_HEADER = ("import shapes::*",)
 
 
-class TestLocalScopeShadowsSameNamedImport:
-    """A local ``scope Geo`` lacking ``Point`` beats an imported ``Geo::Point``.
-
-    A name lookup that fell through to the import would find the imported
-    ``Point`` and accept every position; local-scope-wins rejects all of
-    them instead, identically in every position, file mode and REPL
-    grouping.
-    """
+class TestLocalScopeBesideSameNamedImport:
+    """A local ``scope Geo`` lacking ``Point`` leaves the imported ``Geo::Point`` selected."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_SHADOW_HEADER) + 1))
-    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        probes = {pos: _RECORD_POS[pos].format(q="Geo::Point") for pos in _RECORD_POS}
+    def test_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        probes = {
+            pos: _ACCEPTED_RECORD_POS[pos].format(q="Geo::Point") for pos in _ACCEPTED_RECORD_POS
+        }
         assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _GEO_IMPORTED},
             _SHADOW_HEADER,
             sizes,
             probes,
-            {pos: ("scope", UnknownMemberError) for pos in probes},
-            span_texts={pos: "Geo::Point" for pos in probes},
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={"value": "record shapes::Geo::Point\n  x: int"},
         )
 
 
@@ -611,9 +596,9 @@ class TestLocalTypeWinsOverAmbiguousBareImports:
 
 
 # ---------------------------------------------------------------------------
-# A local bare enum's own nullary case, walked one level past a route that
-# would otherwise resolve the same spelling, gives the identical verdict
-# regardless of how a REPL session happens to split its setup into entries.
+# A local bare enum's own nullary case, spelled one level past, beside a route
+# reaching the same path, gives the identical verdict regardless of how a
+# REPL session happens to split its setup into entries.
 # ---------------------------------------------------------------------------
 
 _ENUM_CASE_CLASH_LIB = {
@@ -626,12 +611,10 @@ _ENUM_CASE_CLASH_HEADER = ("import pkg/Foo", _ENUM_CASE_CLASH_LOCAL)
 class TestLocalEnumCaseWalkAgreesAcrossGroupings:
     """``Foo::E::A`` reaches the identical verdict in file mode and every REPL grouping.
 
-    A route clash is checked over the whole segment run a longer route
-    names, not just the chain's first segment. The unanchored spelling
-    clashes with the ``pkg/Foo`` route (which resolves ``E::A`` past it);
-    the anchored spelling, naming only the current module, has no route to
-    clash with
-    and rejects ``A`` as a plain unknown member of the local nullary case.
+    The own module declares no ``Foo::E::A``, so the unanchored spelling
+    selects the ``pkg/Foo`` route's; the anchored spelling reads the current
+    module alone and rejects ``A`` as an unknown member of the local
+    nullary case.
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_CASE_CLASH_HEADER) + 1))
@@ -642,8 +625,8 @@ class TestLocalEnumCaseWalkAgreesAcrossGroupings:
             _ENUM_CASE_CLASH_LIB,
             decls,
             sizes,
-            ("scope", RouteClashError),
-            span_text="Foo::E::A",
+            _ACCEPTED,
+            expected_identity="record pkg/Foo::E::A",
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_CASE_CLASH_HEADER) + 1))
@@ -821,9 +804,9 @@ class TestUnknownQualifierRouteAcrossPositions:
 
 
 # ---------------------------------------------------------------------------
-# A local, bare (non-scoped) nominal type beats a same-named wildcard-
-# imported one, exactly as a local scope region does: the local owner's own
-# member set is final, never merged with the import's.
+# A local, bare (non-scoped) nominal type beside a same-named wildcard-
+# imported one, exactly as a local scope region: a member only the import
+# declares is the import's.
 # ---------------------------------------------------------------------------
 
 _ENUM_LIB = "record Point\n  x: int\nenum Shape\n  | Circle\n"
@@ -831,8 +814,8 @@ _ENUM_LOCAL = "enum Shape\n  | Tri\n"
 
 _ENUM_POS: dict[str, str] = {
     "value": "{q}",
-    "pattern": "case 1 of\n  | {q} => 1\n  | _ => 2",
-    "is": "let v = 1\nv is {q}",
+    "pattern": "let v: lib::Shape = lib::{q}\ncase v of\n  | {q} => 1",
+    "is": "let v: lib::Shape = lib::{q}\nv is {q}",
     "annot": "fn(p: {q}) => 1",
 }
 
@@ -840,11 +823,11 @@ _ENUM_POS: dict[str, str] = {
 _ENUM_SHADOW_HEADER = ("import lib::*", _ENUM_LOCAL)
 
 
-class TestLocalEnumShadowsImportedEnum:
-    """A local ``enum Shape`` lacking ``Circle`` beats an imported ``Shape::Circle``."""
+class TestLocalEnumBesideImportedEnum:
+    """A local ``enum Shape`` lacking ``Circle`` leaves the imported ``Shape::Circle`` selected."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_SHADOW_HEADER) + 1))
-    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_imported_member_is_selected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {pos: _ENUM_POS[pos].format(q="Shape::Circle") for pos in _ENUM_POS}
         assert_verdicts_for_grouping(
             tmp_path,
@@ -852,8 +835,13 @@ class TestLocalEnumShadowsImportedEnum:
             _ENUM_SHADOW_HEADER,
             sizes,
             probes,
-            {pos: ("scope", UnknownMemberError) for pos in probes},
-            span_texts={pos: "Shape::Circle" for pos in probes},
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={
+                "value": "record lib::Shape::Circle",
+                "pattern": "int",
+                "is": "bool",
+                "annot": "lib::Shape::Circle -> int",
+            },
         )
 
 
@@ -964,10 +952,8 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
 
 
 # ---------------------------------------------------------------------------
-# A nearer ``use``-opened scope region blocks a farther, same-spelled
-# imported type from ever merging into the leading lookup -- the one lookup
-# shared by a bare type name, a qualifier's leading segment, and a
-# ``def Owner::method`` receiver.
+# A ``use``-opened scope region never hides a same-spelled imported type, in
+# a qualifier, a ``def Owner::method`` receiver or a bare type name alike.
 # ---------------------------------------------------------------------------
 
 _NEAREST_REGION_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
@@ -976,21 +962,27 @@ _NEAREST_MODULES = {"shapes": _NEAREST_REGION_LIB, "tl": _NEAREST_IMPORTED_TYPE_
 _NEAREST_HEADER = ("import tl::*", "import shapes", "use shapes::*")
 
 
-class TestNearestUseRegionBlocksFartherImportedTypeAsQualifierLeadingSegment:
-    """A qualifier's own leading segment: the nearer ``use`` region always decides.
-
-    ``tl::Geo`` (an imported type) and ``shapes::Geo`` (a locally ``use``d
-    scope region) share a spelling; only the region -- the nearer
-    contribution -- ever decides ``Geo``'s own leading reading, so a value
-    reference to ``Geo::f()`` (naming no member of either) is a member the
-    region lacks, exactly as for a region this module declares itself --
-    never merged with the farther type (contrast
-    ``test_control_without_the_nearer_region``, whose identical spelling,
-    absent the ``use``, resolves to the farther type instead).
-    """
+class TestUseRegionBesideImportedTypeAsQualifier:
+    """``Geo`` is both a ``use``d region (``Point``) and an imported type (``Inner``)."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
-    def test_farther_type_member_is_not_reached(
+    def test_both_members_are_reached(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        probes = {"inner": "Geo::Inner(y = 1)", "point": "Geo::Point(x = 1)"}
+        assert_verdicts_for_grouping(
+            tmp_path,
+            _NEAREST_MODULES,
+            _NEAREST_HEADER,
+            sizes,
+            probes,
+            {key: _ACCEPTED for key in probes},
+            expected_identities={
+                "inner": "record tl::Geo::Inner\n  y: int",
+                "point": "record shapes::Geo::Point\n  x: int",
+            },
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
+    def test_member_neither_declares_is_unknown(
         self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         assert_verdict_for_grouping(
@@ -1002,23 +994,10 @@ class TestNearestUseRegionBlocksFartherImportedTypeAsQualifierLeadingSegment:
             span_text="Geo::f",
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(("import tl::*",)) + 1))
-    def test_control_without_the_nearer_region(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdict_for_grouping(
-            tmp_path,
-            {"tl": _NEAREST_IMPORTED_TYPE_LIB},
-            ("import tl::*", "Geo::f()"),
-            sizes,
-            ("scope", UnknownMemberError),
-            span_text="Geo::f",
-        )
-
     @pytest.mark.parametrize(
         "sizes", grouping_params(len((*_NEAREST_HEADER, "def Geo::f() -> int = 1")) + 1)
     )
-    def test_a_competing_def_created_path_still_resolves_locally(
+    def test_a_def_created_path_resolves_locally(
         self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         assert_verdict_for_grouping(
@@ -1035,45 +1014,21 @@ _RECEIVER_NEAREST_MODULES = {"shapes": _NEAREST_REGION_LIB, "tl": "record Geo\n 
 _RECEIVER_NEAREST_HEADER = ("import tl::*", "import shapes", "use shapes::*")
 
 
-class TestNearestUseRegionBlocksFartherImportedTypeAsReceiverOwner:
-    """A ``def Owner::method`` receiver's own owner: the same lookup, the same answer.
-
-    ``self``'s type is the receiver's resolved owner; once the nearer
-    ``use``-opened region decides ``Geo`` (exactly as the qualifier leading
-    segment above does), a region is never a type, so ``self`` itself
-    cannot be typed and the receiver rejects -- the same scope-phase verdict
-    the qualifier leading segment reaches for the identical shadowing.
-    Absent the region (``test_control_without_the_nearer_region``), the
-    farther type decides instead and the method type-checks normally.
-    """
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_RECEIVER_NEAREST_HEADER) + 1))
-    def test_receiver_owner_is_not_a_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdict_for_grouping(
-            tmp_path,
-            _RECEIVER_NEAREST_MODULES,
-            (*_RECEIVER_NEAREST_HEADER, "def Geo::f(self) -> int = 1"),
-            sizes,
-            ("scope", AglScopeError),
-            span_text="self",
-        )
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(("import tl::*", "import shapes")) + 1))
-    def test_control_without_the_nearer_region(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdict_for_grouping(
-            tmp_path,
-            _RECEIVER_NEAREST_MODULES,
-            (
-                "import tl::*",
-                "import shapes",
-                "def Geo::f(self) -> int = self.x\nlet g = Geo(x = 1)\ng.f()",
-            ),
-            sizes,
-            _ACCEPTED,
-            expected_identity="int",
-        )
+@pytest.mark.parametrize("sizes", grouping_params(len(_RECEIVER_NEAREST_HEADER) + 1))
+def test_use_region_beside_imported_type_leaves_it_the_receiver_owner(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    assert_verdict_for_grouping(
+        tmp_path,
+        _RECEIVER_NEAREST_MODULES,
+        (
+            *_RECEIVER_NEAREST_HEADER,
+            "def Geo::f(self) -> int = self.x\nlet g = Geo(x = 1)\ng.f()",
+        ),
+        sizes,
+        _ACCEPTED,
+        expected_identity="int",
+    )
 
 
 _BARE_NEAREST_MODULES = {
@@ -1084,49 +1039,24 @@ _BARE_NEAREST_MODULES = {
 _BARE_NEAREST_HEADER = ("import m::*", "import n::*", "import lib", "use lib::*")
 
 
-class TestNearestUseRegionBlocksAmbiguousImportsAsBareTypeName:
-    """A bare (unqualified) type name: the same lookup avoids the same ambiguity.
-
-    ``X`` is ambiguous between two wildcard-imported records (``m::X``,
-    ``n::X``) at the farther, IMPORTED layer; a nearer ``use``-opened scope
-    region of the identical spelling (``lib::X``) decides it outright
-    instead, so -- unlike the plain, genuinely ambiguous control below -- the
-    verdict is never ambiguity. A region is never itself a type, so scope
-    rejects the annotation as naming a region.
-    """
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_BARE_NEAREST_HEADER) + 1))
-    def test_nearer_region_names_no_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdict_for_grouping(
-            tmp_path,
-            _BARE_NEAREST_MODULES,
-            (*_BARE_NEAREST_HEADER, "fn(p: X) => 1"),
-            sizes,
-            ("scope", AglScopeError),
-            span_text="X",
-        )
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(("import m::*", "import n::*")) + 1))
-    def test_control_without_the_nearer_region_is_ambiguous(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdict_for_grouping(
-            tmp_path,
-            _BARE_NEAREST_MODULES,
-            ("import m::*", "import n::*", "fn(p: X) => 1"),
-            sizes,
-            ("scope", AmbiguousQualificationError),
-            span_text="X",
-        )
+@pytest.mark.parametrize("sizes", grouping_params(len(_BARE_NEAREST_HEADER) + 1))
+def test_use_region_beside_two_imported_types_leaves_the_bare_type_ambiguous(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    assert_verdict_for_grouping(
+        tmp_path,
+        _BARE_NEAREST_MODULES,
+        (*_BARE_NEAREST_HEADER, "fn(p: X) => 1"),
+        sizes,
+        ("scope", AmbiguousQualificationError),
+        span_text="X",
+    )
 
 
 # ---------------------------------------------------------------------------
-# ``def Owner::method`` declares *Owner* as a scope path with no member set
-# of its own (a method-owner namespace, unlike a scope region or a nominal
-# type). Its leading segment names no type owner below the local level here
-# -- only a same-named imported scope *region*, never a type -- so the path
-# is a plain local namespace: local wins, with no merging into the region's
-# members, in every position, whether or not the import is even present.
+# ``def Geo::f`` declares only ``Geo::f``: a member no source declares is
+# unknown in every position, and a same-named imported scope region's members
+# stay selected beside it.
 # ---------------------------------------------------------------------------
 
 _DEFPATH_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
@@ -1140,15 +1070,15 @@ _DEFPATH_MISSING_POS: dict[str, str] = {
     "pattern": "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
     "is": "1 is Geo::Point",
 }
+_DEFPATH_IMPORTED_POS: dict[str, str] = {
+    "value": "Geo::Point(x = 1)",
+    "annot": "fn(p: Geo::Point) => 1",
+    "pattern": "let v: Geo::Point = Geo::Point(x = 1)\ncase v of\n  | Geo::Point(x) => x",
+}
 
 
-class TestDefCreatedPathIsPlainLocalNamespace:
-    """A def-created path is a plain local namespace: local wins, with no merging.
-
-    Rejects every position identically whether or not an import happens to
-    open a same-named scope *region* -- a region is not a type owner, so it
-    never gives the def-created path anything to defer to.
-    """
+class TestDefCreatedPathBesideImportedRegion:
+    """A def-created path declares only its own function, never hiding an imported region."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_NO_IMPORT_HEADER) + 1))
     def test_without_import(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
@@ -1169,20 +1099,18 @@ class TestDefCreatedPathIsPlainLocalNamespace:
             {"shapes": _DEFPATH_LIB},
             _DEFPATH_WITH_IMPORT_HEADER,
             sizes,
-            _DEFPATH_MISSING_POS,
-            {pos: ("scope", UnknownMemberError) for pos in _DEFPATH_MISSING_POS},
-            span_texts={pos: "Geo::Point" for pos in _DEFPATH_MISSING_POS},
+            _DEFPATH_IMPORTED_POS,
+            {pos: _ACCEPTED for pos in _DEFPATH_IMPORTED_POS},
+            expected_identities={
+                "value": "record shapes::Geo::Point\n  x: int",
+                "annot": "shapes::Geo::Point -> int",
+            },
         )
 
 
 # ---------------------------------------------------------------------------
-# A def-created path stays a plain local namespace at a 3-segment chain, and
-# at a def path rooted one scope level deeper, not
-# only at the 2-segment case above: the leading segment (``Geo``) still names
-# only a scope region below the local level, so an imported member three
-# segments down (``Geo::In::Point``) gets no more merging than a two-segment
-# one does, whether the def path is declared at the outer scope
-# (``def Geo::f``) or the inner one (``def Geo::In::f``).
+# The same holds for a 3-segment chain, whether the def path is declared at
+# the outer scope (``def Geo::f``) or the inner one (``def Geo::In::f``).
 # ---------------------------------------------------------------------------
 
 _DEFPATH3_LIB = "scope Geo\n\n  scope In\n    record Point\n      x: int\n  end In\nend Geo\n"
@@ -1190,6 +1118,10 @@ _DEFPATH3_LIB = "scope Geo\n\n  scope In\n    record Point\n      x: int\n  end 
 _DEFPATH3_POS: dict[str, str] = {
     "value": "Geo::In::Point(x = 1)",
     "annot": "fn(p: Geo::In::Point) => 1",
+}
+_DEFPATH3_IDENTITIES = {
+    "value": "record shapes::Geo::In::Point\n  x: int",
+    "annot": "shapes::Geo::In::Point -> int",
 }
 _DEFPATH3_MISSING_POS: dict[str, str] = {
     "value": "Geo::In::Nope(x = 1)",
@@ -1199,17 +1131,11 @@ _DEFPATH3_HEADER_OUTER = ("import shapes::*", "def Geo::f() -> int = 1")
 _DEFPATH3_HEADER_INNER = ("import shapes::*", "def Geo::In::f() -> int = 1")
 
 
-class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
-    """The plain-local-namespace verdict holds for a 3-segment chain too.
-
-    The value position and the annotation position must reject with the
-    same, ordinary unknown-member verdict, identically to the 2-segment case
-    above, whether the def path is declared at the outer scope (``Geo``) or
-    one level deeper (``Geo::In``).
-    """
+class TestDefCreatedPathBesideImportedRegionAtLengthThree:
+    """A 3-segment imported member stays selected beside an outer or inner def path."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH3_HEADER_OUTER) + 1))
-    def test_import_is_not_merged_at_length_three(
+    def test_imported_member_beside_outer_def_path(
         self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         assert_verdicts_for_grouping(
@@ -1218,8 +1144,8 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
             _DEFPATH3_HEADER_OUTER,
             sizes,
             _DEFPATH3_POS,
-            {pos: ("scope", UnknownMemberError) for pos in _DEFPATH3_POS},
-            span_texts={pos: "Geo::In::Point" for pos in _DEFPATH3_POS},
+            {pos: _ACCEPTED for pos in _DEFPATH3_POS},
+            expected_identities=_DEFPATH3_IDENTITIES,
         )
 
     @pytest.mark.parametrize("pos_name", sorted(_DEFPATH3_MISSING_POS))
@@ -1234,15 +1160,17 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
         assert src[span.start_offset : span.end_offset] == "Geo::In::Nope"
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH3_HEADER_INNER) + 1))
-    def test_def_path_nested_one_level_deeper(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_imported_member_beside_inner_def_path(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
         assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH3_LIB},
             _DEFPATH3_HEADER_INNER,
             sizes,
             _DEFPATH3_POS,
-            {pos: ("scope", UnknownMemberError) for pos in _DEFPATH3_POS},
-            span_texts={pos: "Geo::In::Point" for pos in _DEFPATH3_POS},
+            {pos: _ACCEPTED for pos in _DEFPATH3_POS},
+            expected_identities=_DEFPATH3_IDENTITIES,
         )
 
 
@@ -1301,8 +1229,7 @@ class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
 # ``Geo`` declares a member at every chain length: ``Geo::Point`` (2),
 # ``Geo::Shape::Circle`` (3) and ``Geo::Deep::Kind::Round`` (4). Declared
 # locally, every one is accepted; imported beside a local ``Geo`` region
-# declaring only ``Deep`` (empty of ``Kind``), every one is an unknown member
-# of that region -- at length 4 one level past a walked hit.
+# declaring only ``Deep`` (empty of ``Kind``), every one is the import's.
 _CHAIN_GEO = (
     "scope Geo\n  record Point\n    x: int\n  enum Shape = Circle | Square\n"
     "\n  scope Deep\n    enum Kind = Round | Flat\n  end Deep\nend Geo"
@@ -1344,9 +1271,10 @@ def _chain_probes(length: int, *, declared: bool) -> dict[str, str]:
     return probes
 
 
-def _chain_identities(length: int) -> dict[str, str]:
-    """Each accepted length-*length* probe's identity."""
-    q, owner = _CHAIN_SPELLINGS[length]
+def _chain_identities(length: int, module: str = "") -> dict[str, str]:
+    """Each accepted length-*length* probe's identity, declared in *module* (``m::``)."""
+    spelled, owner = _CHAIN_SPELLINGS[length]
+    q = f"{module}{spelled}"
     return {
         "value": f"record {q}\n  x: int" if owner is None else f"record {q}",
         "annot": f"{q} -> int",
@@ -1358,20 +1286,23 @@ def _chain_identities(length: int) -> dict[str, str]:
 
 
 class TestLocalScopeChainAtEveryLength:
-    """A local scope's chain is walked exactly at lengths 2 to 4, in every position."""
+    """A chain is looked up as its whole path at lengths 2 to 4, in every position."""
 
     @pytest.mark.parametrize("length", sorted(_CHAIN_SPELLINGS))
     @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_missing_member(self, tmp_path: Path, sizes: tuple[int, ...], length: int) -> None:
-        probes = _chain_probes(length, declared=False)
+    def test_imported_member_beside_local_region(
+        self, tmp_path: Path, sizes: tuple[int, ...], length: int
+    ) -> None:
+        probes = _chain_probes(length, declared=True)
+        identities = _chain_identities(length, "shapes::")
         assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _CHAIN_GEO},
             ("import shapes::*", _CHAIN_LOCAL_DEEP),
             sizes,
             probes,
-            {pos: ("scope", UnknownMemberError) for pos in probes},
-            span_texts=dict.fromkeys(probes, _CHAIN_SPELLINGS[length][0]),
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={pos: identities[pos] for pos in probes},
         )
 
     @pytest.mark.parametrize("length", sorted(_CHAIN_SPELLINGS))
@@ -1395,34 +1326,25 @@ _ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER = ("import Geo", _CHAIN_NESTED_LOCAL)
 
 
 @pytest.mark.parametrize("sizes", grouping_params(len(_ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER) + 1))
-def test_local_scope_partial_miss_clashes_with_a_same_named_route(
+def test_local_scope_partial_miss_beside_a_same_named_route_is_unknown(
     tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
-    """A partial local-scope miss still clashes with a same-named import route.
-
-    ``Geo::Shape::Missing::X``'s walk matches ``Geo::Shape`` (both nested
-    scope regions) but misses at ``Missing``; ``Geo`` also names a genuine
-    import route (not merely a same-spelled scope), so the missing step
-    defers to the route-clash check instead of rejecting directly -- and a
-    plain scope region never declares ``Missing`` itself, so any such route
-    at all is a clash.
-    """
+    """``Geo::Shape::Missing::X`` names nothing in the local scope or the ``Geo`` route."""
     decls = (*_ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER, "Geo::Shape::Missing::X")
     assert_verdict_for_grouping(
         tmp_path,
         _ROUTE_AND_PARTIAL_LOCAL_MISS_LIB,
         decls,
         sizes,
-        ("scope", RouteClashError),
+        ("scope", UnknownMemberError),
         span_text="Geo::Shape::Missing::X",
     )
 
 
 # ---------------------------------------------------------------------------
-# A length-4 local scope, matching an import route at its leading segment
-# alone, clashes at the full chain length: a plain local scope declaring the
-# full path is never decisive against a route resolving to a declaration of
-# its own, whether that declaration shares the local one's leaf name or not.
+# A length-4 local scope matching an import route at its leading segment
+# alone: the local path wins where it declares the full chain, and the route
+# supplies it where the local scope's leaf differs.
 # ---------------------------------------------------------------------------
 
 _LEN4_LIB = "scope E\n\n  scope A\n    record Z\n      v: int\n  end A\nend E\n"
@@ -1435,46 +1357,41 @@ _LEN4_LOCAL_DIFFERENT_LEAF = (
     "end Foo"
 )
 
-_LEN4_POS: dict[str, str] = {
-    "value": "Foo::E::A::Z(w = 1)",
-    "annot": "fn(p: Foo::E::A::Z) => 1",
-}
-
-
 _LEN4_HEADER_SAME_LEAF = ("import pkg/Foo", _LEN4_LOCAL_SAME_LEAF)
 _LEN4_HEADER_DIFFERENT_LEAF = ("import pkg/Foo", _LEN4_LOCAL_DIFFERENT_LEAF)
 
 
-class TestLocalScopeFullyMatchingRouteLeadingSegmentClashesAtFullChainLength:
-    """A local scope fully declaring the qualified path still clashes against its route.
-
-    ``Foo`` both names the ``pkg/Foo`` import route (its leading segment
-    alone) and a local scope declaring the whole chain down to ``A``: the
-    route resolves ``E::A::Z`` to its own declaration, so the chain is
-    ambiguous at length 4 whether or not the local leaf shares the route's
-    own member name.
-    """
+class TestLocalScopeBesideRouteAtFullChainLength:
+    """``Foo::E::A::Z`` is the local scope's when it declares it, else the ``pkg/Foo`` route's."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_LEN4_HEADER_SAME_LEAF) + 1))
-    def test_same_leaf(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_same_leaf_is_local(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        probes = {"value": "Foo::E::A::Z(w = 1)", "annot": "fn(p: Foo::E::A::Z) => 1"}
         assert_verdicts_for_grouping(
             tmp_path,
             {"pkg/Foo": _LEN4_LIB},
             _LEN4_HEADER_SAME_LEAF,
             sizes,
-            _LEN4_POS,
-            {pos: ("scope", RouteClashError) for pos in _LEN4_POS},
-            span_texts={pos: "Foo::E::A::Z" for pos in _LEN4_POS},
+            probes,
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={
+                "value": "record Foo::E::A::Z\n  w: int",
+                "annot": "Foo::E::A::Z -> int",
+            },
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_LEN4_HEADER_DIFFERENT_LEAF) + 1))
-    def test_different_leaf(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_different_leaf_is_routed(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        probes = {"value": "Foo::E::A::Z(v = 1)", "annot": "fn(p: Foo::E::A::Z) => 1"}
         assert_verdicts_for_grouping(
             tmp_path,
             {"pkg/Foo": _LEN4_LIB},
             _LEN4_HEADER_DIFFERENT_LEAF,
             sizes,
-            _LEN4_POS,
-            {pos: ("scope", RouteClashError) for pos in _LEN4_POS},
-            span_texts={pos: "Foo::E::A::Z" for pos in _LEN4_POS},
+            probes,
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={
+                "value": "record pkg/Foo::E::A::Z\n  v: int",
+                "annot": "pkg/Foo::E::A::Z -> int",
+            },
         )

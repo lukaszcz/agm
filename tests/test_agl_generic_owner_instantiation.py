@@ -2,9 +2,10 @@
 
 ``Alias[A]::Member`` instantiates the alias's target with *A* substituted
 through the alias (nested, flipped, phantom or reusing the target's
-parameter names), and must fit the scrutinee; a wrong argument count or
-a non-generic owner applied is a type error. A qualified generic type
-names the same declaration in every type position.
+parameter names), and must fit the scrutinee. Type arguments on a
+non-generic owner, or of the wrong count, are rejected where the name is
+looked up; a declaration nested beneath an applied owner is a type error. A
+qualified generic type names the same declaration in every type position.
 
 Every probe is checked in file mode and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
@@ -415,21 +416,14 @@ _SCENARIOS = {
         probes={
             "arity-hi": rejected(
                 "let row: Slot[int] = Slot::Empty\nrow is Slot[int, int]::Empty",
-                AglTypeError,
-                "row is Slot[int, int]::Empty",
-                phase="typecheck",
+                AglScopeError,
+                "Slot[int, int]",
             ),
             "arity-hi-annot": rejected(
-                "fn(x: Slot[int, int]::Empty) => 1",
-                AglTypeError,
-                "x: Slot[int, int]::Empty",
-                phase="typecheck",
+                "fn(x: Slot[int, int]::Empty) => 1", AglScopeError, "Slot[int, int]"
             ),
             "arity-lo": rejected(
-                "let t: Two[int, int] = Two::L(l = 1)\nt is Two[int]::L",
-                AglTypeError,
-                "t is Two[int]::L",
-                phase="typecheck",
+                "let t: Two[int, int] = Two::L(l = 1)\nt is Two[int]::L", AglScopeError, "Two[int]"
             ),
         },
     ),
@@ -450,13 +444,10 @@ _SCENARIOS = {
         ),
         probes={
             "nongeneric-applied": rejected(
-                "let c: Col = Col::Red\nc is Col[int]::Red",
-                AglTypeError,
-                "c is Col[int]::Red",
-                phase="typecheck",
+                "let c: Col = Col::Red\nc is Col[int]::Red", AglScopeError, "Col[int]"
             ),
             "nongeneric-applied-annot": rejected(
-                "fn(x: Col[int]::Red) => 1", AglTypeError, "x: Col[int]::Red", phase="typecheck"
+                "fn(x: Col[int]::Red) => 1", AglScopeError, "Col[int]"
             ),
         },
     ),
@@ -477,10 +468,7 @@ _SCENARIOS = {
         ),
         probes={
             "nongeneric-alias-applied": rejected(
-                "let r: Slot[int] = Slot::Empty\nr is IS[int]::Empty",
-                AglTypeError,
-                "r is IS[int]::Empty",
-                phase="typecheck",
+                "let r: Slot[int] = Slot::Empty\nr is IS[int]::Empty", AglScopeError, "IS[int]"
             ),
         },
     ),

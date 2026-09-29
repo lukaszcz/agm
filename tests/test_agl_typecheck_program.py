@@ -24,7 +24,6 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -185,29 +184,21 @@ def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
     assert _binding_value_type(checked, ENTRY_ID, "extracted") == IntType()
 
 
-def test_nested_receiver_owner_over_a_plain_imported_scope_region_is_unknown_member(
-    tmp_path: Path,
-) -> None:
-    """``Geo`` is a mere opened scope region here, never a type owner.
-
-    A def-created ``Geo::Point`` receiver path is then a plain local namespace, not
-    that region's method namespace, so its own annotations never reach the region's
-    ``Point`` transparently -- even though ``import shapes::*`` opens one by that name.
-    """
-    with pytest.raises(UnknownMemberError):
-        check_agl_program(
-            tmp_path,
-            {
-                "entry": (
-                    "import shapes::*\n\n"
-                    "def Geo::Point::choose("
-                    "self: Geo::Point, other: Geo::Point"
-                    ") -> Geo::Point = other"
-                ),
-                "shapes": "scope Geo\n  record Point\nend Geo",
-            },
-            default_stdlib=False,
-        )
+def test_nested_receiver_owner_over_an_imported_scope_region_resolves(tmp_path: Path) -> None:
+    """A def-created path reaches the type an import contributes at the same full path."""
+    check_agl_program(
+        tmp_path,
+        {
+            "entry": (
+                "import shapes::*\n\n"
+                "def Geo::Point::choose("
+                "self: Geo::Point, other: Geo::Point"
+                ") -> Geo::Point = other"
+            ),
+            "shapes": "scope Geo\n  record Point\nend Geo",
+        },
+        default_stdlib=False,
+    )
 
 
 def test_nested_receiver_owner_over_an_imported_type_resolves(tmp_path: Path) -> None:
@@ -2342,26 +2333,14 @@ def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) 
     assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
 
 
-@pytest.mark.parametrize(
-    ("test", "error"),
-    [
-        pytest.param("c is ::Color::Red", None, id="anchored-local-owner"),
-        pytest.param("c is Color::Red", RouteClashError, id="local-owner-or-module-alias"),
-    ],
-)
-def test_is_test_owner_spelling_both_local_enum_and_module_alias(
-    tmp_path: Path, test: str, error: type[AglError] | None
-) -> None:
-    """A module alias injects its root enums' members, so it clashes with a same-named enum."""
+@pytest.mark.parametrize("test", ["c is ::Color::Red", "c is Color::Red"])
+def test_is_test_owner_spelling_both_local_enum_and_module_alias(tmp_path: Path, test: str) -> None:
+    """An own enum's member wins over the one a same-named module alias injects."""
     modules = {
         "entry": f"import lib as Color\nenum Color | Red\nlet c: Color = ::Red\n{test}",
         "lib": "enum Other | Red",
     }
-    if error is None:
-        check_agl_program(tmp_path, modules)
-        return
-    with pytest.raises(error):
-        check_agl_program(tmp_path, modules)
+    check_agl_program(tmp_path, modules)
 
 
 def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:

@@ -2,9 +2,9 @@
 
 A method (``def Owner::m(self)``) joins its owner's namespace, so the
 owner's members stay reachable through the same path; a plain function's
-path (``def Geo::f()``) declares an own local namespace, which beats a
-same-named imported type or scope, so a member the namespace lacks is an
-unknown member. Receivers an alias or scalar cannot own are rejected.
+path (``def Geo::f()``) only declares ``Geo::f``: it never hides a
+same-named imported type or scope, whose members stay reachable beside it.
+Receivers an alias or scalar cannot own are rejected.
 
 Every probe is checked in file mode and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
@@ -21,7 +21,6 @@ from agm.agl.diagnostics import AglTypeError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
 )
 from tests.agl.qualifier_support import (
@@ -217,14 +216,10 @@ _SCENARIOS = {
             "def Geo::In::f() -> int = 1",
         ),
         probes={
-            "eprefix-reg-val": rejected("Geo::Point(x = 1)", UnknownMemberError, "Geo::Point"),
-            "eprefix-reg-annot": rejected(
-                "fn(p: Geo::Point) => 1", UnknownMemberError, "Geo::Point"
-            ),
-            "eprefix-reg-pat": rejected(
-                "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x",
-                UnknownMemberError,
-                "Geo::Point",
+            "eprefix-reg-val": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
+            "eprefix-reg-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
+            "eprefix-reg-pat": accepted(
+                "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x", "int"
             ),
         },
     ),
@@ -391,15 +386,13 @@ _SCENARIOS = {
             "import shapes",
         ),
         probes={
-            "nodef-inner-annot": rejected(
-                "scope r\n  use shapes::*\n  def g(p: Geo::Inner) -> int = 1\nend r",
-                UnknownMemberError,
-                "Geo::Inner",
+            "nodef-inner-annot": accepted(
+                "scope r\n  use shapes::*\n  def g(p: Geo::Inner) -> int = 1\nend r\n\nr::g",
+                "tl::Geo::Inner -> int",
             ),
-            "nodef-inner-val": rejected(
-                "scope r\n  use shapes::*\n  let q = Geo::Inner(y = 1)\nend r",
-                UnknownMemberError,
-                "Geo::Inner",
+            "nodef-inner-val": accepted(
+                "scope r\n  use shapes::*\n  let q = Geo::Inner(y = 1)\nend r\n\nr::q",
+                "record tl::Geo::Inner\n  y: int",
             ),
             "nodef-point-annot": accepted(
                 ("scope r\n  use shapes::*\n  def g(p: Geo::Point) -> int = 1\nend r\n\nr::g"),
@@ -412,27 +405,21 @@ _SCENARIOS = {
             "nodef-f": rejected(
                 "scope r\n  use shapes::*\n  let q = Geo::f()\nend r", UnknownMemberError, "Geo::f"
             ),
-            "near-inner-annot": rejected(
-                (
-                    "scope r\n"
-                    "  use shapes::*\n"
-                    "  def Geo::f() -> int = 1\n"
-                    "  def g(p: Geo::Inner) -> int = 1\n"
-                    "end r"
-                ),
-                UnknownMemberError,
-                "Geo::Inner",
+            "near-inner-annot": accepted(
+                "scope r\n"
+                "  use shapes::*\n"
+                "  def Geo::f() -> int = 1\n"
+                "  def g(p: Geo::Inner) -> int = 1\n"
+                "end r\n\nr::g",
+                "tl::Geo::Inner -> int",
             ),
-            "near-inner-val": rejected(
-                (
-                    "scope r\n"
-                    "  use shapes::*\n"
-                    "  def Geo::f() -> int = 1\n"
-                    "  let q = Geo::Inner(y = 1)\n"
-                    "end r"
-                ),
-                UnknownMemberError,
-                "Geo::Inner",
+            "near-inner-val": accepted(
+                "scope r\n"
+                "  use shapes::*\n"
+                "  def Geo::f() -> int = 1\n"
+                "  let q = Geo::Inner(y = 1)\n"
+                "end r\n\nr::q",
+                "record tl::Geo::Inner\n  y: int",
             ),
             "near-point-annot": accepted(
                 (
@@ -514,16 +501,12 @@ _SCENARIOS = {
             "scope R\n  def Geo::f() -> int = 1\nend R",
         ),
         probes={
-            "def-val": rejected("R::Geo::X(z = 1)", UnknownMemberError, "R::Geo::X"),
-            "def-annot": rejected("fn(p: R::Geo::X) => 1", UnknownMemberError, "R::Geo::X"),
-            "def-pat": rejected(
-                "case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z",
-                UnknownMemberError,
-                "R::Geo::X",
-            ),
-            "def-is": rejected("1 is R::Geo::X", UnknownMemberError, "R::Geo::X"),
-            "def-reptype": rejected("R::Geo::X", UnknownMemberError, "R::Geo::X"),
-            "def-alias": rejected("type AA = R::Geo::X\n1", UnknownMemberError, "R::Geo::X"),
+            "def-val": accepted("R::Geo::X(z = 1)", "record tl::R::Geo::X\n  z: int"),
+            "def-annot": accepted("fn(p: R::Geo::X) => 1", "tl::R::Geo::X -> int"),
+            "def-pat": accepted("case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z", "int"),
+            "def-is": rejected("1 is R::Geo::X", AglTypeError, "1 is R::Geo::X", phase="typecheck"),
+            "def-reptype": accepted("R::Geo::X", "int -> tl::R::Geo::X"),
+            "def-alias": accepted("type AA = R::Geo::X\n1", "int"),
         },
     ),
     "region-named-like-imported-record": Scenario(
@@ -533,16 +516,14 @@ _SCENARIOS = {
             "scope R\n  def g() -> int = 1\nend R",
         ),
         probes={
-            "nodef-val": rejected("R::Geo::X(z = 1)", UnknownMemberError, "R::Geo::X"),
-            "nodef-annot": rejected("fn(p: R::Geo::X) => 1", UnknownMemberError, "R::Geo::X"),
-            "nodef-pat": rejected(
-                "case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z",
-                UnknownMemberError,
-                "R::Geo::X",
+            "nodef-val": accepted("R::Geo::X(z = 1)", "record tl::R::Geo::X\n  z: int"),
+            "nodef-annot": accepted("fn(p: R::Geo::X) => 1", "tl::R::Geo::X -> int"),
+            "nodef-pat": accepted("case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z", "int"),
+            "nodef-is": rejected(
+                "1 is R::Geo::X", AglTypeError, "1 is R::Geo::X", phase="typecheck"
             ),
-            "nodef-is": rejected("1 is R::Geo::X", UnknownMemberError, "R::Geo::X"),
-            "nodef-reptype": rejected("R::Geo::X", UnknownMemberError, "R::Geo::X"),
-            "nodef-alias": rejected("type AA = R::Geo::X\n1", UnknownMemberError, "R::Geo::X"),
+            "nodef-reptype": accepted("R::Geo::X", "int -> tl::R::Geo::X"),
+            "nodef-alias": accepted("type AA = R::Geo::X\n1", "int"),
         },
     ),
     "function-in-module-route-namespace": Scenario(
@@ -552,14 +533,13 @@ _SCENARIOS = {
             "def pal::f() -> int = 1",
         ),
         probes={
-            "defns-rc-val": rejected("pal::Color::Red", RouteClashError, "pal::Color::Red"),
-            "defns-rc-annot": rejected(
-                "fn(p: pal::Color::Red) => 1", RouteClashError, "pal::Color::Red"
-            ),
+            "defns-rc-val": accepted("pal::Color::Red", "record pal::Color::Red"),
+            "defns-rc-annot": accepted("fn(p: pal::Color::Red) => 1", "pal::Color::Red -> int"),
             "defns-rc-pat": rejected(
                 "case 1 of\n  | pal::Color::Red => 1\n  | _ => 2",
-                RouteClashError,
+                AglTypeError,
                 "pal::Color::Red",
+                phase="typecheck",
             ),
             "defns-f": accepted("pal::f()", "int"),
         },
@@ -571,9 +551,11 @@ _SCENARIOS = {
             "def Geo::f() -> int = 1",
         ),
         probes={
-            "defpath3-val": rejected("Geo::In::Point(x = 1)", UnknownMemberError, "Geo::In::Point"),
-            "defpath3-annot": rejected(
-                "fn(p: Geo::In::Point) => 1", UnknownMemberError, "Geo::In::Point"
+            "defpath3-val": accepted(
+                "Geo::In::Point(x = 1)", "record shapes::Geo::In::Point\n  x: int"
+            ),
+            "defpath3-annot": accepted(
+                "fn(p: Geo::In::Point) => 1", "shapes::Geo::In::Point -> int"
             ),
             "defpath3-miss-val": rejected(
                 "Geo::In::Nope(x = 1)", UnknownMemberError, "Geo::In::Nope"
@@ -594,11 +576,11 @@ _SCENARIOS = {
             "def Geo::In::f() -> int = 1",
         ),
         probes={
-            "defnested-annot": rejected(
-                "fn(p: Geo::In::Point) => 1", UnknownMemberError, "Geo::In::Point"
+            "defnested-annot": accepted(
+                "fn(p: Geo::In::Point) => 1", "shapes::Geo::In::Point -> int"
             ),
-            "defnested-val": rejected(
-                "Geo::In::Point(x = 1)", UnknownMemberError, "Geo::In::Point"
+            "defnested-val": accepted(
+                "Geo::In::Point(x = 1)", "record shapes::Geo::In::Point\n  x: int"
             ),
         },
     ),
@@ -610,14 +592,15 @@ _SCENARIOS = {
         ),
         probes={
             "is": rejected(
-                "shapes::Geo::Point(x = 1) is Geo::Point", UnknownMemberError, "Geo::Point"
+                "shapes::Geo::Point(x = 1) is Geo::Point",
+                AglTypeError,
+                "shapes::Geo::Point(x = 1) is Geo::Point",
+                phase="typecheck",
             ),
-            "val": rejected("Geo::Point(x = 1)", UnknownMemberError, "Geo::Point"),
-            "annot": rejected("fn(p: Geo::Point) => 1", UnknownMemberError, "Geo::Point"),
-            "pat": rejected(
-                "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x",
-                UnknownMemberError,
-                "Geo::Point",
+            "val": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
+            "annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
+            "pat": accepted(
+                "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x", "int"
             ),
             "val-f": accepted("Geo::f()", "int"),
         },
@@ -639,7 +622,7 @@ _SCENARIOS = {
 
 
 class TestDefCreatedNamespaces:
-    """Owners' members through a method path; own function namespaces shadow imports."""
+    """Owners' members through a method path; function paths beside imported types and scopes."""
 
     @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(

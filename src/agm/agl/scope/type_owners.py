@@ -17,7 +17,6 @@ from dataclasses import replace
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
-    NameAtom,
     QName,
     try_resolve_qualified_member,
 )
@@ -60,10 +59,9 @@ __all__ = [
 ]
 
 ModuleTypeContributions = Callable[
-    [ModuleId, ScopePath, NameAtom, Callable[[QName], bool]],
-    tuple[ScopePath, frozenset[QName]] | None,
+    [ModuleId, ScopePath, ScopePath, Callable[[QName], bool]], frozenset[QName]
 ]
-"""The nearest layer above one module scope contributing a spelling, restricted to types."""
+"""The types contributions make a bare path spelled in one module scope."""
 
 AliasTargets = Callable[[QName, TypeAlias, NameT | AppliedT], DeclarationKey | None]
 """The declaration scope selects for alias *qname*'s nominal target *spelling* where declared.
@@ -154,14 +152,14 @@ class TypeOwnerIndex:
         """Return the constructor of the record, exception, or inline member at *qname*.
 
         An inline member of an enum an earlier REPL entry declared is read from
-        that enum's retained owner.
+        that enum's retained owner; an alias's projected member declares nothing.
         """
         constructor = self._constructor_refs.get(qname)
         if constructor is not None or qname[0] != self._retained_module:
             return constructor
         path = _path(qname[1])
         enum = self._retained.get(path[:-1])
-        return None if enum is None else enum.members.get(path[-1])
+        return None if enum is None or enum.alias is not None else enum.members.get(path[-1])
 
     def referenced_member_refs(
         self, module_id: ModuleId, member: VariantRef
@@ -252,8 +250,8 @@ class TypeOwnerIndex:
         """
         import_env = self._import_envs[module_id]
 
-        def contributions(name: NameAtom) -> tuple[ScopePath, frozenset[QName]] | None:
-            return self._contributions(module_id, path[:-1], name, self.is_declared)
+        def contributions(spelled: ScopePath) -> frozenset[QName]:
+            return self._contributions(module_id, path[:-1], spelled, self.is_declared)
 
         reachable = {
             name: member
@@ -284,9 +282,13 @@ class TypeOwnerIndex:
     ) -> TypeOwner:
         module_id, atom = qname
         path = _path(atom)
+        arity = len(declaration.type_param_slots)
         if isinstance(declaration, (RecordDef, ExceptionDef)):
             return TypeOwner(
-                self._constructor_refs[qname], declaration.node_id, frozenset({declaration.name})
+                self._constructor_refs[qname],
+                declaration.node_id,
+                frozenset({declaration.name}),
+                arity=arity,
             )
         if isinstance(declaration, EnumDef):
             return TypeOwner(
@@ -301,6 +303,7 @@ class TypeOwnerIndex:
                     for constructor in self.referenced_member_refs(module_id, member)
                 ),
                 own_path_referenced=self._own_path_referenced_names(module_id, path, declaration),
+                arity=arity,
             )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
         # None of an alias's TypeOwner constructions below pass
@@ -309,12 +312,16 @@ class TypeOwnerIndex:
         # Typecheck judges a target scope selects no declaration for, so the
         # alias is presumed constructible; an alias cycle meets it that way.
         presumed = TypeOwner(
-            constructor, declaration.node_id, frozenset({declaration.name}), alias=declaration
+            constructor,
+            declaration.node_id,
+            frozenset({declaration.name}),
+            alias=declaration,
+            arity=arity,
         )
         self._owners[qname] = presumed
         selection = self._alias_selection(qname, declaration)
         if selection is None:
-            return TypeOwner(None, declaration.node_id, alias=declaration)
+            return TypeOwner(None, declaration.node_id, alias=declaration, arity=arity)
         target_qname, indirect, type_expr = selection
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
@@ -339,6 +346,7 @@ class TypeOwnerIndex:
             hidden=hidden,
             indirect=indirect,
             target=TypeTarget(target_qname, target.decl_node_id),
+            arity=arity,
         )
 
     def _alias_selection(self, qname: QName, alias: TypeAlias) -> AliasSelection:
@@ -425,7 +433,7 @@ class TypeOwnerIndex:
         elif chain.segments and chain.anchor is not QualifierAnchor.CURRENT_MODULE:
             qname = try_resolve_qualified_member(
                 self._import_envs[module_id],
-                tuple(chain.segments[0].name.split("/")),
+                chain.leading_route,
                 _atom((*(segment.name for segment in chain.segments[1:]), chain.member)),
                 anchored=chain.anchored,
             )

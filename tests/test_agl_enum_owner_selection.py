@@ -28,7 +28,6 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
     NoVisibleConstructorError,
-    RouteClashError,
 )
 from tests._agl_helpers import check_agl_program
 
@@ -769,8 +768,8 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
             id="route-re-exported-and-own-member",
         ),
         # A leading segment that is both a local scope or type and a module
-        # route contributing the name is ambiguous, whether the route declares
-        # the name or injects it.
+        # route: the own path wins where it declares the name, else the route
+        # declares or injects it.
         pytest.param(
             _Spelling(
                 header="import palette\nenum palette = Red | Blue\n",
@@ -778,7 +777,7 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
                 sample="palette::Blue",
                 spelling="palette::Red",
             ),
-            RouteClashError,
+            None,
             id="local-type-and-route-injecting-the-member",
         ),
         pytest.param(
@@ -794,7 +793,7 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
                 sample="W::Other",
                 spelling="palette::Red",
             ),
-            RouteClashError,
+            None,
             id="local-scope-and-route-injecting-the-member",
         ),
         pytest.param(
@@ -804,7 +803,7 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
                 sample="claimed::Blue",
                 spelling="claimed::Red",
             ),
-            RouteClashError,
+            None,
             id="local-type-and-route-declaring-the-name",
         ),
         pytest.param(
@@ -820,7 +819,7 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
                 sample="Mine::Other",
                 spelling="review::Pass",
             ),
-            RouteClashError,
+            AglTypeError,
             id="local-scope-lacking-the-name-and-route",
         ),
         # A record declaring the name owns the spelling; no member is injected over it.

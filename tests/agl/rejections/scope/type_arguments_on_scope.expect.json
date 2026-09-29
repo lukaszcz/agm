@@ -3,7 +3,7 @@
     "line": 6,
     "message_contains": [
       "type arguments",
-      "scope"
+      "segment"
     ]
   }
 }

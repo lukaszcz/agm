@@ -15,7 +15,6 @@ from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
     AmbiguousQualificationError,
     ImportedModuleOrigin,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
     UseDeclarationOrigin,
@@ -1680,7 +1679,11 @@ def test_type_anchors_select_module_routes_over_same_named_local_scopes(tmp_path
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
-def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("params", "applied"), [("", "A::T"), ("[V]", "A::T[int]")])
+def test_own_scope_types_win_over_a_same_named_module_route(
+    tmp_path: Path, params: str, applied: str
+) -> None:
+    field = "int" if params == "" else "V"
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -1688,25 +1691,22 @@ def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_pat
                 "import A\n"
                 "\n"
                 "scope A\n"
-                "  record T\n"
-                "    value: text\n"
-                "  def keep(value: A::T) -> A::T = value\n"
+                f"  record T{params}\n"
+                f"    own: {field}\n"
+                f"  def keep(value: {applied}) -> {applied} = value\n"
                 "end A\n"
                 "\n"
-                "()"
+                "let kept = ::A::keep(A::T(own = 1))\n"
+                "kept.own"
             ),
-            "A": "record T\n  value: int",
+            "A": f"record T{params}\n  imported: {field}",
         },
     )
 
-    with pytest.raises(RouteClashError, match="module route") as exc_info:
-        resolve_program(graph)
-
-    for repair in ("hiding", "longer suffix", "/-anchored", "as"):
-        assert repair in str(exc_info.value)
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
-def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
+def test_missing_member_under_own_scope_and_module_route_is_an_unknown_member(
     tmp_path: Path,
 ) -> None:
     graph = make_graph_from_files(
@@ -1725,32 +1725,7 @@ def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
         },
     )
 
-    with pytest.raises(RouteClashError):
-        resolve_program(graph)
-
-
-def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor(
-    tmp_path: Path,
-) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import A\n"
-                "\n"
-                "scope A\n"
-                "  record T[V]\n"
-                "    value: V\n"
-                "  def keep(value: A::T[int]) -> A::T[int] = value\n"
-                "end A\n"
-                "\n"
-                "()"
-            ),
-            "A": "record T[V]\n  value: V",
-        },
-    )
-
-    with pytest.raises(RouteClashError, match="module route"):
+    with pytest.raises(UnknownMemberError):
         resolve_program(graph)
 
 
@@ -1775,44 +1750,25 @@ def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path)
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
-def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguous(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("owner", "declaration", "applied"),
+    [("config", "enum config | On", "config"), ("Owner", "enum Owner[T] | On", "Owner[int]")],
+)
+def test_is_test_member_under_an_own_enum_wins_over_a_route_function(
+    tmp_path: Path, owner: str, declaration: str, applied: str
 ) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
-                "import support/Owner\n"
-                "enum Owner[T] | On\n"
-                "let flag: Owner[int] = ::Owner[int]::On\n"
-                "flag is Owner::On"
+                f"import support/{owner}\n{declaration}\n"
+                f"let flag: {applied} = ::{applied}::On\nflag is {owner}::On"
             ),
-            "support/Owner": "def On() -> int = 1",
+            f"support/{owner}": "def On() -> int = 1",
         },
     )
 
-    with pytest.raises(RouteClashError):
-        resolve_program(graph)
-
-
-def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
-    tmp_path: Path,
-) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import support/config\n"
-                "enum config | On\n"
-                "let flag: config = ::config::On\n"
-                "flag is config::On"
-            ),
-            "support/config": "def On() -> int = 1",
-        },
-    )
-
-    with pytest.raises(RouteClashError):
-        resolve_program(graph)
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
@@ -1880,7 +1836,7 @@ def test_invalid_qualified_pattern_and_is_routes_are_rejected(
     "use",
     ["let other: config = config::On", "flag is config::On", "case flag of | config::On => 1"],
 )
-def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
+def test_own_enum_member_wins_over_a_same_named_route_injecting_its_member(
     tmp_path: Path, use: str
 ) -> None:
     graph = make_graph_from_files(
@@ -1893,8 +1849,7 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
         },
     )
 
-    with pytest.raises(RouteClashError):
-        resolve_program(graph)
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 @pytest.mark.parametrize(
@@ -1913,7 +1868,7 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
             "  | _ => 2\n"
             "result",
             {"remote/config": "enum Flag | On | Off"},
-            UnknownMemberError,
+            HiddenMemberError,
         ),
         (
             # A qualifier ambiguous across two imported modules is scope's

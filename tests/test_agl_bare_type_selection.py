@@ -1,8 +1,8 @@
 """Scope's one selection for a bare or ``::``-anchored type name, in every type position.
 
 A bare type name is the length-zero case of the qualifier decision: the one
-nearest-level lookup across the type/scope namespace reads it, and scope
-records the one declaration it selects (or rejects it) before typecheck runs.
+full-path lookup reads it, and scope records the one declaration it selects
+(or rejects it) before typecheck runs.
 Every class here probes one spelling in the type positions -- an annotation,
 an alias target, a type argument, an applied type, a caught exception type and
 an ``extends`` base -- in file mode and every REPL grouping (see
@@ -13,8 +13,8 @@ span, or the accepted identity:
   ``::Name``, and names no member there when the root lacks it;
 - a name several equally near ``use`` declarations contribute is ambiguous in
   every position, a caught exception and an ``extends`` base included;
-- a nearer scope region stops the lookup, so a farther same-spelled type --
-  imported or this module's own -- is never selected past it;
+- a scope region spelled like a type never stops its lookup, so a farther
+  same-spelled type -- imported or this module's own -- is still selected;
 - the nearest type declaration is the one every position selects.
 """
 
@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.scope import AglScopeError
 from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
 from agm.agl.typecheck import AglTypeError
 from tests.agl.qualifier_support import (
@@ -134,7 +133,7 @@ class TestAmbiguousBareTypeNameInEveryPosition:
 
 
 # ---------------------------------------------------------------------------
-# A nearer scope region stops the lookup.
+# A scope region never stops the lookup.
 # ---------------------------------------------------------------------------
 
 _GEO_MODULES = {
@@ -161,17 +160,17 @@ _BOOM_REGION_HEADER = ("import a::*", "import b")
 _LOCAL_REGION_HEADER = ("scope Geo\n  record Q\nend Geo",)
 
 
-class TestNearerRegionStopsABareTypeName:
-    """A scope region nearer than a same-spelled type names no type in any position.
+class TestScopeRegionNeverStopsABareTypeName:
+    """A scope region spelled like a type never stops the type's lookup, in any position.
 
-    The farther type is never selected past the region -- whether it is one
-    of several root import tails, this module's own root declaration, or a
-    root import tail a ``use``-opened region shadows for a caught exception
-    and an ``extends`` base.
+    Past a region a ``use`` opens, two root import tails' types stay
+    ambiguous; past an own region, the own root type is selected; past a
+    ``use``-opened region, a root import tail's exception is caught and
+    extended; a region alone names no type.
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_GEO_HEADER) + 1))
-    def test_use_opened_region_over_import_tails(
+    def test_use_opened_region_beside_import_tails(
         self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         probes = {
@@ -183,15 +182,18 @@ class TestNearerRegionStopsABareTypeName:
             _GEO_HEADER,
             sizes,
             probes,
-            {key: _rejected(AglScopeError) for key in probes},
+            {key: _rejected(AmbiguousQualificationError) for key in probes},
             span_texts={key: "Geo" for key in probes},
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_OWN_POINT_HEADER) + 1))
-    def test_own_region_over_own_root_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_own_region_beside_own_root_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {
-            key: _in_region(_OWN_POINT_REGION, probe)
-            for key, probe in _type_probes("Point").items()
+            "annotation": _in_region(_OWN_POINT_REGION, "let v: Point = Point(y = 1)") + "\nr::v",
+            "alias": _in_region(_OWN_POINT_REGION, "type A = Point\nlet v: A = Point(y = 1)")
+            + "\nr::v",
+            "type-argument": _in_region(_OWN_POINT_REGION, "let v: array[Point] = [Point(y = 1)]")
+            + "\nr::v[0]",
         }
         assert_verdicts_for_grouping(
             tmp_path,
@@ -199,23 +201,21 @@ class TestNearerRegionStopsABareTypeName:
             _OWN_POINT_HEADER,
             sizes,
             probes,
-            {key: _rejected(AglScopeError) for key in probes},
-            span_texts={key: "Point" for key in probes},
+            {key: _ACCEPTED for key in probes},
+            expected_identities={key: "record Point\n  y: int" for key in probes},
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_BOOM_REGION_HEADER) + 1))
-    def test_use_opened_region_over_caught_and_base_exception(
+    def test_use_opened_region_beside_caught_and_base_exception(
         self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         probes = {
-            "annotation": _in_region("use b::*", "def g(x: Boom) -> int = 1"),
-            "catch": _in_region("use b::*", _CATCH_BOOM),
-            "extends": _in_region("use b::*", _EXTENDS_BOOM),
-        }
-        spans = {
-            "annotation": "Boom",
-            "catch": "catch Boom as e =>\n    ()\n",
-            "extends": _EXTENDS_BOOM,
+            "annotation": _in_region("use b::*", "let v = fn(x: Boom) => 1") + "\nr::v",
+            "catch": _in_region("use b::*", "let v = try\n  1\ncatch Boom as e =>\n  2") + "\nr::v",
+            "extends": _in_region(
+                "use b::*", 'exception Local extends Boom\nlet v = Local(message = "m") is Boom'
+            )
+            + "\nr::v",
         }
         assert_verdicts_for_grouping(
             tmp_path,
@@ -223,23 +223,26 @@ class TestNearerRegionStopsABareTypeName:
             _BOOM_REGION_HEADER,
             sizes,
             probes,
-            {key: _rejected(AglScopeError) for key in probes},
-            span_texts=spans,
+            {key: _ACCEPTED for key in probes},
+            expected_identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
         )
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_REGION_HEADER) + 1))
     def test_region_alone_is_no_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = _type_probes("Geo", "Geo[int]")
-        spans = {key: "Geo" for key in probes}
-        spans["applied"] = "Geo[int]"
         assert_verdicts_for_grouping(
             tmp_path,
             {},
             _LOCAL_REGION_HEADER,
             sizes,
             probes,
-            {key: _rejected(AglScopeError) for key in probes},
-            span_texts=spans,
+            {key: ("typecheck", AglTypeError) for key in probes},
+            span_texts={
+                "annotation": "x: Geo",
+                "alias": "type A = Geo",
+                "type-argument": "Geo",
+                "applied": "x: Geo[int]",
+            },
         )
 
 

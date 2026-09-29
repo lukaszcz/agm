@@ -128,9 +128,11 @@ _SCENARIOS = {
         probes={
             "localenum-annot": accepted("fn(p: Shape) => 1", "Shape -> int"),
             "localenum-member": rejected(
-                "fn(p: Shape::Circle) => 1", UnknownMemberError, "Shape::Circle"
+                "fn(p: Shape::Circle) => 1", AmbiguousQualificationError, "Shape::Circle"
             ),
-            "localenum-member-val": rejected("Shape::Circle", UnknownMemberError, "Shape::Circle"),
+            "localenum-member-val": rejected(
+                "Shape::Circle", AmbiguousQualificationError, "Shape::Circle"
+            ),
         },
     ),
     "two-imported-records-and-enums": Scenario(
@@ -553,9 +555,9 @@ _SCENARIOS = {
             "annot-shape": accepted("fn(p: Shape) => 1", "Shape -> int"),
             "annot-num": accepted('let n: Num = "a"\nn', "text"),
             "val-tri": accepted("Tri", "record Shape::Tri"),
-            "val-shape-circle": rejected("Shape::Circle", UnknownMemberError, "Shape::Circle"),
-            "annot-shape-circle": rejected(
-                "fn(p: Shape::Circle) => 1", UnknownMemberError, "Shape::Circle"
+            "val-shape-circle": accepted("Shape::Circle", "record lib::Shape::Circle"),
+            "annot-shape-circle": accepted(
+                "fn(p: Shape::Circle) => 1", "lib::Shape::Circle -> int"
             ),
         },
     ),

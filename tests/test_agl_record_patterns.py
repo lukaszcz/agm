@@ -51,18 +51,21 @@ def reject_graph(tmp_path: Path, modules: dict[str, str]) -> None:
         accept_graph(tmp_path, modules)
 
 
-@pytest.mark.parametrize(
-    "source",
-    (
+def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments() -> None:
+    reject(
         "enum Tree[T]\n"
         "  | Node(value: T)\n"
         "let tree: Tree[int] = Node(value = 1)\n"
-        "case tree of | Tree[text]::Node(value) => value | _ => 0",
-        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1",
-    ),
-)
-def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments(source: str) -> None:
-    reject(source)
+        "case tree of | Tree[text]::Node(value) => value | _ => 0"
+    )
+
+
+def test_qualified_enum_constructor_pattern_rejects_arguments_on_a_non_generic_owner() -> None:
+    error = rejection(
+        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1"
+    )
+
+    assert isinstance(error, AglScopeError)
 
 
 def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None:

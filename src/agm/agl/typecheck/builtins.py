@@ -1340,17 +1340,11 @@ class BuiltinCallChecker:
         program declares none of its own, or that declaration's own scope
         path (e.g. ``A::ParsePolicy::``) when it does — so a scoped
         ``ParsePolicy`` is recognized at its own path exactly like the root
-        one, and an unrelated same-named constructor is rejected. A qualifier
-        segment carrying an explicit type argument (``ParsePolicy[int]::``)
-        is never accepted, regardless of what it would otherwise resolve to:
-        ``ParsePolicy`` is not generic, so a type argument there can only be
-        a mistake.
+        one, and an unrelated same-named constructor is rejected.
         """
         chain = ref.qualifier
         if chain is None or chain.anchor is QualifierAnchor.CURRENT_MODULE:
             return self._ctx._constructor_ref_for(ref.node_id) is not None
-        if any(segment.type_args is not None for segment in chain.segments):
-            return False
         parse_policy_type = self.contract_enum("ParsePolicy")
         ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
         return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)

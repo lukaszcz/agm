@@ -1,8 +1,0 @@
-import std/prelude
-use prelude::*
-
-scope prelude
-  def local() -> int = 1
-end prelude
-
-program def main() -> unit = ()

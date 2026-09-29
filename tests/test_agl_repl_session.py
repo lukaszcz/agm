@@ -38,7 +38,6 @@ from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
     AmbiguousQualificationError,
     NoVisibleConstructorError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
     UseDeclarationOrigin,
@@ -10492,19 +10491,8 @@ class TestBareTypeEntry:
 
         assert not session.eval_entry("Other::Box").ok
 
-    @pytest.mark.parametrize(
-        ("local_route", "expected_error"),
-        (
-            (
-                "use S as a\n\nscope S\n  record Box[T]\n    value: T\nend S",
-                AmbiguousQualificationError,
-            ),
-            ("scope a\n  record Box[T]\n    value: T\nend a", RouteClashError),
-        ),
-        ids=("use-alias-vs-import", "local-scope-vs-import"),
-    )
-    def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
-        self, tmp_path: Path, local_route: str, expected_error: type[AglScopeError]
+    def test_qualified_unapplied_generic_rejects_distinct_use_alias_and_import_routes(
+        self, tmp_path: Path
     ) -> None:
         """A qualified ambiguity is rejected identically applied or bare.
 
@@ -10517,15 +10505,38 @@ class TestBareTypeEntry:
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
-        setup = session.eval_entry(f"import a\n{local_route}")
+        setup = session.eval_entry(
+            "import a\nuse S as a\n\nscope S\n  record Box[T]\n    value: T\nend S"
+        )
         assert setup.ok, setup.diagnostics
 
         assert not session.eval_entry("a::Box[int]").ok
         assert not session.eval_entry("a::Box").ok
-        with pytest.raises(expected_error):
+        with pytest.raises(AmbiguousQualificationError):
             session.type_of("a::Box[int]")
-        with pytest.raises(expected_error):
+        with pytest.raises(AmbiguousQualificationError):
             session.type_of("a::Box")
+
+    def test_qualified_generic_type_entry_prefers_an_own_scope_over_a_module_route(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        (tmp_path / "a.agl").write_text("record Box[T]\n  value: T\n  imported: int\n")
+        session = open_session(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
+        )
+        setup = session.eval_entry("import a\n\nscope a\n  record Box[T]\n    value: T\nend a")
+        assert setup.ok, setup.diagnostics
+
+        for entry in ("a::Box[int]", "a::Box"):
+            result = session.eval_entry(entry)
+            assert result.ok, result.diagnostics
+            assert "imported" not in render_entry_result(result, echo=True)
+        routed = session.eval_entry("/a::Box")
+        assert routed.ok, routed.diagnostics
+        assert "imported" in render_entry_result(routed, echo=True)
 
     def test_qualified_unapplied_generic_displays_equivalent_duplicate_routes(
         self, tmp_path: Path

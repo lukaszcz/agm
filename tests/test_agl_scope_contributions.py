@@ -20,16 +20,20 @@ from agm.agl.scope.symbols import (
     BindingRef,
     ContributionLayer,
     ScopeNode,
-    resolve_bare_contribution_layer,
 )
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, ScopeSegment
 from tests._agl_helpers import dummy_span
 
 
 def resolve_bare_contribution(scope: ScopeNode, name: NameAtom) -> set[BindingRef] | None:
-    """Return just the candidates the nearest contributing layer holds for *name*."""
-    resolved = resolve_bare_contribution_layer(scope, name)
-    return None if resolved is None else resolved[1]
+    """Return the candidates the nearest layer contributing *name* holds for it."""
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        stored = layer.bare_contributions.get(name)
+        if stored:
+            return set(stored)
+        layer = layer.parent
+    return None
 
 
 _next_node_id = 0

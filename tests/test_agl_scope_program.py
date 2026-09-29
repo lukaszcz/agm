@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program_seeded
 from agm.agl.repl import ReplSession
@@ -532,76 +533,55 @@ class TestQualifiedAccess:
         with pytest.raises(AglScopeError, match="nomodule"):
             resolve_program(graph)
 
-    def test_local_scope_and_module_route_clash_requires_an_anchor(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
+    def test_local_scope_beats_a_same_named_module_route(self, tmp_path: Path) -> None:
+        """``mylib::foo`` is the own scope's; ``/mylib::foo`` reaches the module."""
+        result = evaluate_ir_graph(
+            "import mylib\n\nscope mylib\n  def foo() -> int = 1\nend mylib\n\n"
+            "let own = mylib::foo()\nlet routed = /mylib::foo()",
+            {"mylib": "def foo() -> int = 2"},
             tmp_path,
-            {
-                "entry": "import mylib\n"
-                "\n"
-                "scope mylib\n"
-                "  def foo() -> int = 1\n"
-                "end mylib\n"
-                "\n"
-                "mylib::foo()",
-                "mylib": "def foo() -> int = 2",
-            },
         )
 
-        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
-            resolve_program(graph)
+        assert (result["own"], result["routed"]) == (IntValue(1), IntValue(2))
 
     @pytest.mark.parametrize(
         ("declaration", "use"),
         [
-            ("record Box\n  v: int", "let b = ::mylib::Box(v = 1)\ncase b of | mylib::Box(v) => v"),
-            ("exception Oops", 'let e: Exception = ::mylib::Oops(message = "m")\ne is mylib::Oops'),
+            (
+                "record Box\n  v: int",
+                "let b = ::mylib::Box(v = 1)\nlet r = case b of | mylib::Box(v) => v == 1",
+            ),
+            (
+                "exception Oops",
+                'let e: Exception = ::mylib::Oops(message = "m")\nlet r = e is mylib::Oops',
+            ),
         ],
         ids=["pattern", "is-test"],
     )
-    def test_local_scope_and_module_route_clash_is_rejected_in_patterns_and_is_tests(
+    def test_local_scope_beats_a_same_named_module_route_in_patterns_and_is_tests(
         self, tmp_path: Path, declaration: str, use: str
     ) -> None:
-        """A pattern or ``is`` spelling both regions contribute is ambiguous, as its value is."""
         local = "\n".join(f"  {line}" for line in declaration.splitlines())
-        graph = _make_graph_from_files(
+        result = evaluate_ir_graph(
+            f"import mylib\n\nscope mylib\n{local}\nend mylib\n\n{use}",
+            {"mylib": declaration},
             tmp_path,
-            {
-                "entry": f"import mylib\n\nscope mylib\n{local}\nend mylib\n\n{use}",
-                "mylib": declaration,
-            },
         )
 
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
+        assert result["r"] == BoolValue(True)
 
-    def test_qualified_assign_to_local_scope_and_module_route_clash_requires_an_anchor(
+    def test_qualified_assign_writes_the_local_scope_beside_a_same_named_module_route(
         self, tmp_path: Path
     ) -> None:
-        """Assignment consults the same ambiguity guard a qualified read does.
-
-        Before the fix, ``_resolve_qualified_assign`` took the local scope
-        path unconditionally, so ``mylib::counter := 1`` silently wrote the
-        local ``var`` while a qualified read of the same spelling was
-        rejected as ambiguous -- read and write of one spelling disagreed.
-        """
-        graph = _make_graph_from_files(
+        """Assignment decides the spelling exactly as a read does."""
+        result = evaluate_ir_graph(
+            "import mylib\n\nscope mylib\n  var counter = 0\nend mylib\n\n"
+            "mylib::counter := 1\nlet r = mylib::counter",
+            {"mylib": "def counter() -> int = 2"},
             tmp_path,
-            {
-                "entry": (
-                    "import mylib\n"
-                    "\n"
-                    "scope mylib\n"
-                    "  var counter = 0\n"
-                    "end mylib\n"
-                    "\n"
-                    "mylib::counter := 1"
-                ),
-                "mylib": "def counter() -> int = 2",
-            },
         )
 
-        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
-            resolve_program(graph)
+        assert result["r"] == IntValue(1)
 
     def test_nested_scope_sharing_only_a_run_of_segments_with_an_import_route_is_not_a_clash(
         self, tmp_path: Path
@@ -647,7 +627,7 @@ class TestQualifiedAccess:
 
         assert result["result"] == IntValue(2)
 
-    def test_anchored_nested_scope_and_complete_import_route_clash_is_accepted(
+    def test_anchored_nested_scope_beside_a_complete_import_route_is_accepted(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(
@@ -700,7 +680,7 @@ class TestQualifiedAccess:
 
         assert result["result"] == BoolValue(True)
 
-    def test_anchored_constructor_path_and_complete_import_route_clash_is_accepted(
+    def test_anchored_constructor_path_beside_a_complete_import_route_is_accepted(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(
@@ -725,7 +705,9 @@ class TestQualifiedAccess:
 
         assert resolve_program(graph).entry_id == ENTRY_ID
 
-    def test_current_module_anchor_repairs_scope_and_route_clash(self, tmp_path: Path) -> None:
+    def test_current_module_anchor_selects_the_own_scope_beside_a_route(
+        self, tmp_path: Path
+    ) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -1829,37 +1811,37 @@ class TestWildcardImports:
             ImportedModuleOrigin((ModuleId.from_path("other"), ("F",))),
         }
 
-    def test_type_name_import_handle_ambiguity_errors(self, tmp_path: Path) -> None:
+    def test_own_type_beats_a_same_named_import_route(self, tmp_path: Path) -> None:
+        """``Color::Red`` is the own enum member, not the aliased route's ``Red``."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib as Color\nenum Color | Red\nlet x = Color::Red\nx",
+                "entry": "import lib as Color\nenum Color | Red\nlet x: Color = Color::Red\nx",
                 "lib": "def Red() -> int = 1",
             },
         )
-        with pytest.raises(AglScopeError, match="both a type name and a module route"):
-            resolve_program(graph)
+        check_program(resolve_program(graph), base_caps())
 
-    def test_type_owner_constructor_compatibility_paths_are_rejected(self, tmp_path: Path) -> None:
-        self_qualified = _make_graph_from_files(
+    def test_route_supplies_a_path_a_same_named_own_type_lacks(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib as Color\nrecord Color\nlet y: int = Color::make()\ny",
+                "lib": "def make() -> int = 1",
+            },
+        )
+        check_program(resolve_program(graph), base_caps())
+
+    def test_own_root_anchor_misses_an_unknown_member_of_an_own_type(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": "import lib\nenum E | value\n::E::missing",
                 "lib": "def ignored() -> int = 1",
             },
         )
-        with pytest.raises(AglScopeError):
-            resolve_program(self_qualified)
-
-        clashing_route = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import lib as Color\nrecord Color\nColor::make",
-                "lib": "def make() -> int = 1",
-            },
-        )
-        with pytest.raises(AglScopeError, match="both a type name and a module route"):
-            resolve_program(clashing_route)
+        with pytest.raises(UnknownMemberError):
+            resolve_program(graph)
 
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
         """Two wildcards that expose same QName from same module are idempotent (no error)."""
@@ -2356,7 +2338,8 @@ class TestMethodOrphanRule:
             (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
         }
 
-    def test_import_inside_receiver_scope_supplies_owner(self, tmp_path: Path) -> None:
+    def test_import_inside_receiver_scope_does_not_supply_its_owner(self, tmp_path: Path) -> None:
+        """The import contributes ``Point::Point``; no type is declared at ``Point``."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2367,11 +2350,8 @@ class TestMethodOrphanRule:
             },
         )
 
-        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
-
-        assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Point",))
-        }
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
 
     def test_exact_bare_record_ignores_nested_alias(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
@@ -2415,7 +2395,7 @@ class TestMethodOrphanRule:
             },
         )
 
-        with pytest.raises(AglScopeError):
+        with pytest.raises(HiddenMemberError):
             resolve_program(graph)
 
     def test_bare_receiver_uses_nearest_lexical_type(self, tmp_path: Path) -> None:
@@ -4021,22 +4001,6 @@ class TestDiagnosticSpans:
                 {"entry": "def foo() -> int = 1\ndef foo() -> int = 2\n()"},
                 (2, 1, 2, 21),
                 id="duplicate-declaration",
-            ),
-            pytest.param(
-                {
-                    "entry": (
-                        "import mylib\n"
-                        "\n"
-                        "scope mylib\n"
-                        "  def foo() -> int = 1\n"
-                        "end mylib\n"
-                        "\n"
-                        "mylib::foo()"
-                    ),
-                    "mylib": "def foo() -> int = 2",
-                },
-                (7, 1, 7, 11),
-                id="scope-and-route-clash",
             ),
             pytest.param(
                 {"entry": "let a = 1\nimport lib\n()", "lib": "def foo() -> int = 1"},

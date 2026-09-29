@@ -21,10 +21,8 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
-    qualification_repair_guidance,
 )
 from agm.agl.syntax import (
     AssignStmt,
@@ -490,19 +488,16 @@ _PALETTE_SCOPE = (
         "print(case /palette::Pixel(x = 1) of | palette::Pixel(x) => x | _ => 2)",
     ),
 )
-def test_local_scope_qualifying_nothing_clashes_with_a_same_named_module_route(
+def test_same_named_module_route_supplies_what_a_local_scope_lacks(
     tmp_path: Path, use: str
 ) -> None:
-    """A pattern or ``is`` spelling the local scope does not publish never falls to the route."""
+    """A pattern or ``is`` spelling the local scope does not declare is the route's."""
     modules = {
         "entry": f"{_PALETTE_SCOPE}{use}\n",
         "palette": "enum Color\n  | Red\n  | Blue\n\nrecord Pixel\n  x: int\n",
     }
 
-    with pytest.raises(RouteClashError) as exc_info:
-        _entry_resolution(tmp_path, modules)
-
-    assert qualification_repair_guidance() in str(exc_info.value)
+    _entry_resolution(tmp_path, modules)
 
 
 @pytest.mark.parametrize(
@@ -521,7 +516,7 @@ def test_local_scope_qualifying_nothing_clashes_with_a_same_named_module_route(
 def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
     source: str,
 ) -> None:
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied to scope"):
+    with pytest.raises(AglScopeError):
         resolve_inline_entry(source)
 
 
@@ -532,12 +527,8 @@ def test_long_expression_qualifier_chain_reports_the_unresolved_qualifier() -> N
     assert exc_info.value.qualifier == "First::Second::Third"
 
 
-def test_type_arguments_on_an_unresolved_leading_segment_reject_the_route() -> None:
-    # Under a real import environment, a first segment carrying type
-    # arguments is classified as an attempted module route before any name
-    # lookup is attempted, so this reports the invalid route shape rather
-    # than an unresolved name.
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied to module route"):
+def test_type_arguments_on_an_unresolved_leading_segment_are_an_unknown_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError):
         resolve_inline_entry("Type[int]::Second::member")
 
 
@@ -642,29 +633,32 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
         _entry_resolution(tmp_path, modules)
 
 
-def test_use_target_local_module_route_clash_requires_an_anchor(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("target", "call", "resolves"),
+    (
+        ("Point", "local()", True),
+        ("Point", "remote()", False),
+        ("::Point", "local()", True),
+        ("/Point", "remote()", True),
+    ),
+)
+def test_use_target_prefers_a_local_scope_over_a_same_named_route(
+    target: str, call: str, *, resolves: bool
+) -> None:
+    """``use Point::*`` opens the own scope; ``use /Point::*`` the module."""
     modules = {
         "Point": "def remote() -> int = 1\n",
         "entry": (
-            "import Point\nuse Point::*\n\nscope Point\n  def local() -> int = 2\nend Point\n"
+            f"import Point\nuse {target}::*\n\nscope Point\n  def local() -> int = 2\nend Point\n"
+            f"let r = {call}\n"
         ),
     }
 
-    del tmp_path
-    with pytest.raises(RouteClashError) as raised:
+    if resolves:
         _resolve_without_loader(modules)
-
-    diagnostic = str(raised.value)
-    assert "Point" in diagnostic
-    assert "/Point" in diagnostic
-    assert "::Point" in diagnostic
-
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Point::*", "use /Point::*")}
-    )
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Point::*", "use ::Point::*")}
-    )
+    else:
+        with pytest.raises(AglScopeError):
+            _resolve_without_loader(modules)
 
 
 @pytest.mark.parametrize(

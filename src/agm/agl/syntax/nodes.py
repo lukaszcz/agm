@@ -255,6 +255,11 @@ class QualifierChain:
         return tuple(part for segment in self.segments for part in segment.name.split("/"))
 
     @property
+    def leading_route(self) -> tuple[str, ...]:
+        """Return the leading segment as a module route, split on '/'."""
+        return tuple(self.segments[0].name.split("/"))
+
+    @property
     def anchored(self) -> bool:
         """Whether the chain uses an absolute module anchor."""
         return self.anchor is QualifierAnchor.MODULE

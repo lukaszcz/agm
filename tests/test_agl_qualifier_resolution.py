@@ -147,9 +147,7 @@ def test_expression_and_pattern_qualifier_verdicts_remain_in_parity(
     assert _module_outcome(pattern) == pattern_outcome
 
 
-def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
-    tmp_path: Path,
-) -> None:
+def test_own_type_beats_module_route_in_both_positions(tmp_path: Path) -> None:
     expression = {
         "entry": "import pkg/Foo\nenum Foo\n  | local\nFoo::local",
         "pkg/Foo": "def local() -> int = 1",
@@ -165,8 +163,8 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
         "pkg/Foo": "def local() -> int = 1",
     }
 
-    assert _program_outcome(tmp_path / "expression", expression) == "scope"
-    assert _program_outcome(tmp_path / "pattern", pattern) == "scope"
+    assert _program_outcome(tmp_path / "expression", expression) == "accepted"
+    assert _program_outcome(tmp_path / "pattern", pattern) == "accepted"
 
 
 @pytest.mark.parametrize(

@@ -39,7 +39,7 @@ from agm.agl.diagnostics import dollar_spacing_hint
 from agm.agl.lexer.positions import token_span
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
-from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan, span_covering
 from agm.agl.syntax.types import (
     AppliedT,
     ArrayT,
@@ -1595,7 +1595,7 @@ class AstBuilder(Transformer):
             span = (
                 self._span_from_meta(meta)
                 if meta is not None
-                else _span_covering(result.span, suffix.span)
+                else span_covering(result.span, suffix.span)
             )
             if suffix.kind == "field":
                 result = syntax.FieldAccess(
@@ -2635,7 +2635,7 @@ class AstBuilder(Transformer):
 
     def _path_span(self, path: _ScopePath) -> SourceSpan:
         """Return the span from the first through last segment of a path."""
-        return _span_covering(path.segments[0][1], path.segments[-1][1])
+        return span_covering(path.segments[0][1], path.segments[-1][1])
 
     def _selection_item(
         self, cls: type[_SelectionItemT], path: _ScopePath, rename: str | None, span: SourceSpan
@@ -3884,7 +3884,7 @@ def _make_infix_node(
     builtin: syntax.BinOp | None,
     builder: AstBuilder,
 ) -> syntax.Expr:
-    span = _span_covering(left.span, right.span)
+    span = span_covering(left.span, right.span)
     if builtin is not None:
         if op.name in _NON_ASSOC_INFIX and (
             _is_nonassoc_binary(left) or _is_nonassoc_binary(right)
@@ -3912,18 +3912,6 @@ def _make_infix_node(
 
 def _is_nonassoc_binary(expr: syntax.Expr) -> bool:
     return isinstance(expr, syntax.BinaryOp) and expr.op.value in _NON_ASSOC_INFIX
-
-
-def _span_covering(left: SourceSpan, right: SourceSpan) -> SourceSpan:
-    return SourceSpan(
-        start_line=left.start_line,
-        start_col=left.start_col,
-        end_line=right.end_line,
-        end_col=right.end_col,
-        start_offset=left.start_offset,
-        end_offset=right.end_offset,
-        source=left.source,
-    )
 
 
 def _extract_ann_and_optional_expr(

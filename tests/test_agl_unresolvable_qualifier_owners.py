@@ -1,7 +1,7 @@
 """Qualifiers whose owner cannot own the member spelled.
 
-An unknown leading segment is an unknown qualifier; a function, binding or
-builtin type is no owner; a scalar alias, a record and an anchored own
+An unknown leading segment is an unknown qualifier; a function or binding
+is no owner; a builtin type, a scalar alias, a record and an anchored own
 scope have no such member. A record reached through a scope is never an
 enum member, so testing or matching an enum value against it is a type
 error.
@@ -235,11 +235,11 @@ _SCENARIOS = {
         modules={"lib": _LIB_2},
         header=(),
         probes={
-            "builtin-owner": rejected("fn(x: int::Foo) => 1", UnknownQualifierError, "int::Foo"),
+            "builtin-owner": rejected("fn(x: int::Foo) => 1", UnknownMemberError, "int::Foo"),
             "builtin-owner-applied": rejected(
-                "fn(x: int::Foo[int]) => 1", UnknownQualifierError, "int::Foo"
+                "fn(x: int::Foo[int]) => 1", UnknownMemberError, "int::Foo"
             ),
-            "builtin-owner-value": rejected("int::Foo", UnknownQualifierError, "int::Foo"),
+            "builtin-owner-value": rejected("int::Foo", UnknownMemberError, "int::Foo"),
             "anch-cur-bare": rejected("fn(x: ::Missing) => 1", UnknownMemberError, "::Missing"),
             "anch-cur-bare-applied": rejected(
                 "fn(x: ::Missing[int]) => 1", UnknownMemberError, "::Missing"

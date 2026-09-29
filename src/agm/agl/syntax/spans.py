@@ -60,3 +60,16 @@ class SourceSpan:
     start_offset: int
     end_offset: int
     source: SourceId = dc_field(default=UNKNOWN_SOURCE, compare=False)
+
+
+def span_covering(left: SourceSpan, right: SourceSpan) -> SourceSpan:
+    """Return the span from *left*'s start through *right*'s end, in *left*'s source."""
+    return SourceSpan(
+        start_line=left.start_line,
+        start_col=left.start_col,
+        end_line=right.end_line,
+        end_col=right.end_col,
+        start_offset=left.start_offset,
+        end_offset=right.end_offset,
+        source=left.source,
+    )

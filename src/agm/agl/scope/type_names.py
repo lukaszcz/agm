@@ -1,8 +1,5 @@
 """Type-name lookups shared by scope and the type-owner index.
 
-A leading (single-segment) name -- a bare type name, or a qualifier chain's
-own first segment -- shares the type/scope namespace with scope regions:
-:class:`LeadingReading` is what one level reads it as, region or types.
 :func:`imported_member_selection` is what an alias's member path reaches
 through the import surfaces its target is spelled through, so ``hiding``
 filters an alias's members exactly as it filters its target's.
@@ -10,8 +7,8 @@ filters an alias's members exactly as it filters its target's.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from typing import TypeGuard
 
 from agm.agl.modules.ids import ModuleId
@@ -19,18 +16,16 @@ from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
     QName,
-    QualResolutionAmbiguous,
     QualResolutionFound,
     resolve_qualified,
 )
-from agm.agl.scope.symbols import ContributionLayer, DeclarationKey, ScopePath, TypeOwner
+from agm.agl.scope.symbols import DeclarationKey, ScopePath, TypeOwner
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
-    "LeadingReading",
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
@@ -39,31 +34,13 @@ __all__ = [
     "is_nominal_type_expr",
     "owner_member_selection",
     "owner_type_expr",
-    "routed_qualifier_and_member",
     "selection_node_id",
     "spells_own_declaration",
 ]
 
 
-@dataclass(frozen=True, slots=True)
-class LeadingReading:
-    """A leading name's nearest-level reading, across the type/scope namespace.
-
-    ``is_region`` marks a scope region's reading: decisive on its own, so
-    ``types`` is always empty then -- a farther level's type never merges
-    into a nearer region. ``types`` maps each selected type to the layer that
-    contributed it, so an ambiguity names every candidate's own origin.
-    ``path`` is the declaring scope path of this module's own lexical
-    declaration, region or type, and ``None`` for a contributed reading.
-    """
-
-    is_region: bool
-    types: Mapping[QName, ContributionLayer] = field(default_factory=dict)
-    path: ScopePath | None = None
-
-
-TypeContributions = Callable[[NameAtom], tuple[ScopePath, frozenset[QName]] | None]
-"""The nearest layer contributing a type spelling, with that layer's path and selections."""
+TypeContributions = Callable[[ScopePath], frozenset[QName]]
+"""The types contributions make a bare path spelled at one site."""
 
 
 def imported_member_selection(
@@ -81,22 +58,22 @@ def imported_member_selection(
     """
     qualifier = owner.qualifier
     segments = () if qualifier is None else qualifier.route_segments
-    path = _atom((*segments, owner.name, member))
+    path = (*segments, owner.name, member)
     if qualifier is None or qualifier.anchor is None:
-        layer = contributions(path)
-        if layer is not None:
-            return layer[1]
+        contributed = contributions(path)
+        if contributed:
+            return contributed
     if qualifier is None:
-        return import_env.unqualified.get(path, frozenset())
+        return import_env.unqualified.get(_atom(path), frozenset())
     return _routed_selection(import_env, qualifier, (owner.name, member))
 
 
-def routed_qualifier_and_member(
+def _routed_qualifier_and_member(
     qualifier: QualifierChain, tail: tuple[str, ...]
 ) -> tuple[tuple[str, ...], NameAtom]:
     """Return the module route and member atom *tail* resolves against the qualifier's lead."""
     return (
-        tuple(qualifier.segments[0].name.split("/")),
+        qualifier.leading_route,
         _atom((*(segment.name for segment in qualifier.segments[1:]), *tail)),
     )
 
@@ -107,17 +84,13 @@ def _routed_selection(
     """Return what *qualifier*'s module route selects for *tail* below its later segments.
 
     A route and a bare compound spelling of the same path are checked
-    together, as :func:`~agm.agl.scope.imports.resolve_qualified` does for
-    every qualified lookup; an ambiguous path keeps every candidate, so a
-    member any of them exposes stays reachable.
+    together, as :func:`~agm.agl.scope.imports.resolve_qualified` does; the
+    owner's own spelling selected one declaration, so its member paths are
+    never ambiguous.
     """
-    route, member = routed_qualifier_and_member(qualifier, tail)
+    route, member = _routed_qualifier_and_member(qualifier, tail)
     result = resolve_qualified(import_env, route, member, anchored=qualifier.anchored)
-    if isinstance(result, QualResolutionFound):
-        return frozenset({result.qname})
-    if isinstance(result, QualResolutionAmbiguous):
-        return result.qnames
-    return frozenset()
+    return frozenset({result.qname}) if isinstance(result, QualResolutionFound) else frozenset()
 
 
 def is_nominal_type_expr(

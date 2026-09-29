@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.scope import AglScopeError
 from agm.agl.scope.symbols import AmbiguousQualificationError
 from tests.agl.qualifier_support import (
     FilePhase,
@@ -85,8 +84,8 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
     """A ``use`` inside a region opens ``Geo`` there, over a root import tail's ``Geo``.
 
     The alias, a direct annotation, a constructor and a pattern in that
-    region all select the region's ``Geo::Point``; a bare ``Geo`` names the
-    region, not a type.
+    region all select the region's ``Geo::Point``; a bare ``Geo`` still
+    selects the root import's type, which no region hides.
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(3))
@@ -107,7 +106,7 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
                 "pattern": region(
                     "let v = fn(p: Geo::Point) => case p of\n    | Geo::Point(x) => x"
                 ),
-                "bare-region": region("let v = fn(p: Geo) => p"),
+                "bare-type-past-region": region("let v = fn(p: Geo) => p"),
             },
             {
                 "value": _ACCEPTED,
@@ -115,15 +114,15 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
                 "alias": _ACCEPTED,
                 "alias-constructor": _ACCEPTED,
                 "pattern": _ACCEPTED,
-                "bare-region": ("scope", AglScopeError),
+                "bare-type-past-region": _ACCEPTED,
             },
-            span_texts={"bare-region": "Geo"},
             expected_identities={
                 "value": _POINT,
                 "annotation": "shapes::Geo::Point -> int",
                 "alias": "shapes::Geo::Point -> int",
                 "alias-constructor": _POINT,
                 "pattern": "shapes::Geo::Point -> int",
+                "bare-type-past-region": "tl::Geo -> tl::Geo",
             },
         )
 

@@ -24,7 +24,7 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
@@ -474,7 +474,8 @@ class TypeOwner:
     is declared directly beneath the owner's own path (``enum Box = ... |
     Box::Item``): such a name selects like a declared member wherever the
     owner is spelled, not only locally; an alias never carries this set, so
-    it stays a referenced-member error through one.
+    it stays a referenced-member error through one. ``arity`` is the number of
+    type parameters the declaration itself takes.
     """
 
     constructor: ConstructorRef | None
@@ -488,6 +489,7 @@ class TypeOwner:
     indirect: bool = False
     target: TypeTarget | None = None
     own_path_referenced: frozenset[str] = frozenset()
+    arity: int = 0
 
     @property
     def constructs(self) -> bool:
@@ -507,13 +509,12 @@ class TypeOwner:
         """Return the constructor ``Owner::name`` selects, with the owner spelled *written*.
 
         A record or exception is also qualified by the owner's written
-        spelling, which covers a ``use`` rename. An alias of an enum keeps its
-        own constructor and records the selected member's record name.
+        spelling, which covers a ``use`` rename. An enum's inline member is
+        selected only through an alias, which keeps its own constructor and
+        records the member's record name.
         """
         member = self.members.get(name)
-        if member is not None:
-            if self.constructor is None:
-                return member
+        if member is not None and self.constructor is not None:
             return replace(self.constructor, member=member.owner_name)
         if self.names and (name in self.names or name == written):
             return self.constructor
@@ -704,9 +705,7 @@ class ImportedUseContribution:
     ``use`` hid instead of reinstating it from the import environment.
     ``constructors`` snapshots the constructor candidates it exposed; it
     starts empty, since headers are read before type owners are known, and is
-    filled in once they are. ``regions`` holds the ``scope_routes`` spellings
-    that reach a scope region rather than a type's own path, classified by
-    canonical declaration identity when the contribution is built.
+    filled in once they are.
     """
 
     declaration: UseDecl
@@ -714,7 +713,6 @@ class ImportedUseContribution:
     refreshes_all_members: bool
     members: Mapping[BareAtom, QName]
     scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
-    regions: frozenset[BareAtom]
     bindings: Mapping[BareAtom, frozenset[BindingRef]]
     hidden_prefixes: frozenset[ScopePath]
     constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
@@ -744,7 +742,6 @@ class ScopeNode:
     - ``bindings``: lexical value bindings introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
-    - ``is_scope_region``: whether an explicit ``scope`` region opened this layer.
     - ``bare_contributions``/``bare_constructor_contributions``: selected
       imports snapshotted for this region. Each entry carries its
       :class:`ContributionLayer`, recorded at the point it was contributed.
@@ -760,7 +757,6 @@ class ScopeNode:
     parent: ScopeNode | None = None
     bindings: dict[str, BindingRef] = field(default_factory=dict)
     scope_path: ScopePath = ()
-    is_scope_region: bool = False
     members: dict[str, BindingRef] = field(default_factory=dict)
     bare_contributions: dict[BareAtom, dict[BindingRef, ContributionLayer]] = field(
         default_factory=dict
@@ -819,7 +815,6 @@ class ScopeNode:
             parent=self.parent,
             bindings=self.bindings,
             scope_path=self.scope_path,
-            is_scope_region=self.is_scope_region,
             members=self.members,
             bare_contributions={
                 atom: dict(sources) for atom, sources in self.bare_contributions.items()
@@ -907,33 +902,22 @@ class ScopeNode:
         }
 
 
-def resolve_bare_contribution_layer(
-    scope: ScopeNode,
-    name: BareAtom,
-    *,
-    predicate: Callable[[BindingRef], bool] | None = None,
-) -> tuple[ScopeNode, set[BindingRef]] | None:
-    """Return the nearest region and its bare candidates in one namespace."""
-    layer: ScopeNode | None = scope
+def anchored_layers(
+    scope_nodes: Mapping[ScopePath, ScopeNode], step: ScopePath, path: ScopePath
+) -> Iterator[tuple[ScopeNode, BareAtom]]:
+    """Yield each layer anchored at or above *step*, outermost first, with *path* relative to it."""
+    layer: ScopeNode | None = scope_nodes[step]
+    chain: list[ScopeNode] = []
     while layer is not None:
-        stored = layer.bare_contributions.get(name, ())
-        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
-        if selected:
-            return layer, selected
+        chain.append(layer)
         layer = layer.parent
-    return None
+    for anchored in reversed(chain):
+        yield anchored, to_bare_atom(path[len(anchored.scope_path) :])
 
 
 def binding_qname(ref: BindingRef) -> QName:
     """Return the declaring module and atom that *ref* names."""
     return ref.module_id, to_bare_atom((*ref.scope_path, ref.name))
-
-
-def contributed_declarations(
-    layer: ScopeNode, refs: Iterable[BindingRef]
-) -> tuple[ScopePath, frozenset[QName]]:
-    """Return a contributing layer's path and the declarations its *refs* name."""
-    return layer.scope_path, frozenset(binding_qname(ref) for ref in refs)
 
 
 # ---------------------------------------------------------------------------
@@ -1107,7 +1091,7 @@ class ModuleResolution:
         ``ConstructorPattern``/``IsTest``) to what its full ``owner::member``
         path selects, and a bare type name's node (``NameT``/``AppliedT``,
         catch clause, ``exception ... extends`` declaration) to the type its
-        nearest-level lookup selects. Typecheck resolves every named type and
+        full-path lookup selects. Typecheck resolves every named type and
         owner from here (peeling the trailing name off a chain when it names
         no separate owner) instead of re-resolving the name.
     """
@@ -1170,10 +1154,6 @@ class AglScopeError(AglError):
 
 class NoVisibleConstructorError(AglScopeError):
     """A bare pattern or ``is`` spelling that no visible constructor has."""
-
-
-class RouteClashError(AglScopeError):
-    """A qualifier whose leading segment is both a local scope or type and a module route."""
 
 
 @dataclass(frozen=True, slots=True)

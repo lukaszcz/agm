@@ -7,17 +7,16 @@ test and an ``as?`` cast -- in file mode and every REPL grouping (see
 :mod:`tests.agl.qualifier_support`), asserting the phase, the class and the
 chain's own span, or the accepted identity:
 
-- the walk from a plain local scope is exact: it never skips a segment it
-  cannot find, and a leading segment that is also a module route clashes
-  once the plain scope lacks the next segment;
-- a nearer ``use``-opened scope region decides a leading segment outright,
-  so a farther same-spelled imported type contributes none of its members;
+- a chain is looked up as its whole path: it never skips a segment no
+  source declares, whether or not its leading segment is also a module
+  route;
+- a scope region never hides a same-spelled imported type: the type's
+  members stay reachable beside the region's own;
 - an orphan method on an imported or prelude type keeps that type's own
   members reachable through its qualifier;
 - hiding is decided on the outer owner's own member table, nested records
   included, and a member no candidate selects is hidden when at least one
-  candidate hides it, else unknown;
-- a plain scope region shadows a same-spelled imported type owner.
+  candidate hides it, else unknown.
 """
 
 from __future__ import annotations
@@ -26,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import HiddenMemberError
-from agm.agl.scope.symbols import RouteClashError, UnknownMemberError
+from agm.agl.diagnostics import AglTypeError, HiddenMemberError
+from agm.agl.scope.symbols import UnknownMemberError
 from tests.agl.qualifier_support import (
     FilePhase,
     assert_verdicts_for_grouping,
@@ -63,44 +62,37 @@ def _skip_probes(q: str) -> dict[str, str]:
 
 
 class TestPlainScopeWalkNeverSkipsAMissingSegment:
-    """``Foo::E::Z`` is never read as ``Foo::Z``: the plain scope ``Foo`` lacks ``E``.
+    """``Foo::E::Z`` is never read as ``Foo::Z``: no source declares ``Foo::E``.
 
-    With ``Foo`` also naming the ``pkg/Foo`` module route, the plain scope's
-    missing next segment clashes with that route; without the route, the
-    missing segment is an unknown member. Either way the member ``Z``, which
-    ``Foo`` does declare, is never selected past the missing segment.
+    The member ``Z``, which the plain scope ``Foo`` does declare, is never
+    selected past the missing segment, whether or not ``Foo`` also names the
+    ``pkg/Foo`` module route.
     """
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_SKIP_ROUTE_HEADER) + 1))
-    def test_route_clashes(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        probes = {
-            **_skip_probes("Foo::E::Z"),
-            "value-length-four": "Foo::E::F::Z(w = 1)",
-        }
-        spans = {key: "Foo::E::Z" for key in probes}
-        spans["value-length-four"] = "Foo::E::F::Z"
-        assert_verdicts_for_grouping(
-            tmp_path,
-            _SKIP_ROUTE_LIB,
-            _SKIP_ROUTE_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(RouteClashError) for key in probes},
-            span_texts=spans,
-        )
+    def test_with_route_is_unknown_member(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        _assert_skip_is_unknown(tmp_path, _SKIP_ROUTE_LIB, _SKIP_ROUTE_HEADER, sizes)
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_SKIP_NO_ROUTE_HEADER) + 1))
     def test_without_route_is_unknown_member(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        probes = _skip_probes("Foo::E::Z")
-        assert_verdicts_for_grouping(
-            tmp_path,
-            {},
-            _SKIP_NO_ROUTE_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "Foo::E::Z" for key in probes},
-        )
+        _assert_skip_is_unknown(tmp_path, {}, _SKIP_NO_ROUTE_HEADER, sizes)
+
+
+def _assert_skip_is_unknown(
+    tmp_path: Path, modules: dict[str, str], header: tuple[str, ...], sizes: tuple[int, ...]
+) -> None:
+    probes = {**_skip_probes("Foo::E::Z"), "value-length-four": "Foo::E::F::Z(w = 1)"}
+    spans = {key: "Foo::E::Z" for key in probes}
+    spans["value-length-four"] = "Foo::E::F::Z"
+    assert_verdicts_for_grouping(
+        tmp_path,
+        modules,
+        header,
+        sizes,
+        probes,
+        {key: _rejected(UnknownMemberError) for key in probes},
+        span_texts=spans,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -125,29 +117,28 @@ def _region(*items: str, method: bool) -> str:
 
 def _nearest_inner_probes(*, method: bool) -> dict[str, str]:
     return {
-        "value": _region("let q = Geo::Inner(y = 1)", method=method),
+        "value": _region("let q = Geo::Inner(y = 1)", method=method) + "\nr::q",
         "pattern": _region(
-            "def g(v: int) -> int =\n  case v of\n    | Geo::Inner(y) => y\n    | _ => 2",
+            "def g(v: tl::Geo::Inner) -> int =\n  case v of\n    | Geo::Inner(y) => y",
             method=method,
-        ),
+        )
+        + "\nr::g",
         "is": _region("let q = 1 is Geo::Inner", method=method),
         "cast": _region("let q = 1 as? Geo::Inner", method=method),
     }
 
 
-class TestNearestUseRegionDecidesQualifiedMembers:
-    """A ``use``-opened region inside ``scope r`` decides ``Geo`` for every position.
+class TestUseRegionBesideImportedType:
+    """A ``use``-opened region inside ``scope r`` never hides the root's imported ``Geo``.
 
-    The root's wildcard-imported ``record Geo`` (with its nested ``Inner``)
-    is farther than the region ``use shapes::*`` opens, so ``Geo::Inner``
-    names no member in any position, with or without a ``def Geo::f``
-    creating a same-spelled method path inside ``r``; the region's own
-    ``Point`` and the method path's own ``f`` stay reachable.
+    The root's wildcard-imported ``record Geo`` keeps its nested ``Inner``
+    reachable beside the region's ``Point``, with or without a ``def Geo::f``
+    creating a same-spelled method path inside ``r``.
     """
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
     @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
-    def test_farther_nested_type_is_unknown(
+    def test_imported_nested_type_is_reached(
         self, tmp_path: Path, sizes: tuple[int, ...], method: bool
     ) -> None:
         probes = _nearest_inner_probes(method=method)
@@ -157,8 +148,17 @@ class TestNearestUseRegionDecidesQualifiedMembers:
             _NEAREST_HEADER,
             sizes,
             probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "Geo::Inner" for key in probes},
+            {
+                "value": _ACCEPTED,
+                "pattern": _ACCEPTED,
+                "is": ("typecheck", AglTypeError),
+                "cast": ("typecheck", AglTypeError),
+            },
+            span_texts={"is": "1 is Geo::Inner", "cast": "1 as? Geo::Inner"},
+            expected_identities={
+                "value": "record tl::Geo::Inner\n  y: int",
+                "pattern": "tl::Geo::Inner -> int",
+            },
         )
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
@@ -454,7 +454,7 @@ class TestSameLevelNestedRecordSelectsFullPathFirst:
 
 
 # ---------------------------------------------------------------------------
-# A plain local region shadows a same-spelled imported type owner.
+# A plain local region beside a same-spelled imported type owner.
 # ---------------------------------------------------------------------------
 
 _REGION_OWNER_LIB = {
@@ -463,15 +463,11 @@ _REGION_OWNER_LIB = {
 _REGION_OWNER_HEADER = ("import tl::*", "scope R\n  def Geo::f() -> int = 1\nend R")
 
 
-class TestPlainRegionShadowsImportedTypeOwner:
-    """A local ``scope R`` decides ``R``: its method path ``R::Geo`` lacks ``X``.
-
-    The wildcard-imported ``record R`` (with its nested ``R::Geo::X``) never
-    merges into the local region's exact walk.
-    """
+class TestPlainRegionBesideImportedTypeOwner:
+    """A local ``scope R`` with a method path ``R::Geo`` never hides the imported ``R::Geo::X``."""
 
     @pytest.mark.parametrize("sizes", grouping_params(len(_REGION_OWNER_HEADER) + 1))
-    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_imported_member_is_reached(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {
             "value": "R::Geo::X(z = 1)",
             "pattern": "case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z",
@@ -484,8 +480,14 @@ class TestPlainRegionShadowsImportedTypeOwner:
             _REGION_OWNER_HEADER,
             sizes,
             probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "R::Geo::X" for key in probes},
+            {
+                "value": _ACCEPTED,
+                "pattern": _ACCEPTED,
+                "is": ("typecheck", AglTypeError),
+                "cast": ("typecheck", AglTypeError),
+            },
+            span_texts={"is": "1 is R::Geo::X", "cast": "1 as? R::Geo::X"},
+            expected_identities={"value": "record tl::R::Geo::X\n  z: int", "pattern": "int"},
         )
 
 

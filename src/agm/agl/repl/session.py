@@ -1259,23 +1259,16 @@ class ReplSession:
                 required_scope_paths.update(
                     member_path[:length] for length in range(1, len(member_path) + 1)
                 )
-        # ``required_scope_paths`` is already prefix-closed: its seed,
+        # ``required_scope_paths`` is prefix-closed: its seed,
         # ``promoted_scope_region_paths``, is prefix-closed by construction
         # (region nesting plus the frontier monotonicity `collect_regions`
         # guarantees in ``lower/repl.py``), and both loops above add every
-        # ancestor of the paths they contribute. So a path has some longer
-        # entry inside it exactly when it is some entry's immediate parent --
-        # a single precomputed set instead of an all-pairs scan below.
-        parents_of_required = frozenset(path[:-1] for path in required_scope_paths if path)
+        # ancestor of the paths they contribute, so a retained path's parent
+        # is always retained first.
         for path, node in checked.resolved.scope_nodes.items():
-            session_node = self._session_scope_nodes.get(path)
-            promoted_region = path in promoted_scope_region_paths or path in parents_of_required
-            if session_node is not None:
-                if node.is_scope_region and promoted_region:
-                    session_node.is_scope_region = True
-                continue
             if (
-                not path
+                path in self._session_scope_nodes
+                or not path
                 or path not in required_scope_paths
                 or beneath(path, unpromoted_type_scope_paths)
                 or beneath(path, retired_scopes)
@@ -1285,7 +1278,6 @@ class ReplSession:
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
-                is_scope_region=node.is_scope_region and promoted_region,
             )
 
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}

@@ -1,11 +1,10 @@
-"""A qualifier head naming both a local scope and a module route.
+"""A qualifier head naming both a local declaration and a module route.
 
-A leading segment that is both a local declaration (scope region, type or
-``use`` alias) and a module route is a route clash, whatever the rest of
-the chain names; a ``::`` anchor selects the current module and a
-``/``-anchored path the module. Without a clash a local scope beats a
-same-named imported scope, so a member only the import declares is
-unknown.
+A chain is looked up as its whole path: a path the own module declares
+wins over the same path through a module route; a path only the route
+reaches is the route's; a ``::`` anchor reads the current module only and a
+``/``-anchored path the module only. A local scope and a same-named
+imported scope look combined, each supplying the members it declares.
 
 Every probe is checked in file mode and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
@@ -22,7 +21,6 @@ from agm.agl.diagnostics import AglTypeError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
-    RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -97,16 +95,20 @@ _SCENARIOS = {
             "scope palette\n  record Local\nend palette",
         ),
         probes={
-            "rc3-val": rejected("palette::Color::Red", RouteClashError, "palette::Color::Red"),
-            "rc3-annot": rejected(
-                "fn(p: palette::Color::Red) => 1", RouteClashError, "palette::Color::Red"
-            ),
+            "rc3-val": accepted("palette::Color::Red", "record palette::Color::Red"),
+            "rc3-annot": accepted("fn(p: palette::Color::Red) => 1", "palette::Color::Red -> int"),
             "rc3-pat": rejected(
                 "case 1 of\n  | palette::Color::Red => 1\n  | _ => 2",
-                RouteClashError,
+                AglTypeError,
                 "palette::Color::Red",
+                phase="typecheck",
             ),
-            "rc3-is": rejected("1 is palette::Color::Red", RouteClashError, "palette::Color::Red"),
+            "rc3-is": rejected(
+                "1 is palette::Color::Red",
+                AglTypeError,
+                "1 is palette::Color::Red",
+                phase="typecheck",
+            ),
         },
     ),
     "local-scope-matching-a-route-at-length-four": Scenario(
@@ -127,8 +129,8 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "len4-val": rejected("Foo::E::A::Z(w = 1)", RouteClashError, "Foo::E::A::Z"),
-            "len4-annot": rejected("fn(p: Foo::E::A::Z) => 1", RouteClashError, "Foo::E::A::Z"),
+            "len4-val": accepted("Foo::E::A::Z(w = 1)", "record Foo::E::A::Z\n  w: int"),
+            "len4-annot": accepted("fn(p: Foo::E::A::Z) => 1", "Foo::E::A::Z -> int"),
         },
     ),
     "local-scope-missing-a-route-member-at-length-four": Scenario(
@@ -149,8 +151,10 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "len4miss-val": rejected("Foo::E::A::Z(w = 1)", RouteClashError, "Foo::E::A::Z"),
-            "len4miss-annot": rejected("fn(p: Foo::E::A::Z) => 1", RouteClashError, "Foo::E::A::Z"),
+            "len4miss-val": rejected(
+                "Foo::E::A::Z(w = 1)", AglTypeError, "w = 1", phase="typecheck"
+            ),
+            "len4miss-annot": accepted("fn(p: Foo::E::A::Z) => 1", "pkg/Foo::E::A::Z -> int"),
         },
     ),
     "local-scope-and-route-both-lacking-the-member": Scenario(
@@ -160,20 +164,20 @@ _SCENARIOS = {
             "scope Foo\n  record Z\n    w: int\n  enum K\n    | Z\nend Foo",
         ),
         probes={
-            "skip-val": rejected("Foo::E::Z(w = 1)", RouteClashError, "Foo::E::Z"),
-            "skip-annot": rejected("fn(p: Foo::E::Z) => 1", RouteClashError, "Foo::E::Z"),
-            "skip-alias": rejected("type AA = Foo::E::Z\n1", RouteClashError, "Foo::E::Z"),
-            "skip-tyarg": rejected("fn(p: array[Foo::E::Z]) => 1", RouteClashError, "Foo::E::Z"),
+            "skip-val": rejected("Foo::E::Z(w = 1)", UnknownMemberError, "Foo::E::Z"),
+            "skip-annot": rejected("fn(p: Foo::E::Z) => 1", UnknownMemberError, "Foo::E::Z"),
+            "skip-alias": rejected("type AA = Foo::E::Z\n1", UnknownMemberError, "Foo::E::Z"),
+            "skip-tyarg": rejected("fn(p: array[Foo::E::Z]) => 1", UnknownMemberError, "Foo::E::Z"),
             "skip-pat": rejected(
                 "let z = Foo::Z(w = 1)\ncase z of\n  | Foo::E::Z(w) => w",
-                RouteClashError,
+                UnknownMemberError,
                 "Foo::E::Z",
             ),
             "skip-is": rejected(
-                "let z = Foo::Z(w = 1)\nz is Foo::E::Z", RouteClashError, "Foo::E::Z"
+                "let z = Foo::Z(w = 1)\nz is Foo::E::Z", UnknownMemberError, "Foo::E::Z"
             ),
-            "skip-reptype": rejected("Foo::E::Z", RouteClashError, "Foo::E::Z"),
-            "skip3-val": rejected("Foo::E::F::Z(w = 1)", RouteClashError, "Foo::E::F::Z"),
+            "skip-reptype": rejected("Foo::E::Z", UnknownMemberError, "Foo::E::Z"),
+            "skip3-val": rejected("Foo::E::F::Z(w = 1)", UnknownMemberError, "Foo::E::F::Z"),
         },
     ),
     "local-scope-without-a-route": Scenario(
@@ -205,34 +209,48 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "full-R-value": rejected("Foo::R(x = 1)", RouteClashError, "Foo::R"),
-            "full-R-annot": rejected("fn(p: Foo::R) => 1", RouteClashError, "Foo::R"),
-            "full-R-alias": rejected("type AA = Foo::R\n1", RouteClashError, "Foo::R"),
-            "full-R-tyarg": rejected("fn(p: array[Foo::R]) => 1", RouteClashError, "Foo::R"),
-            "full-R-reptype": rejected("Foo::R", RouteClashError, "Foo::R"),
-            "full-EA-value": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
+            "full-R-value": rejected("Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"),
+            "full-R-annot": accepted("fn(p: Foo::R) => 1", "Foo::R -> int"),
+            "full-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "full-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[Foo::R] -> int"),
+            "full-R-reptype": accepted("Foo::R", "int -> Foo::R"),
+            "full-EA-value": accepted("Foo::E::A", "record Foo::E::A"),
             "full-EA-pattern": rejected(
-                ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2"),
-                RouteClashError,
+                "let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2",
+                AglTypeError,
                 "Foo::E::A",
+                phase="typecheck",
             ),
             "full-EA-is": rejected(
-                "let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", RouteClashError, "Foo::E::A"
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A",
+                AglTypeError,
+                "v is Foo::E::A",
+                phase="typecheck",
             ),
-            "full-EA-annot": rejected("fn(p: Foo::E::A) => 1", RouteClashError, "Foo::E::A"),
-            "full-EA-alias": rejected("type AA = Foo::E::A\n1", RouteClashError, "Foo::E::A"),
-            "full-EA-tyarg": rejected("fn(p: array[Foo::E::A]) => 1", RouteClashError, "Foo::E::A"),
-            "full-EA-reptype": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
-            "full-E-value": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "full-E-annot": rejected("fn(p: Foo::E) => 1", RouteClashError, "Foo::E"),
-            "full-E-alias": rejected("type AA = Foo::E\n1", RouteClashError, "Foo::E"),
-            "full-E-tyarg": rejected("fn(p: array[Foo::E]) => 1", RouteClashError, "Foo::E"),
-            "full-E-reptype": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "full-Gi-value": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
-            "full-Gi-annot": rejected("fn(p: Foo::G[int]) => 1", RouteClashError, "Foo::G"),
-            "full-Gi-alias": rejected("type AA = Foo::G[int]\n1", RouteClashError, "Foo::G"),
-            "full-Gi-tyarg": rejected("fn(p: array[Foo::G[int]]) => 1", RouteClashError, "Foo::G"),
-            "full-Gi-reptype": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
+            "full-EA-annot": accepted("fn(p: Foo::E::A) => 1", "Foo::E::A -> int"),
+            "full-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "full-EA-tyarg": accepted("fn(p: array[Foo::E::A]) => 1", "array[Foo::E::A] -> int"),
+            "full-EA-reptype": accepted("Foo::E::A", "record Foo::E::A"),
+            "full-E-value": rejected(
+                "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
+            ),
+            "full-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
+            "full-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "full-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
+            "full-E-reptype": rejected(
+                "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
+            ),
+            "full-Gi-value": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record Foo::G[int]\n  w: int"
+            ),
+            "full-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "Foo::G[int] -> int"),
+            "full-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "full-Gi-tyarg": accepted(
+                "fn(p: array[Foo::G[int]]) => 1", "array[Foo::G[int]] -> int"
+            ),
+            "full-Gi-reptype": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record Foo::G[int]\n  w: int"
+            ),
             "full-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "full-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
             "full-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
@@ -294,36 +312,43 @@ _SCENARIOS = {
             "scope Foo\n  record Z\nend Foo",
         ),
         probes={
-            "empty-R-value": rejected("Foo::R(x = 1)", RouteClashError, "Foo::R"),
-            "empty-R-annot": rejected("fn(p: Foo::R) => 1", RouteClashError, "Foo::R"),
-            "empty-R-alias": rejected("type AA = Foo::R\n1", RouteClashError, "Foo::R"),
-            "empty-R-tyarg": rejected("fn(p: array[Foo::R]) => 1", RouteClashError, "Foo::R"),
-            "empty-R-reptype": rejected("Foo::R", RouteClashError, "Foo::R"),
-            "empty-EA-value": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
-            "empty-EA-pattern": rejected(
-                ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2"),
-                RouteClashError,
-                "Foo::E::A",
+            "empty-R-value": accepted("Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
+            "empty-R-annot": accepted("fn(p: Foo::R) => 1", "pkg/Foo::R -> int"),
+            "empty-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "empty-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[pkg/Foo::R] -> int"),
+            "empty-R-reptype": accepted("Foo::R", "int -> pkg/Foo::R"),
+            "empty-EA-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
+            "empty-EA-pattern": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2",
+                "int",
             ),
-            "empty-EA-is": rejected(
-                "let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", RouteClashError, "Foo::E::A"
+            "empty-EA-is": accepted("let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", "bool"),
+            "empty-EA-annot": accepted("fn(p: Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
+            "empty-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "empty-EA-tyarg": accepted(
+                "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "empty-EA-annot": rejected("fn(p: Foo::E::A) => 1", RouteClashError, "Foo::E::A"),
-            "empty-EA-alias": rejected("type AA = Foo::E::A\n1", RouteClashError, "Foo::E::A"),
-            "empty-EA-tyarg": rejected(
-                "fn(p: array[Foo::E::A]) => 1", RouteClashError, "Foo::E::A"
+            "empty-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
+            "empty-E-value": rejected(
+                "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
             ),
-            "empty-EA-reptype": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
-            "empty-E-value": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "empty-E-annot": rejected("fn(p: Foo::E) => 1", RouteClashError, "Foo::E"),
-            "empty-E-alias": rejected("type AA = Foo::E\n1", RouteClashError, "Foo::E"),
-            "empty-E-tyarg": rejected("fn(p: array[Foo::E]) => 1", RouteClashError, "Foo::E"),
-            "empty-E-reptype": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "empty-Gi-value": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
-            "empty-Gi-annot": rejected("fn(p: Foo::G[int]) => 1", RouteClashError, "Foo::G"),
-            "empty-Gi-alias": rejected("type AA = Foo::G[int]\n1", RouteClashError, "Foo::G"),
-            "empty-Gi-tyarg": rejected("fn(p: array[Foo::G[int]]) => 1", RouteClashError, "Foo::G"),
-            "empty-Gi-reptype": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
+            "empty-E-annot": accepted("fn(p: Foo::E) => 1", "pkg/Foo::E -> int"),
+            "empty-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "empty-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[pkg/Foo::E] -> int"),
+            "empty-E-reptype": rejected(
+                "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
+            ),
+            "empty-Gi-value": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
+            ),
+            "empty-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "pkg/Foo::G[int] -> int"),
+            "empty-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "empty-Gi-tyarg": accepted(
+                "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
+            ),
+            "empty-Gi-reptype": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
+            ),
             "empty-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "empty-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
             "empty-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
@@ -387,34 +412,39 @@ _SCENARIOS = {
             "enum Foo\n  | R(y: int)\n  | E",
         ),
         probes={
-            "enum-R-value": rejected("Foo::R(x = 1)", RouteClashError, "Foo::R"),
-            "enum-R-annot": rejected("fn(p: Foo::R) => 1", RouteClashError, "Foo::R"),
-            "enum-R-alias": rejected("type AA = Foo::R\n1", RouteClashError, "Foo::R"),
-            "enum-R-tyarg": rejected("fn(p: array[Foo::R]) => 1", RouteClashError, "Foo::R"),
-            "enum-R-reptype": rejected("Foo::R", RouteClashError, "Foo::R"),
-            "enum-EA-value": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
-            "enum-EA-pattern": rejected(
-                ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2"),
-                RouteClashError,
-                "Foo::E::A",
+            "enum-R-value": rejected("Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"),
+            "enum-R-annot": accepted("fn(p: Foo::R) => 1", "Foo::R -> int"),
+            "enum-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "enum-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[Foo::R] -> int"),
+            "enum-R-reptype": accepted("Foo::R", "int -> Foo::R"),
+            "enum-EA-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
+            "enum-EA-pattern": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2",
+                "int",
             ),
-            "enum-EA-is": rejected(
-                "let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", RouteClashError, "Foo::E::A"
+            "enum-EA-is": accepted("let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", "bool"),
+            "enum-EA-annot": accepted("fn(p: Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
+            "enum-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "enum-EA-tyarg": accepted(
+                "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "enum-EA-annot": rejected("fn(p: Foo::E::A) => 1", RouteClashError, "Foo::E::A"),
-            "enum-EA-alias": rejected("type AA = Foo::E::A\n1", RouteClashError, "Foo::E::A"),
-            "enum-EA-tyarg": rejected("fn(p: array[Foo::E::A]) => 1", RouteClashError, "Foo::E::A"),
-            "enum-EA-reptype": rejected("Foo::E::A", RouteClashError, "Foo::E::A"),
-            "enum-E-value": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "enum-E-annot": rejected("fn(p: Foo::E) => 1", RouteClashError, "Foo::E"),
-            "enum-E-alias": rejected("type AA = Foo::E\n1", RouteClashError, "Foo::E"),
-            "enum-E-tyarg": rejected("fn(p: array[Foo::E]) => 1", RouteClashError, "Foo::E"),
-            "enum-E-reptype": rejected("Foo::E", RouteClashError, "Foo::E"),
-            "enum-Gi-value": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
-            "enum-Gi-annot": rejected("fn(p: Foo::G[int]) => 1", RouteClashError, "Foo::G"),
-            "enum-Gi-alias": rejected("type AA = Foo::G[int]\n1", RouteClashError, "Foo::G"),
-            "enum-Gi-tyarg": rejected("fn(p: array[Foo::G[int]]) => 1", RouteClashError, "Foo::G"),
-            "enum-Gi-reptype": rejected("Foo::G[int]", RouteClashError, "Foo::G"),
+            "enum-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
+            "enum-E-value": accepted("Foo::E", "record Foo::E"),
+            "enum-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
+            "enum-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "enum-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
+            "enum-E-reptype": accepted("Foo::E", "record Foo::E"),
+            "enum-Gi-value": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
+            ),
+            "enum-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "pkg/Foo::G[int] -> int"),
+            "enum-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "enum-Gi-tyarg": accepted(
+                "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
+            ),
+            "enum-Gi-reptype": rejected(
+                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
+            ),
             "enum-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "enum-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
             "enum-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
@@ -633,8 +663,8 @@ _SCENARIOS = {
         probes={
             "annot-shape": accepted("fn(p: Geo::Shape) => 1", "Geo::Shape -> int"),
             "annot-tri": accepted("fn(p: Geo::Shape::Tri) => 1", "Geo::Shape::Tri -> int"),
-            "annot-circle": rejected(
-                "fn(p: Geo::Shape::Circle) => 1", UnknownMemberError, "Geo::Shape::Circle"
+            "annot-circle": accepted(
+                "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
             "value-tri": accepted("Geo::Shape::Tri", "record Geo::Shape::Tri"),
             "let-tri": accepted(
@@ -648,8 +678,9 @@ _SCENARIOS = {
             ),
             "is-circle": rejected(
                 "let s = Geo::Shape::Tri\ns is Geo::Shape::Circle",
-                UnknownMemberError,
-                "Geo::Shape::Circle",
+                AglTypeError,
+                "s is Geo::Shape::Circle",
+                phase="typecheck",
             ),
             "annot-num": accepted("fn(p: Geo::Num) => 1", "text -> int"),
             "let-num": accepted('let n: Geo::Num = "a"\nn', "text"),
@@ -725,36 +756,48 @@ _SCENARIOS = {
             "scope Geo\n  enum Kind = Round | Flat\nend Geo",
         ),
         probes={
-            "locnoP-value": rejected("Geo::Point(x = 1)", UnknownMemberError, "Geo::Point"),
-            "locnoP-value-enum": rejected(
-                "Geo::Shape::Circle", UnknownMemberError, "Geo::Shape::Circle"
+            "locnoP-value": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
+            "locnoP-value-enum": accepted(
+                "Geo::Shape::Circle", "record shapes::Geo::Shape::Circle"
             ),
             "locnoP-pattern": rejected(
-                "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2", UnknownMemberError, "Geo::Point"
+                "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
+                AglTypeError,
+                "Geo::Point(x)",
+                phase="typecheck",
             ),
             "locnoP-pattern-enum": rejected(
                 "case 1 of\n  | Geo::Shape::Circle => 1\n  | _ => 2",
-                UnknownMemberError,
+                AglTypeError,
                 "Geo::Shape::Circle",
+                phase="typecheck",
             ),
             "locnoP-is-enum": rejected(
-                "1 is Geo::Shape::Circle", UnknownMemberError, "Geo::Shape::Circle"
+                "1 is Geo::Shape::Circle",
+                AglTypeError,
+                "1 is Geo::Shape::Circle",
+                phase="typecheck",
             ),
-            "locnoP-annot": rejected("fn(p: Geo::Point) => 1", UnknownMemberError, "Geo::Point"),
-            "locnoP-annot-enum": rejected(
-                "fn(p: Geo::Shape) => 1", UnknownMemberError, "Geo::Shape"
+            "locnoP-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
+            "locnoP-annot-enum": accepted("fn(p: Geo::Shape) => 1", "shapes::Geo::Shape -> int"),
+            "locnoP-annot-member": accepted(
+                "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
-            "locnoP-annot-member": rejected(
-                "fn(p: Geo::Shape::Circle) => 1", UnknownMemberError, "Geo::Shape::Circle"
+            "locnoP-alias": accepted("type A = Geo::Point\n1", "int"),
+            "locnoP-tyarg": accepted(
+                "fn(p: array[Geo::Point]) => 1", "array[shapes::Geo::Point] -> int"
             ),
-            "locnoP-alias": rejected("type A = Geo::Point\n1", UnknownMemberError, "Geo::Point"),
-            "locnoP-tyarg": rejected(
-                "fn(p: array[Geo::Point]) => 1", UnknownMemberError, "Geo::Point"
+            "locnoP-applied": accepted("fn(p: Geo::Box[int]) => 1", "shapes::Geo::Box[int] -> int"),
+            "locnoP-applied-value": accepted(
+                "Geo::Box(v = 1)", "record shapes::Geo::Box[int]\n  v: int"
             ),
-            "locnoP-applied": rejected("fn(p: Geo::Box[int]) => 1", UnknownMemberError, "Geo::Box"),
-            "locnoP-applied-value": rejected("Geo::Box(v = 1)", UnknownMemberError, "Geo::Box"),
-            "locnoP-reptype": rejected("Geo::Point", UnknownMemberError, "Geo::Point"),
-            "locnoP-reptype-applied": rejected("Geo::Box[int]", UnknownMemberError, "Geo::Box"),
+            "locnoP-reptype": accepted("Geo::Point", "int -> shapes::Geo::Point"),
+            "locnoP-reptype-applied": rejected(
+                "Geo::Box[int]",
+                AglScopeError,
+                "int",
+                type_entry="record shapes::Geo::Box[int]\n  v: int",
+            ),
         },
     ),
     "local-scope-redeclaring-some-imported-members": Scenario(
@@ -765,9 +808,7 @@ _SCENARIOS = {
         ),
         probes={
             "locP-value": rejected("Geo::Point(x = 1)", AglTypeError, "x = 1", phase="typecheck"),
-            "locP-value-enum": rejected(
-                "Geo::Shape::Circle", UnknownMemberError, "Geo::Shape::Circle"
-            ),
+            "locP-value-enum": accepted("Geo::Shape::Circle", "record shapes::Geo::Shape::Circle"),
             "locP-pattern": rejected(
                 "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
                 AglTypeError,
@@ -776,23 +817,34 @@ _SCENARIOS = {
             ),
             "locP-pattern-enum": rejected(
                 "case 1 of\n  | Geo::Shape::Circle => 1\n  | _ => 2",
-                UnknownMemberError,
+                AglTypeError,
                 "Geo::Shape::Circle",
+                phase="typecheck",
             ),
             "locP-is-enum": rejected(
-                "1 is Geo::Shape::Circle", UnknownMemberError, "Geo::Shape::Circle"
+                "1 is Geo::Shape::Circle",
+                AglTypeError,
+                "1 is Geo::Shape::Circle",
+                phase="typecheck",
             ),
             "locP-annot": accepted("fn(p: Geo::Point) => 1", "Geo::Point -> int"),
             "locP-annot-enum": accepted("fn(p: Geo::Shape) => 1", "Geo::Shape -> int"),
-            "locP-annot-member": rejected(
-                "fn(p: Geo::Shape::Circle) => 1", UnknownMemberError, "Geo::Shape::Circle"
+            "locP-annot-member": accepted(
+                "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
             "locP-alias": accepted("type A = Geo::Point\n1", "int"),
             "locP-tyarg": accepted("fn(p: array[Geo::Point]) => 1", "array[Geo::Point] -> int"),
-            "locP-applied": rejected("fn(p: Geo::Box[int]) => 1", UnknownMemberError, "Geo::Box"),
-            "locP-applied-value": rejected("Geo::Box(v = 1)", UnknownMemberError, "Geo::Box"),
+            "locP-applied": accepted("fn(p: Geo::Box[int]) => 1", "shapes::Geo::Box[int] -> int"),
+            "locP-applied-value": accepted(
+                "Geo::Box(v = 1)", "record shapes::Geo::Box[int]\n  v: int"
+            ),
             "locP-reptype": accepted("Geo::Point", "int -> Geo::Point"),
-            "locP-reptype-applied": rejected("Geo::Box[int]", UnknownMemberError, "Geo::Box"),
+            "locP-reptype-applied": rejected(
+                "Geo::Box[int]",
+                AglScopeError,
+                "int",
+                type_entry="record shapes::Geo::Box[int]\n  v: int",
+            ),
         },
     ),
     "local-scope-beside-routed-import": Scenario(
@@ -851,30 +903,21 @@ _SCENARIOS = {
             "scope palette\n  record Local\nend palette",
         ),
         probes={
-            "owner-annot": rejected(
-                "fn(x: palette::Color) => 1", RouteClashError, "palette::Color"
+            "owner-annot": accepted("fn(x: palette::Color) => 1", "palette::Color -> int"),
+            "member-annot": accepted(
+                "fn(x: palette::Color::Red) => 1", "palette::Color::Red -> int"
             ),
-            "member-annot": rejected(
-                "fn(x: palette::Color::Red) => 1", RouteClashError, "palette::Color::Red"
+            "member-value": accepted("palette::Color::Red", "record palette::Color::Red"),
+            "member-is": accepted(
+                "let v: palette::Color = palette::Color::Red\nv is palette::Color::Red", "bool"
             ),
-            "member-value": rejected("palette::Color::Red", RouteClashError, "palette::Color::Red"),
-            "member-is": rejected(
-                "let v = palette::Color::Red\nv is palette::Color::Red",
-                RouteClashError,
-                "palette::Color::Red",
+            "member-pat": accepted(
+                "let v: palette::Color = palette::Color::Red\n"
+                "case v of\n  | palette::Color::Red => 1\n  | _ => 2",
+                "int",
             ),
-            "member-pat": rejected(
-                (
-                    "let v = palette::Color::Red\n"
-                    "case v of\n"
-                    "  | palette::Color::Red => 1\n"
-                    "  | _ => 2"
-                ),
-                RouteClashError,
-                "palette::Color::Red",
-            ),
-            "owner-value-rec": rejected("palette::Other(x = 1)", RouteClashError, "palette::Other"),
-            "surface-value": rejected("palette::Red", RouteClashError, "palette::Red"),
+            "owner-value-rec": accepted("palette::Other(x = 1)", "record palette::Other\n  x: int"),
+            "surface-value": accepted("palette::Red", "record palette::Color::Red"),
         },
     ),
     "use-alias-beside-same-named-local-scope": Scenario(
@@ -896,17 +939,13 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "val": rejected("Geo::T(x = 1)", UnknownMemberError, "Geo::T"),
-            "annot": rejected("fn(p: Geo::T) => 1", UnknownMemberError, "Geo::T"),
-            "val-enum": rejected("Geo::K::A", UnknownMemberError, "Geo::K::A"),
-            "annot-enum": rejected("fn(p: Geo::K) => 1", UnknownMemberError, "Geo::K"),
-            "annot-enum-member": rejected("fn(p: Geo::K::A) => 1", UnknownMemberError, "Geo::K::A"),
-            "pat": rejected(
-                "let t = S::T(x = 1)\ncase t of\n  | Geo::T(x) => x", UnknownMemberError, "Geo::T"
-            ),
-            "is-enum": rejected(
-                "let k: S::K = S::K::A\nk is Geo::K::A", UnknownMemberError, "Geo::K::A"
-            ),
+            "val": accepted("Geo::T(x = 1)", "record S::T\n  x: int"),
+            "annot": accepted("fn(p: Geo::T) => 1", "S::T -> int"),
+            "val-enum": accepted("Geo::K::A", "record S::K::A"),
+            "annot-enum": accepted("fn(p: Geo::K) => 1", "S::K -> int"),
+            "annot-enum-member": accepted("fn(p: Geo::K::A) => 1", "S::K::A -> int"),
+            "pat": accepted("let t = S::T(x = 1)\ncase t of\n  | Geo::T(x) => x", "int"),
+            "is-enum": accepted("let k: S::K = S::K::A\nk is Geo::K::A", "bool"),
             "val-other": accepted("Geo::Other(y = 1)", "record Geo::Other\n  y: int"),
             "annot-other": accepted("fn(p: Geo::Other) => 1", "Geo::Other -> int"),
         },
@@ -916,7 +955,7 @@ _SCENARIOS = {
 
 
 class TestRouteAndLocalScopeQualifiers:
-    """Route clashes, anchors, and local scopes over imported ones."""
+    """Own paths beside module routes, anchors, and local scopes beside imported ones."""
 
     @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(

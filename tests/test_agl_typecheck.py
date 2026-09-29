@@ -8998,11 +8998,9 @@ class TestParsePolicy:
         assert "on-parse-error" in r.warnings[0].message
 
     def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
-        """A qualifier segment carrying an explicit type argument
-        (``ParsePolicy[int]::``) is never an accepted ``on_parse_error``
-        spelling, regardless of what it would otherwise resolve to."""
+        """``ParsePolicy`` is not generic, so ``ParsePolicy[int]::`` is a scope error."""
         err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy[int]::Abort())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
+        assert isinstance(err, AglScopeError)
 
     def test_retry_with_non_int_n_raises(self) -> None:
         # Exercises line 880->879: Retry n_arg not an IntLit

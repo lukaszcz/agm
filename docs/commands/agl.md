@@ -260,13 +260,16 @@ order (a config value may instead be a native TOML table, read directly as the t
 
 In shorthand the effort follows the last `:` and is optional; omitted, it is `""`
 ([configured default effort](#agent-effort-defaults)). Provider and effort use
-`[A-Za-z0-9._@+-]`; a model may also contain `:`, so a model with a colon needs an explicit
-effort (`ollama/llama3:8b:high`) or the constructor form. Examples: `claude/sonnet:medium`,
-`codex/o3:high`, `pi/openai/gpt-5:low`, `openrouter/qwen3`. The `claude`, `codex`, and `pi`
-prefixes match in any case; text starting with one that breaks its form (`claude/`,
-`claude/opus:`, `pi/anthropic`, surrounding whitespace) is a host error, never a verbatim
-command. Other two-segment text such as `bin/agent` reads as Pi shorthand, so write a relative
-command path as `./bin/agent`.
+`[A-Za-z0-9._@+-]`; a model may also contain `:`, `[`, and `]` (`claude/opus[1m]:high`), so a
+model with a colon needs an explicit effort (`ollama/llama3:8b:high`) or the constructor form.
+Examples: `claude/sonnet:medium`, `codex/o3:high`, `pi/openai/gpt-5:low`, `openrouter/qwen3`.
+The `claude`, `codex`, and `pi` prefixes match in any case; text starting with one that breaks
+its form (`claude/`, `claude/opus:`, `pi/anthropic`, surrounding whitespace) is a host error,
+never a verbatim command. Other two-segment text such as `bin/agent` reads as Pi shorthand, so
+write a relative command path as `./bin/agent`. Generic text with three or more segments
+(`openrouter/anthropic/claude-sonnet-4`) is not shorthand but a verbatim command, and `pi/` takes
+exactly `pi/PROVIDER/MODEL`, so a model id containing `/` needs the constructor form
+(`AgentPi("openrouter", "anthropic/claude-sonnet-4")`).
 
 Text that opens a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`,
 an unknown field, a qualifier naming anything but `Agent` — is a host error, not a verbatim
@@ -298,7 +301,8 @@ let answer: text = ask("Summarize")
 `AgentCommand(command)`, `AgentClaude(model, thinking = "")`, `AgentCodex(model, thinking = "")`,
 and `AgentPi(provider, model, thinking = "")` each build their own argv; select one with an
 `Agent` value or `default-agent`. An empty `thinking` passes no effort flag unless a configured
-default applies.
+default applies. The built-in `default-agent` is `AgentClaude("sonnet")`, so `[agent]` effort
+defaults apply to it too.
 
 ### Agent effort defaults
 
@@ -326,9 +330,11 @@ effort = ""
 A table that sets `effort`, even to `""`, ends the lookup: `effort = ""` restores the agent CLI's
 own default for that model or provider instead of falling through to a broader table. Only an
 absent `effort` falls through. With nothing set, no effort flag is passed. Quote a model or
-provider name containing dots (`[agent.codex."gpt-5.1-codex"]`); unquoted, TOML splits it into
-nested tables. `effort` shares its table with the model or provider names below it, so a model
-literally named `effort` cannot be configured at that level.
+provider name containing any character outside TOML bare keys (`A-Za-z0-9_-`), such as
+`"gpt-5.1-codex"`, `"llama3:8b"`, or `"opus[1m]"`; unquoted, a dot splits it into nested tables
+and other characters are invalid TOML. `effort` shares its table with the model or provider names
+below it: `[agent.claude.effort]` configures a model named `effort`, but cannot coexist with an
+`effort` key on `[agent.claude]`.
 
 The section layers like any other config (install, home, project, workspace) and is read once,
 at startup, from the merged config. It is validated strictly; an invalid section is a fatal
@@ -340,9 +346,11 @@ config error (exit 1) before anything runs:
 - tables nest no deeper than `[agent.claude.MODEL]`, `[agent.codex.MODEL]`, or
   `[agent.pi.PROVIDER.MODEL]`.
 
-A non-empty `thinking` is never overridden, and `AgentCommand` is unaffected. The AgL value itself keeps
-`thinking = ""` (printing shows it); `Session::default().agent` reports the agent the default
-session runs with, effort applied.
+A non-empty `thinking` is never overridden, and `AgentCommand` is unaffected. The AgL value itself
+keeps `thinking = ""` (printing shows it), and so does `Session::open(a).agent`, which is `a` as
+given; `Session::default().agent` instead reports the agent the default session runs with, effort
+applied. Agent trace records carry both: `agent`, the value as given, and `effective_agent`, the
+agent dispatched.
 
 ### Agent command interpolation
 

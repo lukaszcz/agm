@@ -179,6 +179,41 @@ def test_every_retry_attempt_carries_the_configured_effort(
         assert _flag_values(argv, "--effort") == ["high"]
 
 
+_BUILTIN_DEFAULT_ASK = (
+    "import std/config\n"
+    "std/config::default-sandbox := AgentSandbox::Disabled\n"
+    'let answer: text = ask("hi")\n'
+    "print answer\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ('[agent.claude.sonnet]\neffort = "high"\n', ["high"]),
+        ('[agent.claude]\neffort = "low"\n', ["low"]),
+        (None, []),
+    ],
+    ids=["model-table", "cli-table", "unconfigured"],
+)
+def test_a_plain_ask_on_the_builtin_default_agent_takes_the_configured_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
+    config: str | None,
+    expected: list[str],
+) -> None:
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+
+    result = _exec(tmp_path, monkeypatch, _BUILTIN_DEFAULT_ASK, home_config=config)
+
+    assert result.exit_code == 0, result.output
+    [(_prompt, argv)] = fake_agent_transport.calls
+    assert argv[0] == "claude"
+    assert _flag_values(argv, "--model") == ["sonnet"]
+    assert _flag_values(argv, "--effort") == expected
+
+
 def test_exec_without_configured_effort_passes_no_effort_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_agent_transport: FakeAgentTransport
 ) -> None:

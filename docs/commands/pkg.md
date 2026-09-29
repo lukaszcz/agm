@@ -143,7 +143,9 @@ program = "review-tools/main::batch"
   review`. The equivalent quoted flat form, `[commands."devel review"]`, is also accepted. A path
   cannot start with a built-in command or root alias (`wsp`, `wt`). `pkg check`/`create`/`install`
   also reject a path (including an `@command` path) starting with one of AGM's config sections,
-  like a package name; an already-installed registration still loads, dispatches, and uninstalls.
+  like a package name; an already-installed registration still loads, dispatches, and uninstalls,
+  but one starting with a schema section (`agent`, `deps`, `modules`, `packages`, `params`) gets
+  no command-path config table, exact or inherited.
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its signature arguments and closure module

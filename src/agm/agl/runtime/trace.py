@@ -150,6 +150,7 @@ class TraceStore:
         self,
         *,
         agent: dict[str, object],
+        effective_agent: dict[str, object],
         attempt: int,
         max_attempts: int,
         prompt: str,
@@ -159,6 +160,7 @@ class TraceStore:
         json_schema: object | None,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
+        """Record one agent attempt: its AgL *agent* value and the *effective_agent* spec run."""
         if self._path is None:
             return
         self._emit(
@@ -166,6 +168,7 @@ class TraceStore:
             self._with_span(
                 {
                     "agent": agent,
+                    "effective_agent": effective_agent,
                     "attempt": attempt,
                     "max_attempts": max_attempts,
                     "prompt": prompt,

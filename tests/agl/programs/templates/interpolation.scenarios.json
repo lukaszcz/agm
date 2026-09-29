@@ -23,7 +23,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "contains": [
@@ -36,7 +36,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 1,
             "contains": [
@@ -47,7 +47,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 2,
             "contains": [
@@ -58,7 +58,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 3,
             "contains": [
@@ -94,7 +94,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "contains": [

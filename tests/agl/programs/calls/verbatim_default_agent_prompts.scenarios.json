@@ -26,7 +26,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "equals": "Summarize release notes in one line."
@@ -47,7 +47,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 1,
             "starts_with": "# Review release notes\n- correctness\n- style",
@@ -60,7 +60,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 2,
             "starts_with": "Call-form review for release notes.",
@@ -88,7 +88,7 @@
         ]
       },
       "expect": {
-        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\n",
+        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"sonnet\", thinking = \"\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"\") 1 Review\n",
         "calls": {
           "ask": 3,
           "reviewer": 1
@@ -98,7 +98,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "equals": "Summarize migration guide in one line."
@@ -115,7 +115,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 1,
             "starts_with": "# Review migration guide\n- correctness\n- style",
@@ -128,7 +128,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 2,
             "starts_with": "Call-form review for migration guide.",

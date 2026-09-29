@@ -62,7 +62,7 @@ _MODULES: dict[str, str] = {
         "import std/agent::{Agent, AgentSandbox}\n"
         "import std/option::{Option}\n"
         "\n"
-        'builtin var default-agent: Agent = AgentClaude("sonnet", "medium")\n'
+        'builtin var default-agent: Agent = AgentClaude("sonnet")\n'
         "builtin var default-sandbox: AgentSandbox = Disabled\n"
         "builtin var strict-json: bool = false\n"
         "builtin var timeout: Option[text] = None\n"

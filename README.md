@@ -254,7 +254,8 @@ run inside the `agm run` sandbox by default (see `agm run` below), and `sandbox 
 `sandbox = Disabled` opts one out (an explicit `sandbox` requires an explicit agent); `exec` runs
 unsandboxed unless given `sandbox = Some(Sandbox(...))`. Host `Agent` arguments accept compact
 forms such as `claude/sonnet:medium`, `codex/o3:high`, and `pi/openai/gpt-5:low`; other text is a
-custom command. An `[agent]` config section sets default efforts per agent CLI, provider, or model.
+custom command. An `[agent]` config section sets default efforts for AgL `Agent` values per agent
+CLI, provider, or model.
 
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,

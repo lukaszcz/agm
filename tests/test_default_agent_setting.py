@@ -68,7 +68,7 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     _assert_shape(
         result.bindings["initial"],
         result.bindings["initial-is-claude"],
-        agent_value("AgentClaude", model="sonnet", thinking="medium"),
+        agent_value("AgentClaude", model="sonnet", thinking=""),
     )
     _assert_shape(
         result.bindings["updated"],

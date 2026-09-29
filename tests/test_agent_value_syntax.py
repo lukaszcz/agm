@@ -25,6 +25,8 @@ def _decode(text: str, *, fallback: bool = True) -> object:
     [
         ("claude/opus", AgentClaude("opus", "")),
         ("claude/opus:high", AgentClaude("opus", "high")),
+        ("claude/opus[1m]", AgentClaude("opus[1m]", "")),
+        ("claude/claude-sonnet-4-6[1m]:high", AgentClaude("claude-sonnet-4-6[1m]", "high")),
         ("claude/sonnet-medium", AgentClaude("sonnet-medium", "")),
         (
             "claude/claude-sonnet-4-5:experimental",
@@ -38,6 +40,7 @@ def _decode(text: str, *, fallback: bool = True) -> object:
         ("pi/claude/sonnet:high", AgentPi("claude", "sonnet", "high")),
         ("anthropic/claude-opus", AgentPi("anthropic", "claude-opus", "")),
         ("anthropic/claude-opus:custom", AgentPi("anthropic", "claude-opus", "custom")),
+        ("anthropic/x[1m]", AgentPi("anthropic", "x[1m]", "")),
         ("ollama/llama3:8b:high", AgentPi("ollama", "llama3:8b", "high")),
         ("bin/agent", AgentPi("bin", "agent", "")),
         ("my.host/org@v1+x:a_b-c", AgentPi("my.host", "org@v1+x", "a_b-c")),
@@ -75,6 +78,8 @@ def test_agent_shorthand_selects_a_native_agent(text: str, expected: object) -> 
         "provider/model:hi:gh!",
         "provider/mo$del",
         " provider/model",
+        "prov[1]/model",
+        "provider/model:hi[gh]",
     ],
 )
 def test_text_outside_the_shorthand_forms_is_not_shorthand(text: str) -> None:
@@ -105,6 +110,8 @@ def test_text_outside_the_shorthand_forms_is_not_shorthand(text: str) -> None:
         "claude/op$us",
         "pi/open:ai/gpt",
         "codex/o3:hi:gh!",
+        "claude/opus:hi[gh]",
+        "pi/open[ai]/gpt",
     ],
 )
 def test_malformed_native_prefix_is_a_shorthand_error(text: str) -> None:

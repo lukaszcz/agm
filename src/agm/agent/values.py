@@ -5,13 +5,21 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from agm.agent.spec import AgentClaude, AgentCodex, AgentPi, AgentSpec, payload_items
+from agm.agent.spec import (
+    NATIVE_AGENT_SPECS,
+    AgentPi,
+    AgentSpec,
+    NativeAgentSpec,
+    model_fields,
+    payload_items,
+)
 
 __all__ = ["AgentShorthandError", "agent_spec_shape", "parse_agent_shorthand"]
 
-# Provider and effort characters; a model may also contain ``:``.
+# Provider and effort characters; a model may also contain ``:``, ``[`` and ``]``
+# (``opus[1m]``).
 _SEGMENT = re.compile(r"[A-Za-z0-9._@+-]+")
-_MODEL = re.compile(r"[A-Za-z0-9._@+:-]+")
+_MODEL = re.compile(r"[A-Za-z0-9._@+:\[\]-]+")
 
 
 class AgentShorthandError(ValueError):
@@ -28,34 +36,37 @@ def _model_effort(text: str) -> tuple[str, str] | None:
     return model, effort
 
 
-def _provider_shorthand(parts: list[str]) -> AgentPi | None:
-    """Read ``PROVIDER/MODEL[:EFFORT]`` segments as a Pi agent."""
-    if len(parts) != 2 or not _SEGMENT.fullmatch(parts[0]):
-        return None
-    if (model_effort := _model_effort(parts[1])) is None:
-        return None
-    return AgentPi(parts[0], *model_effort)
+def _shorthand_reader(
+    spec_cls: type[NativeAgentSpec],
+) -> Callable[[list[str]], NativeAgentSpec | None]:
+    """Return a reader of *spec_cls*'s ``[PROVIDER/]MODEL[:EFFORT]`` segments."""
+    levels = len(model_fields(spec_cls))
 
-
-def _model_shorthand(
-    agent: Callable[[str, str], AgentSpec],
-) -> Callable[[list[str]], AgentSpec | None]:
-    """Return a reader of one ``MODEL[:EFFORT]`` segment into *agent*."""
-
-    def read(parts: list[str]) -> AgentSpec | None:
-        if len(parts) != 1 or (model_effort := _model_effort(parts[0])) is None:
+    def read(parts: list[str]) -> NativeAgentSpec | None:
+        *names, last = parts
+        if len(parts) != levels or not all(_SEGMENT.fullmatch(name) for name in names):
             return None
-        return agent(*model_effort)
+        if (model_effort := _model_effort(last)) is None:
+            return None
+        names.extend(model_effort)
+        return spec_cls(*names)
 
     return read
 
 
+def _shorthand_form(spec_cls: type[NativeAgentSpec]) -> str:
+    """The expected-form text for *spec_cls*, e.g. ``pi/PROVIDER/MODEL[:EFFORT]``."""
+    return "/".join((spec_cls.CLI_NAME, *map(str.upper, model_fields(spec_cls)))) + "[:EFFORT]"
+
+
 # Native prefix (matched case-insensitively) -> (expected form, segment reader).
-_NATIVE_SHORTHANDS: dict[str, tuple[str, Callable[[list[str]], AgentSpec | None]]] = {
-    "claude": ("claude/MODEL[:EFFORT]", _model_shorthand(AgentClaude)),
-    "codex": ("codex/MODEL[:EFFORT]", _model_shorthand(AgentCodex)),
-    "pi": ("pi/PROVIDER/MODEL[:EFFORT]", _provider_shorthand),
+_NATIVE_SHORTHANDS: dict[str, tuple[str, Callable[[list[str]], NativeAgentSpec | None]]] = {
+    spec_cls.CLI_NAME: (_shorthand_form(spec_cls), _shorthand_reader(spec_cls))
+    for spec_cls in NATIVE_AGENT_SPECS
 }
+
+# Any other ``PROVIDER/MODEL[:EFFORT]`` text reads as a Pi agent.
+_provider_shorthand = _shorthand_reader(AgentPi)
 
 
 def parse_agent_shorthand(text: str) -> AgentSpec | None:
@@ -65,9 +76,9 @@ def parse_agent_shorthand(text: str) -> AgentSpec | None:
     ``pi/PROVIDER/MODEL[:EFFORT]``, and any other ``PROVIDER/MODEL[:EFFORT]``
     (Pi). The effort follows the final colon, is opaque to AGM, and defaults
     to ``""``. Provider and effort are ``[A-Za-z0-9._@+-]+``; the model also
-    admits ``:``. Text whose left-stripped first segment is a native prefix
-    (any case) but which breaks that form -- surrounding whitespace included
-    -- raises :class:`AgentShorthandError`.
+    admits ``:``, ``[`` and ``]``. Text whose left-stripped first segment is a
+    native prefix (any case) but which breaks that form -- surrounding
+    whitespace included -- raises :class:`AgentShorthandError`.
     """
     stripped = text.lstrip()
     prefix, *parts = stripped.split("/")

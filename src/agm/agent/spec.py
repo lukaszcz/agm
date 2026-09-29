@@ -24,7 +24,10 @@ __all__ = [
     "AgentPi",
     "AGENT_SPECS",
     "AgentSpec",
+    "NATIVE_AGENT_SPECS",
+    "NativeAgentSpec",
     "PermissionMode",
+    "model_fields",
     "payload_fields",
     "payload_items",
     "SessionTransport",
@@ -87,6 +90,7 @@ class AgentClaude:
     model: str
     thinking: str
 
+    CLI_NAME: ClassVar[str] = "claude"
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
@@ -138,6 +142,7 @@ class AgentCodex:
     model: str
     thinking: str
 
+    CLI_NAME: ClassVar[str] = "codex"
     prompt_via_stdin: ClassVar[bool] = True
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
@@ -191,6 +196,7 @@ class AgentPi:
     model: str
     thinking: str
 
+    CLI_NAME: ClassVar[str] = "pi"
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.RPC
 
@@ -238,6 +244,11 @@ class AgentPi:
 
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
+
+#: A specification that selects a native agent CLI by ``CLI_NAME``.
+NativeAgentSpec: TypeAlias = AgentClaude | AgentCodex | AgentPi
+
+NATIVE_AGENT_SPECS: tuple[type[NativeAgentSpec], ...] = (AgentClaude, AgentCodex, AgentPi)
 
 #: Runtime projection of the checked standard ``Agent`` variants.
 AGENT_SPECS: Mapping[str, type[AgentSpec]] = MappingProxyType(
@@ -290,6 +301,11 @@ def payload_fields(spec_cls: type[AgentSpec]) -> tuple[str, ...]:
     ``dataclasses.fields`` it is typed.
     """
     return spec_cls.__match_args__
+
+
+def model_fields(spec_cls: type[NativeAgentSpec]) -> tuple[str, ...]:
+    """*spec_cls*'s model-naming fields, outermost first: every payload field but ``thinking``."""
+    return tuple(name for name in payload_fields(spec_cls) if name != "thinking")
 
 
 def payload_items(spec: AgentSpec) -> dict[str, str]:

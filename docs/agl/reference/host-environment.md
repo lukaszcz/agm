@@ -326,7 +326,7 @@ key:
 | --- | -------- | ---------------- |
 | `trace` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
-| `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
+| `default-agent` | `Agent` | `AgentClaude("sonnet")` (effort from `[agent]`, else the CLI's own) |
 | `default-sandbox` | `AgentSandbox` | `Sandbox` (every field defaulted) |
 | `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
@@ -415,6 +415,16 @@ layer; a leaf an inherited table sets still joins cross-route ambiguity
 checks, but is exempt from undeclared-key warnings, since a descendant
 command may be the one that consumes it.
 
+AGM's own schema sections — `[agent]`, `[deps]`, `[modules]`, `[packages]`,
+and `[params]` — name user-chosen entries in their nested tables, so no route
+passes through one at any depth. A loose file or module whose stem is `agent`
+therefore has no `[agent]` or `[agent.<program>]` config route: such tables
+are validated as [`[agent]` effort config](../../commands/agl.md#agent-effort-defaults)
+instead, and the other schema sections likewise keep their own meaning. A
+package command registered under a schema-section first word by an earlier
+install (validation now rejects one) has no command-path config table, exact
+or inherited.
+
 A config-table string value must be valid Unicode, the same requirement a
 CLI token or `@opt-env` variable is held to above; a value holding a
 surrogate code point is a host invocation error.
@@ -479,8 +489,11 @@ Tracing records only observable boundaries:
 - run start and end (with success/failure);
 - stdout emitted by `print`;
 - each agent request and response. A request records the fully composed prompt,
-  selected agent and payload, attempt information, and output contract; a
-  response records its full content or transport/cancellation outcome;
+  the selected `Agent` value as given (`agent`, variant and payload), the agent
+  actually dispatched after [`[agent]` effort defaults](../../commands/agl.md#agent-effort-defaults)
+  (`effective_agent`, a `$case`-tagged object), attempt information, and output
+  contract; a response records its full content or transport/cancellation
+  outcome;
 - every `exec` invocation (command, exit code, duration, stdout, stderr, and
   timeout flag);
 - an exception only when it escapes the program uncaught;

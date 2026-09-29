@@ -21,7 +21,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "schema_contains": [
@@ -52,7 +52,7 @@
             "agent": {
               "$case": "AgentClaude",
               "model": "sonnet",
-              "thinking": "medium"
+              "thinking": ""
             },
             "call": 0,
             "schema_contains": [

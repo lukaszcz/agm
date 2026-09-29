@@ -65,7 +65,7 @@ def resolve_qualified_values(
     tiers_by_key = {
         key: (
             route_table_paths(key.module_segments, key.scope_path, key.command_paths),
-            *_inherited_group_paths(key.command_paths),
+            *_inherited_group_paths(_config_command_paths(key.command_paths)),
         )
         for key in unique_keys
     }
@@ -203,7 +203,7 @@ def _leaf_table_paths(
 ) -> tuple[tuple[str, ...], ...]:
     """Return one route's exact-route paths plus its inherited group tables, deepest first."""
     paths = list(route_table_paths(module_segments, scope_path, command_paths))
-    for tier in _inherited_group_paths(command_paths):
+    for tier in _inherited_group_paths(_config_command_paths(command_paths)):
         paths.extend(tier)
     return tuple(paths)
 
@@ -370,13 +370,13 @@ def route_table_paths(
     anchor, then each *command path* the declaration is registered under, whose
     own segments are the whole table path: ``agm dev review`` reads
     ``[dev.review]``. AGM's top-level configuration sections are excluded,
-    except that a
-    single-segment loose-file module named after a *command* may address one of
-    its nested declaration tables: a command section holds its own settings as
-    leaf keys, so a table one level below it is free. A section keyed by AGM's
-    own schema (:data:`SCHEMA_CONFIG_SECTION_NAMES`) is excluded at every
-    depth, because its nested tables already belong to user-chosen names, so a
-    loose file named ``packages.agl`` has no config table for its programs at
+    except that a single-segment loose-file module named after a *command* may
+    address one of its nested declaration tables: a command section holds its
+    own settings as leaf keys, so a table one level below it is free. A
+    section keyed by AGM's own schema (:data:`SCHEMA_CONFIG_SECTION_NAMES`) is
+    excluded at every depth, because its nested tables already belong to
+    user-chosen names, so a loose file named ``packages.agl`` -- or a command
+    registered as ``agent review`` -- has no config table for its programs at
     all. Value resolution and leaf enumeration both start from this exact-route
     list before either adds any inherited group-table paths of its own.
     """
@@ -396,14 +396,24 @@ def route_table_paths(
         if (not is_reserved_root or is_nested_loose_file_route) and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)
-    for command_path in command_paths:
-        # A registered command path never starts at a reserved section: package
-        # validation rejects such a registration, so a command table cannot
-        # collide with AGM's own configuration schema.
+    for command_path in _config_command_paths(command_paths):
         if command_path not in seen_paths:
             seen_paths.add(command_path)
             paths.append(command_path)
     return tuple(paths)
+
+
+def _config_command_paths(
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
+    """*command_paths* that address config-file tables: none rooted at a schema section.
+
+    Package validation rejects such a registration, but the activation index
+    tolerates one from an earlier install (e.g. ``agent review``). Like a loose
+    file named after a schema section, it has no config table, exact or
+    inherited, so its tables never collide with AGM's own schema.
+    """
+    return tuple(path for path in command_paths if path[0] not in SCHEMA_CONFIG_SECTION_NAMES)
 
 
 def _table_at(config: TomlDict, path: tuple[str, ...]) -> dict[str, object] | None:

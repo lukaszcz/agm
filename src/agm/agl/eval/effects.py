@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ContextManager, NoReturn, Protocol, assert_never, cast
 
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
+from agm.agent.values import agent_spec_shape
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
@@ -599,6 +600,7 @@ class EffectHandlers:
         """Trace, dispatch, and map one request sent through a session."""
         self._ctx._trace.agent_request(
             agent=self._agent_trace_value(agent_value),
+            effective_agent=agent_spec_shape(request.agent),
             attempt=request.attempt,
             max_attempts=max_attempts,
             prompt=request.prompt,

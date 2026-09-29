@@ -14,7 +14,14 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
+from agm.agent.spec import (
+    NATIVE_AGENT_SPECS,
+    AgentCommand,
+    AgentSpec,
+    NativeAgentSpec,
+    model_fields,
+    payload_items,
+)
 from agm.core.toml import TomlDict, toml_dict
 
 __all__ = [
@@ -29,7 +36,9 @@ __all__ = [
 AgentSpecResolver: TypeAlias = Callable[[AgentSpec], AgentSpec]
 
 #: How many name levels each CLI's table nests below ``[agent.<cli>]``.
-_CLI_NAME_LEVELS: Mapping[str, int] = MappingProxyType({"claude": 1, "codex": 1, "pi": 2})
+_CLI_NAME_LEVELS: Mapping[str, int] = MappingProxyType(
+    {spec_cls.CLI_NAME: len(model_fields(spec_cls)) for spec_cls in NATIVE_AGENT_SPECS}
+)
 
 
 class AgentConfigError(ValueError):
@@ -90,14 +99,11 @@ def with_default_effort(spec: AgentSpec, config: AgentConfig) -> AgentSpec:
     return spec
 
 
-def _effort_table_paths(spec: AgentClaude | AgentCodex | AgentPi) -> list[tuple[str, ...]]:
+def _effort_table_paths(spec: NativeAgentSpec) -> list[tuple[str, ...]]:
     """``[agent]`` table paths for *spec*, most specific first; empty names address none."""
-    paths: list[tuple[str, ...]]
-    if isinstance(spec, AgentPi):
-        paths = [("pi", spec.provider, spec.model), ("pi", spec.provider), ("pi",)]
-    else:
-        cli = "claude" if isinstance(spec, AgentClaude) else "codex"
-        paths = [(cli, spec.model), (cli,)]
+    items = payload_items(spec)
+    names = tuple(items[name] for name in model_fields(type(spec)))
+    paths = [(spec.CLI_NAME, *names[:depth]) for depth in range(len(names), -1, -1)]
     return [path for path in paths if all(path)]
 
 

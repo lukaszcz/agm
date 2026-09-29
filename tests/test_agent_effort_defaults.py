@@ -14,6 +14,7 @@ from agm.agent.effort import (
     with_default_effort,
 )
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
+from agm.agent.values import parse_agent_shorthand
 from agm.config.general import load_merged_config
 from agm.core.toml import TomlDict
 
@@ -135,3 +136,17 @@ def test_the_agent_section_merges_across_config_files(tmp_path: Path) -> None:
         "gpt-5.1-codex", "xhigh"
     )
     assert with_default_effort(AgentCodex("o3", ""), config) == AgentCodex("o3", "low")
+
+
+def test_a_bracketed_model_table_configures_its_shorthand(tmp_path: Path) -> None:
+    """A quoted ``[agent.claude."opus[1m]"]`` table addresses ``claude/opus[1m]``."""
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[agent.claude."opus[1m]"]\neffort = "high"\n')
+
+    config = AgentConfig.from_merged(load_merged_config(home=home, proj_dir=None, cwd=tmp_path))
+
+    spec = parse_agent_shorthand("claude/opus[1m]")
+    assert spec is not None
+    assert with_default_effort(spec, config) == AgentClaude("opus[1m]", "high")
+    assert with_default_effort(AgentClaude("opus", ""), config) == AgentClaude("opus", "")

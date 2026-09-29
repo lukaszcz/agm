@@ -18,6 +18,7 @@ import pytest
 import semver
 
 import agm.commands.exec as exec_command
+from agm.agent.effort import default_effort_resolver
 from agm.agl import PipelineDriver
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
@@ -319,6 +320,34 @@ class TestAgentCallRecord:
         assert request["agent"] == {
             "variant": "AgentClaude",
             "payload": {"model": "sonnet", "thinking": "high"},
+        }
+
+    def test_agent_request_records_the_effective_agent_after_host_defaults(
+        self, tmp_path: Path
+    ) -> None:
+        """The AgL value keeps its empty thinking; the dispatched spec shows the effort."""
+        trace_path = tmp_path / "trace.jsonl"
+        runtime = PipelineDriver(
+            resolve_agent_spec=default_effort_resolver({"agent": {"claude": {"effort": "high"}}}),
+            agent_dispatcher=_agent_returning("ok"),
+            get_sandbox_context=None,
+        )
+        run_inline_code(
+            runtime,
+            'let a = AgentClaude("sonnet", "")\nlet x: text = a.ask("review")\nx',
+            trace_file=trace_path,
+        )
+        request = next(
+            record for record in _load_jsonl(trace_path) if record["kind"] == "agent_request"
+        )
+        assert request["agent"] == {
+            "variant": "AgentClaude",
+            "payload": {"model": "sonnet", "thinking": ""},
+        }
+        assert request["effective_agent"] == {
+            "$case": "AgentClaude",
+            "model": "sonnet",
+            "thinking": "high",
         }
 
     def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
@@ -1151,6 +1180,7 @@ class TestTraceStoreProperties:
         ts.run_start()
         ts.agent_request(
             agent={"variant": "AgentCommand", "payload": {"command": "x"}},
+            effective_agent={"$case": "AgentCommand", "command": "x"},
             attempt=0,
             max_attempts=1,
             prompt="p",

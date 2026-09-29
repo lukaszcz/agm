@@ -8192,7 +8192,7 @@ class TestSessionOpen:
         config = second_root / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
-                'AgentClaude("sonnet", "medium")', 'AgentCommand("second-root")'
+                'AgentClaude("sonnet")', 'AgentCommand("second-root")'
             ),
             encoding="utf-8",
         )
@@ -8280,7 +8280,7 @@ class TestSessionOpen:
         ].display_name
         assert default_display.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
         assert default_result.value.fields["model"] == TextValue("sonnet")
-        assert default_result.value.fields["thinking"] == TextValue("medium")
+        assert default_result.value.fields["thinking"] == TextValue("")
 
     def test_reopened_sessions_keep_their_library_values_after_eviction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

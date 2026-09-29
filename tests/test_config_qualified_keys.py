@@ -260,6 +260,25 @@ class TestQualifiedConfigKeys:
             ): "high"
         }
 
+    def test_a_schema_rooted_command_path_has_no_config_table(self) -> None:
+        """A command registered under a schema section (``agent review``) reads no
+        ``[agent.review]`` or inherited ``[agent]`` table, which belong to AGM's schema."""
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("agent", "review"),)
+        )
+        config = _config({"agent": {"strict": True, "review": {"strict": True}}})
+
+        assert ("agent", "review") not in route_table_paths(
+            key.module_segments, key.scope_path, key.command_paths
+        )
+        assert resolve_qualified_values(config, (key,)) == {}
+        assert (
+            configured_leaf_table_candidates(
+                config, key.module_segments, key.scope_path, key.command_paths
+            )
+            == {}
+        )
+
     def test_configured_leaf_tables_report_command_path_leaves(self) -> None:
         config = _config({"dev": {"review": {"strict": True}}})
 

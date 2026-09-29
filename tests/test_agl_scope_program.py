@@ -2602,6 +2602,7 @@ class TestMethodOrphanRule:
         (
             ("def Point() -> int = 1", "Point"),
             ("enum Tree = Node\ndef Tree::Point() -> int = 1", "Point"),
+            ("enum Tree = Node\ndef Tree::Point() -> int = 1", "Tree::Point"),
             ("enum Tree = Node", "Tree::Missing"),
             ("record Point", "Point::Nested"),
         ),

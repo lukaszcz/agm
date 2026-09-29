@@ -778,15 +778,25 @@ class ScopeNode:
         """
         scope: ScopeNode | None = self
         while scope is not None:
-            ref = scope.bindings.get(name)
-            if ref is None and scope.scope_path:
-                ref = scope.members.get(name)
-                if ref is not None and member_predicate is not None and not member_predicate(ref):
-                    ref = None
+            ref = scope.own_binding(name, member_predicate=member_predicate)
             if ref is not None:
                 return ref
             scope = scope.parent
         return None
+
+    def own_binding(
+        self, name: str, *, member_predicate: Callable[[BindingRef], bool] | None = None
+    ) -> BindingRef | None:
+        """Return this layer's own lexical binding or named-scope member *name*.
+
+        A named-scope member *member_predicate* rejects is not one.
+        """
+        ref = self.bindings.get(name)
+        if ref is None and self.scope_path:
+            ref = self.members.get(name)
+            if ref is not None and member_predicate is not None and not member_predicate(ref):
+                ref = None
+        return ref
 
     def entry_copy(self) -> "ScopeNode":
         """Copy this layer into a REPL entry's own image.

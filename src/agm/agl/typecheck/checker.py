@@ -6237,19 +6237,20 @@ class _Checker:
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._record_constructor_pattern_ref(pattern, subj_type)
             if pattern.qualifier is not None:
+                # An applied owner must be an enum declaring the member inline.
+                self._applied_member(pattern.qualifier, pattern.name, pattern.span)
                 local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
-                if local_enum is not None:
+                # A record merely nested beneath the enum's path is no member:
+                # its own constructor, below, decides it.
+                if local_enum is not None and self._env.type_table.declares_inline_member(
+                    local_enum[1], pattern.name
+                ):
                     _local_owner, enum_type, type_params = local_enum
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
                     ):
                         named = self._env.owner_inline_member(enum_type, pattern.name)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
-                # A non-enum applied owner (`Owner[T]::name`) is never a valid
-                # constructor-pattern qualifier here: `_local_qualified_enum`
-                # above already selects every owner that instantiates to an
-                # enum, and scope's own candidate resolution already rejects
-                # a qualifier naming no such owner before this function runs.
                 # A constructor scope resolved for this record already names it.
                 elif constructor_ref is None:
                     raise AglTypeError(

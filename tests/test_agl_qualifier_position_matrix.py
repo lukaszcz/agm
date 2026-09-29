@@ -966,8 +966,8 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
 # ---------------------------------------------------------------------------
 # A nearer ``use``-opened scope region blocks a farther, same-spelled
 # imported type from ever merging into the leading lookup -- the one lookup
-# shared by a bare type name (``_validate_bare_type_name``), a qualifier's
-# leading segment, and a ``def Owner::method`` receiver.
+# shared by a bare type name, a qualifier's leading segment, and a
+# ``def Owner::method`` receiver.
 # ---------------------------------------------------------------------------
 
 _NEAREST_REGION_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
@@ -1298,71 +1298,95 @@ class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
 # verdict the local owner's member set alone decides.
 # ---------------------------------------------------------------------------
 
-_CHAIN_LIB = (
-    "scope Geo\n  record Point\n    x: int\n  enum Shape\n    | Circle\n    | Square\nend Geo\n"
+# ``Geo`` declares a member at every chain length: ``Geo::Point`` (2),
+# ``Geo::Shape::Circle`` (3) and ``Geo::Deep::Kind::Round`` (4). Declared
+# locally, every one is accepted; imported beside a local ``Geo`` region
+# declaring only ``Deep`` (empty of ``Kind``), every one is an unknown member
+# of that region -- at length 4 one level past a walked hit.
+_CHAIN_GEO = (
+    "scope Geo\n  record Point\n    x: int\n  enum Shape = Circle | Square\n"
+    "\n  scope Deep\n    enum Kind = Round | Flat\n  end Deep\nend Geo"
 )
-_CHAIN_LOCAL = "scope Geo\n  enum Kind = Round | Flat\nend Geo"
-
-_CHAIN_LEN2_POS: dict[str, str] = {
-    "value": "Geo::Point(x = 1)",
-    "annot": "fn(p: Geo::Point) => 1",
-    "pattern": "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
-}
-_CHAIN_LEN3_POS: dict[str, str] = {
-    "value": "Geo::Shape::Circle",
-    "annot": "fn(p: Geo::Shape::Circle) => 1",
-    "pattern": "case 1 of\n  | Geo::Shape::Circle => 1\n  | _ => 2",
-    "is": "1 is Geo::Shape::Circle",
-}
+_CHAIN_LOCAL_DEEP = "scope Geo\n\n  scope Deep\n    enum Other = O\n  end Deep\nend Geo"
 _CHAIN_NESTED_LOCAL = (
     "scope Geo\n\n  scope Shape\n    enum Kind = Round | Flat\n  end Shape\nend Geo"
 )
-_CHAIN_LEN3_HEADER = ("import shapes::*", _CHAIN_LOCAL)
-_CHAIN_LEN4_HEADER = (_CHAIN_NESTED_LOCAL,)
+# Each length's spelling and, for a member, its enum.
+_CHAIN_SPELLINGS: dict[int, tuple[str, str | None]] = {
+    2: ("Geo::Point", None),
+    3: ("Geo::Shape::Circle", "Geo::Shape"),
+    4: ("Geo::Deep::Kind::Round", "Geo::Deep::Kind"),
+}
 
 
-class TestLocalScopeChainLengthsAgree:
-    """A decisive local scope's missing member rejects at length 2 and length 3 alike."""
+def _chain_probes(length: int, *, declared: bool) -> dict[str, str]:
+    """Every position's probe of the length-*length* spelling, well typed when *declared*."""
+    q, owner = _CHAIN_SPELLINGS[length]
+    value = f"{q}(x = 1)" if owner is None else q
+    probes = {
+        "value": value,
+        "annot": f"fn(p: {q}) => 1",
+        "alias": f"type AA = {q}\nfn(p: AA) => 1",
+        "tyarg": f"fn(p: array[{q}]) => 1",
+    }
+    if owner is None:
+        probes["pattern"] = (
+            f"case {value} of\n  | {q}(x) => x"
+            if declared
+            else f"case 1 of\n  | {q}(x) => x\n  | _ => 2"
+        )
+    elif declared:
+        probes["pattern"] = f"let v: {owner} = {q}\ncase v of\n  | {q} => 1\n  | _ => 2"
+        probes["is"] = f"let v: {owner} = {q}\nv is {q}"
+    else:
+        probes["pattern"] = f"case 1 of\n  | {q} => 1\n  | _ => 2"
+        probes["is"] = f"1 is {q}"
+    return probes
 
-    @pytest.mark.parametrize("pos_name", sorted(_CHAIN_LEN2_POS))
-    def test_length_two_file(self, tmp_path: Path, pos_name: str) -> None:
-        entry = _CHAIN_LEN2_POS[pos_name]
-        src = "\n".join(["import shapes::*", _CHAIN_LOCAL, entry])
-        phase, cls, span, _identity = file_verdict(tmp_path, {"entry": src, "shapes": _CHAIN_LIB})
-        assert (phase, cls) == ("scope", UnknownMemberError)
-        assert span is not None
-        assert src[span.start_offset : span.end_offset] == "Geo::Point"
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_CHAIN_LEN3_HEADER) + 1))
-    def test_length_three(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+def _chain_identities(length: int) -> dict[str, str]:
+    """Each accepted length-*length* probe's identity."""
+    q, owner = _CHAIN_SPELLINGS[length]
+    return {
+        "value": f"record {q}\n  x: int" if owner is None else f"record {q}",
+        "annot": f"{q} -> int",
+        "alias": f"{q} -> int",
+        "tyarg": f"array[{q}] -> int",
+        "pattern": "int",
+        "is": "bool",
+    }
+
+
+class TestLocalScopeChainAtEveryLength:
+    """A local scope's chain is walked exactly at lengths 2 to 4, in every position."""
+
+    @pytest.mark.parametrize("length", sorted(_CHAIN_SPELLINGS))
+    @pytest.mark.parametrize("sizes", grouping_params(3))
+    def test_missing_member(self, tmp_path: Path, sizes: tuple[int, ...], length: int) -> None:
+        probes = _chain_probes(length, declared=False)
         assert_verdicts_for_grouping(
             tmp_path,
-            {"shapes": _CHAIN_LIB},
-            _CHAIN_LEN3_HEADER,
+            {"shapes": _CHAIN_GEO},
+            ("import shapes::*", _CHAIN_LOCAL_DEEP),
             sizes,
-            _CHAIN_LEN3_POS,
-            {pos: ("scope", UnknownMemberError) for pos in _CHAIN_LEN3_POS},
-            span_texts={pos: "Geo::Shape::Circle" for pos in _CHAIN_LEN3_POS},
+            probes,
+            {pos: ("scope", UnknownMemberError) for pos in probes},
+            span_texts=dict.fromkeys(probes, _CHAIN_SPELLINGS[length][0]),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_CHAIN_LEN4_HEADER) + 1))
-    def test_length_four_misses_one_level_past_a_walked_hit(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
-        """A 4-segment chain whose first two segments walk successfully rejects at the third.
-
-        ``Shape`` nested inside the local ``Geo`` region exists (the walk's
-        own first step hits), but nothing beneath it is named ``Missing``:
-        the walk's own second step is what rejects, not its first.
-        """
-        decls = (*_CHAIN_LEN4_HEADER, "Geo::Shape::Missing::X")
-        assert_verdict_for_grouping(
+    @pytest.mark.parametrize("length", sorted(_CHAIN_SPELLINGS))
+    @pytest.mark.parametrize("sizes", grouping_params(2))
+    def test_declared_member(self, tmp_path: Path, sizes: tuple[int, ...], length: int) -> None:
+        probes = _chain_probes(length, declared=True)
+        identities = _chain_identities(length)
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
-            decls,
+            (_CHAIN_GEO,),
             sizes,
-            ("scope", UnknownMemberError),
-            span_text="Geo::Shape::Missing::X",
+            probes,
+            {pos: _ACCEPTED for pos in probes},
+            expected_identities={pos: identities[pos] for pos in probes},
         )
 
 
@@ -1392,57 +1416,6 @@ def test_local_scope_partial_miss_clashes_with_a_same_named_route(
         ("scope", RouteClashError),
         span_text="Geo::Shape::Missing::X",
     )
-
-
-_ACCEPTED_CHAIN_LEN2_POS: dict[str, str] = {
-    "value": "Geo::Point(x = 1)",
-    "annot": "fn(p: Geo::Point) => 1",
-    "pattern": "let v: Geo::Point = Geo::Point(x = 1)\ncase v of\n  | Geo::Point(x) => x",
-}
-_ACCEPTED_CHAIN_LEN3_POS: dict[str, str] = {
-    "value": "Geo::Shape::Circle",
-    "annot": "fn(p: Geo::Shape::Circle) => 1",
-    "pattern": (
-        "let v: Geo::Shape = Geo::Shape::Circle\ncase v of\n  | Geo::Shape::Circle => 1\n  | _ => 2"
-    ),
-    "is": "let v: Geo::Shape = Geo::Shape::Circle\nv is Geo::Shape::Circle",
-}
-
-
-_ACCEPTED_CHAIN_HEADER = (_CHAIN_LIB,)
-
-
-class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
-    """A decisive local scope's own member is accepted, walked exactly, at length 2 and 3 alike.
-
-    ``_CHAIN_LIB``'s shape, declared locally instead of imported, exercises
-    the same exact-path walk ``TestLocalScopeChainLengthsAgree`` exercises
-    for a miss, this time to a hit at every step: the walk's own multi-
-    segment success path, distinct from a same-spelled import ever being
-    reachable at all.
-    """
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ACCEPTED_CHAIN_HEADER) + 1))
-    def test_length_two(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
-            tmp_path,
-            {},
-            _ACCEPTED_CHAIN_HEADER,
-            sizes,
-            _ACCEPTED_CHAIN_LEN2_POS,
-            {pos: _ACCEPTED for pos in _ACCEPTED_CHAIN_LEN2_POS},
-        )
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ACCEPTED_CHAIN_HEADER) + 1))
-    def test_length_three(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
-            tmp_path,
-            {},
-            _ACCEPTED_CHAIN_HEADER,
-            sizes,
-            _ACCEPTED_CHAIN_LEN3_POS,
-            {pos: _ACCEPTED for pos in _ACCEPTED_CHAIN_LEN3_POS},
-        )
 
 
 # ---------------------------------------------------------------------------

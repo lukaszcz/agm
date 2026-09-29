@@ -2,9 +2,7 @@
 
 A leading (single-segment) name -- a bare type name, or a qualifier chain's
 own first segment -- shares the type/scope namespace with scope regions:
-:func:`leading_name_reading` is the one nearest-level lookup a bare type
-name, a qualifier's leading segment, and a method receiver all resolve
-through, so a nearer region always stops a farther type from merging in.
+:class:`LeadingReading` is what one level reads it as, region or types.
 :func:`imported_member_selection` is what an alias's member path reaches
 through the import surfaces its target is spelled through, so ``hiding``
 filters an alias's members exactly as it filters its target's.
@@ -37,10 +35,8 @@ __all__ = [
     "MemberReferenced",
     "MemberSelection",
     "TypeContributions",
-    "TypeNameSite",
     "imported_member_selection",
     "is_nominal_type_expr",
-    "leading_name_reading",
     "owner_member_selection",
     "owner_type_expr",
     "routed_qualifier_and_member",
@@ -68,52 +64,6 @@ class LeadingReading:
 
 TypeContributions = Callable[[NameAtom], tuple[ScopePath, frozenset[QName]] | None]
 """The nearest layer contributing a type spelling, with that layer's path and selections."""
-
-LeadingContributions = Callable[[NameAtom], LeadingReading | None]
-"""The nearest layer's :class:`LeadingReading` of a leading name, region and type alike."""
-
-
-@dataclass(frozen=True, slots=True)
-class TypeNameSite:
-    """The lexical layer a type name is written in and what it sees there.
-
-    ``declares`` reports this module's own type declaration at a scope path;
-    ``declares_region`` this module's own scope-region declaration at a path;
-    ``leading_contributions`` the nearest level's reading of a leading name
-    beyond them.
-    """
-
-    module_id: ModuleId
-    scope_path: ScopePath
-    declares: Callable[[ScopePath], bool]
-    declares_region: Callable[[ScopePath], bool]
-    leading_contributions: LeadingContributions
-
-
-def leading_name_reading(
-    site: TypeNameSite, name: str, *, rooted: bool = False
-) -> LeadingReading | None:
-    """Return the nearest level's reading of leading *name*, across the type/scope namespace.
-
-    Checked nearest first: this module's own lexical declaration -- a scope
-    region or a type -- at each enclosing scope, the module root alone when
-    *rooted*; then, unless *rooted* (a current-module anchor never falls
-    back further), the nearest level *site* contributes it through
-    (:attr:`TypeNameSite.leading_contributions`) -- a scope region is
-    decisive wherever it is found, so a farther level's type never merges
-    into a nearer region. Shared by a bare type name, a qualifier chain's
-    own leading segment, and a method receiver's owner, so the three agree
-    on the same nearest level.
-    """
-    for base in enclosing_scope_bases(site.scope_path, rooted=rooted):
-        path = (*base, name)
-        if site.declares_region(path):
-            return LeadingReading(True, path=path)
-        if site.declares(path):
-            return LeadingReading(
-                False, {(site.module_id, _atom(path)): ContributionLayer.DECLARED}, path=path
-            )
-    return None if rooted else site.leading_contributions(_atom((name,)))
 
 
 def imported_member_selection(

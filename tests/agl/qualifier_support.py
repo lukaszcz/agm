@@ -12,9 +12,10 @@ identity)``:
     :func:`repl_matrix_verdict_for_grouping`) has no phase-by-phase call of
     its own -- :class:`~agm.agl.repl.entry.EntryResult`
     carries one ``check_only`` outcome -- so its own phase is only
-    ``"accepted"``/``"rejected"``; a REPL verdict's *class* and *span* are
-    asserted to match a fresh file-mode verdict for the identical case
-    instead, which implies the same phase.
+    ``"accepted"``/``"rejected"``, or ``"type-entry"`` when an entry that is
+    no value is accepted as a type spelling alone; a REPL verdict's *class*
+    and *span* are asserted to match a fresh file-mode verdict for the
+    identical case instead, which implies the same phase.
 ``cls``/``span``
     The raised exception's class and span, or ``(NoneType, None)`` when
     accepted.
@@ -78,6 +79,7 @@ shared with ``tests/test_agl_repl_session.py``.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -102,7 +104,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.env import CheckedModule
 
 FilePhase = Literal["scope", "typecheck", "matchcompile", "accepted"]
-ReplPhase = Literal["accepted", "rejected"]
+ReplPhase = Literal["accepted", "type-entry", "rejected"]
 FileVerdict = tuple[FilePhase, type[BaseException] | type[None], SourceSpan | None, str | None]
 ReplVerdict = tuple[ReplPhase, type[BaseException] | type[None], SourceSpan | None, str | None]
 Verdict = FileVerdict | ReplVerdict
@@ -244,7 +246,8 @@ def _check_only_outcome(session: ReplSession, text: str) -> tuple[ReplVerdict, A
     result = session.eval_entry(text, check_only=True)
     if result.ok:
         identity = _rendered_identity(result.value_type, result.type_table)
-        return ("accepted", type(None), None, identity), None
+        phase: ReplPhase = "type-entry" if result.kind == "type" else "accepted"
+        return (phase, type(None), None, identity), None
     failure = result.failure
     if failure is None:
         raise AssertionError("a check_only rejection always carries its static failure")
@@ -360,6 +363,7 @@ def assert_verdicts_for_grouping(
     span_texts: Mapping[K, str] | None = None,
     expected_identities: Mapping[K, str] | None = None,
     expected_origins: Mapping[K, frozenset[tuple[type, str]]] | None = None,
+    type_entries: Mapping[K, str] | None = None,
     stdlib: bool = True,
     expected_legal_groupings: LegalGroupings = "ALL",
 ) -> None:
@@ -377,11 +381,15 @@ def assert_verdicts_for_grouping(
     otherwise *span_texts[key]* is the exact text the raised error's span
     must slice out, in both modes, both modes raise the same message, and,
     when *expected_origins* has an entry for *key*, both modes' ambiguity
-    origins (:func:`origin_kinds`) equal it.
+    origins (:func:`origin_kinds`) equal it. *type_entries* maps a probe file
+    mode rejects as a value to the type its spelling names: alone in this
+    grouping's final entry, it is instead a REPL ``"type-entry"`` of that
+    rendered *identity*.
     """
     span_texts = span_texts or {}
     expected_identities = expected_identities or {}
     expected_origins = expected_origins or {}
+    type_entries = type_entries or {}
     expected_legal = (
         frozenset(all_groupings(len(header) + 1))
         if expected_legal_groupings == "ALL"
@@ -404,19 +412,23 @@ def assert_verdicts_for_grouping(
         )
         file_phase, file_cls, file_span, file_identity = file_outcome
         assert (file_phase, file_cls) == (expected_phase, expected_cls), key
-        (repl_phase, repl_cls, repl_span, repl_identity), repl_failure = outcomes[key]
-        assert repl_phase == ("accepted" if expected_phase == "accepted" else "rejected"), key
-        assert repl_cls == expected_cls, key
         if expected_phase == "accepted":
             assert key not in span_texts, key
             assert file_identity is not None, key
             if key in expected_identities:
                 assert file_identity == expected_identities[key], key
-            assert repl_identity is not None, key
-            assert repl_identity == file_identity, key
         else:
             assert file_span is not None, key
             assert src[file_span.start_offset : file_span.end_offset] == span_texts[key], key
+        (repl_phase, repl_cls, repl_span, repl_identity), repl_failure = outcomes[key]
+        if key in type_entries and not tail:
+            assert (repl_phase, repl_identity) == ("type-entry", type_entries[key]), key
+            continue
+        assert repl_phase == ("accepted" if expected_phase == "accepted" else "rejected"), key
+        assert repl_cls == expected_cls, key
+        if expected_phase == "accepted":
+            assert repl_identity == file_identity, key
+        else:
             text = "\n".join((*tail, probe))
             sliced = (
                 text[repl_span.start_offset : repl_span.end_offset]
@@ -460,4 +472,79 @@ def assert_verdict_for_grouping(
         expected_origins=None if expected_origins is None else {"_": expected_origins},
         stdlib=stdlib,
         expected_legal_groupings=expected_legal_groupings,
+    )
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One probe's source and expected file-mode verdict, for a :class:`Scenario` table.
+
+    *detail* is the rendered identity when accepted, else the exact text the
+    error's span slices out; *type_entry* is the identity the REPL renders
+    when the probe alone is read as a type spelling (see
+    :func:`assert_verdicts_for_grouping`).
+    """
+
+    text: str
+    phase: FilePhase
+    error: type[AglError] | None
+    detail: str
+    type_entry: str | None = None
+
+
+def accepted(text: str, identity: str) -> Probe:
+    """A probe file mode accepts with rendered *identity*."""
+    return Probe(text, "accepted", None, identity)
+
+
+def rejected(
+    text: str,
+    error: type[AglError],
+    span: str,
+    *,
+    phase: FilePhase = "scope",
+    type_entry: str | None = None,
+) -> Probe:
+    """A probe file mode rejects in *phase* with *error* spanning *span*."""
+    return Probe(text, phase, error, span, type_entry)
+
+
+@dataclass(frozen=True)
+class Scenario:
+    """Modules, a shared header and its probes, with the header's legal REPL groupings."""
+
+    header: tuple[str, ...]
+    probes: Mapping[str, Probe]
+    modules: Mapping[str, str] = field(default_factory=dict)
+    legal: LegalGroupings = "ALL"
+
+
+def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
+    """``pytest.param(name, sizes)`` per scenario and grouping of its header plus one probe."""
+    return [
+        pytest.param(name, sizes, id=f"{name}-{gid}")
+        for name, scenario in scenarios.items()
+        for gid, sizes in grouping_cases(len(scenario.header) + 1)
+    ]
+
+
+def assert_scenario_for_grouping(
+    tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+) -> None:
+    """:func:`assert_verdicts_for_grouping` for every probe of *scenario*."""
+    probes = scenario.probes
+    assert_verdicts_for_grouping(
+        tmp_path,
+        dict(scenario.modules),
+        scenario.header,
+        sizes,
+        {key: probe.text for key, probe in probes.items()},
+        {
+            key: (probe.phase, type(None) if probe.error is None else probe.error)
+            for key, probe in probes.items()
+        },
+        span_texts={key: p.detail for key, p in probes.items() if p.error is not None},
+        expected_identities={key: p.detail for key, p in probes.items() if p.error is None},
+        type_entries={key: p.type_entry for key, p in probes.items() if p.type_entry is not None},
+        expected_legal_groupings=scenario.legal,
     )

@@ -686,6 +686,13 @@ class TypeTable:
         type_params, member = self._inline_members[owner.decl_id][name]
         return substitute(member, dict(zip(type_params, owner.type_args, strict=True)))
 
+    def declares_inline_member(self, owner: EnumType, name: str) -> bool:
+        """Whether *owner*'s scope declares an inline member *name*.
+
+        A record merely nested beneath the enum's path is no member.
+        """
+        return name in self._inline_members.get(owner.decl_id, {})
+
     def is_inline_member(self, owner: EnumType, record: RecordType) -> bool:
         """Whether *record*'s declaration is an inline member of *owner*, not a referenced one.
 

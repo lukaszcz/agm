@@ -515,6 +515,7 @@ def test_local_scope_qualifying_nothing_clashes_with_a_same_named_module_route(
             "case value of | Tools[int]::f => 1"
         ),
         "scope Tools\n  def f() -> int = 0\nend Tools\n\nvalue is Tools[int]::f",
+        "def Tools::f() -> int = 0\nTools[int]::f()",
     ),
 )
 def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(

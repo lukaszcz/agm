@@ -1345,8 +1345,10 @@ class TypeEnvironment:
         from the instantiated enum yields its concrete record handle directly.
         An alias of an enum is its target, so ``Alias::Member`` selects the
         member of the alias's template, quantified over the alias's own type
-        parameters. ``None`` when the qualifier names no such owner, or names
-        an enum directly: its declaration scope then resolves the member.
+        parameters. ``None`` when the qualifier names no such owner, names
+        an enum directly, or names an alias whose template declares no such
+        inline member: the member's declaration scope then resolves it. An
+        applied owner must be an enum declaring the member inline.
         """
         if not qualifier.segments:
             return None
@@ -1356,7 +1358,7 @@ class TypeEnvironment:
             if owner_template is None:
                 return None
             enum_template, type_params, alias = owner_template
-            if alias is None:
+            if alias is None or not self.type_table.declares_inline_member(enum_template, member):
                 return None
             return OwnerMember(self.owner_inline_member(enum_template, member), type_params)
         key = self._owner_declaration_key(qualifier)
@@ -1370,6 +1372,10 @@ class TypeEnvironment:
         )
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
+        if not self.type_table.declares_inline_member(owner, member):
+            raise AglTypeError(
+                f"'{member}' is not an inline member of '{owner_expr.name}'.", span=span
+            )
         return OwnerMember(self.owner_inline_member(owner, member), ())
 
     def owner_inline_member(self, owner: EnumType, member: str) -> RecordType:

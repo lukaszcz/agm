@@ -481,18 +481,22 @@ def test_use_reaches_a_scope_made_nameable_by_an_import_tail(tmp_path: Path) -> 
     assert result.ok
 
 
-def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("body", "ok"), (("()", True), ("visible()", False)))
+def test_use_combines_equally_nameable_bare_scope_targets(
+    tmp_path: Path, body: str, ok: bool
+) -> None:
+    """Both targets combine; the path both declare is ambiguous where used."""
     result = _run_with_modules(
         tmp_path,
         {
             "one": "scope Scope\n  def visible() -> int = 1\nend Scope",
             "two": "scope Scope\n  def visible() -> int = 2\nend Scope",
         },
-        "import one::{Scope}\nimport two::{Scope}\nuse Scope::*\n()",
+        f"import one::{{Scope}}\nimport two::{{Scope}}\nuse Scope::*\n{body}",
     )
 
-    assert not result.ok
-    assert len(result.diagnostics) == 1
+    assert result.ok is ok
+    assert len(result.diagnostics) == (0 if ok else 1)
 
 
 @pytest.mark.parametrize(("member", "ok"), (("Idle", True), ("Saved", False)))

@@ -21,7 +21,7 @@ import copy
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Protocol
+from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Protocol, cast
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
@@ -45,8 +45,11 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.symbols import (
     BindingRef,
     ConstructorRef,
+    DeclarationSelection,
     ModuleResolution,
+    OwnerMemberSelection,
     ScopePath,
+    TypeSelection,
 )
 from agm.agl.scope.type_names import (
     owner_type_expr,
@@ -1099,7 +1102,7 @@ class TypeEnvironment:
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
-        owner_declarations: Mapping[int, DeclKey] | None = None,
+        owner_declarations: Mapping[int, TypeSelection] | None = None,
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1163,7 +1166,7 @@ class TypeEnvironment:
         self._module_id: ModuleId = module_id
         # Scope's recorded selection for every type name and every
         # ``owner::member`` path (see ``ModuleResolution.owner_declarations``).
-        self._owner_declarations: Mapping[int, DeclKey] = (
+        self._owner_declarations: Mapping[int, TypeSelection] = (
             {} if owner_declarations is None else owner_declarations
         )
         self._sealed = False
@@ -1338,45 +1341,36 @@ class TypeEnvironment:
         type_vars: frozenset[str],
         span: SourceSpan | None,
     ) -> OwnerMember | None:
-        """Select an inline enum member from the applied enum its qualifier names.
+        """Select the inline enum member scope recorded *qualifier*'s owner selecting.
 
-        ``Source[T]::Member`` applies ``T`` to ``Source``.  An inline member
+        ``Source[T]::Member`` applies ``T`` to ``Source``. An inline member
         captures only the owner parameters used by its fields, so selecting it
         from the instantiated enum yields its concrete record handle directly.
         An alias of an enum is its target, so ``Alias::Member`` selects the
         member of the alias's template, quantified over the alias's own type
-        parameters. ``None`` when the qualifier names no such owner, names
-        an enum directly, or names an alias whose template declares no such
-        inline member: the member's declaration scope then resolves it. An
-        applied owner must be an enum declaring the member inline.
+        parameters. ``None`` when scope recorded no owner's inline member for
+        *qualifier* (:class:`OwnerMemberSelection`), or an unapplied enum
+        declared directly: the member's own declaration then resolves it.
         """
-        if not qualifier.segments:
+        selection = self._owner_selection(qualifier)
+        if selection is None:
             return None
         owner_expr = owner_type_expr(qualifier)
-        if isinstance(owner_expr, NameT):
-            owner_template = self._enum_owner_template(qualifier)
-            if owner_template is None:
-                return None
-            enum_template, type_params, alias = owner_template
-            if alias is None or not self.type_table.declares_inline_member(enum_template, member):
-                return None
-            return OwnerMember(self.owner_inline_member(enum_template, member), type_params)
-        key = self._owner_declaration_key(qualifier)
-        if key is None:
-            return None
-        resolved_args = tuple(
-            self.resolve_type_expr(arg, span=span, type_vars=type_vars) for arg in owner_expr.args
-        )
-        owner = self._resolve_applied_key(
-            key, self._own_type_name(key), owner_expr.name, resolved_args, span
-        )
-        if not isinstance(owner, EnumType):
-            raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
-        if not self.type_table.declares_inline_member(owner, member):
-            raise AglTypeError(
-                f"'{member}' is not an inline member of '{owner_expr.name}'.", span=span
+        if isinstance(owner_expr, AppliedT):
+            # Scope selected an inline member of this generic owner, so it
+            # instantiates to an enum.
+            owner = cast(
+                EnumType, self._applied_owner(selection.owner, owner_expr, span, type_vars)
             )
-        return OwnerMember(self.owner_inline_member(owner, member), ())
+            return OwnerMember(self.owner_inline_member(owner, member), ())
+        module_id, scope_path, name = selection.owner
+        template = self.declared_type_template(module_id, name, scope_path=scope_path)
+        enum_template = cast(EnumType, template.template)
+        if (enum_template.module_id, enum_template.scope_path, enum_template.name) == (
+            selection.owner
+        ):
+            return None
+        return OwnerMember(self.owner_inline_member(enum_template, member), template.type_params)
 
     def owner_inline_member(self, owner: EnumType, member: str) -> RecordType:
         """Return the member *member* selects from enum *owner*'s scope.
@@ -1386,29 +1380,6 @@ class TypeEnvironment:
         for every position; a caller here has already passed that check.
         """
         return self.type_table.inline_member(owner, member)
-
-    def _enum_owner_template(
-        self, qualifier: QualifierChain
-    ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
-        """Return the enum template *qualifier*'s owner names, its parameters, and its naming alias.
-
-        The owner is the identity scope recorded for *qualifier* (see
-        :meth:`_owner_declaration_key`), not the bare owner spelling
-        re-resolved here. Scope only ever records a declared type's own
-        identity there, so the template is always found once a key is
-        recorded; ``None`` only reports a non-enum owner (a record or
-        exception cannot own an inline member).
-        """
-        key = self._owner_declaration_key(qualifier)
-        if key is None:
-            return None
-        module_id, scope_path, name = key
-        template = self.declared_type_template(module_id, name, scope_path=scope_path)
-        enum_type = template.template
-        if not isinstance(enum_type, EnumType):
-            return None
-        aliased = (enum_type.module_id, enum_type.scope_path, enum_type.name) != key
-        return enum_type, template.type_params, key if aliased else None
 
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ
@@ -1594,37 +1565,29 @@ class TypeEnvironment:
         """Return the declaration identity scope selected for *type_expr*'s name.
 
         Lets a host see through the transparent aliases resolution erases.
-        ``None`` when scope selected none: a built-in fallback name no
-        declaration reaches, or a name that is not a type.
+        ``None`` when scope selected none -- a built-in fallback name no
+        declaration reaches -- or an owner's inline member, never an alias.
         """
-        return self._owner_declarations.get(selection_node_id(type_expr))
+        selection = self._owner_declarations.get(selection_node_id(type_expr))
+        return selection.key if isinstance(selection, DeclarationSelection) else None
 
-    def _owner_declaration_key(self, qualifier: QualifierChain) -> DeclKey | None:
-        """Return the declaration identity *qualifier*'s owner selects, scope already recorded.
+    def _selected_key(self, node_id: int) -> DeclKey | None:
+        """Return the declaration scope selected under *node_id*, if any.
 
-        Peels the trailing member off the full ``owner::member`` path scope
-        recorded for this qualifier (see ``ModuleResolution.owner_declarations``).
-        ``None`` when scope recorded no separate owner -- the qualifier names
-        no such inline-member relationship at all: a module route straight to
-        a plain type reached through a scope region (the recorded path then
-        has no declared type one level up), or an unrecognized qualifier
-        typecheck's ordinary diagnostics handle.
+        An inline member selected through its enum is declared beneath it;
+        one an alias projects is resolved through the alias
+        (:meth:`select_owner_inline_member`) before its key is read.
         """
-        full_key = self._owner_declarations.get(qualifier.node_id)
-        if full_key is None:
-            return None
-        module_id, scope_path, _name = full_key
-        if not scope_path:
-            return None
-        owner_key = (module_id, scope_path[:-1], scope_path[-1])
-        return owner_key if self._is_declared_owner_key(owner_key) else None
+        selection = self._owner_declarations.get(node_id)
+        if isinstance(selection, OwnerMemberSelection):
+            module_id, scope_path, name = selection.owner
+            return module_id, (*scope_path, name), selection.member
+        return None if selection is None else selection.key
 
-    def _is_declared_owner_key(self, key: DeclKey) -> bool:
-        """Whether *key* names a declared type this program can instantiate as an owner."""
-        module_id, scope_path, name = key
-        if module_id == self._module_id:
-            return self._has_own_type_name(_join_scoped_type_name(scope_path, name))
-        return self._in_program_type_tables(key) or self._is_program_alias_key(key)
+    def _owner_selection(self, qualifier: QualifierChain) -> OwnerMemberSelection | None:
+        """Return the owner's inline member scope recorded *qualifier* selecting, if it did."""
+        selection = self._owner_declarations.get(qualifier.node_id)
+        return selection if isinstance(selection, OwnerMemberSelection) else None
 
     def owner_type_for_qualifier(
         self,
@@ -1633,47 +1596,37 @@ class TypeEnvironment:
         span: SourceSpan | None,
         type_vars: frozenset[str] = frozenset(),
     ) -> tuple[Type, tuple[str, ...]] | None:
-        """Return the type and open parameters *qualifier* names as an owner.
+        """Return the type and open parameters of the owner whose inline member *qualifier* selects.
 
-        Reads the identity scope recorded for *qualifier* (see
-        :meth:`_owner_declaration_key`), never a bare re-resolution by name:
-        an applied owner (``Owner[T]``) resolves like the same type
-        expression and leaves no parameter open; an unapplied owner is its
-        template over its own parameters. ``None`` when scope recorded no
-        separate owner for *qualifier*.
+        Reads the owner scope recorded (:meth:`_owner_selection`): an applied
+        owner (``Owner[T]``) is instantiated at its arguments and leaves no
+        parameter open; an unapplied owner is its template over its own
+        parameters. ``None`` when scope recorded no owner's inline member.
         """
-        key = self._owner_declaration_key(qualifier)
-        if key is None:
+        selection = self._owner_selection(qualifier)
+        if selection is None:
             return None
-        module_id, scope_path, name = key
-        template = self.declared_type_template(module_id, name, scope_path=scope_path)
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, AppliedT):
-            args = tuple(
-                self.resolve_type_expr(arg, span=span, type_vars=type_vars)
-                for arg in owner_expr.args
-            )
-            return self._instantiate_owner_template(name, template, args, span), ()
+            return self._applied_owner(selection.owner, owner_expr, span, type_vars), ()
+        module_id, scope_path, name = selection.owner
+        template = self.declared_type_template(module_id, name, scope_path=scope_path)
         return template.template, template.type_params
 
-    def _instantiate_owner_template(
-        self, name: str, template: TypeTemplate, args: tuple[Type, ...], span: SourceSpan | None
+    def _applied_owner(
+        self,
+        key: DeclKey,
+        owner_expr: AppliedT,
+        span: SourceSpan | None,
+        type_vars: frozenset[str],
     ) -> Type:
-        """Instantiate *template*, the recorded owner's own template, with *args*.
+        """Instantiate owner *key*, which *owner_expr* spells, at *owner_expr*'s arguments."""
+        args = tuple(
+            self.resolve_type_expr(arg, span=span, type_vars=type_vars) for arg in owner_expr.args
+        )
+        return self._resolve_applied_key(key, self._own_type_name(key), owner_expr.name, args, span)
 
-        Always by substitution: a nominal (record/enum) template's own type
-        params appear as its bare type args, so substituting them is the same
-        as swapping them in directly; an alias target (possibly parameterized
-        over the *same-named* type params, but nested inside another generic
-        shape, as ``Rows[A] = Slot[array[A]]``) needs the real substitution a
-        bare swap would skip. ``isinstance`` on the resolved template cannot
-        tell the two apart -- an alias to a bare nominal type looks exactly
-        like a direct declaration -- so both go through the one path.
-        """
-        alias_def = GenericAliasDef(type_params=template.type_params, template=template.template)
-        return self.instantiate_alias(name, alias_def, args, span=span)
-
-    def with_owner_declarations(self, entries: Mapping[int, DeclKey]) -> "TypeEnvironment":
+    def with_owner_declarations(self, entries: Mapping[int, TypeSelection]) -> "TypeEnvironment":
         """Return a read-only view of this environment with *entries* merged in.
 
         A retained environment is built from an earlier entry's own scope
@@ -1944,7 +1897,7 @@ class TypeEnvironment:
         declaration resolves through its stored name, any other through the
         program tables.
         """
-        key = self._owner_declarations.get(node_id)
+        key = self._selected_key(node_id)
         local_name = self._local_type_name(qualifier, name, key, span)
         rendered = render_qualified_name(qualifier, name)
         if local_name is not None:
@@ -2060,17 +2013,6 @@ class TypeEnvironment:
             GenericAliasDef(type_params=alias_params, template=body_type),
             args,
             span=span,
-        )
-
-    def _has_own_type_name(self, name: str) -> bool:
-        """Whether *name* is declared by this module in any type namespace."""
-        return (
-            name in self._types
-            or name in self._generic_types
-            or name in self._alias_targets
-            or (self._module_id, (), name) in self._program_type_table
-            or (self._module_id, (), name) in self._program_generic_table
-            or (self._module_id, (), name) in self._program_alias_table
         )
 
     def resolve_type_expr(
@@ -2194,7 +2136,7 @@ class TypeEnvironment:
                 raise AglTypeError(
                     f"Type '{rendered}' does not take type arguments.", span=eff_span
                 )
-            selected = self._owner_declarations.get(selection_node_id(type_expr))
+            selected = self._selected_key(selection_node_id(type_expr))
             return self._resolve_applied_key(
                 selected,
                 self._local_type_name(qualifier, type_expr.name, selected, eff_span),

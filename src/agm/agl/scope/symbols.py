@@ -51,6 +51,29 @@ BareAtom = str | ScopePath
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 QName: TypingTypeAlias = tuple[ModuleId, BareAtom]
 
+
+@dataclass(frozen=True, slots=True)
+class DeclarationSelection:
+    """A spelling selecting the declaration *key* at its full path."""
+
+    key: DeclarationKey
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerMemberSelection:
+    """A qualified spelling selecting inline member *member* of type *owner*.
+
+    *owner* is the type its last qualifier segment selects: an enum, or an
+    alias whose target enum's member it projects.
+    """
+
+    owner: DeclarationKey
+    member: str
+
+
+TypeSelection: TypingTypeAlias = DeclarationSelection | OwnerMemberSelection
+"""What scope selected for one spelling (``ModuleResolution.owner_declarations``)."""
+
 BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
     {"array", "dict", "text", "json", "int", "decimal", "bool"}
 )
@@ -463,13 +486,12 @@ class TypeOwner:
     name. ``alias`` is an alias path's declaration. ``injected`` holds, for an
     enum declaration only, its referenced members' record constructors, whose
     names a root enum injects bare. ``hidden`` holds the names of the inline
-    members an alias's target spelling cannot reach, since its import hides
-    them: they are left out of ``members``. ``target`` holds, for an alias
+    members an alias's target spelling cannot reach where the alias is
+    declared, since a ``hiding`` removed their paths: they are left out of
+    ``members``. ``target`` holds, for an alias
     with a nominal target, the target's identity (:class:`TypeTarget`): what a
     REPL entry retains and never re-selects, however later entries redeclare
-    or import around it. ``indirect`` holds, for an alias, whether ``target``
-    was reached through a ``use`` contribution or an import route rather than
-    this module's own nearest declaration. ``own_path_referenced`` holds, for
+    or import around it. ``own_path_referenced`` holds, for
     a direct (non-alias) enum owner only, each of ``referenced``'s names that
     is declared directly beneath the owner's own path (``enum Box = ... |
     Box::Item``): such a name selects like a declared member wherever the
@@ -486,7 +508,6 @@ class TypeOwner:
     alias: TypeAlias | None = None
     injected: tuple[ConstructorRef, ...] = ()
     hidden: frozenset[str] = frozenset()
-    indirect: bool = False
     target: TypeTarget | None = None
     own_path_referenced: frozenset[str] = frozenset()
     arity: int = 0
@@ -1082,18 +1103,21 @@ class ModuleResolution:
         :class:`~agm.agl.scope.attributes.AttributeFacts`, which describes each
         table; typecheck, lowering, and the host read them from there.
     ``type_owners``
-        For a REPL entry, the :class:`TypeOwner` each type it declares resolved
-        to, keyed by type path; the session retains them for later entries.
+        The :class:`TypeOwner` each type the module declares resolved to, keyed
+        by type path: a REPL session retains an entry's for later entries, and
+        a later resolution reusing the module reads its aliases' reached members.
     ``owner_declarations``
-        Maps a node id to the declaration identity scope selected for it -- the
-        same one verdict every position shares: a qualified chain's node id
-        (the ``QualifierChain`` on a ``NameT``/``AppliedT``/
-        ``ConstructorPattern``/``IsTest``) to what its full ``owner::member``
-        path selects, and a bare type name's node (``NameT``/``AppliedT``,
-        catch clause, ``exception ... extends`` declaration) to the type its
-        full-path lookup selects. Typecheck resolves every named type and
-        owner from here (peeling the trailing name off a chain when it names
-        no separate owner) instead of re-resolving the name.
+        Maps a node id to what scope selected for it (:data:`TypeSelection`)
+        -- the one verdict every position shares: a qualified chain's node id
+        (the ``QualifierChain`` on a ``VarRef``/``NameTarget``/``NameT``/
+        ``AppliedT``/``ConstructorPattern``/``IsTest``/``VariantRef``) to what
+        its whole path selects, and a bare type name's node (``NameT``/
+        ``AppliedT``, catch clause, ``exception ... extends`` declaration) to
+        the type it selects. A chain selecting an inline member of the type
+        its last qualifier segment selects records that owner
+        (:class:`OwnerMemberSelection`); any other selection records the
+        declaration (:class:`DeclarationSelection`). Typecheck and the REPL
+        read every named type and owner from here, never re-resolving a name.
     """
 
     program: Program
@@ -1107,9 +1131,6 @@ class ModuleResolution:
     origin_path: Path | None = None
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)
-    constructor_candidates_by_path: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
-        default_factory=dict
-    )
     constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
@@ -1124,7 +1145,7 @@ class ModuleResolution:
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
-    owner_declarations: dict[int, DeclarationKey] = field(default_factory=dict)
+    owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.
@@ -1387,6 +1408,28 @@ class UnknownMemberError(AglScopeError):
             f"'{spelling}' names no visible member.{_spelling_hint(spelling)}", span=span
         )
         self.spelling = spelling
+
+
+class TypeArgumentsError(AglScopeError):
+    """A qualifier segment carrying type arguments its full path does not take.
+
+    A segment takes type arguments only when it selects a generic type whose
+    inline member the next segment selects, and exactly as many as that type
+    declares. *segment* is the segment as spelled; *arity* the owner's type
+    parameter count, ``None`` when the segment selects no such owner.
+    """
+
+    def __init__(self, segment: str, arity: int | None, *, span: SourceSpan) -> None:
+        reason = (
+            "it selects no generic type owning the next segment as an inline member"
+            if arity is None
+            else f"its type takes {arity} type argument(s)"
+        )
+        super().__init__(
+            f"Type arguments cannot be applied to segment '{segment}': {reason}.", span=span
+        )
+        self.segment = segment
+        self.arity = arity
 
 
 class ImmutableAssignmentError(AglScopeError):

@@ -250,11 +250,6 @@ class QualifierChain:
     node_id: int = dc_field(compare=False)
 
     @property
-    def route_segments(self) -> tuple[str, ...]:
-        """Return the slash-expanded route represented by the chain segments."""
-        return tuple(part for segment in self.segments for part in segment.name.split("/"))
-
-    @property
     def leading_route(self) -> tuple[str, ...]:
         """Return the leading segment as a module route, split on '/'."""
         return tuple(self.segments[0].name.split("/"))

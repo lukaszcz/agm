@@ -450,9 +450,8 @@ class TestBareTypeEntryFallback:
     on its own, so it never reaches ``_try_type_entry``), each probe here
     names a real type and nothing else, so scope's own owner/member
     resolution is what the fallback's synthetic ``type <fresh> = text``
-    alias exercises; rejection through the same fallback (a hidden or
-    referenced member) is already covered in
-    ``tests/test_agl_repl_session.py``.
+    alias exercises; a rejected type-only entry (a hidden member, an
+    ambiguity) is covered in ``tests/test_agl_repl_session.py``.
     """
 
     def test_module_qualified_alias_member(self, tmp_path: Path) -> None:

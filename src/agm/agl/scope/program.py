@@ -26,7 +26,7 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -53,21 +53,19 @@ from agm.agl.scope.imports import (
     declares_bare_constructor,
     matching_atoms,
 )
-from agm.agl.scope.lookup import contributed_types
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
-    DeclarationKey,
     DeclInfo,
     ModuleResolution,
     ReceiverOwner,
     ScopeNode,
     ScopePath,
     TypeOwner,
+    TypeSelection,
     UnknownMemberError,
-    anchored_layers,
     builtin_type_static_kind,
     dedupe_constructor_candidates,
 )
@@ -257,7 +255,7 @@ def _build_cross_module_constructor_candidates(
             elif isinstance(decl, EnumDef):
                 for member in decl.members:
                     if isinstance(member, VariantRef):
-                        for referenced_cref in type_owners.referenced_member_refs(mid, member):
+                        for referenced_cref in type_owners.referenced_member_refs(key, member):
                             add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
                     if declares_bare_constructor(
@@ -861,30 +859,19 @@ def resolve_program(
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     resolvers: dict[ModuleId, _Resolver] = {}
 
-    def type_contributions(
-        module_id: ModuleId,
-        scope_path: ScopePath,
-        path: ScopePath,
-        is_type: Callable[[QName], bool],
-    ) -> frozenset[QName]:
+    def reached_members(
+        qname: QName, spelling: NameT | AppliedT, members: Collection[str]
+    ) -> frozenset[str]:
+        module_id, atom = qname
+        path = _path(atom)
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.type_contributions(scope_path, path, is_type)
-        scope_nodes = resolved_modules[module_id].resolved.scope_nodes
-        return contributed_types(
-            scope_path,
-            path,
-            is_type,
-            lambda step, full: (
-                ref
-                for layer, atom in anchored_layers(scope_nodes, step, full)
-                for ref in layer.bare_contributions.get(atom, ())
-            ),
-        )
+            return resolver.members_reached_at(path[:-1], spelling, members)
+        return frozenset(resolved_modules[module_id].resolved.type_owners[path].members)
 
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
-    ) -> DeclarationKey | None:
+    ) -> TypeSelection | None:
         resolver = resolvers.get(qname[0])
         if resolver is not None:
             return resolver.alias_target(qname, alias, spelling)
@@ -893,18 +880,22 @@ def resolve_program(
         )
 
     def current_selection(
-        module_id: ModuleId, scope_path: ScopePath, spelling: NameT | AppliedT
-    ) -> DeclarationKey | None:
-        return resolvers[module_id].type_name_key_at(scope_path, spelling)
+        module_id: ModuleId, scope_path: ScopePath, spelling: NameT | AppliedT | VariantRef
+    ) -> TypeSelection | None:
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver.type_name_selection_at(scope_path, spelling)
+        return resolved_modules[module_id].resolved.owner_declarations.get(
+            selection_node_id(spelling)
+        )
 
     # The index answers from prepared headers, so it is only asked once every
     # module below is constructed.
     type_owners = TypeOwnerIndex(
         all_public_types=all_public_types,
         constructor_refs=cross_module_constructor_refs,
-        import_envs=import_envs,
-        contributions=type_contributions,
         alias_targets=alias_target,
+        reached_members=reached_members,
         current_selection=current_selection,
     )
 

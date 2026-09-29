@@ -6645,6 +6645,41 @@ class TestUnpromotedDeclarationTables:
         assert "Pair" not in session.type_names()
         assert not session.eval_entry("def take(xs: Pair[int]) -> int = 1").ok
 
+    @pytest.mark.parametrize(
+        ("setup", "declarations", "spelling", "promoted"),
+        [
+            pytest.param("", "type A = int", "A", False, id="root-alias"),
+            pytest.param("", "type A = int", "::A", False, id="anchored-root-alias"),
+            pytest.param("", "scope S\n  type A = int\nend S", "S::A", False, id="region-alias"),
+            pytest.param(
+                "", "scope S\n  type A = int\nend S", "::S::A", False, id="anchored-region-alias"
+            ),
+            pytest.param(
+                "import lib::*",
+                "scope S\n  type A = bool\nend S",
+                "A",
+                True,
+                id="imported-alias-beside-a-region-alias",
+            ),
+        ],
+    )
+    def test_a_declaration_is_promoted_only_with_the_alias_it_selects(
+        self, tmp_path: Path, setup: str, declarations: str, spelling: str, promoted: bool
+    ) -> None:
+        """A function whose signature names an alias the failed entry never promotes stays out."""
+        (tmp_path / "lib.agl").write_text("type A = int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        if setup:
+            assert session.eval_entry(setup).ok
+
+        failed = session.eval_entry(
+            f"def take(x: {spelling}) -> int = 1\nlet boom: int = [1][5]\n{declarations}"
+        )
+
+        assert not failed.ok
+        assert session.eval_entry("take", check_only=True).ok is promoted
+
 
 # ---------------------------------------------------------------------------
 # Exactly-once agent dispatch
@@ -8662,9 +8697,7 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert session.eval_entry("Outer::check()").value == IntValue(33)
 
-    def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_separate_wildcard_aliases_combine_under_a_use(self, tmp_path: Path) -> None:
         alpha = tmp_path / "alpha"
         beta = tmp_path / "beta"
         alpha.mkdir()
@@ -8676,7 +8709,8 @@ class TestImports:
         assert session.eval_entry("import alpha/* as Facade").ok
         assert session.eval_entry("import beta/* as Facade").ok
 
-        assert not session.eval_entry("use Facade::*").ok
+        assert session.eval_entry("use Facade::*").ok
+        assert session.eval_entry("first() + second()").value == IntValue(3)
 
     def test_retained_wildcard_facade_use_exposes_a_grown_type_at_every_position(
         self, tmp_path: Path
@@ -9795,7 +9829,29 @@ class TestAmbiguousQualifierClassAgreement:
         result = session.eval_entry("Facade::Thing")
         assert not result.ok
         assert result.kind != "type"
-        assert result.diagnostics
+        assert isinstance(result.failure, AmbiguousQualificationError)
+        span = result.failure.span
+        assert span is not None
+        assert "Facade::Thing"[span.start_offset : span.end_offset] == "Facade::Thing"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("Facade::Thing -> int", id="function-type"),
+            pytest.param("int -> array[Facade::Thing]", id="type-argument"),
+        ],
+    )
+    def test_an_entry_only_a_type_spells_reports_the_type_position_verdict(
+        self, tmp_path: Path, text: str
+    ) -> None:
+        """An entry that is no value expression at all is read as a type alone."""
+        session = self._session(tmp_path)
+        result = session.eval_entry(text, check_only=True)
+        assert not result.ok
+        assert isinstance(result.failure, AmbiguousQualificationError)
+        span = result.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "Facade::Thing"
 
 
 # ---------------------------------------------------------------------------

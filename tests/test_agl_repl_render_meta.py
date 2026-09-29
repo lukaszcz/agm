@@ -15,14 +15,22 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import Diagnostic, RelatedDiagnostic
+from agm.agl.diagnostics import AglError, Diagnostic, HiddenMemberError, RelatedDiagnostic
 from agm.agl.ir.program import ValueDescriptors
+from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
 from tests._agl_helpers import repl_session_with_root
@@ -641,25 +649,88 @@ class TestInfo:
             "(lvl: std/log::Level, val: T)"
         )
 
-    def test_info_resolves_a_canonical_module_function(self) -> None:
-        session = _open_session()
-        assert session.eval_entry("import std/log").ok
+    @pytest.mark.parametrize(
+        ("modules", "setup", "name", "error", "span_text"),
+        [
+            pytest.param(
+                {"x/lib": "def f() -> int = 1\n", "a/x/lib": "def f() -> int = 2\n"},
+                "import x/lib\nimport a/x/lib",
+                "x/lib::f",
+                AmbiguousQualificationError,
+                "x/lib::f",
+                id="two-routes-reach-a-function",
+            ),
+            pytest.param(
+                {"a": "type A = int\n", "b": "type A = bool\n"},
+                "import a::*\nimport b::*",
+                "A",
+                AmbiguousQualificationError,
+                "A",
+                id="two-imported-aliases",
+            ),
+            pytest.param(
+                {"a": "record P\n  x: int\n", "b": "record P\n  y: int\n"},
+                "import a::*\nimport b::*",
+                "P",
+                AmbiguousConstructorError,
+                "P",
+                id="two-imported-records",
+            ),
+            pytest.param(
+                {"pkg/lib": "record Hid\n  x: int\n"},
+                "import pkg/lib hiding Hid",
+                "pkg/lib::Hid",
+                HiddenMemberError,
+                "pkg/lib::Hid",
+                id="hidden-type",
+            ),
+            pytest.param(
+                {"lib": "def f() -> int = 1\n"},
+                "import lib",
+                "lib::missing",
+                UnknownMemberError,
+                "lib::missing",
+                id="unknown-member",
+            ),
+            pytest.param(
+                {"lib": "def f() -> int = 1\n"},
+                "import lib",
+                "std/io::print",
+                UnknownQualifierError,
+                "std/io::print",
+                id="module-not-imported",
+            ),
+            pytest.param({}, "let v = 1", "missing", AglScopeError, "missing", id="unknown-name"),
+        ],
+    )
+    def test_info_reports_the_scope_verdict_when_nothing_is_selected(
+        self,
+        tmp_path: Path,
+        modules: dict[str, str],
+        setup: str,
+        name: str,
+        error: type[AglError],
+        span_text: str,
+    ) -> None:
+        """``:info`` reads a name exactly as an entry does: a rejection is scope's own."""
+        for module, source in modules.items():
+            path = tmp_path / f"{module}.agl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry(setup).ok
 
-        outcome = meta_mod.dispatch_meta(":info std/io::print", _session_ctx(session))
+        with pytest.raises(AglError) as raised:
+            session.info_of(name)
 
-        assert outcome.text is not None
-        assert outcome.text.startswith(
-            "std/io::print is a function.\nSignature:\n  def std/io::print[T](value: T)"
-        )
-
-    def test_info_rejects_an_unknown_qualified_library_function(self) -> None:
-        session = _open_session()
-        assert session.eval_entry("import std/fs").ok
-
-        outcome = meta_mod.dispatch_meta(":info fs::missing", _session_ctx(session))
-
-        assert outcome.text == "Unknown identifier 'fs::missing'."
-        assert session.info_of("std/fs::missing") is None
+        assert type(raised.value) is error
+        span = raised.value.span
+        assert span is not None
+        assert name[span.start_offset : span.end_offset] == span_text
+        info = meta_mod.dispatch_meta(f":info {name}", _session_ctx(session))
+        typed = meta_mod.dispatch_meta(f":type {name}", _session_ctx(session))
+        assert info.text == typed.text
 
     def test_info_reports_an_imported_generic_type_and_constructor(self) -> None:
         session = _open_session()
@@ -675,7 +746,7 @@ class TestInfo:
             "Some is a constructor.\nSignature:\n  Some[T](value: T) -> std/option::Option::Some[T]"
         )
 
-    @pytest.mark.parametrize("name", ("None", "Option::None", "std/option::Option::None"))
+    @pytest.mark.parametrize("name", ("None", "Option::None"))
     def test_info_reports_each_visible_spelling_of_a_constructor(self, name: str) -> None:
         outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(_open_session()))
 
@@ -784,6 +855,25 @@ class TestInfo:
         assert described is not None
         assert described == one.info_of("T")
 
+    def test_info_of_a_declaration_beneath_an_applied_owner_member_reads_as_its_type(
+        self,
+    ) -> None:
+        """Type arguments on an owner never instantiate a declaration nested beneath its member."""
+        session = _open_session()
+        for entry in (
+            "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
+            "scope Slot\n\n  scope Filled\n    record X\n      a: int\n  end Filled\nend Slot",
+        ):
+            assert session.eval_entry(entry).ok
+
+        applied = session.info_of("Slot[int]::Filled::X")
+        plain = session.info_of("Slot::Filled::X")
+
+        assert applied is not None
+        assert plain is not None
+        assert plain.startswith("Slot::Filled::X is a record type.")
+        assert applied == plain.replace("Slot::Filled::X", "Slot[int]::Filled::X", 1)
+
     def test_info_describes_a_generic_alias_with_its_parameters(self) -> None:
         """A generic alias reads as its declaration, parameters included."""
         declaration = "type Rows[A] = array[A]"
@@ -841,11 +931,9 @@ class TestInfo:
         qualifier's resolved identity directly into the retained environment
         under that id, so a later, differently owned query reading the same
         id back got the wrong owner. The two queries below are shaped alike
-        (``Owner[T]::Member``) but resolve through different paths -- the
-        first through a direct import, the second only reachable
-        transitively (through ``wrap``, never imported directly) -- to
-        exercise both the ordinary and the canonical-library-fallback
-        resolution routes. Each answer is compared against the same query's
+        (``Owner[T]::Member``) but resolve through different routes -- the
+        first through a module's short route, the second through another
+        module's full path. Each answer is compared against the same query's
         answer in a fresh session with the same imports, so a stale
         collision -- the first query's answer leaking into the second's --
         would show up as a mismatch rather than as an easily-miscounted
@@ -858,19 +946,18 @@ class TestInfo:
         (tmp_path / "pkg" / "other.agl").write_text(
             "enum SlotB[T]\n  | FilledB(value: T)\n  | EmptyB\n"
         )
-        (tmp_path / "wrap.agl").write_text("import pkg/other\nlet w = 1\n")
 
         def info_in_a_fresh_session(query: str) -> str | None:
             fresh = repl_session_with_root(tmp_path)
             fresh.open()
             assert fresh.eval_entry("import pkg/lib").ok
-            assert fresh.eval_entry("import wrap").ok
+            assert fresh.eval_entry("import pkg/other").ok
             return fresh.info_of(query)
 
         session = repl_session_with_root(tmp_path)
         session.open()
         assert session.eval_entry("import pkg/lib").ok
-        assert session.eval_entry("import wrap").ok
+        assert session.eval_entry("import pkg/other").ok
 
         first = session.info_of("lib::SlotA[int]::FilledA")
         second = session.info_of("pkg/other::SlotB[text]::FilledB")
@@ -929,12 +1016,12 @@ class TestInfo:
     def test_info_rejects_an_invalid_qualified_name(self) -> None:
         assert _open_session().info_of("Count::") is None
 
-    def test_info_rejects_a_non_identifier_and_an_unknown_module_path(self) -> None:
+    def test_info_rejects_a_non_identifier(self) -> None:
         session = _open_session()
 
         assert session.info_of("()") is None
-        assert session.info_of("(") is None
-        assert session.info_of("std/not-loaded::missing") is None
+        with pytest.raises(AglSyntaxError):
+            session.info_of("(")
 
     def test_info_reports_the_static_type_of_an_imported_value(self) -> None:
         session = _open_session()
@@ -945,12 +1032,26 @@ class TestInfo:
         assert outcome.text is not None
         assert outcome.text == "std/config::strict-json is a value.\nType:\n  bool"
 
-    def test_info_requires_one_known_identifier(self) -> None:
+    def test_info_requires_one_identifier(self) -> None:
         assert "usage" in (meta_mod.dispatch_meta(":info", _session_ctx()).text or "").lower()
-        assert (
-            "unknown"
-            in (meta_mod.dispatch_meta(":info missing", _session_ctx()).text or "").lower()
-        )
+        assert meta_mod.dispatch_meta(":info ()", _session_ctx()).text == "Unknown identifier '()'."
+
+    @pytest.mark.parametrize(
+        ("declaration", "name"),
+        [
+            pytest.param("record R\n  x: int", "R", id="record"),
+            pytest.param("enum E\n  | A\n  | B", "E", id="enum"),
+            pytest.param("record Box[T]\n  v: T", "Box", id="generic-record"),
+        ],
+    )
+    def test_info_locates_a_type_declared_in_the_repl(self, declaration: str, name: str) -> None:
+        session = _open_session()
+        assert session.eval_entry(f"let pad = 0\n{declaration}").ok
+
+        described = session.info_of(name)
+
+        assert described is not None
+        assert described.endswith("\nLocation: <repl>:2:1")
 
     def test_info_formats_full_function_parameter_metadata(self) -> None:
         from agm.agl.repl.session import _format_repl_signature

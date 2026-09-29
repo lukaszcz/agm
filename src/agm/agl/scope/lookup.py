@@ -23,7 +23,6 @@ from typing import Protocol
 
 from agm.agl.diagnostics import AglError, HiddenMemberError
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import QName
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
@@ -31,11 +30,14 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ContributionLayer,
     DeclarationKey,
+    DeclarationSelection,
+    OwnerMemberSelection,
     QualificationOrigin,
     ScopePath,
+    TypeArgumentsError,
+    TypeSelection,
     UnknownMemberError,
     UnknownQualifierError,
-    binding_qname,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
@@ -48,7 +50,6 @@ __all__ = [
     "PathSources",
     "QualifiedTarget",
     "Reading",
-    "contributed_types",
     "lookup_bare",
     "lookup_qualified",
     "lookup_steps",
@@ -84,11 +85,21 @@ class QualifiedTarget:
     its own under that qualifier. ``ref`` is the binding the spelling reads
     as a value, and ``None`` for a type or a member only a type owner's own
     table selects. ``constructor`` is the constructor it names, if any.
+    ``owner`` is set when the selection is an inline member of the type the
+    last qualifier segment selects.
     """
 
     key: DeclarationKey | None
     ref: BindingRef | None
     constructor: ConstructorRef | None
+    owner: OwnerMemberSelection | None = None
+
+    @property
+    def selection(self) -> TypeSelection | None:
+        """What scope records for a spelling selecting this; ``None`` without a key."""
+        if self.owner is not None:
+            return self.owner
+        return None if self.key is None else DeclarationSelection(self.key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,8 +169,12 @@ class PathSources(Protocol):
         """The enum member module qualifier *chain*'s surface injects as *member*."""
         ...
 
-    def type_arity(self, key: DeclarationKey) -> int:
-        """The number of type parameters type *key* declares."""
+    def inline_arity(self, owner: DeclarationKey, member: str) -> int | None:
+        """The type parameters type *owner* takes when *member* is one of its inline members.
+
+        An alias's inline members are those of its target it reaches.
+        ``None`` when *member* is none.
+        """
         ...
 
     def hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
@@ -186,28 +201,6 @@ class PathSources(Protocol):
 def lookup_steps(scope_path: ScopePath) -> tuple[ScopePath, ...]:
     """Return the steps a spelling written in *scope_path* is tried at, nearest first."""
     return tuple(scope_path[:end] for end in range(len(scope_path), -1, -1))
-
-
-def contributed_types(
-    scope_path: ScopePath,
-    path: ScopePath,
-    is_type: Callable[[QName], bool],
-    bindings: Callable[[ScopePath, ScopePath], Iterable[BindingRef]],
-) -> frozenset[QName]:
-    """Return the types contributions make bare *path* at the nearest step reaching any.
-
-    *bindings* answers what the contributions anchored at or above a step
-    bind at a full path.
-    """
-    for step in lookup_steps(scope_path):
-        types = frozenset(
-            qname
-            for ref in bindings(step, (*step, *path))
-            if ref.contributes_a_type and is_type(qname := binding_qname(ref))
-        )
-        if types:
-            return types
-    return frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,41 +400,50 @@ class _Walk:
             return self._ambiguous(selected, step.start)
         if chain is None:
             return selected.target
-        return self._type_args_error(chain, step, selected.target) or selected.target
+        return self._owned(chain, step, selected.target)
 
-    def _type_args_error(
+    def _owned(
         self, chain: QualifierChain, step: _Step, target: QualifiedTarget
-    ) -> AglScopeError | None:
-        """Reject a segment's type arguments unless it selects a generic type owning the next.
+    ) -> QualifiedTarget | TypeArgumentsError:
+        """Return *target* with the type owning it inline, or why a segment's type arguments fail.
 
-        The next segment's declaration -- or the selected one, after the last
-        -- must be declared directly beneath a type the segment's full path
-        selects, and that type must take as many type parameters as written.
-        An alias's projected member is declared beneath the alias.
+        A segment owns what follows it -- the next segment's selection, or
+        *target* after the last -- when a type its full path selects declares
+        that as an inline member (an alias's projected member is declared
+        beneath the alias). A segment carries type arguments only when it owns
+        what follows, as many as its owner takes.
         """
         segments = chain.segments
-        for index, segment in enumerate(segments):
-            if segment.type_args is None:
+        owner: DeclarationKey | None = None
+        for index in range(step.start, len(segments)):
+            segment = segments[index]
+            last = index == len(segments) - 1
+            if segment.type_args is None and not last:
                 continue
             prefix = (*step.path, *self._names[: index + 1])
+            member = self._names[index + 1]
             following = (
                 target
-                if index == len(segments) - 1
-                else _decided(
-                    step.read((*prefix, self._names[index + 1]), LookupKind.TYPE).candidates
-                )
+                if last
+                else _decided(step.read((*prefix, member), LookupKind.TYPE).candidates)
             )
-            owner = next(
+            owner, arity = next(
                 (
-                    candidate.target.key
+                    (key, arity)
                     for candidate in step.owners(prefix).candidates
-                    if _is_inline_member(following, candidate.target.key)
+                    if (key := candidate.target.key) is not None
+                    and _is_beneath(following, key)
+                    and (arity := self._sources.inline_arity(key, member)) is not None
                 ),
-                None,
+                (None, None),
             )
-            if owner is None or self._sources.type_arity(owner) != len(segment.type_args):
-                return _type_args_error(segment.name, segment.span)
-        return None
+            if segment.type_args is not None and (arity is None or arity != len(segment.type_args)):
+                return TypeArgumentsError(segment.name, arity, span=segment.span)
+        return (
+            target
+            if owner is None
+            else replace(target, owner=OwnerMemberSelection(owner, self._names[-1]))
+        )
 
     def _ambiguous(
         self, origins: tuple[QualificationOrigin, ...], start: int
@@ -486,14 +488,14 @@ def _decided(
     return next(iter(distinct.values()), None)
 
 
-def _is_inline_member(
+def _is_beneath(
     target: QualifiedTarget | Candidate | tuple[QualificationOrigin, ...] | None,
-    owner: DeclarationKey | None,
+    owner: DeclarationKey,
 ) -> bool:
     """Whether *target* is declared directly beneath type *owner*."""
     if isinstance(target, Candidate):
         target = target.target
-    if owner is None or not isinstance(target, QualifiedTarget) or target.key is None:
+    if not isinstance(target, QualifiedTarget) or target.key is None:
         return False
     module, path, name = owner
     return target.key[0] == module and target.key[1] == (*path, name)
@@ -506,7 +508,3 @@ def _is_module_qualifier(chain: QualifierChain, step: _Step) -> bool:
     if chain.anchor is QualifierAnchor.CURRENT_MODULE:
         return not chain.segments
     return len(chain.segments) == 1
-
-
-def _type_args_error(name: str, span: SourceSpan) -> AglScopeError:
-    return AglScopeError(f"Type arguments cannot be applied to segment '{name}'.", span=span)

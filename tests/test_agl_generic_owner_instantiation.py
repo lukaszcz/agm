@@ -3,8 +3,9 @@
 ``Alias[A]::Member`` instantiates the alias's target with *A* substituted
 through the alias (nested, flipped, phantom or reusing the target's
 parameter names), and must fit the scrutinee. Type arguments on a
-non-generic owner, or of the wrong count, are rejected where the name is
-looked up; a declaration nested beneath an applied owner is a type error. A
+non-generic owner, of the wrong count, or on an owner whose next segment is
+not one of its inline members (a declaration nested beneath it) are rejected
+on the applied segment where the name is looked up. A
 qualified generic type names the same declaration in every type position.
 
 Every probe is checked in file mode and in every legal REPL grouping of its
@@ -19,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglTypeError
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, TypeArgumentsError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
@@ -54,19 +55,14 @@ _SCENARIOS = {
         probes={
             "rec-pat": rejected(
                 "let i = Box::Inner(x = 1)\ncase i of\n  | Box[int]::Inner(x) => x",
-                AglTypeError,
-                "Box[int]::Inner(x)",
-                phase="typecheck",
+                TypeArgumentsError,
+                "Box[int]",
             ),
             "rec-pat-plain": accepted(
                 "let i = Box::Inner(x = 1)\ncase i of\n  | Box::Inner(x) => x", "int"
             ),
-            "rec-val": rejected(
-                "Box[int]::Inner(x = 1)", AglTypeError, "Box[int]::Inner(x = 1)", phase="typecheck"
-            ),
-            "rec-annot": rejected(
-                "fn(p: Box[int]::Inner) => 1", AglTypeError, "p: Box[int]::Inner", phase="typecheck"
-            ),
+            "rec-val": rejected("Box[int]::Inner(x = 1)", TypeArgumentsError, "Box[int]"),
+            "rec-annot": rejected("fn(p: Box[int]::Inner) => 1", TypeArgumentsError, "Box[int]"),
         },
     ),
     "generic-enum-with-nested-record": Scenario(
@@ -74,19 +70,14 @@ _SCENARIOS = {
         probes={
             "enum-pat": rejected(
                 "let i = E::Inner(x = 1)\ncase i of\n  | E[int]::Inner(x) => x",
-                AglTypeError,
-                "E[int]::Inner(x)",
-                phase="typecheck",
+                TypeArgumentsError,
+                "E[int]",
             ),
             "enum-pat-plain": accepted(
                 "let i = E::Inner(x = 1)\ncase i of\n  | E::Inner(x) => x", "int"
             ),
-            "enum-val": rejected(
-                "E[int]::Inner(x = 1)", AglTypeError, "E[int]::Inner(x = 1)", phase="typecheck"
-            ),
-            "enum-annot": rejected(
-                "fn(p: E[int]::Inner) => 1", AglTypeError, "p: E[int]::Inner", phase="typecheck"
-            ),
+            "enum-val": rejected("E[int]::Inner(x = 1)", TypeArgumentsError, "E[int]"),
+            "enum-annot": rejected("fn(p: E[int]::Inner) => 1", TypeArgumentsError, "E[int]"),
             "enum-val-plain": accepted("E::Inner(x = 1)", "record E::Inner\n  x: int"),
         },
     ),
@@ -95,9 +86,8 @@ _SCENARIOS = {
         probes={
             "alias-pat": rejected(
                 "let i = Al::Inner(x = 1)\ncase i of\n  | Al[int]::Inner(x) => x",
-                AglTypeError,
-                "Al[int]::Inner(x)",
-                phase="typecheck",
+                TypeArgumentsError,
+                "Al[int]",
             ),
         },
     ),
@@ -416,14 +406,16 @@ _SCENARIOS = {
         probes={
             "arity-hi": rejected(
                 "let row: Slot[int] = Slot::Empty\nrow is Slot[int, int]::Empty",
-                AglScopeError,
+                TypeArgumentsError,
                 "Slot[int, int]",
             ),
             "arity-hi-annot": rejected(
-                "fn(x: Slot[int, int]::Empty) => 1", AglScopeError, "Slot[int, int]"
+                "fn(x: Slot[int, int]::Empty) => 1", TypeArgumentsError, "Slot[int, int]"
             ),
             "arity-lo": rejected(
-                "let t: Two[int, int] = Two::L(l = 1)\nt is Two[int]::L", AglScopeError, "Two[int]"
+                "let t: Two[int, int] = Two::L(l = 1)\nt is Two[int]::L",
+                TypeArgumentsError,
+                "Two[int]",
             ),
         },
     ),
@@ -444,10 +436,10 @@ _SCENARIOS = {
         ),
         probes={
             "nongeneric-applied": rejected(
-                "let c: Col = Col::Red\nc is Col[int]::Red", AglScopeError, "Col[int]"
+                "let c: Col = Col::Red\nc is Col[int]::Red", TypeArgumentsError, "Col[int]"
             ),
             "nongeneric-applied-annot": rejected(
-                "fn(x: Col[int]::Red) => 1", AglScopeError, "Col[int]"
+                "fn(x: Col[int]::Red) => 1", TypeArgumentsError, "Col[int]"
             ),
         },
     ),
@@ -468,7 +460,7 @@ _SCENARIOS = {
         ),
         probes={
             "nongeneric-alias-applied": rejected(
-                "let r: Slot[int] = Slot::Empty\nr is IS[int]::Empty", AglScopeError, "IS[int]"
+                "let r: Slot[int] = Slot::Empty\nr is IS[int]::Empty", TypeArgumentsError, "IS[int]"
             ),
         },
     ),

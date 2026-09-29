@@ -1,96 +1,30 @@
-"""Type-name lookups shared by scope and the type-owner index.
+"""Type-name spellings shared by scope and the type-owner index.
 
-:func:`imported_member_selection` is what an alias's member path reaches
-through the import surfaces its target is spelled through, so ``hiding``
-filters an alias's members exactly as it filters its target's.
+:func:`member_chain` spells an alias's member path ``<target>::member`` as
+its target is written, so the one whole-path lookup at the alias's site
+decides which of the target's members the alias reaches.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TypeGuard
 
-from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import (
-    ImportEnv,
-    NameAtom,
-    QName,
-    QualResolutionFound,
-    resolve_qualified,
-)
-from agm.agl.scope.symbols import DeclarationKey, ScopePath, TypeOwner
-from agm.agl.scope.symbols import to_bare_atom as _atom
-from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
-from agm.agl.syntax.qualifiers import enclosing_scope_bases
+from agm.agl.scope.symbols import TypeOwner
+from agm.agl.syntax.nodes import QualifierChain, QualifierSegment, VariantRef
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
-    "TypeContributions",
-    "imported_member_selection",
     "is_nominal_type_expr",
+    "member_chain",
     "owner_member_selection",
     "owner_type_expr",
     "selection_node_id",
-    "spells_own_declaration",
 ]
-
-
-TypeContributions = Callable[[ScopePath], frozenset[QName]]
-"""The types contributions make a bare path spelled at one site."""
-
-
-def imported_member_selection(
-    import_env: ImportEnv,
-    contributions: TypeContributions,
-    owner: NameT | AppliedT,
-    member: str,
-) -> frozenset[QName]:
-    """Return what path ``owner::member`` selects through *import_env*, *owner* as written.
-
-    The spelling reaches a member only through an import surface exposing its
-    complete path, which ``hiding`` filters: the nearest layer *contributions*
-    reports for it, a bare owner's root import tails, else the owner's module
-    route.
-    """
-    qualifier = owner.qualifier
-    segments = () if qualifier is None else qualifier.route_segments
-    path = (*segments, owner.name, member)
-    if qualifier is None or qualifier.anchor is None:
-        contributed = contributions(path)
-        if contributed:
-            return contributed
-    if qualifier is None:
-        return import_env.unqualified.get(_atom(path), frozenset())
-    return _routed_selection(import_env, qualifier, (owner.name, member))
-
-
-def _routed_qualifier_and_member(
-    qualifier: QualifierChain, tail: tuple[str, ...]
-) -> tuple[tuple[str, ...], NameAtom]:
-    """Return the module route and member atom *tail* resolves against the qualifier's lead."""
-    return (
-        qualifier.leading_route,
-        _atom((*(segment.name for segment in qualifier.segments[1:]), *tail)),
-    )
-
-
-def _routed_selection(
-    import_env: ImportEnv, qualifier: QualifierChain, tail: tuple[str, ...]
-) -> frozenset[QName]:
-    """Return what *qualifier*'s module route selects for *tail* below its later segments.
-
-    A route and a bare compound spelling of the same path are checked
-    together, as :func:`~agm.agl.scope.imports.resolve_qualified` does; the
-    owner's own spelling selected one declaration, so its member paths are
-    never ambiguous.
-    """
-    route, member = _routed_qualifier_and_member(qualifier, tail)
-    result = resolve_qualified(import_env, route, member, anchored=qualifier.anchored)
-    return frozenset({result.qname}) if isinstance(result, QualResolutionFound) else frozenset()
 
 
 def is_nominal_type_expr(
@@ -108,35 +42,34 @@ def is_nominal_type_expr(
     )
 
 
-def selection_node_id(type_expr: NameT | AppliedT) -> int:
-    """Return the node id scope records *type_expr*'s selected declaration under.
+def selection_node_id(spelling: NameT | AppliedT | VariantRef) -> int:
+    """Return the node id scope records *spelling*'s selected declaration under.
 
-    A qualified or ``::``-anchored name's is its qualifier's; a bare name's
-    is its own.
+    A qualified or ``::``-anchored name's -- an enum member reference's
+    included -- is its qualifier's; a bare name's is its own.
     """
-    qualifier = type_expr.qualifier
-    return type_expr.node_id if qualifier is None else qualifier.node_id
+    qualifier = spelling.chain if isinstance(spelling, VariantRef) else spelling.qualifier
+    return spelling.node_id if qualifier is None else qualifier.node_id
 
 
-def spells_own_declaration(
-    module_id: ModuleId, scope_path: ScopePath, type_expr: NameT | AppliedT, key: DeclarationKey
-) -> bool:
-    """Whether *key*, selected for *type_expr* at *scope_path*, is reached directly.
+def member_chain(owner: NameT | AppliedT, member: str) -> QualifierChain:
+    """Return the chain spelling ``owner::member``, *owner* as written.
 
-    Direct means this module's own declaration at the path the spelling
-    names from an enclosing scope: no import surface lies between, so no
-    ``hiding`` filters its members. A selection through a ``use``
-    contribution, an import tail, or a module route is indirect.
+    The inverse of :func:`owner_type_expr`.
     """
-    qualifier = type_expr.qualifier
-    anchor = None if qualifier is None else qualifier.anchor
-    if key[0] != module_id or anchor is QualifierAnchor.MODULE:
-        return False
-    segments = () if qualifier is None else qualifier.route_segments
-    rooted = anchor is QualifierAnchor.CURRENT_MODULE
-    return any(
-        (*key[1], key[2]) == (*base, *segments, type_expr.name)
-        for base in enclosing_scope_bases(scope_path, rooted=rooted)
+    qualifier = owner.qualifier
+    segment = QualifierSegment(
+        owner.name,
+        owner.args if isinstance(owner, AppliedT) else None,
+        span=owner.span,
+        node_id=owner.node_id,
+    )
+    return QualifierChain(
+        anchor=None if qualifier is None else qualifier.anchor,
+        segments=(*(() if qualifier is None else qualifier.segments), segment),
+        member=member,
+        span=owner.span,
+        node_id=owner.node_id,
     )
 
 

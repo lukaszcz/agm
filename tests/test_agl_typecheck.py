@@ -34,7 +34,9 @@ from agm.agl.scope.symbols import (
     BinderKind,
     BindingRef,
     BuiltinKind,
+    DeclarationSelection,
     ScopeNode,
+    TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -8165,14 +8167,13 @@ class TestBareConstructorTypeApply:
         assert binding_type == option_type
 
     def test_owner_apply_requires_an_enum_owner(self) -> None:
-        """A record owner has no inline-member namespace at all: a type-kind
-        error typecheck reports, not a name scope ever selects among."""
+        """A record owner has no inline members: scope rejects its type arguments."""
         error = reject_type("record Box[T]\n  value: T\nBox[int]::Box")
-        assert isinstance(error, AglTypeError)
+        assert isinstance(error, TypeArgumentsError)
 
     def test_applied_unknown_owner_member_is_rejected(self) -> None:
         error = reject_type("let v: Missing[int]::Bar = 1\nv")
-        assert isinstance(error, AglScopeError)
+        assert isinstance(error, UnknownQualifierError)
 
     def test_owner_apply_substitutes_only_the_selected_member_parameters(self) -> None:
         checked = accept_type(
@@ -10184,7 +10185,7 @@ class TestStaticParameterBindingValidation:
             ),
             owner_declarations={
                 **resolved.owner_declarations,
-                open_annotation.node_id: (ENTRY_ID, (), "OpenToken"),
+                open_annotation.node_id: DeclarationSelection((ENTRY_ID, (), "OpenToken")),
             },
         )
         seed_env = TypeEnvironment()
@@ -10739,8 +10740,13 @@ class TestResolveTypeExprTypeVars:
             f"def f(v: {annotation}) -> int = 1"
         )
 
-    def test_alias_applied_before_its_declaration_checks_its_arity(self) -> None:
-        reject_type("type A = W[int, int]\ntype W[T] = array[T]")
+    @pytest.mark.parametrize("target", ["array[T]", "Slot[T]"])
+    def test_alias_applied_before_its_declaration_checks_its_arity(self, target: str) -> None:
+        error = reject_type(
+            "enum Slot[T]\n  | Filled(value: T)\n  | Empty\n"
+            f"type A = W[int, int]\ntype W[T] = {target}"
+        )
+        assert isinstance(error, AglTypeError)
 
     def test_bare_generic_name_rejected(self) -> None:
         with pytest.raises(UnappliedGenericTypeError) as exc_info:

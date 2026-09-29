@@ -5197,40 +5197,21 @@ class _Checker:
             span=span,
         )
 
-    def _variant_qualification_error(
-        self,
-        qualifier: QualifierChain,
-        enum_type: EnumType,
-        span: SourceSpan,
-    ) -> AglTypeError:
-        """Return why owner-qualified ``qualifier::variant`` selects no member of *enum_type*.
-
-        Scope selects every member a qualified spelling can name; a qualifier
-        reaching here always names some owner (else scope itself rejects the
-        spelling), but that owner need not be an enum, nor this one: identity
-        is the declaration, never the name, so two declarations sharing one
-        name path (a REPL redeclaration) are unrelated enums.
-        """
-        owner = self._local_qualified_enum(qualifier, span)
-        if owner is None:
-            local_owner = render_qualifier_path(qualifier)
-            return AglTypeError(f"'{local_owner}' is not an enum type.", span=span)
-        local_owner, owner_type, _type_params = owner
-        return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
-
     def _local_qualified_enum(
         self, qualifier: QualifierChain, span: SourceSpan
     ) -> tuple[str, EnumType, tuple[str, ...]] | None:
-        """Resolve a qualifier to its owner and open parameters, when its owner is an enum."""
+        """Return the enum whose inline member *qualifier* selects, and its open parameters.
+
+        ``None`` when scope recorded no owner's inline member for *qualifier*.
+        """
         owner = self._env.owner_type_for_qualifier(
             qualifier, span=span, type_vars=self._current_type_vars
         )
         if owner is None:
             return None
         owner_type, type_params = owner
-        if not isinstance(owner_type, EnumType):
-            return None
-        return render_qualifier_path(qualifier), owner_type, type_params
+        # Only an enum, directly or through an alias, owns inline members.
+        return render_qualifier_path(qualifier), cast(EnumType, owner_type), type_params
 
     # --- member access ---
 
@@ -6237,14 +6218,10 @@ class _Checker:
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._record_constructor_pattern_ref(pattern, subj_type)
             if pattern.qualifier is not None:
-                # An applied owner must be an enum declaring the member inline.
-                self._applied_member(pattern.qualifier, pattern.name, pattern.span)
                 local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
-                # A record merely nested beneath the enum's path is no member:
+                # A record merely nested beneath a type's path is no member:
                 # its own constructor, below, decides it.
-                if local_enum is not None and self._env.type_table.declares_inline_member(
-                    local_enum[1], pattern.name
-                ):
+                if local_enum is not None:
                     _local_owner, enum_type, type_params = local_enum
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
@@ -6462,7 +6439,10 @@ class _Checker:
         a local scope spelling naming no member of the scope.
         """
         if qualifier is not None and node_id not in self._resolved.scope_qualified_spellings:
-            return self._variant_qualification_error(qualifier, enum_type, span)
+            owner = self._local_qualified_enum(qualifier, span)
+            if owner is not None:
+                local_owner, owner_type, _type_params = owner
+                return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
         return self._constructor_outside_enum(variant, enum_type, candidates, span)
 
     @staticmethod

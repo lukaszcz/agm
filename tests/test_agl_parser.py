@@ -516,7 +516,7 @@ class TestBinders:
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
-        assert assignment.target.qualifier.route_segments == ("std", "config")
+        assert [s.name for s in assignment.target.qualifier.segments] == ["std/config"]
 
     def test_multi_segment_qualified_assignment_target_preserved(self) -> None:
         """A multi-segment qualifier -- a local scope path such as
@@ -525,7 +525,7 @@ class TestBinders:
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
-        assert assignment.target.qualifier.route_segments == ("A", "B")
+        assert [s.name for s in assignment.target.qualifier.segments] == ["A", "B"]
 
     @pytest.mark.parametrize(
         "source",
@@ -1355,7 +1355,7 @@ class TestParseTypeExpr:
         assert isinstance(result, AppliedT)
         assert result.name == "Box"
         assert result.qualifier is not None
-        assert result.qualifier.route_segments == ("mymod",)
+        assert [s.name for s in result.qualifier.segments] == ["mymod"]
 
     def test_invalid_raises_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -2661,7 +2661,7 @@ class TestBinaryOperators:
         e = first(parse("x is Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.qualifier is not None
-        assert e.qualifier.route_segments == ("Review",)
+        assert [s.name for s in e.qualifier.segments] == ["Review"]
         assert e.variant == "Pass"
         assert not e.negated
 
@@ -2669,7 +2669,7 @@ class TestBinaryOperators:
         e = first(parse("x is not Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.qualifier is not None
-        assert e.qualifier.route_segments == ("Review",)
+        assert [s.name for s in e.qualifier.segments] == ["Review"]
         assert e.variant == "Pass"
         assert e.negated
 
@@ -3177,7 +3177,7 @@ class TestPatterns:
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
 
     # -----------------------------------------------------------------
     # Qualified pattern parsing: constructor-match shape in `case`, and its
@@ -3200,7 +3200,7 @@ class TestPatterns:
         pat = self._first_case_pattern("case r of | Review::Pass => ok")
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
         assert pat.positional == ()
         assert pat.named == ()
 
@@ -3208,7 +3208,7 @@ class TestPatterns:
         pat = self._first_case_pattern("case r of | Review::Pass() => ok")
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
         assert pat.positional == ()
         assert pat.named == ()
 
@@ -3280,7 +3280,9 @@ class TestTemplates:
         assert isinstance(interpolation.expr.callee, VarRef)
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
-        assert interpolation.expr.callee.qualifier.route_segments == ("std", "prelude")
+        assert tuple(s.name for s in interpolation.expr.callee.qualifier.segments) == (
+            "std/prelude",
+        )
         argument = interpolation.expr.args[0]
         assert isinstance(argument, StringLit)
         assert argument.value == "HOME"
@@ -4120,7 +4122,7 @@ class TestCaseNeutralPatterns:
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Option",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Option",)
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
@@ -4624,7 +4626,7 @@ class TestQualifiedRefs:
         (argument,) = expr.right.args
         assert isinstance(argument, VarRef)
         assert argument.qualifier is not None
-        assert argument.qualifier.route_segments == ()
+        assert argument.qualifier.segments == ()
 
     def test_anchored_qual_var_ref(self) -> None:
         (expr,) = items(parse("/foo/bar::baz"))
@@ -4655,7 +4657,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "myvar"
         assert expr.qualifier is not None
-        assert expr.qualifier.route_segments == ()
+        assert expr.qualifier.segments == ()
 
     def test_self_ref_constructor(self) -> None:
         # ::MyType has a current-module anchor and no qualifier segments.
@@ -4664,7 +4666,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "MyType"
         assert expr.qualifier is not None
-        assert expr.qualifier.route_segments == ()
+        assert expr.qualifier.segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
         # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
@@ -4744,7 +4746,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.name == "MyType"
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in decl.type_ann.qualifier.segments) == ("m",)
 
     def test_qual_applied_type_in_annotation(self) -> None:
         prog = parse("let x: m::Box[int] = null")
@@ -4753,7 +4755,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl.type_ann, syntax.AppliedT)
         assert decl.type_ann.name == "Box"
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in decl.type_ann.qualifier.segments) == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
         prog = parse("Option[int]::some(value = 1)")
@@ -4778,7 +4780,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ()
+        assert decl.type_ann.qualifier.segments == ()
 
     def test_qual_named_type_in_func_return(self) -> None:
         prog = parse("def f() -> m::Result = null")
@@ -4795,7 +4797,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("m",)
 
     def test_self_ref_pattern_constructor(self) -> None:
         prog = parse("case x of | ::Bar => 2")
@@ -4804,7 +4806,7 @@ class TestQualifiedTypeRefs:
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ()
+        assert pat.qualifier.segments == ()
 
     def test_qual_pattern_enum_variant(self) -> None:
         # Qualified enum variant: m::Color::Red (type qualifier after qual_prefix)

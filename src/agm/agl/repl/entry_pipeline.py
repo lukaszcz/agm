@@ -270,8 +270,7 @@ class EntryPipeline:
         compilation, lowering, or evaluation — such as ``type_of`` and the
         bare-type-entry fallback. Raises the underlying
         ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
-        on failure; callers that need diagnostics instead of a raised exception
-        must catch these themselves.
+        on failure.
         """
         from agm.agl.typecheck.program import check_program
 

@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     )
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
+    from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -188,6 +189,18 @@ def _region_path(region: "ScopeRegion") -> tuple[str, ...]:
         current = current.items[0]
         path.append(current.segment.name)
     return tuple(path)
+
+
+def _static_verdict[T](probe: Callable[[], T]) -> T | AglError:
+    """Run one static REPL probe, returning its rejection as a value instead of raising it.
+
+    The one boundary where an introspection probe's diagnostic becomes data:
+    a caller weighing two readings of one spelling inspects both verdicts.
+    """
+    try:
+        return probe()
+    except AglError as exc:
+        return exc
 
 
 def _format_repl_location(span: "SourceSpan") -> str:
@@ -703,12 +716,12 @@ class ReplSession:
         """
         result = self._eval_entry_pipeline(text, check_only=check_only)
         if not result.ok:
-            type_result = self._try_type_entry(text)
+            type_result = self._try_type_entry(text, value_failure=result.failure)
             if type_result is not None:
                 return type_result
         return result
 
-    def _try_type_entry(self, text: str) -> EntryResult | None:
+    def _try_type_entry(self, text: str, *, value_failure: AglError | None) -> EntryResult | None:
         """Attempt to interpret *text* as a bare type-expression entry.
 
         Returns a ``kind == "type"`` :class:`EntryResult` echoing the resolved
@@ -726,79 +739,62 @@ class ReplSession:
         or referenced-only, for every position, so a bare type entry is
         rejected exactly as it is in ``fn(x: text) => 1``.
 
-        The synthetic program is the *only* resolution attempted: any error
-        other than a hidden/referenced-member rejection or an unapplied
-        generic reference means *text* is not a valid type entry, full stop
-        -- never a cue to re-resolve it against some other environment. A
-        bare unapplied generic (e.g. ``Option``) cannot be an alias body
-        either, but its selected declaration is already known -- the
-        exception raised while checking the alias carries it directly -- so
-        its definition is displayed from there instead, but only when the
-        unapplied reference *is* the whole entry (its span equals *text*'s
-        parsed span): a generic nested inside the entry (e.g. a type argument,
-        as in ``Box[Option]``) is not what was asked for, and the original
-        failure stands.
+        The synthetic program is the *only* resolution attempted -- never
+        re-resolved against some other environment. A rejected type reading
+        stands in for the value reading's failure (*value_failure*) only when
+        *text* is no value expression at all (it failed to parse as one):
+        otherwise the value reading's verdict is the entry's. A bare
+        unapplied generic (e.g. ``Option``) cannot be an alias body either,
+        but its selected declaration is already known -- the rejection of the
+        alias carries it directly -- so its definition is displayed from
+        there instead, but only when the unapplied reference *is* the whole
+        entry (its span equals *text*'s parsed span): a generic nested inside
+        the entry (e.g. a type argument, as in ``Box[Option]``) is not what
+        was asked for.
 
         Like :meth:`type_of`, this never evaluates, promotes, advances the
         node-id counter, or mutates session state: the synthetic declaration
         is discarded once its resolved type (or generic definition) is read.
         """
-        from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
-        from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
-        from agm.agl.parser import AglSyntaxError, parse_type_expr_seeded
+        from agm.agl.parser import AglSyntaxError
         from agm.agl.repl.type_display import format_generic_type_def_for_repl
-        from agm.agl.scope import AglScopeError
-        from agm.agl.typecheck import AglTypeError, UnappliedGenericTypeError
+        from agm.agl.typecheck import UnappliedGenericTypeError
 
-        host_env = self._runtime.host_environment()
-        try:
-            with spaced_qualifier_collector() as spaced_sink:
-                type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
-        except AglSyntaxError:
+        parsed = _static_verdict(lambda: self._parse_type_entry(text))
+        if isinstance(parsed, AglError):
             return None
-        type_span = type_expr.span
+        type_expr, next_node_id, spaced_qualifiers = parsed
         program, fresh_name, next_node_id = self._type_probe_program(type_expr, next_node_id)
-
-        try:
-            checked_program = self._entry_pipeline.resolve_and_check_program(
-                program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
+        host_env = self._runtime.host_environment()
+        checked_program = _static_verdict(
+            lambda: self._entry_pipeline.resolve_and_check_program(
+                program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
             )
-        except (HiddenMemberError, ReferencedMemberError) as exc:
-            return self._fail_static(exc, [])
-        except UnappliedGenericTypeError as exc:
-            if exc.span != type_span:
-                # The unapplied generic is nested inside the entry (e.g. a type
-                # argument), not the entry's own whole spelling: its definition
-                # is not what was asked for, so the original failure stands.
-                return None
+        )
+        if isinstance(checked_program, UnappliedGenericTypeError) and (
+            checked_program.span == type_expr.span
+        ):
             return EntryResult(
                 kind="type",
                 name=None,
                 value=None,
                 value_type=None,
                 type_display=format_generic_type_def_for_repl(
-                    exc.display_name, exc.generic_def, self._type_env.type_table
+                    checked_program.display_name,
+                    checked_program.generic_def,
+                    self._type_env.type_table,
                 ),
                 diagnostics=[],
                 warnings=[],
                 error=None,
                 ok=True,
             )
-        except (
-            AglScopeError,
-            AglTypeError,
-            ModuleNotFound,
-            AmbiguousModule,
-            ModulePrefixNotFound,
-            ImportEntryError,
-        ):
-            return None
+        if isinstance(checked_program, AglError):
+            return (
+                self._fail_static(checked_program, [])
+                if isinstance(value_failure, AglSyntaxError)
+                else None
+            )
 
         checked = checked_program.modules[checked_program.entry_id]
         typ = checked_program.program_type_table[(checked_program.entry_id, (), fresh_name)]
@@ -813,6 +809,15 @@ class ReplSession:
             ok=True,
             type_table=checked.type_env.type_table,
         )
+
+    def _parse_type_entry(self, text: str) -> tuple["TypeExpr", int, tuple["SpacedQualifier", ...]]:
+        """Parse *text* standalone as one type expression, with the spaced qualifiers it writes."""
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_type_expr_seeded
+
+        with spaced_qualifier_collector() as spaced_sink:
+            type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
+        return type_expr, next_node_id, tuple(spaced_sink)
 
     @staticmethod
     def _type_probe_program(type_expr: "TypeExpr", start_id: int) -> tuple["Program", str, int]:
@@ -1661,7 +1666,8 @@ class ReplSession:
         This is introspection over promoted state only: it never evaluates or
         changes the session.  It resolves names through the same entry pipeline
         as the REPL, so bare and imported qualified names select their actual
-        visible declaration.
+        visible declaration, and a name scope rejects raises scope's rejection.
+        ``None`` when *name* is no identifier.
         """
         from agm.agl.repl.render import _render_value_or_cyclic_message
         from agm.agl.semantics.values import Cell
@@ -1708,7 +1714,7 @@ class ReplSession:
             )
 
         if resolved_reference is not None:
-            described = self._describe_type_declaration(name, resolved_reference, location)
+            described = self._describe_type_declaration(name, resolved_reference)
             if described is not None:
                 return described
         if resolved_reference is None or resolved_reference.constructor is None:
@@ -1726,33 +1732,56 @@ class ReplSession:
         )
 
     def _resolve_info_reference(self, name: str) -> _InfoReference | None:
-        """Resolve NAME with the REPL entry resolver, without type-checking it.
+        """Resolve NAME as a value and as a type with the REPL entry resolver, unchecked.
 
-        ``None`` when NAME is not a name reference.
+        ``None`` when NAME is not a name reference. A name neither reading
+        selects raises the value reading's rejection: a value lookup that
+        finds nothing already answers with the type lookup's verdict for the
+        same spelling (a type name, an ambiguity, a hidden path), so it is
+        scope's one decision for the name, exactly as an entry spelling it
+        reports.
         """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import VarRef
         from agm.agl.syntax.types import NameT
 
-        try:
-            with spaced_qualifier_collector() as spaced_sink:
-                program, next_node_id = parse_program_seeded(
-                    name, start_id=self._next_node_id, resolve_infix=False
-                )
-        except AglError:
-            return None
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                name, start_id=self._next_node_id, resolve_infix=False
+            )
         if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
             return None
         reference = program.body.items[0]
         spaced_qualifiers = tuple(spaced_sink)
-        type_env = self._type_env
-        try:
-            resolved = self._entry_pipeline.resolve_program(
+        # The same name as a type: scope selects its declaration in the one
+        # type position a bare type entry probes too.
+        type_name = NameT(
+            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
+        )
+        type_program, _fresh_name, type_next_id = self._type_probe_program(type_name, next_node_id)
+        resolved = _static_verdict(
+            lambda: self._entry_pipeline.resolve_program(
                 program, next_node_id, spaced_qualifiers=spaced_qualifiers
             )
-        except AglError:
-            binding, constructor = self._canonical_library_identities(reference)
+        )
+        type_resolved = _static_verdict(
+            lambda: self._entry_pipeline.resolve_program(
+                type_program, type_next_id, spaced_qualifiers=spaced_qualifiers
+            )
+        )
+        type_key = (
+            None
+            if isinstance(type_resolved, AglError)
+            else self._type_env.with_owner_declarations(
+                type_resolved.modules[type_resolved.entry_id].resolved.owner_declarations
+            ).type_name_declaration(type_name)
+        )
+        type_env = self._type_env
+        if isinstance(resolved, AglError):
+            if type_key is None:
+                raise resolved
+            binding, constructor = None, None
         else:
             entry = resolved.modules[resolved.entry_id].resolved
             binding = entry.resolution.get(reference.node_id)
@@ -1765,23 +1794,6 @@ class ReplSession:
             # ``_InfoReference.type_env``) without risking a later entry's
             # colliding node ids reading them back.
             type_env = type_env.with_owner_declarations(entry.owner_declarations)
-        # The same name as a type: scope selects its declaration in the one
-        # type position a bare type entry probes too.
-        type_name = NameT(
-            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
-        )
-        type_program, _fresh_name, type_next_id = self._type_probe_program(type_name, next_node_id)
-        try:
-            type_resolved = self._entry_pipeline.resolve_program(
-                type_program, type_next_id, spaced_qualifiers=spaced_qualifiers
-            )
-        except AglError:
-            type_key = None
-        else:
-            type_entry = type_resolved.modules[type_resolved.entry_id].resolved
-            type_key = self._type_env.with_owner_declarations(
-                type_entry.owner_declarations
-            ).type_name_declaration(type_name)
         return _InfoReference(
             binding=binding,
             constructor=constructor,
@@ -1790,36 +1802,16 @@ class ReplSession:
             type_env=type_env,
         )
 
-    def _canonical_library_identities(
-        self, reference: "VarRef"
-    ) -> tuple["BindingRef | None", "ConstructorRef | None"]:
-        """Return retained identities named by REFERENCE's canonical module path."""
-        from agm.agl.modules.ids import ModuleId
-
-        qualifier = reference.qualifier
-        if qualifier is None or not qualifier.segments or "/" not in qualifier.segments[0].name:
-            return None, None
-        module_id = ModuleId.from_path(qualifier.segments[0].name)
-        module = self._retained_resolved_modules.get(module_id)
-        if module is None:
-            return None, None
-        scope_path = tuple(segment.name for segment in qualifier.segments[1:])
-        binding = module.resolved.declarations.get((module_id, scope_path, reference.name))
-        candidates = module.resolved.constructor_candidates_by_path.get(
-            (scope_path, reference.name), ()
-        )
-        return binding, candidates[0] if len(candidates) == 1 else None
-
-    def _describe_type_declaration(
-        self, name: str, reference: _InfoReference, location: str | None
-    ) -> str | None:
+    def _describe_type_declaration(self, name: str, reference: _InfoReference) -> str | None:
         """Describe the type declaration NAME selects as a type, if it reads as one.
 
         An alias reads as its declaration wherever it is declared; a type this
         session declares, and a generic type from anywhere, as its definition.
-        Any other selection -- an imported plain type, or a member reached
-        through an applied owner (an instantiated member, not its generic
-        declaration) -- reads as its value instead.
+        Any other selection -- an imported plain type -- reads as its value
+        instead. An owner's inline member selects no type declaration here, so
+        one reached through an applied owner reads as its instantiated
+        constructor; type arguments never instantiate a declaration nested
+        beneath that member, which reads as its definition.
         """
         from agm.agl.repl.type_display import (
             format_generic_type_def_for_repl,
@@ -1835,12 +1827,15 @@ class ReplSession:
             params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
             definition = f"type {name}{params} = {render_type_expr(alias.type_expr)}"
             return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
-        qualifier = reference.reference.qualifier
-        if qualifier is not None and any(
-            segment.type_args is not None for segment in qualifier.segments
-        ):
-            return None
         module_id, scope_path, decl_name = key
+        # A type this session declares is located at its declaration.
+        location = (
+            _format_repl_location(
+                self._session_scope_nodes[scope_path].members[decl_name].decl_span
+            )
+            if module_id.is_entry
+            else None
+        )
         type_env = self._info_type_env(module_id)
         local_name = "::".join((*scope_path, decl_name))
         typ = type_env.get_type(local_name) if module_id.is_entry else None

@@ -33,7 +33,7 @@ from agm.agl.syntax.nodes import (
 )
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.type_table import TypeDef
+    from agm.agl.semantics.type_table import DeclKey, TypeDef
     from agm.agl.semantics.types import Type
     from agm.agl.typecheck.env import CheckedModule
 
@@ -269,7 +269,7 @@ def _declaration_dependencies(
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
     nominal_dependency_ids: Mapping[int, int],
-    alias_declaration_ids: Mapping[str, frozenset[int]],
+    alias_declaration_ids: Mapping["DeclKey", int],
     library_module_ids: Collection[ModuleId],
 ) -> tuple[frozenset[int], frozenset[ModuleId]]:
     """Return local declaration and imported runtime dependencies of one leaf item.
@@ -278,16 +278,13 @@ def _declaration_dependencies(
     produces, so *item* is never a ``ScopeRegion`` itself. Imported nominal
     types are metadata dependencies rather than module-initialization dependencies;
     imported binding and method references require their module's runtime image.
+    A type name depends on the entry alias scope selected for it
+    (*alias_declaration_ids*, keyed by declaration).
     """
     from agm.agl.syntax.nodes import ElseSentinel, FuncDef
     from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.syntax.visitor import walk
 
-    type_parameters = (
-        frozenset(item.type_params)
-        if isinstance(item, (EnumDef, ExceptionDef, FuncDef, RecordDef, TypeAlias))
-        else frozenset()
-    )
     dependencies: set[int] = set()
     imported_modules: set[ModuleId] = set()
 
@@ -295,12 +292,11 @@ def _declaration_dependencies(
         if isinstance(node, ElseSentinel):
             return
         node_id = cast(Item, node).node_id
-        if (
-            isinstance(node, (AppliedT, NameT))
-            and (node.qualifier is None or not node.qualifier.segments)
-            and node.name not in type_parameters
-        ):
-            dependencies.update(alias_declaration_ids.get(node.name, frozenset()))
+        if isinstance(node, (AppliedT, NameT)):
+            key = checked.type_env.type_name_declaration(node)
+            alias_id = None if key is None else alias_declaration_ids.get(key)
+            if alias_id is not None:
+                dependencies.add(alias_id)
         binding = checked.binding_for(node_id)
         if binding is not None:
             if binding.decl_node_id in entry_declaration_ids:
@@ -400,12 +396,13 @@ def _promotion_plan(
                     nominal_dependency_ids[member_handle.decl_id] = item.node_id
     # Aliases are transparent in semantic types, so retain their syntactic
     # declaration dependency separately from nominal identity.
-    alias_declaration_ids: dict[str, frozenset[int]] = {}
-    for item in leaf_items:
-        if isinstance(item, TypeAlias):
-            alias_declaration_ids[item.name] = alias_declaration_ids.get(
-                item.name, frozenset()
-            ) | frozenset({item.node_id})
+    alias_declaration_ids: dict[DeclKey, int] = {
+        (checked.module_id, tuple(segment.name for segment in item.scope_path), item.name): (
+            item.node_id
+        )
+        for item in leaf_items
+        if isinstance(item, TypeAlias)
+    }
     region_indices: dict[tuple[str, ...], list[int]] = {}
     source_index = 0
 

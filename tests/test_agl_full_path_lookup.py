@@ -23,16 +23,23 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglTypeError, HiddenMemberError
+from agm.agl.diagnostics import AglTypeError, HiddenMemberError, ReferencedMemberError
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.repl import meta
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
     AmbiguousQualificationError,
+    DeclarationSelection,
+    OwnerMemberSelection,
+    TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
 )
+from agm.agl.syntax.types import NameT
+from agm.agl.syntax.visitor import walk
 from tests._agl_helpers import repl_session_with_root
+from tests.agl.module_graph import resolve_inline_entry
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
@@ -61,8 +68,116 @@ _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
 _TL_LOCAL = "scope s\n  record Geo\n    x: int\n  record Geo::Inner\n    y: int\nend s"
 _OPT = "enum Opt[T]\n  | Som(v: T)\n  | Non\n"
 _GENERIC = "record Outer\n  a: int\nenum Outer::Inner[T]\n  | A(v: T)\n  | B\n"
+_NESTED_UNDER_GENERICS = (
+    "record Box[T]\n  v: T\nrecord Box::Inner\n  x: int\n"
+    "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int\n"
+    "type Al[T] = Box[T]\nrecord Al::Inner\n  x: int\n"
+    "enum Col\n  | Red\n  | Blue\nenum Two[A, B]\n  | L(l: A)\n  | R(r: B)"
+)
+_GEO_REGION = "scope Geo\n  record Point\n    x: int\nend Geo"
+_GEO_TYPE = "record Geo\n  y: int\nrecord Geo::Point\n  x: int"
+_REFERENCING_ENUM = "enum E\n  | Geo::Point\n  | Other"
+_REFERENCING_ENUM_IDENTITY = "enum E\n  | Point(x: int)\n  | Other"
+_REFERENCED_MEMBER_PROBES = {
+    "injected-value": accepted("let e: E = Point(x = 1)\ne", _REFERENCING_ENUM_IDENTITY),
+    "injected-pattern": accepted(
+        "let e: E = E::Other\ncase e of\n  | Point(x) => x\n  | Other => 0", "int"
+    ),
+    "enum-annotation": accepted("fn(e: E) => e is Other", "E -> bool"),
+}
+
+_USE_M = (
+    "scope Agent\n  def f() -> int = 1\n  def both() -> int = 10\n  def dup() -> int = 11\n"
+    "  record P\n    x: int\n  record Q\n    x: int\nend Agent"
+)
+_USE_N = (
+    'scope Agent\n  def n() -> text = "n"\n  def both() -> text = "n"\n'
+    '  def dup() -> text = "d"\nend Agent'
+)
+_USE_O = "scope Agent\n  def dup() -> bool = true\nend Agent"
+_USE_OWN = (
+    "scope Agent\n  def g() -> int = 2\n  def both() -> bool = true\n"
+    "  record Q\n    y: bool\nend Agent"
+)
+_USE_LIB = "def f() -> int = 1\ndef both() -> int = 10\nrecord P\n  x: int"
+_USE_OWN_LIB = "scope lib\n  def g() -> int = 2\n  def both() -> bool = true\nend lib"
+
+
+def _in_region(use: str, value: str) -> str:
+    """A region whose ``use`` exposes names that its ``let v`` reads, then ``r::v``."""
+    return f"scope r\n  {use}\n  let v = {value}\nend r\n\nr::v"
+
 
 _SCENARIOS = {
+    "a-use-combines-an-own-scope-with-an-imported-one": Scenario(
+        modules={"M": _USE_M},
+        header=("import M::*", _USE_OWN),
+        probes={
+            "imported-member": accepted(_in_region("use Agent::*", "f()"), "int"),
+            "own-member": accepted(_in_region("use Agent::*", "g()"), "int"),
+            "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
+            "imported-type-value": accepted(
+                _in_region("use Agent::*", "P(x = 1)"), "record M::Agent::P\n  x: int"
+            ),
+            "imported-type-annotation": accepted(
+                _in_region("use Agent::*", "fn(p: P) => p.x"), "M::Agent::P -> int"
+            ),
+            "own-type-wins-its-path-in-annotation": accepted(
+                _in_region("use Agent::*", "fn(q: Q) => q.y"), "Agent::Q -> bool"
+            ),
+            "own-type-wins-its-path-as-constructor": accepted(
+                _in_region("use Agent::*", "Q(y = true)"), "record Agent::Q\n  y: bool"
+            ),
+            "own-type-wins-its-path-in-pattern": accepted(
+                _in_region("use Agent::*", "case Q(y = true) of\n    | Q(y) => y"), "bool"
+            ),
+            "selected-from-both": accepted(_in_region("use Agent::{f, g}", "f() + g()"), "int"),
+            "hiding-an-imported-member": rejected(
+                _in_region("use Agent::* hiding f", "f()"), AglScopeError, "f"
+            ),
+            "selecting-a-member-neither-declares": rejected(
+                _in_region("use Agent::{h}", "1"), UnknownMemberError, "use Agent::{h}"
+            ),
+        },
+    ),
+    "a-use-combines-an-own-scope-with-two-imported-ones": Scenario(
+        modules={"M": _USE_M, "N": _USE_N},
+        header=("import M::*", "import N::*", _USE_OWN),
+        probes={
+            "one-import-and-own": accepted(_in_region("use Agent::*", "f() + g()"), "int"),
+            "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
+            "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
+            "two-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
+            ),
+        },
+    ),
+    "a-use-combines-imported-scopes": Scenario(
+        modules={"M": _USE_M, "N": _USE_N, "O": _USE_O},
+        header=("import M::*", "import N::*", "import O::*"),
+        probes={
+            "one-import": accepted(_in_region("use Agent::*", "f()"), "int"),
+            "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
+            "two-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "both()"), AmbiguousQualificationError, "both"
+            ),
+            "three-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
+            ),
+        },
+    ),
+    "a-use-combines-an-own-scope-with-a-module-route": Scenario(
+        modules={"lib": _USE_LIB},
+        header=("import lib", _USE_OWN_LIB),
+        probes={
+            "routed-member": accepted(_in_region("use lib::*", "f()"), "int"),
+            "own-member": accepted(_in_region("use lib::*", "g()"), "int"),
+            "own-member-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
+            "routed-type-value": accepted(
+                _in_region("use lib::*", "P(x = 1)"), "record lib::P\n  x: int"
+            ),
+        },
+    ),
     "own-scope-and-imported-scope-combine": Scenario(
         modules={"M": _M},
         header=("import M::*", _OWN_AGENT, _OWN_GEO),
@@ -181,7 +296,7 @@ _SCENARIOS = {
             ),
             "unknown-qualifier": rejected("nosuch::W", UnknownQualifierError, "nosuch::W"),
             "route-takes-no-type-arguments": rejected(
-                "lib[int]::Y(b = 1)", AglScopeError, "lib[int]"
+                "lib[int]::Y(b = 1)", TypeArgumentsError, "lib[int]"
             ),
             "route-type-annotation": accepted("fn(p: lib::Y) => p.b", "lib::Y -> int"),
             "own-path-type-annotation": accepted("fn(p: lib::X) => p.c", "lib::X -> text"),
@@ -222,7 +337,7 @@ _SCENARIOS = {
                 'scope q\n  use lib::Opt as K\n  let v = K[text]::Som(v = "x")\nend q\n\nq::v',
                 "record lib::Opt::Som[text]\n  v: text",
             ),
-            "wrong-arity-alias": rejected("B[int, text]::Non", AglScopeError, "B[int, text]"),
+            "wrong-arity-alias": rejected("B[int, text]::Non", TypeArgumentsError, "B[int, text]"),
         },
     ),
     "hidden-unknown-member-and-unknown-qualifier": Scenario(
@@ -294,15 +409,99 @@ _SCENARIOS = {
                 "fn(p: Outer::Inner[int]::A) => p.v", "lib::Outer::Inner::A[int] -> int"
             ),
             "non-generic-segment": rejected(
-                "fn(p: Outer[int]::Inner[int]::A) => 1", AglScopeError, "Outer[int]"
+                "fn(p: Outer[int]::Inner[int]::A) => 1", TypeArgumentsError, "Outer[int]"
             ),
             "wrong-arity-segment": rejected(
-                "Outer::Inner[int, text]::A(v = 1)", AglScopeError, "Inner[int, text]"
+                "Outer::Inner[int, text]::A(v = 1)", TypeArgumentsError, "Inner[int, text]"
             ),
             "generic-segment-before-a-scope-path": rejected(
                 "def Outer::Inner::sub::f() -> int = 1\n\nOuter::Inner[int]::sub::f()",
-                AglScopeError,
+                TypeArgumentsError,
                 "Inner[int]",
+            ),
+        },
+    ),
+    "type-arguments-select-an-inline-member": Scenario(
+        header=(_NESTED_UNDER_GENERICS, "type Rows[A] = E[array[A]]"),
+        probes={
+            "inline-member-value": accepted("E[int]::A(a = 1)", "record E::A[int]\n  a: int"),
+            "alias-inline-member-annotation": accepted(
+                "fn(p: Rows[int]::A) => p.a", "E::A[array[int]] -> array[int]"
+            ),
+            "record-under-generic-record-value": rejected(
+                "Box[int]::Inner(x = 1)", TypeArgumentsError, "Box[int]"
+            ),
+            "record-under-generic-record-annotation": rejected(
+                "fn(p: Box[int]::Inner) => 1", TypeArgumentsError, "Box[int]"
+            ),
+            "record-under-generic-record-pattern": rejected(
+                "case Box::Inner(x = 1) of\n  | Box[int]::Inner(x) => x",
+                TypeArgumentsError,
+                "Box[int]",
+            ),
+            "record-own-spelling": rejected("Box[int]::Box(v = 1)", TypeArgumentsError, "Box[int]"),
+            "record-under-generic-enum": rejected(
+                "E[int]::Inner(x = 1)", TypeArgumentsError, "E[int]"
+            ),
+            "record-under-generic-alias": rejected(
+                "Al[int]::Inner(x = 1)", TypeArgumentsError, "Al[int]"
+            ),
+            "non-generic-owner-is": rejected(
+                "Col::Red is Col[int]::Red", TypeArgumentsError, "Col[int]"
+            ),
+            "non-generic-owner-annotation": rejected(
+                "fn(p: Col[int]::Red) => 1", TypeArgumentsError, "Col[int]"
+            ),
+            "too-many-arguments-cast": rejected(
+                "fn(p: E[int]) => p as E[int, int]::B", TypeArgumentsError, "E[int, int]"
+            ),
+            "too-few-arguments-value": rejected(
+                "Two[int]::L(l = 1)", TypeArgumentsError, "Two[int]"
+            ),
+        },
+    ),
+    "applied-owner-of-a-record-pattern": Scenario(
+        header=(_NESTED_UNDER_GENERICS,),
+        probes={
+            "scoped-alias-owner": accepted(
+                "scope q\n  type Rows[A] = E[array[A]]\n"
+                "  let v = fn(r: E[array[int]]::A) => case r of\n"
+                "    | Rows[int]::A(a) => a.size()\nend q\n\nq::v",
+                "E::A[array[int]] -> int",
+            ),
+            "scoped-alias-owner-mismatch": rejected(
+                "scope q\n  type Rows[A] = E[array[A]]\n"
+                "  let v = fn(r: E[int]::A) => case r of\n"
+                "    | Rows[int]::A(a) => 1\nend q",
+                AglTypeError,
+                "Rows[int]::A(a)",
+                phase="typecheck",
+            ),
+        },
+    ),
+    "enum-references-a-member-through-a-use": Scenario(
+        modules={"lib": _GEO_REGION},
+        header=("import lib", "use lib::{Geo}", _REFERENCING_ENUM),
+        probes=_REFERENCED_MEMBER_PROBES,
+    ),
+    "enum-references-a-nested-member-through-a-use": Scenario(
+        modules={"lib": _GEO_TYPE},
+        header=("import lib", "use lib::{Geo}", _REFERENCING_ENUM),
+        probes=_REFERENCED_MEMBER_PROBES,
+    ),
+    "enum-in-a-region-references-a-member-through-its-use": Scenario(
+        modules={"lib": _GEO_REGION},
+        header=(
+            "import lib",
+            "scope S\n  use lib::{Geo}\n  enum E\n    | Geo::Point\n    | Other\nend S",
+        ),
+        probes={
+            "referenced-member-through-the-enum": rejected(
+                "S::E::Point(x = 1)", ReferencedMemberError, "S::E::Point"
+            ),
+            "value": accepted(
+                "let e: S::E = lib::Geo::Point(x = 1)\ne",
+                "enum S::E\n  | Point(x: int)\n  | Other",
             ),
         },
     ),
@@ -359,3 +558,22 @@ def test_info_reads_an_imported_type_beside_an_own_scope_of_its_name(tmp_path: P
 
     assert outcome.text is not None
     assert "record Box[T]\n    v: T" in outcome.text
+
+
+def test_scope_records_whether_a_spelling_selects_an_inline_member_or_a_declaration() -> None:
+    """``E[int]::A`` selects enum ``E``'s inline member; ``E::Inner`` the record at that path."""
+    source = (
+        "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int\n"
+        "fn(p: E[int]::A, q: E::Inner) => q.x"
+    )
+    entry = resolve_inline_entry(source)
+    names: list[NameT] = []
+    walk(entry.program, lambda node: names.append(node) if isinstance(node, NameT) else None)
+    member, nested = (
+        entry.owner_declarations[node.qualifier.node_id]
+        for node in names
+        if node.qualifier is not None
+    )
+
+    assert member == OwnerMemberSelection((ENTRY_ID, (), "E"), "A")
+    assert nested == DeclarationSelection((ENTRY_ID, ("E",), "Inner"))

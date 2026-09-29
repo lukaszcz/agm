@@ -34,7 +34,6 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     BinderKind,
     ImmutableAssignmentError,
-    ImportedModuleOrigin,
     ReceiverOwner,
     UnknownMemberError,
 )
@@ -389,7 +388,7 @@ class TestGlobImport:
         )
         result = resolve_program(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
-        (candidate,) = entry_resolved.constructor_candidates_by_path[((), "T")]
+        (candidate,) = entry_resolved.constructor_refs.values()
         assert candidate.owner_name == "Token"
         assert candidate.owner_path == ("A",)
 
@@ -407,13 +406,13 @@ class TestGlobImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib::{A::Status::Good as X}\n()",
+                "entry": "import mylib::{A::Status::Good as X}\nlet x = X",
                 "mylib": "scope A\n  enum Status\n    | Good\n    | Bad\nend A",
             },
         )
         result = resolve_program(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
-        (candidate,) = entry_resolved.constructor_candidates_by_path[((), "X")]
+        (candidate,) = entry_resolved.constructor_refs.values()
         assert candidate.owner_name == "Good"
         assert candidate.owner_path == ("A", "Status")
 
@@ -763,9 +762,9 @@ class TestClashDeferred:
         # ``foo`` on the third entry line, columns 9..12 -- the reference itself.
         assert (span.start_line, span.start_col, span.end_line, span.end_col) == (3, 9, 3, 12)
 
-    def test_renamed_scope_collision_is_ambiguous_when_used(self, tmp_path: Path) -> None:
+    def test_scopes_renamed_to_one_spelling_combine_under_a_use(self, tmp_path: Path) -> None:
         files = {
-            "entry": "import lib\nuse lib::{One as X, Two as X}\n()",
+            "entry": "import lib\nuse lib::{One as X, Two as X}\nuse X::*\nfirst() + second()",
             "lib": (
                 "scope One\n  def first() -> int = 1\nend One\n"
                 "\n"
@@ -773,11 +772,7 @@ class TestClashDeferred:
             ),
         }
 
-        resolve_program(_make_graph_from_files(tmp_path, files))
-
-        files["entry"] = "import lib\nuse lib::{One as X, Two as X}\nuse X::*\n()"
-        with pytest.raises(AglScopeError, match="ambiguous"):
-            resolve_program(_make_graph_from_files(tmp_path, files))
+        check_program(resolve_program(_make_graph_from_files(tmp_path, files)), base_caps())
 
     def test_use_deduplicates_routes_to_same_reexport_origin(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
@@ -1758,58 +1753,32 @@ class TestWildcardImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[shared_var.node_id]
         assert ref.module_id == ModuleId.from_path("core")
 
-    def test_unrelated_import_aliases_do_not_form_a_use_facade(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
+    @pytest.mark.parametrize(
+        "modules",
+        (
             {
-                "entry": "import alpha as F\nimport beta as F\nuse F::*",
+                "entry": "import alpha as F\nimport beta as F\nuse F::*\nfirst() + second()",
                 "alpha": "def first() -> int = 1",
                 "beta": "def second() -> int = 2",
             },
-        )
-
-        with pytest.raises(AmbiguousQualificationError) as exc_info:
-            resolve_program(graph)
-        assert set(exc_info.value.origins) == {
-            ImportedModuleOrigin((ModuleId.from_path("alpha"), ())),
-            ImportedModuleOrigin((ModuleId.from_path("beta"), ())),
-        }
-
-    def test_separate_wildcard_aliases_do_not_form_one_use_facade(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
             {
-                "entry": "import alpha/* as F\nimport beta/* as F\nuse F::*",
+                "entry": "import alpha/* as F\nimport beta/* as F\nuse F::*\nfirst() + second()",
                 "alpha/one": "def first() -> int = 1",
                 "beta/two": "def second() -> int = 2",
             },
-        )
-
-        with pytest.raises(AmbiguousQualificationError) as exc_info:
-            resolve_program(graph)
-        assert set(exc_info.value.origins) == {
-            ImportedModuleOrigin((ModuleId.from_path("alpha/one"), ())),
-            ImportedModuleOrigin((ModuleId.from_path("beta/two"), ())),
-        }
-
-    def test_nonfacade_route_keeps_wildcard_alias_use_ambiguous(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
             {
-                "entry": "import pkg/* as F\nimport other::{F}\nuse F::*",
+                "entry": "import pkg/* as F\nimport other::{F}\nuse F::*\nfirst() + third()",
                 "pkg/alpha": "def first() -> int = 1",
                 "pkg/beta": "def second() -> int = 2",
                 "other": "scope F\n  def third() -> int = 3\nend F",
             },
-        )
-
-        with pytest.raises(AmbiguousQualificationError) as exc_info:
-            resolve_program(graph)
-        assert set(exc_info.value.origins) == {
-            ImportedModuleOrigin((ModuleId.from_path("pkg/alpha"), ())),
-            ImportedModuleOrigin((ModuleId.from_path("pkg/beta"), ())),
-            ImportedModuleOrigin((ModuleId.from_path("other"), ("F",))),
-        }
+        ),
+        ids=("aliases", "wildcard-aliases", "wildcard-alias-and-scope"),
+    )
+    def test_every_scope_a_use_target_spells_combines(
+        self, tmp_path: Path, modules: dict[str, str]
+    ) -> None:
+        check_program(resolve_program(_make_graph_from_files(tmp_path, modules)), base_caps())
 
     def test_own_type_beats_a_same_named_import_route(self, tmp_path: Path) -> None:
         """``Color::Red`` is the own enum member, not the aliased route's ``Red``."""

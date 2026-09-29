@@ -1516,44 +1516,36 @@ def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Pat
         resolve_program(graph)
 
 
-def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
-    tmp_path: Path,
-) -> None:
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import left\n"
-                "import right\n"
-                "use left::Outer::*\n"
-                "use right::Outer::*\n"
-                "use Shared::*\n"
-            ),
-            "left": (
-                "scope Outer\n"
-                "\n"
-                "  scope Shared\n"
-                "    def left() -> int = 1\n"
-                "  end Shared\n"
-                "end Outer\n"
-            ),
-            "right": (
-                "scope Outer\n"
-                "\n"
-                "  scope Shared\n"
-                "    def right() -> int = 2\n"
-                "  end Shared\n"
-                "end Outer\n"
-            ),
-        },
+def test_use_combines_imported_scopes_exposed_by_earlier_uses(tmp_path: Path) -> None:
+    """Both exposed ``Shared`` scopes combine; a path both declare is ambiguous where used."""
+    shared = (
+        "scope Outer\n"
+        "\n"
+        "  scope Shared\n"
+        "    def {name}() -> int = 1\n"
+        "    def common() -> int = 1\n"
+        "  end Shared\n"
+        "end Outer\n"
     )
+    header = "import left\nimport right\nuse left::Outer::*\nuse right::Outer::*\nuse Shared::*\n"
+    modules = {"left": shared.format(name="left"), "right": shared.format(name="right")}
 
+    check_program(
+        resolve_program(
+            make_graph_from_files(
+                tmp_path, {"entry": header + "let x = left() + right()\n", **modules}
+            )
+        ),
+        base_caps(),
+    )
     with pytest.raises(AmbiguousQualificationError) as excinfo:
-        resolve_program(graph)
+        resolve_program(
+            make_graph_from_files(tmp_path, {"entry": header + "let x = common()\n", **modules})
+        )
 
     assert set(excinfo.value.origins) == {
-        ImportedModuleOrigin((ModuleId.from_path("left"), ("Outer", "Shared"))),
-        ImportedModuleOrigin((ModuleId.from_path("right"), ("Outer", "Shared"))),
+        UseDeclarationOrigin((ModuleId.from_path("left"), ("Outer", "Shared", "common"))),
+        UseDeclarationOrigin((ModuleId.from_path("right"), ("Outer", "Shared", "common"))),
     }
 
 

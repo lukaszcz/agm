@@ -21,6 +21,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
+    TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -504,7 +505,6 @@ def test_same_named_module_route_supplies_what_a_local_scope_lacks(
     "source",
     (
         "scope Tools\n  def f() -> int = 0\nend Tools\n\nTools[int]::f()",
-        "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value: Tools[int]::T = null",
         (
             "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value = 1\n"
             "case value of | Tools[int]::f => 1"
@@ -516,8 +516,15 @@ def test_same_named_module_route_supplies_what_a_local_scope_lacks(
 def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
     source: str,
 ) -> None:
-    with pytest.raises(AglScopeError):
+    with pytest.raises(TypeArgumentsError):
         resolve_inline_entry(source)
+
+
+def test_an_unknown_member_beneath_an_applied_plain_scope_is_unknown() -> None:
+    with pytest.raises(UnknownMemberError):
+        resolve_inline_entry(
+            "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value: Tools[int]::T = null"
+        )
 
 
 def test_long_expression_qualifier_chain_reports_the_unresolved_qualifier() -> None:
@@ -637,15 +644,17 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
     ("target", "call", "resolves"),
     (
         ("Point", "local()", True),
-        ("Point", "remote()", False),
+        ("Point", "remote()", True),
         ("::Point", "local()", True),
+        ("::Point", "remote()", False),
         ("/Point", "remote()", True),
+        ("/Point", "local()", False),
     ),
 )
-def test_use_target_prefers_a_local_scope_over_a_same_named_route(
+def test_use_target_combines_a_local_scope_with_a_same_named_route(
     target: str, call: str, *, resolves: bool
 ) -> None:
-    """``use Point::*`` opens the own scope; ``use /Point::*`` the module."""
+    """``use Point::*`` opens the own scope and the module; ``::``/``/`` anchor one of them."""
     modules = {
         "Point": "def remote() -> int = 1\n",
         "entry": (
@@ -789,19 +798,21 @@ def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
         )
 
 
-def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
+def test_use_target_suffix_routes_combine_and_a_module_anchor_selects_one() -> None:
     modules = {
-        "entry": "import one/Target\nimport two/Target\nuse Target::*\n",
+        "entry": (
+            "import one/Target\nimport two/Target\nuse Target::*\nlet r = first() + second()\n"
+        ),
         "one/Target": "def first() -> int = 1\n",
         "two/Target": "def second() -> int = 2\n",
     }
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
-        _resolve_without_loader(modules)
+    _resolve_without_loader(modules)
 
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
-    )
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
+        )
 
 
 def test_use_bare_contributions_narrow_to_their_scope_region(tmp_path: Path) -> None:
@@ -979,7 +990,7 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
 ) -> None:
     from tests.agl.ir_harness import make_graph_from_files
 
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+    with pytest.raises(TypeArgumentsError):
         resolve_program(
             make_graph_from_files(
                 tmp_path, {"entry": entry_source, "lib": "scope A\n  def f() -> int = 7\nend A\n"}
@@ -988,7 +999,7 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
 
 
 def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Path) -> None:
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+    with pytest.raises(TypeArgumentsError):
         _entry_resolution(
             tmp_path,
             {
@@ -1001,22 +1012,25 @@ def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Pat
         )
 
 
-def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path: Path) -> None:
-    """``lib::Box[int]::describe()`` keeps working: ``Box`` is a real generic type."""
-    resolution = _entry_resolution(
-        tmp_path,
-        {
-            "entry": "import lib\nprint(lib::Box[int]::describe())",
-            "lib": 'record Box[T]\n  value: T\n\ndef Box::describe() -> text = "box"\n',
-        },
-    )
-    (describe_call,) = [
-        call
-        for call in _find_nodes(resolution.program, Call)
-        if isinstance(call.callee, VarRef) and call.callee.name == "describe"
-    ]
-    assert isinstance(describe_call.callee, VarRef)
-    assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID
+@pytest.mark.parametrize(
+    "entry_source",
+    ("import lib\nprint(lib::Box[int]::describe())", "import lib::*\nprint(Box[int]::describe())"),
+)
+def test_type_arguments_on_a_generic_type_never_reach_its_scope_functions(
+    tmp_path: Path, entry_source: str
+) -> None:
+    """``Box[int]::describe()`` is rejected: ``describe`` is not an inline member of ``Box``."""
+    with pytest.raises(TypeArgumentsError) as exc_info:
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": entry_source,
+                "lib": 'record Box[T]\n  value: T\n\ndef Box::describe() -> text = "box"\n',
+            },
+        )
+    span = exc_info.value.span
+    assert span is not None
+    assert entry_source[span.start_offset : span.end_offset] == "Box[int]"
 
 
 def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None:

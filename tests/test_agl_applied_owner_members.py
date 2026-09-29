@@ -1,11 +1,11 @@
-"""An applied type owner selects only its own members.
+"""An applied type owner selects only its inline members.
 
 ``Owner[A]::member`` selects an inline member of an enum owner (directly or
-through an alias of it), or a name the enum references from its own path. A
-declaration merely nested beneath the owner's path (``record E::Inner``) is
-reached only through the owner's bare path: applying the owner to type
-arguments first is a static type error, alike for a constructor call or
-reference, a pattern, an annotation and an alias target --
+through an alias of it). Any other declaration beneath the owner's path -- a
+nested ``record E::Inner`` or a member the enum references from its own path --
+is reached only through the owner's bare path: applying the owner to type
+arguments first is a scope error on the applied segment, alike for a
+constructor call or reference, a pattern, an annotation and an alias target --
 in file mode and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
 A pattern spelling the nested declaration through the owner's bare path
 matches that declaration alone, never one of the enum's members.
@@ -18,10 +18,11 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglTypeError
+from agm.agl.scope.symbols import TypeArgumentsError
 from tests.agl.qualifier_support import FilePhase, assert_verdicts_for_grouping, grouping_params
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
-_REJECTED: tuple[FilePhase, type[BaseException] | type[None]] = ("typecheck", AglTypeError)
+_REJECTED: tuple[FilePhase, type[BaseException] | type[None]] = ("scope", TypeArgumentsError)
 
 _OWNERS = {
     "enum": "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int",
@@ -37,13 +38,7 @@ _APPLIED_PROBES = {
     "annotation": "fn(p: E[int]::Inner) => 1",
     "alias": "type T = E[int]::Inner\nfn(p: T) => 1",
 }
-_APPLIED_SPANS = {
-    "call": "E[int]::Inner(x = 1)",
-    "reference": "E[int]::Inner",
-    "pattern": "E[int]::Inner(x)",
-    "annotation": "p: E[int]::Inner",
-    "alias": "type T = E[int]::Inner",
-}
+_APPLIED_SPANS = dict.fromkeys(_APPLIED_PROBES, "E[int]")
 # The nested declaration's own bare path selects it, whatever its owner is.
 _PLAIN_PROBES = {
     "call": "E::Inner(x = 1)",
@@ -104,7 +99,7 @@ class TestNestedDeclarationBeneathAnAppliedOwner:
             (_OWNERS["enum"],),
             sizes,
             probes,
-            dict.fromkeys(probes, _REJECTED),
+            dict.fromkeys(probes, ("typecheck", AglTypeError)),
             span_texts={"nested-against-member": "E::Inner(x)", "member-against-nested": "E::A(a)"},
         )
 
@@ -119,12 +114,11 @@ _MEMBER_PROBES = {
     "inline-annotation": "fn(p: E[int]::A) => p.a",
     "alias-call": "Al[int]::A(a = 1)",
     "alias-annotation": "fn(p: Al[int]::A) => p.a",
-    "own-path-referenced": "E[int]::Item(y = 1)",
 }
 
 
 class TestAppliedOwnerSelectsItsOwnMembers:
-    """An inline member, through the enum or its alias, and an own-path reference."""
+    """An inline member, through the enum or its alias."""
 
     @pytest.mark.parametrize("sizes", grouping_params(2))
     def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
@@ -142,8 +136,22 @@ class TestAppliedOwnerSelectsItsOwnMembers:
                 "inline-annotation": "E::A[int] -> int",
                 "alias-call": "record E::A[int]\n  a: int",
                 "alias-annotation": "E::A[int] -> int",
-                "own-path-referenced": "record E::Item\n  y: int",
             },
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(2))
+    def test_a_member_referenced_from_the_owner_path_is_not_inline(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        probes = {"call": "E[int]::Item(y = 1)", "annotation": "fn(p: E[int]::Item) => p.y"}
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {},
+            (_MEMBER_OWNERS,),
+            sizes,
+            probes,
+            dict.fromkeys(probes, _REJECTED),
+            span_texts=dict.fromkeys(probes, "E[int]"),
         )
 
 
@@ -168,10 +176,5 @@ class TestImportedAppliedOwner:
             sizes,
             _ROUTED_PROBES,
             dict.fromkeys(_ROUTED_PROBES, _REJECTED),
-            span_texts={
-                "call": "lib::E[int]::Inner(x = 1)",
-                "pattern": "lib::E[int]::Inner(x)",
-                "annotation": "p: lib::E[int]::Inner",
-                "used-call": "E[int]::Inner(x = 1)",
-            },
+            span_texts=dict.fromkeys(_ROUTED_PROBES, "E[int]"),
         )

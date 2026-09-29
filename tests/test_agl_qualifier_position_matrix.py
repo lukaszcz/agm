@@ -4,14 +4,18 @@ Scope, not typecheck, decides which declaration a qualified type name
 selects and whether a qualifier selects none at all, identically across the
 value, pattern, ``is``, cast, annotation, alias, type-argument and applied
 positions, and identically in file mode and the REPL (independent of how a
-REPL session groups its declarations into entries). ``assert_verdict_everywhere``
-(see :mod:`tests.agl.qualifier_support`) is the one assertion helper behind
-both this file's hand-written cases and (via ``_assert_matrix_verdict``) its
-own generated matrix; every accepted case's *identity* is asserted against
-its exact expected rendering (``_accepted_identity``), not merely non-``None``
--- proof scope's resolution reached real, checked node types naming the
-declaration it actually picked, and (since ``assert_verdict_everywhere``
-compares them) that file mode and every REPL grouping agree on it exactly.
+REPL session groups its declarations into entries). ``assert_verdicts_for_grouping``/
+``assert_verdict_for_grouping`` (see :mod:`tests.agl.qualifier_support`) are
+the one assertion helpers behind both this file's hand-written cases and
+(via ``_assert_matrix_verdict``) its own generated matrix, each checking one
+REPL grouping per test instance -- every hand-written case parametrizes over
+:func:`~tests.agl.qualifier_support.grouping_params` exactly as the matrix
+already does, so a batch's full grouping coverage is spread across many
+cheap tests rather than summed into one. Every accepted case's *identity* is
+asserted against its exact expected rendering (``_accepted_identity``), not
+merely non-``None`` -- proof scope's resolution reached real, checked node
+types naming the declaration it actually picked, and (since these helpers
+compare them) that file mode and this grouping agree on it exactly.
 
 ``_matrix_params`` (file mode) and ``_matrix_cases`` (REPL mode, feeding
 :func:`~tests.agl.qualifier_support.repl_matrix_verdict_for_grouping`'s
@@ -89,9 +93,11 @@ from tests.agl.qualifier_support import (
     LegalGroupings,
     Verdict,
     all_groupings,
-    assert_verdict_everywhere,
-    assert_verdicts_everywhere,
+    assert_verdict_for_grouping,
+    assert_verdicts_for_grouping,
     file_verdict,
+    grouping_cases,
+    grouping_params,
     repl_matrix_verdict_for_grouping,
 )
 
@@ -396,9 +402,9 @@ def test_qualifier_decision_matrix_file(
 
 def _matrix_repl_params() -> list[object]:
     return [
-        pytest.param(form_name, sizes, id=f"{form_name}-{'.'.join(map(str, sizes))}")
+        pytest.param(form_name, sizes, id=f"{form_name}-{gid}")
         for form_name in sorted(_FORMS)
-        for sizes in all_groupings(len(_FORMS[form_name][1]) + 1)
+        for gid, sizes in grouping_cases(len(_FORMS[form_name][1]) + 1)
     ]
 
 
@@ -545,6 +551,10 @@ _ACCEPTED_RECORD_POS: dict[str, str] = {
 }
 
 
+_SHADOW_HEADER = ("import shapes::*", _GEO_LOCAL_ONLY)
+_IMPORTED_MEMBER_HEADER = ("import shapes::*",)
+
+
 class TestLocalScopeShadowsSameNamedImport:
     """A local ``scope Geo`` lacking ``Point`` beats an imported ``Geo::Point``.
 
@@ -554,13 +564,14 @@ class TestLocalScopeShadowsSameNamedImport:
     grouping.
     """
 
-    def test_rejected(self, tmp_path: Path) -> None:
-        header = ("import shapes::*", _GEO_LOCAL_ONLY)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_SHADOW_HEADER) + 1))
+    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {pos: _RECORD_POS[pos].format(q="Geo::Point") for pos in _RECORD_POS}
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _GEO_IMPORTED},
-            header,
+            _SHADOW_HEADER,
+            sizes,
             probes,
             {pos: ("scope", UnknownMemberError) for pos in probes},
             span_texts={pos: "Geo::Point" for pos in probes},
@@ -576,13 +587,18 @@ class TestImportedScopeRegionMemberIsAccepted:
     all.
     """
 
-    def test_accepted(self, tmp_path: Path) -> None:
-        header = ("import shapes::*",)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_IMPORTED_MEMBER_HEADER) + 1))
+    def test_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {
             pos: _ACCEPTED_RECORD_POS[pos].format(q="Geo::Point") for pos in _ACCEPTED_RECORD_POS
         }
-        assert_verdicts_everywhere(
-            tmp_path, {"shapes": _GEO_IMPORTED}, header, probes, {pos: _ACCEPTED for pos in probes}
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {"shapes": _GEO_IMPORTED},
+            _IMPORTED_MEMBER_HEADER,
+            sizes,
+            probes,
+            {pos: _ACCEPTED for pos in probes},
         )
 
 
@@ -610,17 +626,19 @@ class TestLocalTypeWinsOverAmbiguousBareImports:
     the local record wins the same way in every position.
     """
 
-    def test_accepted(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_TWO_IMPORT_HEADER) + 1))
+    def test_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {
             "annot": "fn(p: Point) => 1",
             "tyarg": "fn(p: array[Point]) => 1",
             "alias": "type A = Point\n1",
             "value": "Point(z = 1)",
         }
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             _TWO_IMPORT_LIB,
             _TWO_IMPORT_HEADER,
+            sizes,
             probes,
             {pos: _ACCEPTED for pos in probes},
         )
@@ -650,22 +668,26 @@ class TestLocalEnumCaseWalkAgreesAcrossGroupings:
     and rejects ``A`` as a plain unknown member of the local nullary case.
     """
 
-    def test_unanchored(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_CASE_CLASH_HEADER) + 1))
+    def test_unanchored(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         decls = (*_ENUM_CASE_CLASH_HEADER, "Foo::E::A")
-        assert_verdict_everywhere(
+        assert_verdict_for_grouping(
             tmp_path,
             _ENUM_CASE_CLASH_LIB,
             decls,
+            sizes,
             ("scope", RouteClashError),
             span_text="Foo::E::A",
         )
 
-    def test_anchored(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_CASE_CLASH_HEADER) + 1))
+    def test_anchored(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         decls = (*_ENUM_CASE_CLASH_HEADER, "::Foo::E::A")
-        assert_verdict_everywhere(
+        assert_verdict_for_grouping(
             tmp_path,
             _ENUM_CASE_CLASH_LIB,
             decls,
+            sizes,
             ("scope", UnknownMemberError),
             span_text="::Foo::E::A",
         )
@@ -693,6 +715,19 @@ _LOCAL_WINS_LOCAL = (
     "scope Geo\n  record Point\n    y: int\n  enum Shape\n    | Tri\n  type Num = text\nend Geo"
 )
 _LOCAL_WINS_HEADER = ("import shapes::*", _LOCAL_WINS_LOCAL)
+_LOCAL_WINS_NESTED_LIB = (
+    "scope Geo\n"
+    "  record Point\n"
+    "    x: int\n"
+    "  record Box[T]\n"
+    "    v: T\n"
+    "  enum Shape\n"
+    "    | Circle\n"
+    "    | Square\n"
+    "end Geo\n"
+)
+_LOCAL_WINS_NESTED_LOCAL = "scope Geo\n  record Point\n    y: int\n  enum Shape\n    | Tri\nend Geo"
+_LOCAL_WINS_NESTED_HEADER = ("import shapes::*", _LOCAL_WINS_NESTED_LOCAL)
 
 
 class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
@@ -704,17 +739,19 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
     scope already does.
     """
 
-    def test_accepted(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_WINS_HEADER) + 1))
+    def test_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {
             "annot-shape": "fn(p: Geo::Shape) => 1",
             "let-tri": "let s: Geo::Shape = Geo::Shape::Tri\ns",
             "annot-num": "fn(p: Geo::Num) => 1",
             "let-num": 'let n: Geo::Num = "a"\nn',
         }
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _LOCAL_WINS_LIB},
             _LOCAL_WINS_HEADER,
+            sizes,
             probes,
             {pos: _ACCEPTED for pos in probes},
         )
@@ -733,36 +770,37 @@ class TestLocalTypeWinsOverAmbiguousImportWithoutMerging:
         assert isinstance(bindings["n"], TextValue)
         assert bindings["n"].value == "a"
 
-    def test_local_scope_region_type_wins_over_imported_region(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_WINS_NESTED_HEADER) + 1))
+    def test_local_scope_region_type_wins_over_imported_region(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
         """A local scope-region ``Geo::Shape`` also wins when the local scope has ``Point``.
 
         Distinct from the module-level cases above: here the local ``Geo``
         also declares its own ``Point``, ruling out any fallback reading of
         ``Geo`` as a plain member-set scope with nothing of its own.
         """
-        lib = (
-            "scope Geo\n"
-            "  record Point\n"
-            "    x: int\n"
-            "  record Box[T]\n"
-            "    v: T\n"
-            "  enum Shape\n"
-            "    | Circle\n"
-            "    | Square\n"
-            "end Geo\n"
+        decls = (*_LOCAL_WINS_NESTED_HEADER, "fn(p: Geo::Shape) => 1")
+        assert_verdict_for_grouping(
+            tmp_path, {"shapes": _LOCAL_WINS_NESTED_LIB}, decls, sizes, _ACCEPTED
         )
-        local = "scope Geo\n  record Point\n    y: int\n  enum Shape\n    | Tri\nend Geo"
-        entry = "fn(p: Geo::Shape) => 1"
-        decls = ("import shapes::*", local, entry)
-        assert_verdict_everywhere(tmp_path, {"shapes": lib}, decls, _ACCEPTED)
 
 
 # ---------------------------------------------------------------------------
 # The owner is instantiated from scope's recorded key.
 # ---------------------------------------------------------------------------
 
+_NESTED_GENERIC_ALIAS_HEADER = (
+    "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
+    "type Rows[A] = Slot[array[A]]",
+    "let row: Slot[array[int]] = Slot::Filled(value = [1, 2])",
+)
 
-def test_nested_generic_alias_owner_is_instantiated_by_substitution(tmp_path: Path) -> None:
+
+@pytest.mark.parametrize("sizes", grouping_params(len(_NESTED_GENERIC_ALIAS_HEADER) + 1))
+def test_nested_generic_alias_owner_is_instantiated_by_substitution(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
     """An alias target nested inside another generic type substitutes recursively.
 
     ``Rows[A]``'s own template is ``Slot[array[A]]`` -- an alias target
@@ -771,9 +809,7 @@ def test_nested_generic_alias_owner_is_instantiated_by_substitution(tmp_path: Pa
     ``Slot::Filled[int]``.
     """
     decls = (
-        "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
-        "type Rows[A] = Slot[array[A]]",
-        "let row: Slot[array[int]] = Slot::Filled(value = [1, 2])",
+        *_NESTED_GENERIC_ALIAS_HEADER,
         "case row of\n  | Rows[int]::Filled(value) => value.size() + 1\n  | Slot::Empty => 0",
     )
     # The case expression's own arms both return ``int``, so the substitution
@@ -783,7 +819,7 @@ def test_nested_generic_alias_owner_is_instantiated_by_substitution(tmp_path: Pa
     # array-only method) would fail to typecheck rather than silently
     # accepting -- so acceptance itself is the proof; the identity is
     # asserted exactly anyway, per this module's own no-discard rule.
-    assert_verdict_everywhere(tmp_path, {}, decls, _ACCEPTED, expected_identity="int")
+    assert_verdict_for_grouping(tmp_path, {}, decls, sizes, _ACCEPTED, expected_identity="int")
 
 
 # ---------------------------------------------------------------------------
@@ -806,10 +842,12 @@ class TestUnknownQualifierRouteAcrossPositions:
     """``missing::Item`` selects none, decided by scope, in all seven positions."""
 
     def test_rejected(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+        # No header: the only grouping is one entry holding the probe alone.
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
             (),
+            (1,),
             _UNKNOWN_ROUTE_POS,
             {pos: ("scope", UnknownQualifierError) for pos in _UNKNOWN_ROUTE_POS},
             span_texts={pos: "missing::Item" for pos in _UNKNOWN_ROUTE_POS},
@@ -833,16 +871,20 @@ _ENUM_POS: dict[str, str] = {
 }
 
 
+_ENUM_SHADOW_HEADER = ("import lib::*", _ENUM_LOCAL)
+
+
 class TestLocalEnumShadowsImportedEnum:
     """A local ``enum Shape`` lacking ``Circle`` beats an imported ``Shape::Circle``."""
 
-    def test_rejected(self, tmp_path: Path) -> None:
-        header = ("import lib::*", _ENUM_LOCAL)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_SHADOW_HEADER) + 1))
+    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {pos: _ENUM_POS[pos].format(q="Shape::Circle") for pos in _ENUM_POS}
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"lib": _ENUM_LIB},
-            header,
+            _ENUM_SHADOW_HEADER,
+            sizes,
             probes,
             {pos: ("scope", UnknownMemberError) for pos in probes},
             span_texts={pos: "Shape::Circle" for pos in probes},
@@ -859,6 +901,7 @@ class TestLocalEnumShadowsImportedEnum:
 
 _DEFPATH_TYPE_OWNER_LIB = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
 _DEFPATH_TYPE_OWNER_DEF = "def Geo::m(self) -> int = self.x"
+_DEFPATH_TYPE_OWNER_HEADER = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF)
 
 
 class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
@@ -870,24 +913,26 @@ class TestDefCreatedPathOverImportedTypeReadsAsItsMethodNamespace:
     only a method-owner namespace with no nested members of its own.
     """
 
-    def test_nested_type_is_accepted(self, tmp_path: Path) -> None:
-        header = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_TYPE_OWNER_HEADER) + 1))
+    def test_nested_type_is_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {"annot": "fn(p: Geo::Inner) => 1", "value": "Geo::Inner(y = 1)"}
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_TYPE_OWNER_LIB},
-            header,
+            _DEFPATH_TYPE_OWNER_HEADER,
+            sizes,
             probes,
             {pos: _ACCEPTED for pos in probes},
         )
 
-    def test_missing_member_is_rejected(self, tmp_path: Path) -> None:
-        header = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_TYPE_OWNER_HEADER) + 1))
+    def test_missing_member_is_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {"annot": "fn(p: Geo::Nope) => 1", "value": "Geo::Nope(y = 1)"}
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_TYPE_OWNER_LIB},
-            header,
+            _DEFPATH_TYPE_OWNER_HEADER,
+            sizes,
             probes,
             {pos: ("scope", UnknownMemberError) for pos in probes},
             span_texts={pos: "Geo::Nope" for pos in probes},
@@ -906,8 +951,8 @@ class TestCurrentModuleAnchoredDefCreatedPathIsAnOwnRootMiss:
     qualifier.
     """
 
-    def test_rejected(self, tmp_path: Path) -> None:
-        header = ("import shapes::*", _DEFPATH_TYPE_OWNER_DEF)
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_TYPE_OWNER_HEADER) + 1))
+    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         shapes = {"annot": "fn(p: ::Geo::{}) => 1", "value": "::Geo::{}(y = 1)"}
         members = ["Inner", "Nope"]
         probes = {
@@ -915,10 +960,11 @@ class TestCurrentModuleAnchoredDefCreatedPathIsAnOwnRootMiss:
             for shape_name, shape in shapes.items()
             for member in members
         }
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_TYPE_OWNER_LIB},
-            header,
+            _DEFPATH_TYPE_OWNER_HEADER,
+            sizes,
             probes,
             {key: ("scope", UnknownMemberError) for key in probes},
             span_texts={key: f"::Geo::{key[1]}" for key in probes},
@@ -937,12 +983,14 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
     than treating ``Stored`` as an unresolved module route.
     """
 
-    def test_rejected(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_REFERENCED_MEMBER_HEADER) + 1))
+    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
         probes = {"annot": "fn(p: Stored::Saved::X) => 1", "value": "Stored::Saved::X"}
-        assert_verdicts_everywhere(
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
             _REFERENCED_MEMBER_HEADER,
+            sizes,
             probes,
             {pos: ("scope", ReferencedMemberError) for pos in probes},
             span_texts={pos: "Stored::Saved::X" for pos in probes},
@@ -960,6 +1008,8 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
 
 _DEFPATH_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
 _DEFPATH_DEF = "def Geo::f() -> int = 1"
+_DEFPATH_NO_IMPORT_HEADER = (_DEFPATH_DEF,)
+_DEFPATH_WITH_IMPORT_HEADER = ("import shapes::*", _DEFPATH_DEF)
 
 _DEFPATH_MISSING_POS: dict[str, str] = {
     "value": "Geo::Point(x = 1)",
@@ -977,21 +1027,25 @@ class TestDefCreatedPathIsPlainLocalNamespace:
     never gives the def-created path anything to defer to.
     """
 
-    def test_without_import(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_NO_IMPORT_HEADER) + 1))
+    def test_without_import(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
-            (_DEFPATH_DEF,),
+            _DEFPATH_NO_IMPORT_HEADER,
+            sizes,
             _DEFPATH_MISSING_POS,
             {pos: ("scope", UnknownMemberError) for pos in _DEFPATH_MISSING_POS},
             span_texts={pos: "Geo::Point" for pos in _DEFPATH_MISSING_POS},
         )
 
-    def test_with_imported_region(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_WITH_IMPORT_HEADER) + 1))
+    def test_with_imported_region(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_LIB},
-            ("import shapes::*", _DEFPATH_DEF),
+            _DEFPATH_WITH_IMPORT_HEADER,
+            sizes,
             _DEFPATH_MISSING_POS,
             {pos: ("scope", UnknownMemberError) for pos in _DEFPATH_MISSING_POS},
             span_texts={pos: "Geo::Point" for pos in _DEFPATH_MISSING_POS},
@@ -1018,6 +1072,8 @@ _DEFPATH3_MISSING_POS: dict[str, str] = {
     "value": "Geo::In::Nope(x = 1)",
     "annot": "fn(p: Geo::In::Nope) => 1",
 }
+_DEFPATH3_HEADER_OUTER = ("import shapes::*", "def Geo::f() -> int = 1")
+_DEFPATH3_HEADER_INNER = ("import shapes::*", "def Geo::In::f() -> int = 1")
 
 
 class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
@@ -1029,11 +1085,15 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
     one level deeper (``Geo::In``).
     """
 
-    def test_import_is_not_merged_at_length_three(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH3_HEADER_OUTER) + 1))
+    def test_import_is_not_merged_at_length_three(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH3_LIB},
-            ("import shapes::*", "def Geo::f() -> int = 1"),
+            _DEFPATH3_HEADER_OUTER,
+            sizes,
             _DEFPATH3_POS,
             {pos: ("scope", UnknownMemberError) for pos in _DEFPATH3_POS},
             span_texts={pos: "Geo::In::Point" for pos in _DEFPATH3_POS},
@@ -1050,11 +1110,13 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::In::Nope"
 
-    def test_def_path_nested_one_level_deeper(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH3_HEADER_INNER) + 1))
+    def test_def_path_nested_one_level_deeper(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH3_LIB},
-            ("import shapes::*", "def Geo::In::f() -> int = 1"),
+            _DEFPATH3_HEADER_INNER,
+            sizes,
             _DEFPATH3_POS,
             {pos: ("scope", UnknownMemberError) for pos in _DEFPATH3_POS},
             span_texts={pos: "Geo::In::Point" for pos in _DEFPATH3_POS},
@@ -1074,27 +1136,32 @@ class TestDefCreatedPathIsPlainLocalNamespaceAtLengthThree:
 _DEFPATH_EMPTY_PREFIX_LIB = (
     "scope Geo\n\n  scope In\n    record Point\n      x: int\n  end In\nend Geo\n"
 )
+_DEFPATH_EMPTY_PREFIX_HEADER = ("import shapes::*", "def Geo::In::f() -> int = 1")
 
 
 class TestDefCreatedPathWithEmptyOwnPrefixIsPlainLocalNamespace:
     """A def-created path's non-owning leading prefix still rejects a sibling miss."""
 
-    def test_annotation(self, tmp_path: Path) -> None:
-        decls = ("import shapes::*", "def Geo::In::f() -> int = 1", "fn(x: Geo::Other) => 1")
-        assert_verdict_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_EMPTY_PREFIX_HEADER) + 1))
+    def test_annotation(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        decls = (*_DEFPATH_EMPTY_PREFIX_HEADER, "fn(x: Geo::Other) => 1")
+        assert_verdict_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_EMPTY_PREFIX_LIB},
             decls,
+            sizes,
             ("scope", UnknownMemberError),
             span_text="Geo::Other",
         )
 
-    def test_is(self, tmp_path: Path) -> None:
-        decls = ("import shapes::*", "def Geo::In::f() -> int = 1", "1 is Geo::Other")
-        assert_verdict_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_DEFPATH_EMPTY_PREFIX_HEADER) + 1))
+    def test_is(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        decls = (*_DEFPATH_EMPTY_PREFIX_HEADER, "1 is Geo::Other")
+        assert_verdict_for_grouping(
             tmp_path,
             {"shapes": _DEFPATH_EMPTY_PREFIX_LIB},
             decls,
+            sizes,
             ("scope", UnknownMemberError),
             span_text="Geo::Other",
         )
@@ -1127,6 +1194,8 @@ _CHAIN_LEN3_POS: dict[str, str] = {
 _CHAIN_NESTED_LOCAL = (
     "scope Geo\n\n  scope Shape\n    enum Kind = Round | Flat\n  end Shape\nend Geo"
 )
+_CHAIN_LEN3_HEADER = ("import shapes::*", _CHAIN_LOCAL)
+_CHAIN_LEN4_HEADER = (_CHAIN_NESTED_LOCAL,)
 
 
 class TestLocalScopeChainLengthsAgree:
@@ -1141,37 +1210,47 @@ class TestLocalScopeChainLengthsAgree:
         assert span is not None
         assert src[span.start_offset : span.end_offset] == "Geo::Point"
 
-    def test_length_three(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_CHAIN_LEN3_HEADER) + 1))
+    def test_length_three(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"shapes": _CHAIN_LIB},
-            ("import shapes::*", _CHAIN_LOCAL),
+            _CHAIN_LEN3_HEADER,
+            sizes,
             _CHAIN_LEN3_POS,
             {pos: ("scope", UnknownMemberError) for pos in _CHAIN_LEN3_POS},
             span_texts={pos: "Geo::Shape::Circle" for pos in _CHAIN_LEN3_POS},
         )
 
-    def test_length_four_misses_one_level_past_a_walked_hit(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("sizes", grouping_params(len(_CHAIN_LEN4_HEADER) + 1))
+    def test_length_four_misses_one_level_past_a_walked_hit(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
         """A 4-segment chain whose first two segments walk successfully rejects at the third.
 
         ``Shape`` nested inside the local ``Geo`` region exists (the walk's
         own first step hits), but nothing beneath it is named ``Missing``:
         the walk's own second step is what rejects, not its first.
         """
-        decls = (_CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X")
-        assert_verdict_everywhere(
+        decls = (*_CHAIN_LEN4_HEADER, "Geo::Shape::Missing::X")
+        assert_verdict_for_grouping(
             tmp_path,
             {},
             decls,
+            sizes,
             ("scope", UnknownMemberError),
             span_text="Geo::Shape::Missing::X",
         )
 
 
 _ROUTE_AND_PARTIAL_LOCAL_MISS_LIB = {"Geo": "let x = 1\n"}
+_ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER = ("import Geo", _CHAIN_NESTED_LOCAL)
 
 
-def test_local_scope_partial_miss_clashes_with_a_same_named_route(tmp_path: Path) -> None:
+@pytest.mark.parametrize("sizes", grouping_params(len(_ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER) + 1))
+def test_local_scope_partial_miss_clashes_with_a_same_named_route(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
     """A partial local-scope miss still clashes with a same-named import route.
 
     ``Geo::Shape::Missing::X``'s walk matches ``Geo::Shape`` (both nested
@@ -1181,11 +1260,12 @@ def test_local_scope_partial_miss_clashes_with_a_same_named_route(tmp_path: Path
     plain scope region never declares ``Missing`` itself, so any such route
     at all is a clash.
     """
-    decls = ("import Geo", _CHAIN_NESTED_LOCAL, "Geo::Shape::Missing::X")
-    assert_verdict_everywhere(
+    decls = (*_ROUTE_AND_PARTIAL_LOCAL_MISS_HEADER, "Geo::Shape::Missing::X")
+    assert_verdict_for_grouping(
         tmp_path,
         _ROUTE_AND_PARTIAL_LOCAL_MISS_LIB,
         decls,
+        sizes,
         ("scope", RouteClashError),
         span_text="Geo::Shape::Missing::X",
     )
@@ -1206,6 +1286,9 @@ _ACCEPTED_CHAIN_LEN3_POS: dict[str, str] = {
 }
 
 
+_ACCEPTED_CHAIN_HEADER = (_CHAIN_LIB,)
+
+
 class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
     """A decisive local scope's own member is accepted, walked exactly, at length 2 and 3 alike.
 
@@ -1216,20 +1299,24 @@ class TestLocalScopeChainLengthsAreAcceptedWhenDeclaredLocally:
     reachable at all.
     """
 
-    def test_length_two(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_ACCEPTED_CHAIN_HEADER) + 1))
+    def test_length_two(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
-            (_CHAIN_LIB,),
+            _ACCEPTED_CHAIN_HEADER,
+            sizes,
             _ACCEPTED_CHAIN_LEN2_POS,
             {pos: _ACCEPTED for pos in _ACCEPTED_CHAIN_LEN2_POS},
         )
 
-    def test_length_three(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_ACCEPTED_CHAIN_HEADER) + 1))
+    def test_length_three(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {},
-            (_CHAIN_LIB,),
+            _ACCEPTED_CHAIN_HEADER,
+            sizes,
             _ACCEPTED_CHAIN_LEN3_POS,
             {pos: _ACCEPTED for pos in _ACCEPTED_CHAIN_LEN3_POS},
         )
@@ -1258,6 +1345,10 @@ _LEN4_POS: dict[str, str] = {
 }
 
 
+_LEN4_HEADER_SAME_LEAF = ("import pkg/Foo", _LEN4_LOCAL_SAME_LEAF)
+_LEN4_HEADER_DIFFERENT_LEAF = ("import pkg/Foo", _LEN4_LOCAL_DIFFERENT_LEAF)
+
+
 class TestLocalScopeFullyMatchingRouteLeadingSegmentClashesAtFullChainLength:
     """A local scope fully declaring the qualified path still clashes against its route.
 
@@ -1268,21 +1359,25 @@ class TestLocalScopeFullyMatchingRouteLeadingSegmentClashesAtFullChainLength:
     own member name.
     """
 
-    def test_same_leaf(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_LEN4_HEADER_SAME_LEAF) + 1))
+    def test_same_leaf(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"pkg/Foo": _LEN4_LIB},
-            ("import pkg/Foo", _LEN4_LOCAL_SAME_LEAF),
+            _LEN4_HEADER_SAME_LEAF,
+            sizes,
             _LEN4_POS,
             {pos: ("scope", RouteClashError) for pos in _LEN4_POS},
             span_texts={pos: "Foo::E::A::Z" for pos in _LEN4_POS},
         )
 
-    def test_different_leaf(self, tmp_path: Path) -> None:
-        assert_verdicts_everywhere(
+    @pytest.mark.parametrize("sizes", grouping_params(len(_LEN4_HEADER_DIFFERENT_LEAF) + 1))
+    def test_different_leaf(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
             tmp_path,
             {"pkg/Foo": _LEN4_LIB},
-            ("import pkg/Foo", _LEN4_LOCAL_DIFFERENT_LEAF),
+            _LEN4_HEADER_DIFFERENT_LEAF,
+            sizes,
             _LEN4_POS,
             {pos: ("scope", RouteClashError) for pos in _LEN4_POS},
             span_texts={pos: "Foo::E::A::Z" for pos in _LEN4_POS},

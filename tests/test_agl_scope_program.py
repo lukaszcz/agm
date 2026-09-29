@@ -2549,6 +2549,44 @@ class TestMethodOrphanRule:
         with pytest.raises(AglScopeError, match="alias"):
             resolve_program(graph)
 
+    def test_local_nested_alias_is_rejected_as_a_multi_segment_receiver(
+        self, tmp_path: Path
+    ) -> None:
+        """A type alias reopened under its own type's scope still rejects a receiver."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "record Outer\n"
+                    "  x: int\n"
+                    "\n"
+                    "scope Outer\n"
+                    "  type Inner = int\n"
+                    "end Outer\n"
+                    "\n"
+                    "def Outer::Inner::bad(self) -> int = 1"
+                ),
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="alias"):
+            resolve_program(graph)
+
+    def test_foreign_nested_alias_is_rejected_as_a_multi_segment_receiver(
+        self, tmp_path: Path
+    ) -> None:
+        """A used nested type alias, reached without a local declaration, still rejects."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes\nuse shapes::*\ndef Outer::Inner::bad(self) -> int = 1",
+                "shapes": ("record Outer\n  x: int\n\nscope Outer\n  type Inner = int\nend Outer"),
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="alias"):
+            resolve_program(graph)
+
     @pytest.mark.parametrize(
         ("module_source", "receiver"),
         (

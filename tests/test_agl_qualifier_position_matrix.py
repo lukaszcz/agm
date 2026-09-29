@@ -80,6 +80,7 @@ import pytest
 from agm.agl.diagnostics import ReferencedMemberError
 from agm.agl.repl import ReplSession
 from agm.agl.scope.symbols import (
+    AglScopeError,
     AmbiguousQualificationError,
     RouteClashError,
     UnknownMemberError,
@@ -994,6 +995,164 @@ class TestReferencedMemberWalkedOneSegmentPastNeverNamesAnUnknownQualifier:
             probes,
             {pos: ("scope", ReferencedMemberError) for pos in probes},
             span_texts={pos: "Stored::Saved::X" for pos in probes},
+        )
+
+
+# ---------------------------------------------------------------------------
+# A nearer ``use``-opened scope region blocks a farther, same-spelled
+# imported type from ever merging into the leading lookup -- the one lookup
+# shared by a bare type name (``_validate_bare_type_name``), a qualifier's
+# leading segment, and a ``def Owner::method`` receiver.
+# ---------------------------------------------------------------------------
+
+_NEAREST_REGION_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
+_NEAREST_IMPORTED_TYPE_LIB = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
+_NEAREST_MODULES = {"shapes": _NEAREST_REGION_LIB, "tl": _NEAREST_IMPORTED_TYPE_LIB}
+_NEAREST_HEADER = ("import tl::*", "import shapes", "use shapes::*")
+
+
+class TestNearestUseRegionBlocksFartherImportedTypeAsQualifierLeadingSegment:
+    """A qualifier's own leading segment: the nearer ``use`` region always decides.
+
+    ``tl::Geo`` (an imported type) and ``shapes::Geo`` (a locally ``use``d
+    scope region) share a spelling; only the region -- the nearer
+    contribution -- ever decides ``Geo``'s own leading reading, so a value
+    reference to ``Geo::f()`` (naming no member of either) reports the
+    unknown-*qualifier* verdict, not the farther type's own unknown-*member*
+    one (contrast ``test_control_without_the_nearer_region``, whose
+    identical spelling, absent the ``use``, resolves to the farther type
+    instead and so does report an unknown member).
+    """
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
+    def test_farther_type_member_is_not_reached(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _NEAREST_MODULES,
+            (*_NEAREST_HEADER, "Geo::f()"),
+            sizes,
+            ("scope", UnknownQualifierError),
+            span_text="Geo::f",
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(("import tl::*",)) + 1))
+    def test_control_without_the_nearer_region(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            {"tl": _NEAREST_IMPORTED_TYPE_LIB},
+            ("import tl::*", "Geo::f()"),
+            sizes,
+            ("scope", UnknownMemberError),
+            span_text="Geo::f",
+        )
+
+    @pytest.mark.parametrize(
+        "sizes", grouping_params(len((*_NEAREST_HEADER, "def Geo::f() -> int = 1")) + 1)
+    )
+    def test_a_competing_def_created_path_still_resolves_locally(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _NEAREST_MODULES,
+            (*_NEAREST_HEADER, "def Geo::f() -> int = 1", "Geo::f()"),
+            sizes,
+            _ACCEPTED,
+            expected_identity="int",
+        )
+
+
+_RECEIVER_NEAREST_MODULES = {"shapes": _NEAREST_REGION_LIB, "tl": "record Geo\n  x: int\n"}
+_RECEIVER_NEAREST_HEADER = ("import tl::*", "import shapes", "use shapes::*")
+
+
+class TestNearestUseRegionBlocksFartherImportedTypeAsReceiverOwner:
+    """A ``def Owner::method`` receiver's own owner: the same lookup, the same answer.
+
+    ``self``'s type is the receiver's resolved owner; once the nearer
+    ``use``-opened region decides ``Geo`` (exactly as the qualifier leading
+    segment above does), a region is never a type, so ``self`` itself
+    cannot be typed and the receiver rejects -- the same scope-phase verdict
+    the qualifier leading segment reaches for the identical shadowing.
+    Absent the region (``test_control_without_the_nearer_region``), the
+    farther type decides instead and the method type-checks normally.
+    """
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_RECEIVER_NEAREST_HEADER) + 1))
+    def test_receiver_owner_is_not_a_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _RECEIVER_NEAREST_MODULES,
+            (*_RECEIVER_NEAREST_HEADER, "def Geo::f(self) -> int = 1"),
+            sizes,
+            ("scope", AglScopeError),
+            span_text="self",
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(("import tl::*", "import shapes")) + 1))
+    def test_control_without_the_nearer_region(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _RECEIVER_NEAREST_MODULES,
+            (
+                "import tl::*",
+                "import shapes",
+                "def Geo::f(self) -> int = self.x\nlet g = Geo(x = 1)\ng.f()",
+            ),
+            sizes,
+            _ACCEPTED,
+            expected_identity="int",
+        )
+
+
+_BARE_NEAREST_MODULES = {
+    "m": "record X\n  a: int\n",
+    "n": "record X\n  b: int\n",
+    "lib": "scope X\n  record Y\n    z: int\nend X\n",
+}
+_BARE_NEAREST_HEADER = ("import m::*", "import n::*", "import lib", "use lib::*")
+
+
+class TestNearestUseRegionBlocksAmbiguousImportsAsBareTypeName:
+    """A bare (unqualified) type name: the same lookup avoids the same ambiguity.
+
+    ``X`` is ambiguous between two wildcard-imported records (``m::X``,
+    ``n::X``) at the farther, IMPORTED layer; a nearer ``use``-opened scope
+    region of the identical spelling (``lib::X``) decides it outright
+    instead, so ``_validate_bare_type_name`` -- unlike the plain, genuinely
+    ambiguous control below -- never raises scope's own ambiguity verdict
+    for it. A region is never itself a type, so the annotation then names
+    no type at all: typecheck's ordinary unknown-type verdict.
+    """
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_BARE_NEAREST_HEADER) + 1))
+    def test_scope_never_raises_ambiguity(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _BARE_NEAREST_MODULES,
+            (*_BARE_NEAREST_HEADER, "fn(p: X) => 1"),
+            sizes,
+            ("typecheck", AglTypeError),
+            span_text="p: X",
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(("import m::*", "import n::*")) + 1))
+    def test_control_without_the_nearer_region_is_ambiguous(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        assert_verdict_for_grouping(
+            tmp_path,
+            _BARE_NEAREST_MODULES,
+            ("import m::*", "import n::*", "fn(p: X) => 1"),
+            sizes,
+            ("scope", AmbiguousQualificationError),
+            span_text="X",
         )
 
 

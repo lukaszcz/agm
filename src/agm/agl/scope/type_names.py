@@ -8,10 +8,17 @@ lexical declaration of it; for an unqualified name, the type contributions
 it, ranked equally at the module root with root import tails; for an
 unanchored qualified path, the nearest layer's contributions of that path;
 then a qualified name's module route.
+
+A leading (single-segment) name -- a bare type name, or a qualifier chain's
+own first segment -- additionally shares the type/scope namespace with scope
+regions: :func:`leading_name_reading` is the one nearest-level lookup a bare
+type name, a qualifier's leading segment, and a method receiver all resolve
+through, so a nearer region always stops a farther type from merging in.
 """
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeGuard
@@ -32,6 +39,8 @@ from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
+    "ContributionLayer",
+    "LeadingReading",
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
@@ -41,6 +50,7 @@ __all__ = [
     "bare_type_selection",
     "imported_member_selection",
     "is_nominal_type_expr",
+    "leading_name_reading",
     "nominal_selection",
     "owner_member_selection",
     "owner_type_expr",
@@ -48,8 +58,49 @@ __all__ = [
     "type_name_selection",
 ]
 
+
+class ContributionLayer(enum.Enum):
+    """Which layer a leading name's nearest reading came from.
+
+    ``DECLARED`` is this module's own lexical declaration; ``USE`` a ``use``
+    contribution (local or region-scoped); ``IMPORTED`` a bare import tail or
+    scope route, reachable only at the module root.
+    """
+
+    DECLARED = enum.auto()
+    USE = enum.auto()
+    IMPORTED = enum.auto()
+
+
+@dataclass(frozen=True, slots=True)
+class LeadingReading:
+    """A leading name's nearest-level reading, across the type/scope namespace.
+
+    ``is_region`` marks a scope region's reading: decisive on its own, so
+    ``types`` is always empty then -- a farther level's type never merges
+    into a nearer region.
+    """
+
+    layer: ContributionLayer
+    is_region: bool
+    types: frozenset[QName] = frozenset()
+
+
 TypeContributions = Callable[[NameAtom], tuple[ScopePath, frozenset[QName]] | None]
 """The nearest layer contributing a type spelling, with that layer's path and selections."""
+
+LeadingContributions = Callable[[NameAtom], LeadingReading | None]
+"""The nearest layer's :class:`LeadingReading` of a leading name, region and type alike."""
+
+
+def _no_region(_path: ScopePath) -> bool:
+    """The default ``declares_region``: a site that never sees one."""
+    return False
+
+
+def _no_leading_contribution(_name: NameAtom) -> LeadingReading | None:
+    """The default ``leading_contributions``: a site that never sees one."""
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +110,10 @@ class TypeNameSite:
     ``declares`` reports this module's own type declaration at a scope path;
     ``is_type`` whether an import-tail selection denotes a type;
     ``type_params`` the type parameters in scope, which shadow every declaration.
+    ``declares_region`` reports this module's own scope-region declaration at
+    a path; ``leading_contributions`` is :attr:`contributions`' counterpart
+    for :func:`leading_name_reading` -- both default to "no region" for a
+    site that never sees one (typecheck's own, region-free site).
     """
 
     module_id: ModuleId
@@ -68,6 +123,8 @@ class TypeNameSite:
     contributions: TypeContributions
     is_type: Callable[[QName], bool]
     type_params: frozenset[str] = frozenset()
+    declares_region: Callable[[ScopePath], bool] = _no_region
+    leading_contributions: LeadingContributions = _no_leading_contribution
 
 
 def bare_type_selection(site: TypeNameSite, name: NameAtom) -> frozenset[QName]:
@@ -82,6 +139,40 @@ def bare_type_selection(site: TypeNameSite, name: NameAtom) -> frozenset[QName]:
     return contributed | imported
 
 
+def leading_name_reading(
+    site: TypeNameSite, name: str, *, rooted: bool = False
+) -> LeadingReading | None:
+    """Return the nearest level's reading of leading *name*, across the type/scope namespace.
+
+    Checked nearest first: this module's own lexical declaration -- a scope
+    region or a type -- at each enclosing scope, the module root alone when
+    *rooted*; then, unless *rooted* (a current-module anchor never falls
+    back further), the nearest layer *site* contributes it through -- a scope
+    region is decisive wherever it is found, so a farther level's type never
+    merges into a nearer region -- falling back to :func:`bare_type_selection`
+    when *site* carries no region-aware layer of its own (the default for a
+    site that never sees one, as typecheck's own does). Shared by a bare
+    type name (:func:`type_name_selection`), a qualifier chain's own leading
+    segment, and a method receiver's owner, so the three agree on the same
+    nearest level.
+    """
+    for base in enclosing_scope_bases(site.scope_path, rooted=rooted):
+        path = (*base, name)
+        if site.declares_region(path):
+            return LeadingReading(ContributionLayer.DECLARED, True)
+        if site.declares(path):
+            return LeadingReading(
+                ContributionLayer.DECLARED, False, frozenset({(site.module_id, _atom(path))})
+            )
+    if rooted:
+        return None
+    contributed = site.leading_contributions(_atom((name,)))
+    if contributed is not None:
+        return contributed
+    bare = bare_type_selection(site, name)
+    return None if not bare else LeadingReading(ContributionLayer.IMPORTED, False, bare)
+
+
 def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> frozenset[QName]:
     """Return every declaration *type_expr*'s name selects at *site*; several are ambiguous."""
     return _type_name_selection(site, type_expr)[0]
@@ -94,14 +185,18 @@ def _type_name_selection(
 
     A direct hit (the site's own nearest lexical declaration) carries no
     ``hiding``: the second element is ``False`` only then. Every other route
-    -- a bare name's contributions or root import tails, an unanchored
+    -- a leading name's reading or root import tails, an unanchored
     qualified path's contributions, or a qualified name's module route --
     already reflects whatever ``hiding`` applies there, so the second element
     is ``True``.
     """
     qualifier = type_expr.qualifier
-    anchor = None if qualifier is None else qualifier.anchor
-    segments = () if qualifier is None else qualifier.route_segments
+    if qualifier is None:
+        return _leading_type_name_selection(site, type_expr.name, None, None)
+    anchor = qualifier.anchor
+    segments = qualifier.route_segments
+    if not segments:
+        return _leading_type_name_selection(site, type_expr.name, qualifier, anchor)
     if anchor is not QualifierAnchor.MODULE:
         for base in enclosing_scope_bases(
             site.scope_path, rooted=anchor is QualifierAnchor.CURRENT_MODULE
@@ -109,13 +204,32 @@ def _type_name_selection(
             path = (*base, *segments, type_expr.name)
             if site.declares(path):
                 return frozenset({(site.module_id, _atom(path))}), False
-    if qualifier is None:
-        return bare_type_selection(site, type_expr.name), True
     if anchor is None:
         layer = site.contributions(_atom((*segments, type_expr.name)))
         if layer is not None:
             return layer[1], True
     return _routed_selection(site, qualifier, (type_expr.name,)), True
+
+
+def _leading_type_name_selection(
+    site: TypeNameSite,
+    name: str,
+    qualifier: QualifierChain | None,
+    anchor: QualifierAnchor | None,
+) -> tuple[frozenset[QName], bool]:
+    """Return a leading name's selection: a bare name, or a qualifier's own leading segment.
+
+    Delegates to :func:`leading_name_reading`, the one nearest-level lookup
+    shared with a qualifier chain's leading segment and a method receiver's
+    owner. A module-anchored leading segment is a route only, never a local
+    or contributed reading; a scope-region reading selects no type.
+    """
+    if anchor is QualifierAnchor.MODULE and qualifier is not None:
+        return _routed_selection(site, qualifier, (name,)), True
+    reading = leading_name_reading(site, name, rooted=anchor is QualifierAnchor.CURRENT_MODULE)
+    if reading is None:
+        return frozenset(), True
+    return reading.types, reading.layer is not ContributionLayer.DECLARED
 
 
 def imported_member_selection(

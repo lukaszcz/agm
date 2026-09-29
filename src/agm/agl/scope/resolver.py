@@ -126,10 +126,13 @@ from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
+    ContributionLayer,
+    LeadingReading,
     MemberHidden,
     MemberReferenced,
     OwnerRoute,
     TypeNameSite,
+    leading_name_reading,
     nominal_selection,
     owner_member_selection,
     owner_type_expr,
@@ -1029,12 +1032,10 @@ class _Resolver:
         owner = (
             self._local_receiver_owner(owner_path, declaration)
             if declaration.receiver_type is not None
-            else self._lexical_receiver_owner(region_path, type_path, aliases, receiver.span)
+            else self._receiver_owner(region_path, type_path, aliases, receiver.span)
         )
         if owner is None:
             owner = self._local_receiver_owner(owner_path, declaration)
-        if owner is None:
-            owner = self._foreign_receiver_owner(owner_path, receiver.span)
         if owner is None:
             if receiver.type_expr is None:
                 self._reject_referenced_receiver(region_path, type_path, receiver.span)
@@ -1055,9 +1056,7 @@ class _Resolver:
         if len(type_path) < 2:
             return
         owner_path = type_path[:-1]
-        owner = self._lexical_receiver_owner(region_path, owner_path, {}, span)
-        if owner is None:
-            owner = self._foreign_receiver_owner((*region_path, *owner_path), span)
+        owner = self._receiver_owner(region_path, owner_path, {}, span)
         if owner is None:
             return
         self._select_owner_member(
@@ -1188,6 +1187,127 @@ class _Resolver:
             return ReceiverOwner(self._module_id, path)
         return None
 
+    def _receiver_owner(
+        self,
+        region_path: ScopePath,
+        type_path: ScopePath,
+        aliases: Mapping[ScopePath, TypeAlias],
+        span: SourceSpan,
+    ) -> ReceiverOwner | None:
+        """Resolve a receiver's owner at *region_path* + *type_path*.
+
+        A one-segment *type_path* -- a leading name -- decides through the
+        one leading lookup (:meth:`_leading_receiver_owner`), shared with a
+        bare type name and a qualifier chain's own leading segment: a
+        nearer scope region decides, and a farther type never merges in. A
+        longer *type_path* still walks the lexical region directly
+        (:meth:`_lexical_receiver_owner`), then the ordinary nearest bare
+        contribution layer (:meth:`_foreign_receiver_owner`).
+        """
+        if len(type_path) == 1:
+            return self._leading_receiver_owner(region_path, type_path[0], aliases, span)
+        return self._lexical_receiver_owner(
+            region_path, type_path, aliases, span
+        ) or self._foreign_receiver_owner((*region_path, *type_path), span)
+
+    def _leading_receiver_owner(
+        self,
+        region_path: ScopePath,
+        name: str,
+        aliases: Mapping[ScopePath, TypeAlias],
+        span: SourceSpan,
+    ) -> ReceiverOwner | None:
+        """Resolve a one-segment receiver name through the one leading lookup.
+
+        Shares :meth:`_leading_reading` with a bare type name and a
+        qualifier chain's own leading segment: a nearer ``use``-opened
+        region is decisive, so a farther type never merges in. This
+        module's own plain ``scope Name ... end Name`` is never decisive on
+        its own, though: attaching orphan methods (and, often, a
+        region-scoped import or use) to an otherwise-foreign type is that
+        declaration's routine job, so a plain region instead defers to its
+        own body's contributions (:meth:`_leading_contributions`, seeded at
+        the declaring scope, exactly where :meth:`_bare_receiver_constructor_owner`
+        cannot reach a region-scoped import). No reading at all -- and no
+        contribution inside a deferred plain region -- falls back to a bare
+        enum-member or record-constructor candidate. A local alias is checked
+        against *aliases* -- the module's unified, REPL-retention-aware
+        alias table (:meth:`_alias_receiver_paths`) -- rather than this
+        entry's own declarations alone, so a receiver naming an alias
+        retained from an earlier REPL entry is rejected exactly like one
+        declared in this entry. Every non-alias entry in ``reading.types``
+        already names a genuinely declared type (:attr:`_leading_reading`'s
+        own provenance is always :attr:`TypeOwnerIndex.is_declared`), so its
+        owner is built directly rather than re-checked, mirroring
+        :meth:`_foreign_receiver_owner`'s own direct lookup.
+        """
+        reading = self._leading_reading(region_path, name)
+        if reading is None:
+            return self._bare_receiver_constructor_owner(name, span)
+        if reading.is_region and reading.layer is ContributionLayer.DECLARED:
+            reading = self._leading_contributions(self._scope.scope_path, name)
+            if reading is None:
+                return self._bare_receiver_constructor_owner(name, span)
+        if reading.is_region:
+            return None
+        owners: set[ReceiverOwner] = set()
+        for module_id, atom in reading.types:
+            if module_id == self._module_id:
+                path = _bare_path(atom)
+                alias = aliases.get(path)
+                if alias is not None:
+                    self._raise_alias_receiver(name, alias, span)
+                owners.add(ReceiverOwner(self._module_id, path))
+            else:
+                declaration = self._all_public_types.get((module_id, atom))
+                if isinstance(declaration, TypeAlias):
+                    self._raise_alias_receiver(name, declaration, span)
+                owners.add(self._cross_module_type_owners[(module_id, atom)])
+        return self._single_receiver_owner(owners, (name,), span)
+
+    def _bare_receiver_constructor_owner(self, name: str, span: SourceSpan) -> ReceiverOwner | None:
+        """Fall back to a bare enum-member or record-constructor receiver candidate.
+
+        A leading name that names no type at any layer may still spell an
+        injected enum member's bare constructor, or a bare record
+        constructor.
+        """
+        owners: set[ReceiverOwner] = set()
+        for exposed, qnames in self._import_env.unqualified.items():
+            if _bare_path(exposed)[-1:] != (name,):
+                continue
+            for module_id, source in qnames:
+                source_path = _bare_path(source)
+                parent = _bare_atom(source_path[:-1])
+                if isinstance(self._all_public_types.get((module_id, parent)), EnumDef):
+                    owner = self._cross_module_type_owners.get((module_id, source))
+                    if owner is not None:
+                        owners.add(owner)
+        owners.update(
+            ReceiverOwner(candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name))
+            for candidate in self._bare_constructor_candidates(name)
+        )
+        return self._single_receiver_owner(owners, (name,), span)
+
+    def _single_receiver_owner(
+        self, owners: set[ReceiverOwner], member: tuple[str, ...], span: SourceSpan
+    ) -> ReceiverOwner | None:
+        """Return *owners*' sole member, or raise when it holds more than one."""
+        if len(owners) == 1:
+            return next(iter(owners))
+        if len(owners) > 1:
+            raise AmbiguousQualificationError.for_origins(
+                (),
+                member,
+                (
+                    self._declaration_origin((owner.module_id, _bare_atom(owner.scope_path)))
+                    for owner in owners
+                ),
+                span=span,
+                local_to=self._module_id,
+            )
+        return None
+
     def _lexical_receiver_owner(
         self,
         region_path: ScopePath,
@@ -1195,7 +1315,12 @@ class _Resolver:
         aliases: Mapping[ScopePath, TypeAlias],
         span: SourceSpan,
     ) -> ReceiverOwner | None:
-        """Resolve a local receiver from the nearest enclosing lexical region."""
+        """Resolve a local receiver from the nearest enclosing lexical region.
+
+        Only ever called with a *type_path* longer than one segment
+        (:meth:`_receiver_owner`); a leading name resolves through
+        :meth:`_leading_receiver_owner` instead.
+        """
         for base in enclosing_scope_bases(region_path):
             candidate = (*base, *type_path)
             alias = aliases.get(candidate)
@@ -1209,7 +1334,12 @@ class _Resolver:
     def _foreign_receiver_owner(
         self, owner_path: ScopePath, span: SourceSpan
     ) -> ReceiverOwner | None:
-        """Resolve a receiver through the ordinary nearest bare contribution layer."""
+        """Resolve a receiver through the ordinary nearest bare contribution layer.
+
+        Only ever called with a *type_path* longer than one segment
+        (:meth:`_receiver_owner`); a leading name resolves through
+        :meth:`_leading_receiver_owner` instead.
+        """
         _region_path, type_path = self._receiver_region_and_type_path(owner_path)
         if not type_path:
             return None
@@ -1238,43 +1368,13 @@ class _Resolver:
             refs.update(imported_refs)
 
         owners: set[ReceiverOwner] = set()
-        if not refs and len(type_path) == 1:
-            for exposed, qnames in self._import_env.unqualified.items():
-                if _bare_path(exposed)[-1:] != type_path:
-                    continue
-                for module_id, source in qnames:
-                    source_path = _bare_path(source)
-                    parent = _bare_atom(source_path[:-1])
-                    if isinstance(self._all_public_types.get((module_id, parent)), EnumDef):
-                        owner = self._cross_module_type_owners.get((module_id, source))
-                        if owner is not None:
-                            owners.add(owner)
-            owners.update(
-                ReceiverOwner(
-                    candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name)
-                )
-                for candidate in self._bare_constructor_candidates(type_path[0])
-            )
         for ref in refs:
             source = _bare_atom((*ref.scope_path, ref.name))
             declaration = self._all_public_types.get((ref.module_id, source))
             if isinstance(declaration, TypeAlias):
                 self._raise_alias_receiver(type_path[0], declaration, span)
             owners.add(self._cross_module_type_owners[(ref.module_id, source)])
-        if len(owners) == 1:
-            return next(iter(owners))
-        if len(owners) > 1:
-            raise AmbiguousQualificationError.for_origins(
-                (),
-                type_path,
-                (
-                    self._declaration_origin((owner.module_id, _bare_atom(owner.scope_path)))
-                    for owner in owners
-                ),
-                span=span,
-                local_to=self._module_id,
-            )
-        return None
+        return self._single_receiver_owner(owners, type_path, span)
 
     def _receiver_region_and_type_path(self, owner_path: ScopePath) -> tuple[ScopePath, ScopePath]:
         """Split a method path at its longest prefix of plain scope regions."""
@@ -3682,7 +3782,7 @@ class _Resolver:
             ):
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
-                if local_path is not None and self._is_decisive_local_path(chain, local_path):
+                if local_path is not None and self._decisive_local_type_reading(chain, local_path):
                     # An exact local scope-region or nominal-type match takes
                     # precedence over any import route or use contribution
                     # sharing its spelling, exactly as it does for a value
@@ -3698,7 +3798,7 @@ class _Resolver:
                     # through to the ordinary owner resolution below, as does
                     # a def-created path whose leading segment resolves,
                     # below local scope, to a type owner
-                    # (:meth:`_is_local_scope_path`) -- that owner's method
+                    # (:meth:`_reads_as_local`) -- that owner's method
                     # namespace instead, which has no member set of its own
                     # to decide against.
                     self._check_local_scope_route_ambiguity(chain, chain.member, local_path)
@@ -3889,16 +3989,20 @@ class _Resolver:
         """Decide a bare (unqualified) type name's ambiguity, here in scope.
 
         Uses the same layered type-name lookup typecheck resolves a single
-        surviving candidate through (``type_name_selection``), which tries
-        this module's own nearest declaration first, so a local declaration
-        is never diluted by a same-spelled import contribution. An ambiguous
-        name -- more than one equally ranked route contributing it -- raises
-        the :class:`AmbiguousQualificationError` here, identically in every
+        surviving candidate through (``type_name_selection``), region-aware
+        (:meth:`_leading_site`) so a nearer ``use``-opened region stops a
+        farther same-spelled type from ever merging into the ambiguity check
+        below, exactly as the qualifier leading segment and a receiver's
+        owner agree it does; this module's own nearest declaration always
+        goes first, so a local declaration is never diluted by a same-spelled
+        import contribution either way. An ambiguous name -- more than one
+        equally ranked route contributing it -- raises the
+        :class:`AmbiguousQualificationError` here, identically in every
         position and independent of REPL entry grouping, instead of
         typecheck's own later, position-specific raise. A name with at most
         one candidate is left to typecheck's resolution unchanged.
         """
-        site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
+        site = self._leading_site(self._scope.scope_path, type_params)
         selected = type_name_selection(site, node)
         if len(selected) > 1:
             raise AmbiguousQualificationError.for_origins(
@@ -4050,85 +4154,22 @@ class _Resolver:
         """
         return tuple(chain.segments[0].name.split("/"))
 
-    def _is_local_scope_path(self, chain: QualifierChain, path: ScopePath) -> bool:
-        """Whether *path* is genuinely local: a scope region, or a locally declared type.
-
-        Either owns a member set of its own (an alias's own, transparently,
-        is its target's), so a member it lacks is a decided miss, never
-        merged with a same-spelled import route or ``use`` contribution. A
-        def-created path -- one that exists only because a ``def
-        Owner::method`` created it, never a scope region or a local type of
-        its own -- is that owner's method namespace instead, with no member
-        set of its own to decide against, whenever its leading segment
-        resolves to a type owner below local scope
-        (:meth:`_leading_segment_owner_candidates`); every position then
-        defers it to ordinary owner resolution. Otherwise it is a plain
-        local namespace like any other, walked exactly.
-        """
-        if path in self._scope_region_paths:
-            return True
-        if path in self._type_paths:
-            return self._type_owners.owner((self._module_id, _bare_atom(path))) is not None
-        return not self._leading_segment_owner_candidates(chain)
-
-    def _is_decisive_local_path(self, chain: QualifierChain, path: ScopePath) -> bool:
+    def _decisive_local_type_reading(self, chain: QualifierChain, path: ScopePath) -> bool:
         """Whether *path* is a final local reading for a type-position walk.
 
-        As :meth:`_is_local_scope_path`, but an alias's members are its
-        target's own projection, not its own nested path, so it is never
-        decisive for a type-qualifier walk -- always deferred to the
-        ordinary owner resolution that walks the alias instead.
+        As :meth:`_reads_as_local`, but an alias's members are its target's
+        own projection, not its own nested path, so it is never decisive for
+        a type-qualifier walk -- always deferred to the ordinary owner
+        resolution that walks the alias instead. Type positions keep this
+        refinement of their own; the leading lookup underneath is the one
+        every other position shares.
         """
-        if not self._is_local_scope_path(chain, path):
+        if not self._reads_as_local(chain, path):
             return False
         if path not in self._type_paths:
             return True
         owner = self._type_owners.owner((self._module_id, _bare_atom(path)))
         return owner is not None and owner.alias is None
-
-    def _defers_to_owner_resolution(self, chain: QualifierChain, path: ScopePath) -> bool:
-        """Whether *path*, a leading local reading, has no exhaustive member set to walk.
-
-        Shared by :meth:`_validate_local_scope_chain`'s own multi-segment
-        walk and :meth:`_resolve_local_scope_member`: a nominal type's
-        members are always the ordinary owner resolution's to decide (it
-        alone knows a referenced or hidden member from a genuinely missing
-        one), and so is a def-created path's, whenever its leading segment
-        also resolves, below local scope, to a declared type owner. A plain
-        scope region never defers.
-        """
-        return path not in self._scope_region_paths and (
-            path in self._type_paths or bool(self._leading_segment_owner_candidates(chain))
-        )
-
-    def _leading_segment_owner_candidates(self, chain: QualifierChain) -> frozenset[QName]:
-        """Return the type declarations *chain*'s leading segment names, below local scope.
-
-        Reuses the ordinary layered bare-name lookup a bare type name uses
-        (:func:`type_name_selection`), at the qualifier's own site and
-        respecting its own anchor: outer lexical levels first (a def-created
-        path is never itself a candidate, since it declares no type), then
-        ``use`` contributions, then bare import contributions and the
-        prelude. The nearest level that has the name decides; several
-        candidates there are a same-level ambiguity for the caller to
-        decide, full-path-first, against the full qualified path -- this
-        never raises.
-        """
-        leading = chain.segments[0]
-        owner_qualifier = (
-            None
-            if chain.anchor is None
-            else QualifierChain(
-                anchor=chain.anchor,
-                segments=(),
-                member=leading.name,
-                span=chain.span,
-                node_id=chain.node_id,
-            )
-        )
-        owner_expr = NameT(leading.name, leading.span, leading.node_id, qualifier=owner_qualifier)
-        site = self._type_owners.site(self._module_id, self._scope.scope_path)
-        return type_name_selection(site, owner_expr)
 
     def _check_local_scope_route_ambiguity(
         self, chain: QualifierChain, name: str, path: ScopePath
@@ -4266,9 +4307,10 @@ class _Resolver:
             return
         direct_error: AglScopeError | None = None
         local_type_path = self._validate_local_scope_chain(chain)
-        decisive_local_type = local_type_path is not None and self._is_local_scope_path(
+        decisive_local_type = local_type_path is not None and self._reads_as_local(
             chain, local_type_path
         )
+
         if (
             chain.anchor is not QualifierAnchor.CURRENT_MODULE
             and chain.segments
@@ -4424,7 +4466,7 @@ class _Resolver:
             rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
             raise _use_route_unknown_member(rendered, chain.span)
         local_path = self._validate_local_scope_chain(chain)
-        if local_path is not None and self._is_local_scope_path(chain, local_path):
+        if local_path is not None and self._reads_as_local(chain, local_path):
             # A scope region or a plain local namespace is already decided
             # earlier, by `_resolve_local_scope_member`, for a value
             # reference; a pattern or `is` test calls this directly instead,
@@ -4765,19 +4807,20 @@ class _Resolver:
         """Resolve a constructible type owner reached through imports, with its declaration key.
 
         The final chain segment is selected as a normal imported member; any
-        preceding segments are its route.  A one-segment chain may instead
+        preceding segments are its route. A one-segment chain may instead
         name a type exposed by an import tail, or an outer local type
-        declaration -- both are :meth:`_leading_segment_owner_candidates`'s
-        job, the same layered lookup a local def-created path's own leading
-        segment defers to for its owner reading. This is the same chain walk
-        used for ordinary qualified values, with only the resulting member
-        kind determining whether it owns a constructor.
+        declaration -- both are :meth:`_leading_reading`'s job, the same
+        layered lookup a local def-created path's own leading segment
+        defers to for its owner reading. This is the same chain walk used
+        for ordinary qualified values, with only the resulting member kind
+        determining whether it owns a constructor.
         """
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
         if len(chain.segments) == 1 and not chain.anchored:
             segment = chain.segments[0]
-            candidates = self._leading_segment_owner_candidates(chain)
+            reading = self._leading_reading(self._scope.scope_path, segment.name)
+            candidates = frozenset() if reading is None or reading.is_region else reading.types
             if not candidates:
                 return None
             owner_matches = [
@@ -5185,6 +5228,168 @@ class _Resolver:
             start=self._scope_nodes[scope_path],
         )
         return None if nearest is None else contributed_declarations(nearest[0], nearest[1])
+
+    def _declares_region(self, path: ScopePath) -> bool:
+        """Whether *path* is a scope region this module declares directly.
+
+        A path that is also this module's own type declaration -- a type's
+        own reopened ``scope Name ... end Name`` block -- is never a
+        competing region: it is that type's own namespace, not a distinct
+        entity sharing its spelling (mirrors
+        :meth:`_receiver_region_and_type_path`'s own exclusion).
+        """
+        if path not in self._scope_region_paths:
+            return False
+        key = (self._module_id, path[:-1], path[-1])
+        return (
+            self._scope_entity_kinds.get(key) != "type"
+            and path not in self._repl_session_type_paths
+        )
+
+    def _layer_region_source(self, layer: ScopeNode, name: NameAtom) -> bool:
+        """Whether *layer* contributes *name* as a scope region through one of its own uses.
+
+        A route target that is itself a declared type is never a competing
+        region: every type's own path is also a scope-export identity (it is
+        always walkable further, for its own members and methods), so a
+        ``use`` exposing it exposes that same type, not a distinct namespace
+        sharing its spelling (mirrors :meth:`_declares_region`'s own
+        exclusion for this module's own declarations).
+        """
+        return any(
+            not self._type_owners.is_declared((module_id, _bare_atom(path)))
+            for contribution in layer.imported_use_contributions
+            for module_id, path in contribution.scope_routes.get(name, frozenset())
+        )
+
+    def _leading_contributions(
+        self, scope_path: ScopePath, name: NameAtom
+    ) -> LeadingReading | None:
+        """Return the nearest layer above *scope_path* reading leading *name*, region or type.
+
+        Mirrors :meth:`type_contributions`, but across the type/scope
+        namespace: a ``use``-opened scope region decides in its own right,
+        stopping a farther layer's type from merging in -- the counterpart,
+        above local scope, of :func:`~agm.agl.scope.type_names.leading_name_reading`'s
+        own-module region check. A plain ``import`` -- root or region-scoped
+        -- never opens a region this way: it only ever contributes a type,
+        even when the same name also has nested members of its own reachable
+        by a farther qualifier segment (``unqualified_scope_routes`` tracks
+        that route separately, for the ordinary qualified-chain walk).
+
+        The walk visits every ancestor layer -- never stopping early at a
+        module-root ``scope_path``, since a REPL session chains one root
+        layer per retained entry, so an earlier entry's own ``use``-opened
+        region can sit above the current entry's own, otherwise-empty root
+        layer. Bare import tails merge in only once the walk stops: at the
+        nearest layer with a type reading, when that layer is a module root,
+        or -- no layer contributing anything at all -- as the final root
+        fallback, exactly as :func:`~agm.agl.scope.type_names.bare_type_selection`
+        merges them for a bare name.
+        """
+        layer: ScopeNode | None = self._scope_nodes[scope_path]
+        types: frozenset[QName] = frozenset()
+        while layer is not None:
+            if self._layer_region_source(layer, name):
+                return LeadingReading(ContributionLayer.USE, True)
+            types = frozenset(
+                _ref_qname(ref)
+                for ref in self._layer_bare_bindings(layer, name)
+                if ref.contributes_a_type and self._type_owners.is_declared(_ref_qname(ref))
+            )
+            if types:
+                if layer.scope_path:
+                    return LeadingReading(ContributionLayer.USE, False, types)
+                break
+            layer = layer.parent
+        imported = frozenset(
+            qname
+            for qname in self._import_env.unqualified.get(name, ())
+            if self._type_owners.is_declared(qname)
+        )
+        merged = types | imported
+        if not merged:
+            return None
+        tag = ContributionLayer.USE if types else ContributionLayer.IMPORTED
+        return LeadingReading(tag, False, merged)
+
+    def _leading_site(self, scope_path: ScopePath, type_params: Iterable[str] = ()) -> TypeNameSite:
+        """Return *scope_path*'s type-name site, region-aware for the one leading lookup."""
+        return replace(
+            self._type_owners.site(self._module_id, scope_path, type_params),
+            declares_region=self._declares_region,
+            leading_contributions=lambda name: self._leading_contributions(scope_path, name),
+        )
+
+    def _leading_reading(
+        self, scope_path: ScopePath, name: str, *, rooted: bool = False
+    ) -> LeadingReading | None:
+        """Return leading *name*'s nearest reading as written at *scope_path*.
+
+        Shared by a bare type name, a qualifier chain's own leading segment
+        (both via :func:`type_name_selection`, seeded through
+        :meth:`_leading_site`), and a method receiver's owner
+        (:meth:`_leading_receiver_owner`), so the three agree on the same
+        nearest level. *rooted* mirrors a current-module (``::``) anchor: the
+        module root alone, never a fall-back beyond it.
+        """
+        return leading_name_reading(self._leading_site(scope_path), name, rooted=rooted)
+
+    def _reads_as_local(self, chain: QualifierChain, path: ScopePath) -> bool:
+        """Whether *path* is a decisive local reading: its own declaration settles it outright.
+
+        A scope region this module declares itself is always decisive, as is
+        a genuinely local nominal type's own declaration -- neither ever
+        merges with a same-spelled import route or ``use`` contribution. A
+        def-created path -- naming no region or type of its own -- is a
+        plain local namespace, equally decisive, UNLESS its leading segment
+        also resolves, through the one leading lookup
+        (:meth:`_leading_reading`, shared with a bare type name and a
+        method receiver's owner), to a region or type owner below local
+        scope: that makes it that owner's own namespace instead, left for
+        :meth:`_defers_to_owner_resolution` -- a ``use``-opened region's own
+        exhaustive member set is the ordinary owner-member walk's to read,
+        never this def-created path's unrelated, narrower one. An ambient
+        wildcard or prelude type never counts here: the lookup answers from
+        this module's own declarations and layered contributions, never raw
+        ``_type_paths`` membership.
+        """
+        if path in self._scope_region_paths:
+            return True
+        if path in self._type_paths:
+            return self._type_owners.owner((self._module_id, _bare_atom(path))) is not None
+        reading = self._leading_reading(
+            self._scope.scope_path,
+            chain.segments[0].name,
+            rooted=chain.anchor is QualifierAnchor.CURRENT_MODULE,
+        )
+        return reading is None
+
+    def _defers_to_owner_resolution(self, chain: QualifierChain, path: ScopePath) -> bool:
+        """Whether *path*, a leading local reading, has no exhaustive member set to walk.
+
+        Shared by :meth:`_validate_local_scope_chain`'s own multi-segment
+        walk and :meth:`_resolve_local_scope_member`: a nominal type's
+        members are always the ordinary owner resolution's to decide (it
+        alone knows a referenced or hidden member from a genuinely missing
+        one), and so is a def-created path's, whenever its leading segment
+        also resolves, through the one leading lookup
+        (:meth:`_leading_reading`), to a region or type owner below local
+        scope -- a ``use``-opened region's own member set is exhaustive too,
+        but it is that region's own route that reads it, not this
+        def-created path's unrelated, narrower one. A scope region this
+        module declares itself never defers.
+        """
+        if path in self._scope_region_paths:
+            return False
+        if path in self._type_paths:
+            return True
+        reading = self._leading_reading(
+            self._scope.scope_path,
+            chain.segments[0].name,
+            rooted=chain.anchor is QualifierAnchor.CURRENT_MODULE,
+        )
+        return reading is not None
 
     def _is_value_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared contribution denotes a value in addition to any type."""

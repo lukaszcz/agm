@@ -1,7 +1,14 @@
 
-enum Level = Silent | Error | Warn | Info | Debug
+enum Level
+  | @name("silent") Silent
+  | @name("error") Error
+  | @name("warn") Warn
+  | @name("info") Info
+  | @name("debug") Debug
 
-@param @opt-name("log-level") @doc("Least severe level printed by log:: calls.")
+@param
+@opt-name("log-level")
+@doc("Logging level: silent, error, warn, info, debug.")
 var level: Level = Info
 
 def Level::to-int(self) -> int =

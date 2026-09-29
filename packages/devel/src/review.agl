@@ -94,11 +94,15 @@ let default-aspects = "correctness, maintainability, efficency, adherence to rel
 
 @command("devel review")
 @doc("""
-Review for the specified aspects within the given scope.
+Review <scope> for given aspects.
 
-Default aspects: %{default-aspects}
+Default aspects: %{default-aspects}.
+
+Examples:
+  agm devel review "against main"
+  agm devel review "last commit" --extra-aspects "simplicity"
+  agm devel review "the test suite" --aspects "efficiency only"
 """)
-@config(config::trace = true)
 program def review-main(
   scope: text,
   aspects: text = default-aspects,
@@ -110,12 +114,11 @@ program def review-main(
 
 @command("devel revise")
 @doc("Revise based on a review.")
-@config(config::trace = true)
 program def revise-main(
-  file: path,
+  review-file: path,
   agent: Agent = config::default-agent)
   -> unit =
-  let txt: text = fs::read(file)
+  let txt: text = fs::read(review-file)
   let high-valid: bool =
     case txt as? Review of
       | Some(value) =>
@@ -131,8 +134,12 @@ program def revise-main(
 Refine in a review-revise loop.
 
 Runs a refinement loop until no high-severity issues remain, for at most `max-steps` iterations.
+
+Examples:
+  agm devel refine "against main"
+  agm devel refine "last commit" --extra-aspects "simplicity"
+  agm devel refine "the test suite" --aspects "efficiency only"
 """)
-@config(config::trace = true)
 program def refine-main(
   scope: text,
   aspects: text = default-aspects,

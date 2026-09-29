@@ -332,18 +332,17 @@ def test_current_module_anchored_type_constructor_uses_the_chain_constructor_ref
 
 
 @pytest.mark.parametrize("source", ("::Unknown::On", "::Unknown[int]::On"))
-def test_current_module_unknown_constructor_owner_reports_its_segment(source: str) -> None:
+def test_current_module_unknown_constructor_owner_reports_its_qualifier(source: str) -> None:
     program = parse_program(source)
     assert isinstance(program.body, Block)
     expr = program.body.items[-1]
     assert isinstance(expr, VarRef)
     assert expr.qualifier is not None
 
-    with pytest.raises(AglScopeError) as exc_info:
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_inline_entry(source)
 
-    assert "Unknown" in exc_info.value.to_diagnostic().message
-    assert exc_info.value.span == expr.qualifier.segments[0].span
+    assert exc_info.value.span == expr.qualifier.span
 
 
 def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeline() -> None:
@@ -373,7 +372,7 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
 
 
 def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() -> None:
-    with pytest.raises(AglScopeError, match="scope path"):
+    with pytest.raises(UnknownQualifierError):
         resolve_inline_entry("::A::B::C")
 
 
@@ -394,7 +393,7 @@ def test_current_module_unknown_constructor_owner_hints_a_dollar_suffixed_segmen
 
 
 def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
-    with pytest.raises(AglScopeError, match="No module"):
+    with pytest.raises(UnknownQualifierError):
         resolve_inline_entry("enum A | value\n/A::value")
 
 
@@ -525,22 +524,20 @@ def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
         resolve_inline_entry(source)
 
 
-@pytest.mark.parametrize(
-    ("source", "match"),
-    (
-        ("First::Second::Third::member", "not defined|No module"),
-        # Under a real import environment, a first segment carrying type
-        # arguments is classified as an attempted module route before any
-        # name lookup is attempted, so this reports the invalid route shape
-        # rather than an unresolved name.
-        ("Type[int]::Second::member", "Type arguments cannot be applied to module route"),
-    ),
-)
-def test_long_expression_qualifier_chain_reports_the_unresolved_name(
-    source: str, match: str
-) -> None:
-    with pytest.raises(AglScopeError, match=match):
-        resolve_inline_entry(source)
+def test_long_expression_qualifier_chain_reports_the_unresolved_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError) as exc_info:
+        resolve_inline_entry("First::Second::Third::member")
+
+    assert exc_info.value.qualifier == "First::Second::Third"
+
+
+def test_type_arguments_on_an_unresolved_leading_segment_reject_the_route() -> None:
+    # Under a real import environment, a first segment carrying type
+    # arguments is classified as an attempted module route before any name
+    # lookup is attempted, so this reports the invalid route shape rather
+    # than an unresolved name.
+    with pytest.raises(AglScopeError, match="Type arguments cannot be applied to module route"):
+        resolve_inline_entry("Type[int]::Second::member")
 
 
 def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
@@ -710,7 +707,7 @@ def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) ->
 def test_selective_import_does_not_expose_unselected_nested_scope_to_later_use(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(AglScopeError, match="not nameable"):
+    with pytest.raises(UnknownQualifierError):
         _entry_resolution(
             tmp_path,
             {
@@ -854,7 +851,7 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
         }
     )
 
-    with pytest.raises(AglScopeError, match="not declared"):
+    with pytest.raises(UnknownMemberError):
         _resolve_without_loader(
             {
                 "entry": (
@@ -945,8 +942,8 @@ def test_use_accepts_nameable_targets_with_no_visible_members(
     _entry_resolution(tmp_path, modules)
 
 
-def test_unnameable_use_target_suggests_importing_its_module() -> None:
-    with pytest.raises(AglScopeError, match="Import"):
+def test_unnameable_use_target_is_an_unknown_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError):
         _resolve_without_loader({"entry": "use Missing::*\n"})
 
 

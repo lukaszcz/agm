@@ -2960,15 +2960,19 @@ class _Checker:
         self._constructor_pattern_bindings[node_id] = binding
 
     def _record_pattern_classification(
-        self, node_id: int, constructor: ConstructorRef | None
+        self, node_id: int, selected: tuple[ConstructorRef, RecordType] | None
     ) -> None:
-        """Publish one final bare/as-pattern classification for this check region."""
+        """Publish one final bare/as-pattern classification for this check region.
+
+        A *selected* constructor is paired with the record it matches -- for
+        an alias's constructor, the member its template names.
+        """
         self._record_side_table_addition(
             "pattern_classifications", self._pattern_classifications, node_id
         )
-        self._pattern_classifications[node_id] = constructor
-        if constructor is not None:
-            self._record_pattern_constructor_ref(node_id, constructor)
+        self._pattern_classifications[node_id] = None if selected is None else selected[0]
+        if selected is not None:
+            self._record_pattern_constructor_ref(node_id, *selected)
 
     def _record_selected_constructor_ref(self, node_id: int, constructor: ConstructorRef) -> None:
         """Publish the declaration an ``is`` test or constructor spelling at *node_id* selects."""
@@ -2985,22 +2989,17 @@ class _Checker:
         self._pattern_binding_refs[node_id] = binding
 
     def _record_pattern_constructor_ref(
-        self,
-        node_id: int,
-        constructor: ConstructorRef,
-        *,
-        owner_type: RecordType | EnumType | None = None,
+        self, node_id: int, constructor: ConstructorRef, owner_type: RecordType
     ) -> None:
-        """Publish the selected constructor and, when available, its owner."""
+        """Publish the selected constructor and the record it matches."""
         self._record_side_table_addition(
             "pattern_constructor_refs", self._pattern_constructor_refs, node_id
         )
         self._pattern_constructor_refs[node_id] = constructor
-        if owner_type is not None:
-            self._record_side_table_addition(
-                "pattern_constructor_owners", self._pattern_constructor_owners, node_id
-            )
-            self._pattern_constructor_owners[node_id] = NominalId(owner_type.decl_id)
+        self._record_side_table_addition(
+            "pattern_constructor_owners", self._pattern_constructor_owners, node_id
+        )
+        self._pattern_constructor_owners[node_id] = NominalId(owner_type.decl_id)
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""
@@ -6166,9 +6165,7 @@ class _Checker:
         owner_type, fields, context_desc, constructor_ref = (
             self._resolve_nominal_pattern_constructor(pattern, subj_type)
         )
-        self._record_pattern_constructor_ref(
-            pattern.node_id, constructor_ref, owner_type=owner_type
-        )
+        self._record_pattern_constructor_ref(pattern.node_id, constructor_ref, owner_type)
         field_kinds = self._env.type_table.field_kinds(owner_type)
         binding = bind_pattern_args(
             field_kinds,
@@ -6509,7 +6506,7 @@ class _Checker:
                 raise AglTypeError(
                     f"Constructor '{subj_type.name}' requires fields.", span=pattern.span
                 )
-            self._record_pattern_classification(pattern.node_id, candidate)
+            self._record_pattern_classification(pattern.node_id, (candidate, subj_type))
             return
         enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
         candidate, member = self._select_enum_member(
@@ -6522,7 +6519,7 @@ class _Checker:
             subject="Constructor pattern",
         )
         self._require_nullary_bare_constructor(pattern, member)
-        self._record_pattern_classification(pattern.node_id, candidate)
+        self._record_pattern_classification(pattern.node_id, (candidate, member))
 
     def _check_field_bare_pattern(
         self,
@@ -6551,7 +6548,7 @@ class _Checker:
         if selected is not None:
             candidate, member = selected
             self._require_nullary_bare_constructor(pattern, member)
-            self._record_pattern_classification(pattern.node_id, candidate)
+            self._record_pattern_classification(pattern.node_id, (candidate, member))
             return
         if pattern.name in field_names:
             raise AglTypeError(

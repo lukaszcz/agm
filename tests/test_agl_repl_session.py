@@ -41,6 +41,7 @@ from agm.agl.scope.symbols import (
     RouteClashError,
     UnknownMemberError,
     UnknownQualifierError,
+    UseDeclarationOrigin,
 )
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
@@ -80,6 +81,7 @@ from tests.agl.qualifier_support import (
     eval_grouped_final,
     eval_setup_entries,
     legal_groupings,
+    origin_kinds,
 )
 
 # ---------------------------------------------------------------------------
@@ -8266,6 +8268,24 @@ class TestImports:
         assert not replacement.ok
         assert not session.eval_entry("Outer::captured()").ok
 
+    def test_replacing_a_use_hides_its_old_constructor_in_the_replacement_entry(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "scope Source\n  record Old\n    x: int\n\n  record New\n    y: int\nend Source"
+        ).ok
+        assert session.eval_entry("use Source::{Old}").ok
+        assert session.eval_entry("Old(x = 1)").ok
+
+        for probe in (
+            "Old(x = 1)",
+            "fn(o: Source::Old) => case o of\n  | Old(x) => x",
+            "fn(o: Source::Old) => o is Old",
+        ):
+            replaced = session.eval_entry(f"use Source::{{New}}\n{probe}", check_only=True)
+            assert isinstance(replaced.failure, AglScopeError), probe
+        assert session.eval_entry("use Source::{New}\nNew(y = 2)").ok
+        assert not session.eval_entry("Old(x = 1)").ok
+
     def test_regional_import_tail_does_not_canonicalize_an_unrelated_use(
         self, tmp_path: Path
     ) -> None:
@@ -10619,15 +10639,12 @@ class TestBareTypeEntry:
             d.source_label for d in value_result.diagnostics
         ]
 
-    def test_ambiguous_bare_generic_entry_keeps_original_failure(self) -> None:
-        """Two same-named generics from distinct ``use``s: the bare entry must not
+    def test_ambiguous_bare_generic_entry_is_ambiguous_in_every_position(self) -> None:
+        """Two same-named generics from distinct ``use``s: no position picks either one.
 
-        pick either one arbitrarily. It stays a value-position lookup (no
-        constructor named ``G`` exists either), so it fails the same way any
-        bare name with no value meaning does, unrelated to which candidate a
-        type reading would have selected -- the annotation position,
-        ``fn(x: G) => 1``, decides that ambiguity itself, in scope, before
-        typecheck ever runs.
+        No constructor is named ``G``, so the bare value asks which type, as
+        the annotation does: both are ambiguous among the two ``use``
+        contributions.
         """
         session = open_session()
         assert session.eval_entry("scope s\n  enum G[T] = A(x: T)\nend s").ok
@@ -10640,12 +10657,11 @@ class TestBareTypeEntry:
             assert not result.ok
             assert result.kind != "type"
 
-        with pytest.raises(AglError) as bare:
-            session.type_of("G")
-        with pytest.raises(AglError) as annotated:
-            session.type_of("fn(x: G) => 1")
-        assert type(bare.value) is AglTypeError
-        assert type(annotated.value) is AmbiguousQualificationError
+        expected = {(UseDeclarationOrigin, "s::G"), (UseDeclarationOrigin, "t::G")}
+        for text in ("G", "fn(x: G) => 1"):
+            with pytest.raises(AmbiguousQualificationError) as ambiguous:
+                session.type_of(text)
+            assert origin_kinds(ambiguous.value) == expected
 
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep

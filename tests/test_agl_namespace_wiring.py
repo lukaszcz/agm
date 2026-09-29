@@ -1409,7 +1409,7 @@ def test_use_rejects_an_ordinary_member_exposed_by_an_earlier_use(tmp_path: Path
         },
     )
 
-    with pytest.raises(AglScopeError, match="not nameable"):
+    with pytest.raises(UnknownQualifierError):
         resolve_program(graph)
 
 
@@ -1513,7 +1513,7 @@ def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Pat
         },
     )
 
-    with pytest.raises(AglScopeError, match="not nameable"):
+    with pytest.raises(UnknownQualifierError):
         resolve_program(graph)
 
 
@@ -1569,7 +1569,7 @@ def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
         },
     )
 
-    with pytest.raises(AglScopeError, match="not nameable"):
+    with pytest.raises(UnknownQualifierError):
         resolve_program(graph)
 
 
@@ -1833,12 +1833,10 @@ def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
         {"entry": "import library::*\n::Unknown::On", "library": "enum Unknown | On"},
     )
 
-    with pytest.raises(AglScopeError) as exc_info:
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_program(graph)
 
-    message = exc_info.value.to_diagnostic().message
-    assert "Unknown" in message
-    assert "not defined" in message
+    assert exc_info.value.qualifier == "::Unknown"
 
 
 @pytest.mark.parametrize("use", ["case u of | ::Unknown::On => 1 | _ => 0", "u is ::Unknown::On"])

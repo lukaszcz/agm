@@ -253,7 +253,7 @@ def _needle_span(entry: str, locate: str, span_len: int) -> tuple[int, int, int]
         (
             "import types\ndef f[types](x: int) -> int = types::Color::Red",
             "scope",
-            "types::Color",
+            "types::Color::Red",
         ),
         (
             "import types\nrecord Box\n  v: int\n"
@@ -294,7 +294,7 @@ def test_a_one_liner_def_body_validates_its_qualifier_chains(
     scope-region, method, and ``program`` ``def``.
 
     A scope-phase row's precise class is :class:`UnknownQualifierError`, at
-    the shadowed segment's own span; a typecheck-phase row's is
+    the shadowed qualifier's span; a typecheck-phase row's is
     :class:`AglTypeError`, at the whole rejected pattern's span.
     """
     modules = {
@@ -303,8 +303,7 @@ def test_a_one_liner_def_body_validates_its_qualifier_chains(
         "lib": "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA",
     }
     graph = make_graph_from_files(tmp_path, modules)
-    span_len = len("types") if phase == "scope" else len(locate)
-    expected_line, expected_start_col, expected_end_col = _needle_span(entry, locate, span_len)
+    expected_line, expected_start_col, expected_end_col = _needle_span(entry, locate, len(locate))
 
     if phase == "scope":
         with pytest.raises(UnknownQualifierError) as scope_excinfo:

@@ -50,6 +50,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.scope.type_names import (
     owner_type_expr,
+    selection_node_id,
 )
 from agm.agl.scope.type_owners import beneath
 from agm.agl.self_validation import self_validation_enabled
@@ -103,16 +104,6 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
     *scope_path, declared_name = name.split("::")
     return tuple(scope_path), declared_name
-
-
-def _selection_node_id(type_expr: NameT | AppliedT) -> int:
-    """Return the node id scope records *type_expr*'s selected declaration under.
-
-    A qualified or ``::``-anchored name's is its qualifier's; a bare name's
-    is its own.
-    """
-    qualifier = type_expr.qualifier
-    return type_expr.node_id if qualifier is None else qualifier.node_id
 
 
 def _join_scoped_type_name(scope_path: ScopePath, name: str) -> str:
@@ -1600,7 +1591,7 @@ class TypeEnvironment:
         ``None`` when scope selected none: a built-in fallback name no
         declaration reaches, or a name that is not a type.
         """
-        return self._owner_declarations.get(_selection_node_id(type_expr))
+        return self._owner_declarations.get(selection_node_id(type_expr))
 
     def _owner_declaration_key(self, qualifier: QualifierChain) -> DeclKey | None:
         """Return the declaration identity *qualifier*'s owner selects, scope already recorded.
@@ -1627,7 +1618,7 @@ class TypeEnvironment:
         module_id, scope_path, name = key
         if module_id == self._module_id:
             return self._has_own_type_name(_join_scoped_type_name(scope_path, name))
-        return self._in_program_type_tables(key)
+        return self._in_program_type_tables(key) or self._is_program_alias_key(key)
 
     def owner_type_for_qualifier(
         self,
@@ -2171,7 +2162,7 @@ class TypeEnvironment:
             elif type_expr.name in type_vars:
                 return TypeVarType(type_expr.name)
             return self._resolve_selected_type(
-                _selection_node_id(type_expr),
+                selection_node_id(type_expr),
                 type_expr.qualifier,
                 type_expr.name,
                 span=eff_span,
@@ -2197,7 +2188,7 @@ class TypeEnvironment:
                 raise AglTypeError(
                     f"Type '{rendered}' does not take type arguments.", span=eff_span
                 )
-            selected = self._owner_declarations.get(_selection_node_id(type_expr))
+            selected = self._owner_declarations.get(selection_node_id(type_expr))
             return self._resolve_applied_key(
                 selected,
                 self._local_type_name(qualifier, type_expr.name, selected, eff_span),

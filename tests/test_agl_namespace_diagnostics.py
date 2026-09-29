@@ -398,27 +398,19 @@ def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
 def test_qualified_scope_errors_distinguish_unknown_route_from_missing_member(
     tmp_path: Path,
 ) -> None:
-    cases: tuple[tuple[str, dict[str, str], tuple[str, ...], tuple[str, ...]], ...] = (
-        (
-            "missing::read()",
-            {},
-            ("qualifier", "missing"),
-            ("imported set",),
-        ),
-        (
-            "import remote/config::read\nremote/config::missing()",
-            {"remote/config": "def read() -> int = 1\nenum Flag | On"},
-            ("remote/config", "not a public member", "is hidden", "missing"),
-            ("qualifier",),
-        ),
-    )
+    with pytest.raises(UnknownQualifierError) as route:
+        resolve_repl_graph(_graph(tmp_path, "missing::read()", {}))
+    assert route.value.qualifier == "missing"
 
-    for entry, modules, expected, absent in cases:
-        with pytest.raises(AglScopeError) as raised:
-            resolve_repl_graph(_graph(tmp_path, entry, modules))
-        diagnostic = str(raised.value).lower()
-        assert all(term in diagnostic for term in expected)
-        assert all(term not in diagnostic for term in absent)
+    with pytest.raises(UnknownMemberError) as member:
+        resolve_repl_graph(
+            _graph(
+                tmp_path,
+                "import remote/config::read\nremote/config::missing()",
+                {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+            )
+        )
+    assert member.value.spelling == "remote/config::missing"
 
     reachable = _graph(
         tmp_path,

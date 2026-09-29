@@ -324,16 +324,14 @@ def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: b
     return f"Cannot assign to '{name}': {_IMMUTABLE_BINDER_PHRASES[kind]} (immutable).{hint}"
 
 
-def undefined_name_message(name: str, *, in_module: bool = False) -> str:
+def undefined_name_message(name: str) -> str:
     """Return the canonical undefined-name rejection message for *name*.
 
-    *in_module* selects the current-module-qualified wording. Appends
-    :func:`~agm.agl.diagnostics.dollar_spacing_hint` when *name* looks like a
-    verbatim literal written without a space (``exec$ date``).
+    Appends :func:`~agm.agl.diagnostics.dollar_spacing_hint` when *name* looks
+    like a verbatim literal written without a space (``exec$ date``).
     """
-    scope = " in this module" if in_module else ""
     hint = dollar_spacing_hint(name) or ""
-    return f"'{name}' is not defined{scope}.{hint}"
+    return f"'{name}' is not defined.{hint}"
 
 
 def duplicate_binder_message(name: str) -> str:
@@ -719,17 +717,19 @@ class ImportedUseContribution:
     constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
 
 
-class BareContributionSource(enum.Enum):
-    """How a region's bare contribution reached visibility.
+class ContributionLayer(enum.Enum):
+    """Which layer made a candidate visible, recorded where it is contributed.
 
-    Recorded per contribution at the point it is added, rather than guessed
-    later from where it happens to sit (a region-scoped import tail's
-    contribution is otherwise indistinguishable from a ``use`` declaration's,
-    since both land in the same region's bare table).
+    ``DECLARED`` is this module's own lexical declaration; ``USE`` a ``use``
+    declaration's contribution (local or region-scoped); ``IMPORTED`` an
+    import tail's (root or region-scoped) or a module route's. An ambiguity's
+    origin kinds are read off these tags (:func:`contribution_origin`), never
+    guessed from where a candidate happens to sit.
     """
 
-    IMPORT_TAIL = enum.auto()
-    USE_DECLARATION = enum.auto()
+    DECLARED = enum.auto()
+    USE = enum.auto()
+    IMPORTED = enum.auto()
 
 
 @dataclass(slots=True)
@@ -743,9 +743,8 @@ class ScopeNode:
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
     - ``is_scope_region``: whether an explicit ``scope`` region opened this layer.
     - ``bare_contributions``/``bare_constructor_contributions``: selected
-      imports snapshotted for this region. Each ``bare_contributions`` entry
-      carries its :class:`BareContributionSource`, recorded at the point it
-      was contributed.
+      imports snapshotted for this region. Each entry carries its
+      :class:`ContributionLayer`, recorded at the point it was contributed.
 
     ``members`` is read freely but written only through the member mutation
     methods on this class.
@@ -760,10 +759,10 @@ class ScopeNode:
     scope_path: ScopePath = ()
     is_scope_region: bool = False
     members: dict[str, BindingRef] = field(default_factory=dict)
-    bare_contributions: dict[BareAtom, dict[BindingRef, BareContributionSource]] = field(
+    bare_contributions: dict[BareAtom, dict[BindingRef, ContributionLayer]] = field(
         default_factory=dict
     )
-    bare_constructor_contributions: dict[BareAtom, set[ConstructorRef]] = field(
+    bare_constructor_contributions: dict[BareAtom, dict[ConstructorRef, ContributionLayer]] = field(
         default_factory=dict
     )
     local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
@@ -813,21 +812,21 @@ class ScopeNode:
                 atom: dict(sources) for atom, sources in self.bare_contributions.items()
             },
             bare_constructor_contributions={
-                atom: set(refs) for atom, refs in self.bare_constructor_contributions.items()
+                atom: dict(refs) for atom, refs in self.bare_constructor_contributions.items()
             },
             local_use_contributions=list(self.local_use_contributions),
             imported_use_contributions=list(self.imported_use_contributions),
         )
 
-    def contribute_bare(
-        self, name: BareAtom, ref: BindingRef, source: BareContributionSource
-    ) -> None:
-        """Add one use-site-resolved bare contribution to this region, tagged with its *source*."""
-        self.bare_contributions.setdefault(name, {})[ref] = source
+    def contribute_bare(self, name: BareAtom, ref: BindingRef, layer: ContributionLayer) -> None:
+        """Add one use-site-resolved bare contribution to this region, tagged with its *layer*."""
+        self.bare_contributions.setdefault(name, {})[ref] = layer
 
-    def contribute_bare_constructor(self, name: BareAtom, ref: ConstructorRef) -> None:
-        """Add one constructor candidate contributed bare to this region."""
-        self.bare_constructor_contributions.setdefault(name, set()).add(ref)
+    def contribute_bare_constructor(
+        self, name: BareAtom, ref: ConstructorRef, layer: ContributionLayer
+    ) -> None:
+        """Add one constructor candidate contributed bare to this region, from *layer*."""
+        self.bare_constructor_contributions.setdefault(name, {})[ref] = layer
 
     def contribute_local_use(self, contribution: LocalUseContribution) -> None:
         """Add a local scope use whose source members remain live."""
@@ -851,7 +850,8 @@ class ScopeNode:
             remaining_constructors = self.bare_constructor_contributions.get(atom)
             if remaining_constructors is None:
                 continue
-            remaining_constructors.difference_update(constructor_refs)
+            for constructor_ref in constructor_refs:
+                remaining_constructors.pop(constructor_ref, None)
             if not remaining_constructors:
                 del self.bare_constructor_contributions[atom]
 
@@ -868,9 +868,11 @@ class ScopeNode:
         for atom, refs in bindings.items():
             layer = self.bare_contributions.setdefault(atom, {})
             for ref in refs:
-                layer[ref] = BareContributionSource.USE_DECLARATION
+                layer[ref] = ContributionLayer.USE
         for atom, constructor_refs in constructors.items():
-            self.bare_constructor_contributions.setdefault(atom, set()).update(constructor_refs)
+            self.bare_constructor_contributions.setdefault(atom, {}).update(
+                dict.fromkeys(constructor_refs, ContributionLayer.USE)
+            )
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -1192,6 +1194,18 @@ class DeclaredOrigin:
 
 QualificationOrigin: TypingTypeAlias = ImportedModuleOrigin | UseDeclarationOrigin | DeclaredOrigin
 
+_LAYER_ORIGINS: Mapping[ContributionLayer, Callable[[QName], QualificationOrigin]] = {
+    ContributionLayer.DECLARED: DeclaredOrigin,
+    ContributionLayer.USE: UseDeclarationOrigin,
+    ContributionLayer.IMPORTED: ImportedModuleOrigin,
+}
+
+
+def contribution_origin(declaration: QName, layer: ContributionLayer) -> QualificationOrigin:
+    """Return the ambiguity origin of candidate *declaration*, which *layer* made visible."""
+    return _LAYER_ORIGINS[layer](declaration)
+
+
 _ORIGIN_KIND_LABELS: tuple[tuple[type, str], ...] = (
     (ImportedModuleOrigin, "imported"),
     (UseDeclarationOrigin, "use-contributed"),
@@ -1347,33 +1361,39 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         )
 
 
+def _spelling_hint(spelling: str) -> str:
+    """Return the dollar-spacing hint for *spelling*'s last segment, or nothing."""
+    return dollar_spacing_hint(spelling.rsplit("::", 1)[-1]) or ""
+
+
 class UnknownQualifierError(AglScopeError):
-    """A qualifier naming no module route, scope region, or type owner."""
+    """A qualifier naming no module route, scope region, or type owner.
+
+    *qualifier* is spelled as written; every miss shares this one message,
+    with :func:`_spelling_hint`.
+    """
+
+    def __init__(self, qualifier: str, *, span: SourceSpan | None) -> None:
+        super().__init__(
+            f"Unknown qualifier '{qualifier}': no imported module route, scope, or type "
+            f"is named so here.{_spelling_hint(qualifier)}",
+            span=span,
+        )
+        self.qualifier = qualifier
 
 
 class UnknownMemberError(AglScopeError):
-    """A qualifier that resolves, but whose full spelling selects no member."""
+    """A qualifier that resolves, but whose full spelling selects no member.
 
-
-def not_exported_error(name: str, module_display: str, *, span: SourceSpan) -> UnknownMemberError:
-    """Build the "not exported by module" verdict shared by import and export selections."""
-    return UnknownMemberError(
-        f"name {name!r} is not exported by module {module_display!r}", span=span
-    )
-
-
-def unnameable_use_target_error(target_spelling: str, *, span: SourceSpan) -> UnknownQualifierError:
-    """Build the "not nameable" verdict for a use target no import route reaches.
-
-    Both call sites (a fresh use target with no matching route, and an
-    already-imported module's route a later import replacement hides) spell
-    *target_spelling* for their own context before calling this, so the
-    wording and repair guidance stay identical.
+    *spelling* is the qualified name as written; every miss shares this one
+    message, with :func:`_spelling_hint`.
     """
-    return UnknownQualifierError(
-        f"use target '{target_spelling}' is not nameable. Import its module before using it.",
-        span=span,
-    )
+
+    def __init__(self, spelling: str, *, span: SourceSpan | None) -> None:
+        super().__init__(
+            f"'{spelling}' names no visible member.{_spelling_hint(spelling)}", span=span
+        )
+        self.spelling = spelling
 
 
 class ImmutableAssignmentError(AglScopeError):

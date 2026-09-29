@@ -199,9 +199,7 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
     )
 
     assert prepared.resolved is None
-    assert any(
-        "unknown static" in diagnostic.message.lower() for diagnostic in prepared.diagnostics
-    )
+    assert any("Session::Session" in diagnostic.message for diagnostic in prepared.diagnostics)
 
 
 def test_builtin_static_cannot_be_partially_applied() -> None:

@@ -58,22 +58,24 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
+    DeclarationKey,
     DeclInfo,
     ModuleResolution,
     ReceiverOwner,
     ScopeNode,
     ScopePath,
     TypeOwner,
+    UnknownMemberError,
     binding_qname,
     builtin_type_static_kind,
     contributed_declarations,
     dedupe_constructor_candidates,
-    not_exported_error,
     resolve_bare_contribution_layer,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
+from agm.agl.scope.type_names import selection_node_id
 from agm.agl.scope.type_owners import (
     TypeOwnerIndex,
     beneath,
@@ -101,7 +103,7 @@ from agm.agl.syntax.nodes import (
     static_binding_node_id,
     static_items,
 )
-from agm.agl.syntax.types import TypeExpr, member_type_params
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -573,7 +575,9 @@ def _compute_reexport_additions(
         declarations = matching_atoms(target_exports, prefix)
         scopes = matching_atoms(target_scopes, prefix)
         if not declarations and not scopes and not allow_missing:
-            raise not_exported_error("::".join(prefix), "/".join(decl.module_path), span=decl.span)
+            raise UnknownMemberError(
+                f"{'/'.join(decl.module_path)}::{'::'.join(prefix)}", span=decl.span
+            )
         return declarations, scopes
 
     selected_items = [(item, *match(item)) for item in decl.items]
@@ -871,6 +875,21 @@ def resolve_program(
         )
         return None if nearest is None else contributed_declarations(*nearest)
 
+    def alias_target(
+        qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
+    ) -> DeclarationKey | None:
+        resolver = resolvers.get(qname[0])
+        if resolver is not None:
+            return resolver.alias_target(qname, alias, spelling)
+        return resolved_modules[qname[0]].resolved.owner_declarations.get(
+            selection_node_id(spelling)
+        )
+
+    def current_selection(
+        module_id: ModuleId, scope_path: ScopePath, spelling: NameT | AppliedT
+    ) -> DeclarationKey | None:
+        return resolvers[module_id].type_name_key_at(scope_path, spelling)
+
     # The index answers from prepared headers, so it is only asked once every
     # module below is constructed.
     type_owners = TypeOwnerIndex(
@@ -878,6 +897,8 @@ def resolve_program(
         constructor_refs=cross_module_constructor_refs,
         import_envs=import_envs,
         contributions=type_contributions,
+        alias_targets=alias_target,
+        current_selection=current_selection,
     )
 
     # What earlier REPL entries retain stays current unless the entry

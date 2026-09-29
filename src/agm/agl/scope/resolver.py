@@ -43,7 +43,7 @@ because its argument must be a source literal.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -82,14 +82,13 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
     AmbiguousQualificationError,
-    BareContributionSource,
     BinderKind,
     BindingRef,
     BuiltinKind,
     BuiltinStaticKind,
     ConstructorRef,
+    ContributionLayer,
     DeclarationKey,
-    DeclaredOrigin,
     DeclInfo,
     ImmutableAssignmentError,
     ImportedModuleOrigin,
@@ -112,19 +111,18 @@ from agm.agl.scope.symbols import (
     builtin_call_kind,
     builtin_type_static_kind,
     contributed_declarations,
+    contribution_origin,
     duplicate_binder_message,
     is_builtin_type_static_owner,
     is_qualified_function_member,
     qualification_repair_guidance,
     undefined_name_message,
-    unnameable_use_target_error,
 )
 from agm.agl.scope.symbols import binding_qname as _ref_qname
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
-    ContributionLayer,
     LeadingReading,
     MemberHidden,
     MemberReferenced,
@@ -132,7 +130,7 @@ from agm.agl.scope.type_names import (
     leading_name_reading,
     owner_member_selection,
     routed_qualifier_and_member,
-    type_name_selection,
+    selection_node_id,
 )
 from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors, root_type_names
 from agm.agl.semantics.type_table import (
@@ -332,6 +330,11 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     return (len(path), path)
 
 
+def _binding_sort_key(ref: BindingRef) -> tuple[tuple[str, ...], ScopePath, str, int]:
+    """Order bindings by their declaration identity, never by set order."""
+    return (ref.module_id.segments, ref.scope_path, ref.name, ref.decl_node_id)
+
+
 def _constructor_candidate_sort_key(
     candidate: ConstructorRef,
 ) -> tuple[tuple[str, ...], ScopePath, str, int]:
@@ -356,11 +359,20 @@ def _is_root_inline_member(constructor: ConstructorRef) -> bool:
     )
 
 
-def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> UnknownMemberError:
-    """Return the error for local scope *path* declaring no member *name*."""
-    return UnknownMemberError(
-        f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span
-    )
+def _unknown_member(chain: QualifierChain, member: str) -> UnknownMemberError:
+    """Return the one verdict for ``chain::member``, as written, selecting no member."""
+    return UnknownMemberError(render_qualified_name(chain, member), span=chain.span)
+
+
+def _use_target_spelling(decl: UseDecl) -> str:
+    """Spell *decl*'s target as written."""
+    anchor = "/" if decl.anchored else "::" if decl.current_module else ""
+    return anchor + "::".join(segment.name for segment in decl.target)
+
+
+def _unknown_qualifier(chain: QualifierChain) -> UnknownQualifierError:
+    """Return the one verdict for *chain*, as written, naming nothing that qualifies."""
+    return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,6 +648,9 @@ class _Resolver:
         # Qualified type-owner chains: QualifierChain.node_id -> the full
         # owner::member path's declaration identity, by suffix resolution.
         self._owner_declarations: dict[int, DeclarationKey] = {}
+        # Type aliases whose declaration is validated -- its target selected --
+        # by node id: on the first type-owner query or at the ordered walk.
+        self._validated_aliases: set[int] = set()
         # Scope records constructor candidates for bare pattern names. The
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
@@ -1096,15 +1111,8 @@ class _Resolver:
         if isinstance(selection, MemberReferenced):
             return ReferencedMemberError(spelling, member, span=span)
         if isinstance(selection, MemberHidden):
-            return HiddenMemberError(f"{spelling}::{member}", span=span)
+            return HiddenMemberError(spelling, member, span=span)
         return None
-
-    @staticmethod
-    def _unknown_owner_member(
-        spelling: str, member: str, span: SourceSpan | None
-    ) -> UnknownMemberError:
-        """The one verdict for a resolved owner declaring no ``member`` at all, in any position."""
-        return UnknownMemberError(f"'{member}' is not a member of '{spelling}'.", span=span)
 
     @staticmethod
     def _owner_member_key(owner_qname: QName, member: str) -> DeclarationKey:
@@ -1229,67 +1237,59 @@ class _Resolver:
         reading = self._leading_reading(region_path, name)
         if reading is None:
             return self._bare_receiver_constructor_owner(name, span)
-        if reading.is_region and reading.layer is ContributionLayer.DECLARED:
+        if reading.is_region and reading.path is not None:
             reading = self._leading_contributions(self._scope.scope_path, name)
             if reading is None:
                 return self._bare_receiver_constructor_owner(name, span)
         if reading.is_region:
             return None
-        owners: set[ReceiverOwner] = set()
-        for module_id, atom in reading.types:
+        owners: dict[ReceiverOwner, QualificationOrigin] = {}
+        for qname, layer in reading.types.items():
+            module_id, atom = qname
             if module_id == self._module_id:
                 path = _bare_path(atom)
                 alias = aliases.get(path)
                 if alias is not None:
                     self._raise_alias_receiver(name, alias, span)
-                owners.add(ReceiverOwner(self._module_id, path))
+                owner = ReceiverOwner(self._module_id, path)
             else:
-                declaration = self._all_public_types.get((module_id, atom))
+                declaration = self._all_public_types.get(qname)
                 if isinstance(declaration, TypeAlias):
                     self._raise_alias_receiver(name, declaration, span)
-                owners.add(self._cross_module_type_owners[(module_id, atom)])
+                owner = self._cross_module_type_owners[qname]
+            owners[owner] = contribution_origin(qname, layer)
         return self._single_receiver_owner(owners, (name,), span)
 
     def _bare_receiver_constructor_owner(self, name: str, span: SourceSpan) -> ReceiverOwner | None:
         """Fall back to a bare enum-member or record-constructor receiver candidate.
 
-        A leading name that names no type at any layer may still spell an
-        injected enum member's bare constructor, or a bare record
-        constructor.
+        A leading name that names no type at any level may still spell a
+        bare constructor; the one bare constructor decision
+        (:meth:`_bare_constructors`) selects its owner.
         """
-        owners: set[ReceiverOwner] = set()
-        for exposed, qnames in self._import_env.unqualified.items():
-            if _bare_path(exposed)[-1:] != (name,):
-                continue
-            for module_id, source in qnames:
-                source_path = _bare_path(source)
-                parent = _bare_atom(source_path[:-1])
-                if isinstance(self._all_public_types.get((module_id, parent)), EnumDef):
-                    owner = self._cross_module_type_owners.get((module_id, source))
-                    if owner is not None:
-                        owners.add(owner)
-        owners.update(
-            ReceiverOwner(candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name))
-            for candidate in self._bare_constructor_candidates(name)
+        return self._single_receiver_owner(
+            {
+                ReceiverOwner(
+                    candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name)
+                ): contribution_origin(candidate.qname, layer)
+                for candidate, layer in self._value_constructors(name).items()
+            },
+            (name,),
+            span,
         )
-        return self._single_receiver_owner(owners, (name,), span)
 
     def _single_receiver_owner(
-        self, owners: set[ReceiverOwner], member: tuple[str, ...], span: SourceSpan
+        self,
+        owners: Mapping[ReceiverOwner, QualificationOrigin],
+        member: tuple[str, ...],
+        span: SourceSpan,
     ) -> ReceiverOwner | None:
-        """Return *owners*' sole member, or raise when it holds more than one."""
+        """Return *owners*' sole member, or raise from their origins when it holds more than one."""
         if len(owners) == 1:
             return next(iter(owners))
         if len(owners) > 1:
             raise AmbiguousQualificationError.for_origins(
-                (),
-                member,
-                (
-                    self._declaration_origin((owner.module_id, _bare_atom(owner.scope_path)))
-                    for owner in owners
-                ),
-                span=span,
-                local_to=self._module_id,
+                (), member, owners.values(), span=span, local_to=self._module_id
             )
         return None
 
@@ -1337,28 +1337,14 @@ class _Resolver:
                 self._all_public_types.get(key), TypeAlias
             )
 
-        nearest = self._nearest_bare_contribution_layer(atom, binding_predicate=is_type)
-        refs: set[BindingRef] = set()
-        selected_layer: ScopeNode | None = None
-        if nearest is not None:
-            selected_layer, refs = nearest
-        imported_refs = {
-            ref
-            for qname in self._import_env.unqualified.get(atom, frozenset())
-            if is_type(ref := self._cross_module_binding_ref(qname))
-        }
-        if selected_layer is None:
-            refs = imported_refs
-        elif selected_layer is self._root_scope:
-            refs.update(imported_refs)
-
-        owners: set[ReceiverOwner] = set()
-        for ref in refs:
-            source = _bare_atom((*ref.scope_path, ref.name))
-            declaration = self._all_public_types.get((ref.module_id, source))
+        nearest = self._bare_level_bindings(atom, binding_predicate=is_type)
+        owners: dict[ReceiverOwner, QualificationOrigin] = {}
+        for ref, layer in {} if nearest is None else nearest[1].items():
+            qname = _ref_qname(ref)
+            declaration = self._all_public_types.get(qname)
             if isinstance(declaration, TypeAlias):
                 self._raise_alias_receiver(type_path[0], declaration, span)
-            owners.add(self._cross_module_type_owners[(ref.module_id, source)])
+            owners[self._cross_module_type_owners[qname]] = contribution_origin(qname, layer)
         return self._single_receiver_owner(owners, type_path, span)
 
     def _receiver_region_and_type_path(self, owner_path: ScopePath) -> tuple[ScopePath, ScopePath]:
@@ -2238,10 +2224,16 @@ class _Resolver:
         for atom, qnames in bare.items():
             for qname in qnames:
                 scope.contribute_bare(
-                    atom, self._cross_module_binding_ref(qname), BareContributionSource.IMPORT_TAIL
+                    atom, self._cross_module_binding_ref(qname), ContributionLayer.IMPORTED
                 )
                 self._deferred_constructors.append(
-                    partial(self._contribute_bare_constructor, scope, atom, qname)
+                    partial(
+                        self._contribute_bare_constructor,
+                        scope,
+                        atom,
+                        qname,
+                        ContributionLayer.IMPORTED,
+                    )
                 )
                 if isinstance(atom, str):
                     self._contribute_regional_enum_variants(qname, decl.span, exposures=exposures)
@@ -2280,10 +2272,12 @@ class _Resolver:
             scope.contribute_bare(
                 member.name,
                 replace(self._cross_module_binding_ref(variant_qname), is_variant_member=True),
-                BareContributionSource.IMPORT_TAIL,
+                ContributionLayer.IMPORTED,
             )
             scope.contribute_bare_constructor(
-                member.name, self._cross_module_constructor_refs[variant_qname]
+                member.name,
+                self._cross_module_constructor_refs[variant_qname],
+                ContributionLayer.IMPORTED,
             )
 
     def _contribute_referenced_member(
@@ -2294,17 +2288,19 @@ class _Resolver:
             scope.contribute_bare(
                 constructor.owner_name,
                 self._variant_binding_ref(constructor, span),
-                BareContributionSource.IMPORT_TAIL,
+                ContributionLayer.IMPORTED,
             )
-            scope.contribute_bare_constructor(constructor.owner_name, constructor)
+            scope.contribute_bare_constructor(
+                constructor.owner_name, constructor, ContributionLayer.IMPORTED
+            )
 
     def _contribute_bare_constructor(
-        self, scope: ScopeNode, atom: NameAtom, qname: QName
+        self, scope: ScopeNode, atom: NameAtom, qname: QName, layer: ContributionLayer
     ) -> ConstructorRef | None:
-        """Contribute the constructor an imported *qname* names bare to *scope*, if any."""
+        """Contribute the constructor imported *qname* names bare to *scope* through *layer*."""
         constructor = self._cross_module_constructor(qname)
         if constructor is not None:
-            scope.contribute_bare_constructor(atom, constructor)
+            scope.contribute_bare_constructor(atom, constructor, layer)
         return constructor
 
     def _validate_retained_imported_use_routes(self) -> None:
@@ -2320,9 +2316,8 @@ class _Resolver:
                     if module not in self._import_env.contributions:
                         continue
                     if (module, path) not in self._import_env.scope_origins_by_route:
-                        rendered = "::".join(path)
-                        raise unnameable_use_target_error(
-                            f"{module.display()}::{rendered}",
+                        raise UnknownQualifierError(
+                            "::".join((module.display(), *path)),
                             span=self._import_env.decl_spans[module],
                         )
             scope = scope.parent
@@ -2471,8 +2466,7 @@ class _Resolver:
                 local_to=self._module_id,
             )
         if local is None and not imported:
-            rendered = "/".join(route) if route else "::".join(target)
-            raise unnameable_use_target_error(rendered, span=decl.span)
+            raise UnknownQualifierError(_use_target_spelling(decl), span=decl.span)
         if local is not None:
             self._use_targets[decl.node_id] = ResolvedUseTarget(local_path=local)
             self._scope.contribute_local_use(
@@ -2889,10 +2883,10 @@ class _Resolver:
         for exposed, source in exposures:
             if not isinstance(source, BindingRef):
                 continue
-            layer.contribute_bare(exposed, source, BareContributionSource.USE_DECLARATION)
+            layer.contribute_bare(exposed, source, ContributionLayer.USE)
             bindings.setdefault(exposed, set()).add(source)
             for constructor in self._declaring_constructor_candidates(source.name, source):
-                layer.contribute_bare_constructor(exposed, constructor)
+                layer.contribute_bare_constructor(exposed, constructor, ContributionLayer.USE)
                 constructors.setdefault(exposed, set()).add(constructor)
         return (
             {atom: frozenset(refs) for atom, refs in bindings.items()},
@@ -2944,7 +2938,7 @@ class _Resolver:
 
         def contribute(exposed: NameAtom, source: QName) -> None:
             ref = self._cross_module_binding_ref(source)
-            scope.contribute_bare(exposed, ref, BareContributionSource.USE_DECLARATION)
+            scope.contribute_bare(exposed, ref, ContributionLayer.USE)
             contributed_bindings.setdefault(exposed, set()).add(ref)
             contributed_sources.append((exposed, source))
 
@@ -2968,7 +2962,9 @@ class _Resolver:
         def complete_constructors() -> None:
             constructors: dict[NameAtom, set[ConstructorRef]] = {}
             for exposed, source in contributed_sources:
-                constructor = self._contribute_bare_constructor(scope, exposed, source)
+                constructor = self._contribute_bare_constructor(
+                    scope, exposed, source, ContributionLayer.USE
+                )
                 if constructor is not None:
                     constructors.setdefault(exposed, set()).add(constructor)
             scope.imported_use_contributions[index] = replace(
@@ -3007,8 +3003,7 @@ class _Resolver:
             matches = tuple(atom for atom in members if _atom_under_prefix(atom, prefix))
             if not matches and validate:
                 raise UnknownMemberError(
-                    f"name {'::'.join(prefix)!r} is not declared by this use target.",
-                    span=decl.span,
+                    "::".join((_use_target_spelling(decl), *prefix)), span=decl.span
                 )
             return matches
 
@@ -3116,11 +3111,35 @@ class _Resolver:
         # Type declarations do not otherwise participate in value resolution,
         # but their annotations still need qualifier validation in the actual
         # lexical owner layer.
-        if node.scope_path:
-            with self._named_scope(tuple(segment.name for segment in node.scope_path)):
-                self._validate_type_decl(node)
+        path = (
+            tuple(segment.name for segment in node.scope_path)
+            if node.scope_path
+            else self._named_scope_path()
+        )
+        if isinstance(node, TypeAlias):
+            self._validate_alias(path, node)
         else:
-            self._validate_type_decl(node)
+            with self._named_scope(path):
+                self._validate_type_decl(node)
+
+    def alias_target(
+        self, qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
+    ) -> DeclarationKey | None:
+        """Return the declaration alias *qname*'s nominal target *spelling* selects.
+
+        Exactly what the target's own type position records where the alias is
+        declared, validating the alias first when the type-owner index asks
+        before the ordered walk reaches it.
+        """
+        self._validate_alias(_bare_path(qname[1])[:-1], alias)
+        return self._owner_declarations.get(selection_node_id(spelling))
+
+    def _validate_alias(self, path: ScopePath, alias: TypeAlias) -> None:
+        """Validate *alias*, declared at scope *path*, once."""
+        if alias.node_id not in self._validated_aliases:
+            self._validated_aliases.add(alias.node_id)
+            with self._named_scope(path):
+                self._validate_type_decl(alias)
 
     def _validate_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Validate *node*'s type names in the current layer, an exception's base included."""
@@ -3237,13 +3256,8 @@ class _Resolver:
         name = target.name
         ref = self._lookup_value(name)
         if ref is None:
+            # A bare target reaches an imported mutable binding just like a read.
             ref = self._lookup_bare_contribution(name, node.span, self._is_value_contribution)
-            # Structured bare import contributions come next, so a bare target
-            # reaches an imported mutable binding just like a read.
-            if ref is None:
-                ref = self._lookup_import_env_unqualified(
-                    name, node.span, self._is_value_contribution
-                )
             if ref is None:
                 raise AglScopeError(
                     f"'{name}' is not declared; assignment requires an existing mutable binding.",
@@ -3426,16 +3440,18 @@ class _Resolver:
         if qualifier is not None:
             if qualifier.anchor is QualifierAnchor.CURRENT_MODULE and not qualifier.segments:
                 ref = self._lookup_own_root(node.name)
-                candidates: tuple[ConstructorRef, ...] | None = None
+                candidates: dict[ConstructorRef, ContributionLayer] | None = None
                 if ref is None or ref.kind is BinderKind.constructor_binding:
                     # A root constructor binding also carries imported and
                     # referenced candidates; the module surface selects among
                     # its own, and reports a member only a root enum references.
                     constructor = self._module_surface_constructor(qualifier, node.name)
-                    candidates = None if constructor is None else (constructor,)
+                    candidates = (
+                        None if constructor is None else {constructor: ContributionLayer.DECLARED}
+                    )
                     ref = None if constructor is None else ref
                 if ref is None:
-                    raise self._own_root_miss(qualifier, node.name, node.span, node.node_id)
+                    raise self._own_root_miss(qualifier, node.name, node.span)
                 self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
                 self._record_varref_binding(node, ref, candidates=candidates)
                 return
@@ -3468,18 +3484,10 @@ class _Resolver:
                 self._record_varref_binding(node, builtin_ref)
                 return
             raise AglScopeError(undefined_name_message(node.name), span=node.span)
-        # Only a missing or constructor binding can consume regional candidates:
-        # any other kind leaves *ref* untouched below and returns from
-        # ``_record_varref_binding`` before the candidates are read.
-        regional_candidates = (
-            self._regional_constructor_candidates(node.name)
-            if ref is None or ref.kind is BinderKind.constructor_binding
-            else None
-        )
+        # An imported constructor binding is one of the levels' contributions;
+        # any other binding the lexical lookup finds is nearer than them.
         if ref is None or (
-            ref.kind is BinderKind.constructor_binding
-            and ref.module_id != self._module_id
-            and regional_candidates is not None
+            ref.kind is BinderKind.constructor_binding and ref.module_id != self._module_id
         ):
             contributed = self._lookup_bare_contribution(
                 node.name, node.span, self._is_value_contribution
@@ -3487,24 +3495,15 @@ class _Resolver:
             if contributed is not None:
                 ref = contributed
         if ref is None:
-            # Structured bare import contributions come next.
-            ref = self._lookup_import_env_unqualified(
-                node.name, node.span, self._is_value_contribution
+            self._reject_type_name_value(None, node.name, node.span)
+            raise self._spaced_qualifier_repair(
+                self._spaced_qualifier_around(node.span), node.span
+            ) or AglScopeError(
+                undefined_name_message(node.name),
+                span=node.span,
             )
-            if ref is None:
-                self._reject_type_name_value(node.qualifier, node.name, node.span, node.node_id)
-                raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_around(node.span), node.span
-                ) or AglScopeError(
-                    undefined_name_message(node.name),
-                    span=node.span,
-                )
         self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
-        self._record_varref_binding(
-            node,
-            ref,
-            candidates=self._regional_constructor_candidates(node.name),
-        )
+        self._record_varref_binding(node, ref, candidates=self._value_constructors(node.name))
 
     def _qualifier_denotes_builtin_static_owner(self, chain: QualifierChain) -> bool:
         """Return whether the resolved qualifier *chain* is a host static's nominal owner."""
@@ -3549,11 +3548,7 @@ class _Resolver:
     @staticmethod
     def _unknown_static_error(node: VarRef, qualifier: QualifierChain) -> UnknownMemberError:
         """Build the diagnostic for a prelude owner that lacks the requested static."""
-        owner = qualifier.render()
-        return UnknownMemberError(
-            f"Unknown static '{owner}::{node.name}' on prelude type '{owner}'.",
-            span=node.span,
-        )
+        return UnknownMemberError(render_qualified_name(qualifier, node.name), span=node.span)
 
     #: Built-in names that genuinely require direct call syntax and may never
     #: be referenced as a first-class value, each mapped to why: ``resource``
@@ -3602,28 +3597,26 @@ class _Resolver:
         node: VarRef,
         ref: BindingRef,
         *,
-        candidates: Collection[ConstructorRef] | None = None,
+        candidates: Mapping[ConstructorRef, ContributionLayer] | None = None,
     ) -> None:
-        """Record an ordinary value binding and its constructor metadata."""
+        """Record an ordinary value binding and, for a constructor, its one selected candidate.
+
+        *candidates* is the constructor decision's, each with its contributing
+        layer; several are ambiguous.
+        """
         self._require_textually_visible(ref, node.span)
         self._resolution[node.node_id] = ref
-        if ref.kind != BinderKind.constructor_binding:
+        if ref.kind != BinderKind.constructor_binding or not candidates:
             return
-        resolved_candidates = tuple(
-            self._declaring_constructor_candidates(node.name, ref)
-            if candidates is None
-            else candidates
-        )
-        if len(resolved_candidates) >= 2:
-            ordered = sorted(resolved_candidates, key=_constructor_candidate_sort_key)
+        if len(candidates) >= 2:
+            ordered = sorted(candidates, key=_constructor_candidate_sort_key)
             raise self._ambiguous_constructor(
                 node.name,
-                ordered,
+                {candidate: candidates[candidate] for candidate in ordered},
                 self._bare_constructor_repair(ordered[0], node),
                 node.span,
             )
-        if len(resolved_candidates) == 1:
-            self._constructor_refs[node.node_id] = resolved_candidates[0]
+        (self._constructor_refs[node.node_id],) = candidates
 
     def _bare_constructor_repair(self, candidate: ConstructorRef, node: VarRef) -> str:
         """Spell *candidate*, which bare *node* selects among others, as it resolves at *node*.
@@ -3652,20 +3645,16 @@ class _Resolver:
             ),
             None,
         )
-        if owner is not None and self._selects_imported_type(
-            NameT(owner, node.span, node.node_id), unqualified[owner]
-        ):
+        if owner is not None and self._selects_imported_type(owner, unqualified[owner]):
             return f"{owner}::{node.name}"
         return self._routed_spelling(origin, candidate.owner_module_id, path)
 
-    def _selects_imported_type(self, spelling: NameT, imported: frozenset[QName]) -> bool:
-        """Whether bare qualifier *spelling* names no local scope here and selects *imported*."""
-        return (
-            not any(
-                (*base, spelling.name) in self._scope_paths for base in self._lexical_scope_bases()
-            )
-            and self._visible_type_selection(spelling) == imported
-        )
+    def _selects_imported_type(self, name: str, imported: frozenset[QName]) -> bool:
+        """Whether bare qualifier *name* names no local scope here and selects *imported*."""
+        if any((*base, name) in self._scope_paths for base in self._lexical_scope_bases()):
+            return False
+        reading = self._leading_reading(self._named_scope_path(), name)
+        return reading is not None and reading.types.keys() == imported
 
     def _routed_spelling(self, origin: QName, module: ModuleId, path: ScopePath) -> str:
         """Spell imported *origin* by its shortest unique route, else as *path* in *module*."""
@@ -3673,30 +3662,23 @@ class _Resolver:
             module, path, local_to=self._module_id
         )
 
-    def _declaration_origin(self, qname: QName) -> QualificationOrigin:
-        """Classify how *qname* is visible here: declared, imported, or use-contributed.
-
-        *qname* is already resolved, so this asks only how it reached
-        visibility: this module's own declaration, a spellable import route,
-        or (the remaining case) a ``use`` declaration's contribution.
-        """
-        if qname[0] == self._module_id:
-            return DeclaredOrigin(qname)
-        if route_spelling(self._import_env, qname) is not None:
-            return ImportedModuleOrigin(qname)
-        return UseDeclarationOrigin(qname)
-
     def _ambiguous_constructor(
         self,
         spelling: str,
-        candidates: Sequence[ConstructorRef],
+        candidates: Mapping[ConstructorRef, ContributionLayer],
         repair: str,
         span: SourceSpan,
     ) -> AmbiguousConstructorError:
-        """Report *spelling* as ambiguous among *candidates*; *repair* selects the first."""
+        """Report *spelling* as ambiguous among *candidates*, each from its contributing layer.
+
+        *repair* selects the first candidate.
+        """
         return AmbiguousConstructorError.for_constructor_origins(
             spelling,
-            (self._declaration_origin(candidate.qname) for candidate in candidates),
+            (
+                contribution_origin(candidate.qname, layer)
+                for candidate, layer in candidates.items()
+            ),
             repair=repair,
             span=span,
             local_to=self._module_id,
@@ -3715,18 +3697,14 @@ class _Resolver:
     def _declaring_constructor_candidates(
         self, name: str, ref: BindingRef
     ) -> tuple[ConstructorRef, ...]:
-        """Return the candidates declared where *ref* was found.
+        """Return the candidates declared where *ref*, a ``use``-contributed binding, was found.
 
-        A member of a named scope is selected by that scope's structured
-        identity; only a module-root binding uses the root-only candidate map.
+        This module's own contributed member is selected by its named scope's
+        structured identity: a member without a constructor (an enum, say)
+        has none there.
         """
         if ref.module_id == self._module_id:
-            if ref.scope_path:
-                scoped = tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
-                if scoped:
-                    return scoped
-            candidates = self._constructor_candidates.get(name, ())
-            return self._prefer_local_constructor_candidates(candidates)
+            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
         return tuple(self._constructor_candidates.get(name, ()))
 
     def _validate_qualifier_chains(self, root: SyntaxNode, type_params: Iterable[str] = ()) -> None:
@@ -3764,60 +3742,77 @@ class _Resolver:
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
             if chain.anchor is None and chain.segments and chain.segments[0].name in type_param_set:
-                raise UnknownQualifierError(
-                    f"'{chain.segments[0].name}' is a type parameter here and cannot be used "
-                    "as a qualifier route.",
-                    span=chain.segments[0].span,
-                )
+                raise _unknown_qualifier(chain)
             if isinstance(node, (NameT, AppliedT, VariantRef)):
-                if chain.segments:
-                    self._select_qualified(chain, chain.member)
-                else:
-                    # A chain without segments is ``::member``: the anchored length-zero case.
-                    self._select_type_name(chain.member, chain.span, chain.node_id, anchor=chain)
+                key = self._chain_key(chain)
+                if key is not None:
+                    self._owner_declarations[chain.node_id] = key
 
         walk(root, validate)
 
-    def _select_type_name(
-        self,
-        name: str,
-        span: SourceSpan,
-        node_id: int,
-        *,
-        anchor: QualifierChain | None = None,
-    ) -> None:
-        """Decide what type name *name*, spelled by node *node_id*, selects, and record it.
+    def _select_type_name(self, name: str, span: SourceSpan, node_id: int) -> None:
+        """Decide what bare type name *name*, spelled by node *node_id*, selects, and record it.
 
-        The length-zero case of :meth:`_select_qualified`, behind every bare
-        type name -- an annotation, alias target, type argument, applied
-        type, caught exception type and ``extends`` base -- and every
-        ``::Name`` one (*anchor*, read at this module's root alone). The one
-        leading lookup (:meth:`_leading_reading`) reads it: a scope region
-        at the nearest level names no type and stops the lookup, several
-        equally near types are ambiguous, and the one selected type's
-        identity is recorded in ``owner_declarations`` under *node_id*, so
-        typecheck reads it back instead of re-resolving the name. A bare name
-        no level reads records nothing: typecheck resolves only the
-        built-in fallback names from there. A ``::Name`` the root lacks
-        names no member there, exactly like the value ``::Name``.
+        Behind every bare type name -- an annotation, alias target, type
+        argument, applied type, caught exception type and ``extends`` base.
+        The selected type's identity (:meth:`_leading_type_key`) is recorded
+        in ``owner_declarations`` under *node_id*, so typecheck reads it back
+        instead of re-resolving the name.
+        """
+        key = self._leading_type_key(name, span, None)
+        if key is not None:
+            self._owner_declarations[node_id] = key
+
+    def _type_name_key(self, spelling: NameT | AppliedT) -> DeclarationKey | None:
+        """Return the declaration type name *spelling* selects in the current layer."""
+        chain = spelling.qualifier
+        if chain is None:
+            return self._leading_type_key(spelling.name, spelling.span, None)
+        return self._chain_key(chain)
+
+    def _chain_key(self, chain: QualifierChain) -> DeclarationKey | None:
+        """Return the declaration a qualified or ``::`` type name's *chain* selects."""
+        if chain.segments:
+            return self._qualified_target(chain, chain.member).key
+        return self._leading_type_key(chain.member, chain.span, chain)
+
+    def _leading_type_key(
+        self, name: str, span: SourceSpan, anchor: QualifierChain | None
+    ) -> DeclarationKey | None:
+        """Return the declaration bare or ``::`` (*anchor*) type name *name* selects.
+
+        The length-zero case of :meth:`_select_qualified`: the one leading
+        lookup (:meth:`_leading_reading`) reads it, at this module's root
+        alone for ``::Name``. A scope region at the nearest level names no
+        type and stops the lookup, and several equally near types are
+        ambiguous. A bare name no level reads selects nothing: typecheck
+        resolves only the built-in fallback names from there. A ``::Name``
+        the root lacks names no member there, exactly like the value
+        ``::Name``.
         """
         reading = self._leading_reading(self._named_scope_path(), name, rooted=anchor is not None)
         if anchor is not None and (reading is None or reading.is_region):
-            raise self._own_root_miss(anchor, name, span, node_id)
+            raise self._own_root_miss(anchor, name, span)
         if reading is None:
-            return
+            return None
         if reading.is_region:
             raise AglScopeError(f"'{name}' names a scope region, not a type.", span=span)
         if len(reading.types) > 1:
-            raise AmbiguousQualificationError.for_origins(
-                (),
-                (name,),
-                (self._declaration_origin(qname) for qname in reading.types),
-                span=span,
-                local_to=self._module_id,
-            )
+            raise self._ambiguous_type_name(name, reading, span)
         (qname,) = reading.types
-        self._owner_declarations[node_id] = self._qname_decl_key(qname)
+        return self._qname_decl_key(qname)
+
+    def _ambiguous_type_name(
+        self, name: str, reading: LeadingReading, span: SourceSpan
+    ) -> AmbiguousQualificationError:
+        """Return the error for type name *name*, which *reading* reads as several types."""
+        return AmbiguousQualificationError.for_origins(
+            (),
+            (name,),
+            (contribution_origin(qname, layer) for qname, layer in reading.types.items()),
+            span=span,
+            local_to=self._module_id,
+        )
 
     def _select_qualified(self, chain: QualifierChain, member: str) -> QualifiedTarget:
         """Decide what ``chain::member`` selects, in every position, and record its identity.
@@ -3865,7 +3860,7 @@ class _Resolver:
             chain,
             member,
             layers,
-            [(qname, 1) for qname in reading.types],
+            [(qname, 1, layer) for qname, layer in reading.types.items()],
             at_root=not layers[0].scope_path,
             routed=False,
         )
@@ -3958,13 +3953,13 @@ class _Resolver:
         owner = self._type_owners.owner(owner_qname)
         if owner is None:
             self._reject_route_clash(chain, member, path, plain_miss=True)
-            raise _unknown_scope_member(missing, path, chain.span)
+            raise _unknown_member(replace(chain, segments=segments[:reached]), missing)
         self._reject_route_clash(chain, member, path, plain_miss=False)
         spelling = render_qualifier_path(replace(chain, segments=segments[:reached]))
         self._select_owner_member(owner, spelling, missing, chain.span)
         constructor = owner.select(member, segments[-1].name) if reached == len(segments) else None
         if constructor is None:
-            raise self._unknown_owner_member(spelling, missing, chain.span)
+            raise _unknown_member(replace(chain, segments=segments[:reached]), missing)
         return QualifiedTarget(self._owner_member_key(owner_qname, member), None, constructor)
 
     @staticmethod
@@ -4027,9 +4022,9 @@ class _Resolver:
             return self._level_target(chain, member, (), (), at_root=True, routed=True)
         roots = self._layer_chain(self._root_scope)
         atom = _bare_atom((*(segment.name for segment in chain.segments), member))
-        nearest = self._nearest_bare_contribution_layer(atom)
-        if nearest is not None and not any(nearest[0] is root for root in roots):
-            return self._level_target(chain, member, (nearest[0],), (), at_root=False, routed=True)
+        nearest = self._bare_level_bindings(atom)
+        if nearest is not None and nearest[0][0] is not self._root_scope:
+            return self._level_target(chain, member, nearest[0], (), at_root=False, routed=True)
         return self._level_target(chain, member, roots, (), at_root=True, routed=True)
 
     def _reject_route_type_args(self, chain: QualifierChain) -> None:
@@ -4061,7 +4056,7 @@ class _Resolver:
         chain: QualifierChain,
         member: str,
         layers: tuple[ScopeNode, ...],
-        owners: Iterable[tuple[QName, int]],
+        owners: Iterable[tuple[QName, int, ContributionLayer]],
         *,
         at_root: bool,
         routed: bool,
@@ -4074,8 +4069,9 @@ class _Resolver:
         owner (from *owners*, each walked from the segment index it pairs
         with, or reached through the route) through its own member table
         (:meth:`_owner_walk`). One distinct declaration selects; several are
-        ambiguous. A one-segment module qualifier selecting no constructor
-        falls back to its surface's injected enum members. With none
+        ambiguous, each origin tagged with the layer contributing it. A
+        one-segment module qualifier selecting no constructor falls back to
+        its surface's injected enum members. With none
         selected, a hidden member is reported as hidden, then a referenced
         one as referenced; otherwise the member is unknown -- or, for a
         route, the route itself when no module is imported under it.
@@ -4093,16 +4089,11 @@ class _Resolver:
 
         for layer in layers:
             constructors = self._layer_bare_constructors(layer, atom)
-            sources = layer.bare_contributions.get(atom, {})
-            for ref in self._layer_bare_bindings(layer, atom):
-                target = self._contributed_target(ref, constructors)
-                qname = _ref_qname(ref)
+            for ref, tag in self._layer_bare_bindings(layer, atom).items():
                 select(
-                    target,
+                    self._contributed_target(ref, constructors),
                     (ref.module_id, ref.scope_path, ref.name),
-                    ImportedModuleOrigin(qname)
-                    if sources.get(ref) is BareContributionSource.IMPORT_TAIL
-                    else UseDeclarationOrigin(qname),
+                    contribution_origin(_ref_qname(ref), tag),
                 )
         walks = [*owners, *self._use_alias_owners(chain)]
         if at_root:
@@ -4117,7 +4108,7 @@ class _Resolver:
                 for end in range(2, len(names) + 1):
                     routed_owner = members.get(_bare_atom(names[1:end]))
                     if routed_owner is not None:
-                        walks.append((routed_owner, end))
+                        walks.append((routed_owner, end, ContributionLayer.IMPORTED))
             for qname in imported:
                 select(
                     self._imported_target(qname),
@@ -4125,14 +4116,14 @@ class _Resolver:
                     ImportedModuleOrigin(qname),
                 )
         errors: list[AglError] = []
-        for owner_qname, start in walks:
+        for owner_qname, start, walk_layer in walks:
             outcome = self._owner_walk(chain, member, owner_qname, start, found)
             if isinstance(outcome, tuple):
                 key, constructor = outcome
                 select(
                     QualifiedTarget(key, None, constructor),
                     key,
-                    self._declaration_origin((key[0], _bare_atom((*key[1], key[2])))),
+                    contribution_origin((key[0], _bare_atom((*key[1], key[2]))), walk_layer),
                 )
             elif outcome is not None:
                 errors.append(outcome)
@@ -4150,22 +4141,14 @@ class _Resolver:
         hidden = [error for error in errors if isinstance(error, HiddenMemberError)]
         if errors:
             raise (hidden or errors)[0]
-        if not routed:
-            raise self._unknown_owner_member(render_qualifier_path(chain), member, chain.span)
         route = self._leading_route(chain)
-        rendered = render_qualifier(route, anchored=chain.anchored)
-        if qualifier_candidates(self._import_env, route, anchored=chain.anchored):
-            raise UnknownMemberError(
-                f"'{member}' is not a public member of imported module '{rendered}' or is hidden.",
-                span=chain.span,
-            )
-        if chain.anchor is None and any(names[0] in path for path in self._scope_nodes):
-            raise self._unknown_scope_path(chain)
-        raise UnknownQualifierError(
-            f"No module imported under qualifier '{rendered}'.", span=chain.span
-        )
+        if not routed or qualifier_candidates(self._import_env, route, anchored=chain.anchored):
+            raise _unknown_member(chain, member)
+        raise _unknown_qualifier(chain)
 
-    def _use_alias_owners(self, chain: QualifierChain) -> list[tuple[QName, int]]:
+    def _use_alias_owners(
+        self, chain: QualifierChain
+    ) -> list[tuple[QName, int, ContributionLayer]]:
         """Return the types a whole-target ``use`` alias spelled by *chain*'s leading segment names.
 
         ``use Status as S`` contributes only what ``Status``'s scope declares
@@ -4176,7 +4159,7 @@ class _Resolver:
         if chain.anchor is not None:
             return []
         alias = chain.segments[0].name
-        walks: list[tuple[QName, int]] = []
+        walks: list[tuple[QName, int, ContributionLayer]] = []
         layer: ScopeNode | None = self._scope
         while layer is not None:
             contributions: list[LocalUseContribution | ImportedUseContribution] = [
@@ -4192,7 +4175,10 @@ class _Resolver:
                     if target.local_path is not None
                     else target.imported_routes
                 )
-                walks.extend(((module_id, _bare_atom(path)), 1) for module_id, path in targets)
+                walks.extend(
+                    ((module_id, _bare_atom(path)), 1, ContributionLayer.USE)
+                    for module_id, path in targets
+                )
             layer = layer.parent
         return walks
 
@@ -4272,7 +4258,7 @@ class _Resolver:
         nested = (current[0], _bare_atom((*_bare_path(current[1]), member)))
         declares = (owner.alias is None and member in owner.members) or nested in self._decl_info
         if declares and key not in selected:
-            return HiddenMemberError(f"{spelling}::{member}", span=chain.span)
+            return HiddenMemberError(spelling, member, span=chain.span)
         constructor = owner.select(member, names[-1])
         return None if constructor is None else (key, constructor)
 
@@ -4308,109 +4294,131 @@ class _Resolver:
         module_id, path, _name = key
         return not path or self._type_owners.owner((module_id, _bare_atom(path))) is None
 
-    def _own_root_miss(
-        self, chain: QualifierChain, name: str, span: SourceSpan, node_id: int
-    ) -> AglScopeError:
-        """Return why ``::name``, spelled by node *node_id*, names nothing at this module's root."""
-        self._reject_type_name_value(chain, name, span, node_id)
+    def _own_root_miss(self, chain: QualifierChain, name: str, span: SourceSpan) -> AglScopeError:
+        """Return why ``::name`` names nothing at this module's root."""
+        self._reject_type_name_value(chain, name, span)
         return self._spaced_qualifier_repair(
             self._spaced_qualifier_at(chain.span), chain.span
-        ) or UnknownMemberError(undefined_name_message(name, in_module=True), span=span)
+        ) or UnknownMemberError(render_qualified_name(chain, name), span=span)
 
     def _own_scope_miss(self, chain: QualifierChain, span: SourceSpan) -> AglScopeError:
         """Return why current-module *chain*, used at *span*, names no scope of this module."""
         if len(chain.segments) > 1:
-            return self._unknown_scope_path(chain)
-        segment = chain.segments[0]
+            return _unknown_qualifier(chain)
         return self._spaced_qualifier_repair(
             self._spaced_qualifier_at(chain.span) or self._spaced_qualifier_around(span), span
-        ) or UnknownQualifierError(
-            undefined_name_message(segment.name, in_module=True), span=segment.span
-        )
+        ) or _unknown_qualifier(chain)
 
-    @staticmethod
-    def _unknown_scope_path(chain: QualifierChain) -> UnknownQualifierError:
-        """Return the error for *chain* spelling no scope path."""
-        return UnknownQualifierError(
-            f"Unknown scope path '{'::'.join(segment.name for segment in chain.segments)}'.",
-            span=chain.span,
-        )
+    def _levels(self, start: ScopeNode | None = None) -> Iterator[tuple[ScopeNode, ...]]:
+        """Yield the bare lookup's levels outward from *start*, or the current scope.
 
-    def _nearest_layer[T](
-        self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None
-    ) -> tuple[ScopeNode, set[T]] | None:
-        """Return the nearest layer, from *start* or the current scope, where *read* finds any."""
+        Every layer below the module root is a level of its own. The module
+        root is one level however many layers form it -- a REPL session
+        chains one root layer per retained entry -- so its layers are read
+        together, and an entry's grouping never changes what a name reads.
+        """
         layer: ScopeNode | None = self._scope if start is None else start
-        while layer is not None:
-            found = read(layer)
-            if found:
-                return layer, found
+        while layer is not None and layer is not self._root_scope:
+            yield (layer,)
             layer = layer.parent
-        return None
+        yield self._layer_chain(self._root_scope)
 
-    def _nearest_bare_contribution_layer(
+    def _level_bindings(
+        self, level: tuple[ScopeNode, ...], name: NameAtom, *, root_tails: bool = True
+    ) -> dict[BindingRef, ContributionLayer]:
+        """Return what *level*'s layers contribute as bare *name*, each with its contributing layer.
+
+        The module root's level also holds its bare import tails, unless
+        *root_tails* is off. A binding several layers contribute keeps the
+        nearest one's tag.
+        """
+        bindings = {
+            ref: tag
+            for layer in reversed(level)
+            for ref, tag in self._layer_bare_bindings(layer, name).items()
+        }
+        if root_tails and level[0] is self._root_scope:
+            for qname in self._import_env.unqualified.get(name, frozenset()):
+                bindings.setdefault(
+                    self._cross_module_binding_ref(qname), ContributionLayer.IMPORTED
+                )
+        return bindings
+
+    def _bare_level_bindings(
         self,
         name: NameAtom,
         *,
         binding_predicate: Callable[[BindingRef], bool] | None = None,
         start: ScopeNode | None = None,
-    ) -> tuple[ScopeNode, set[BindingRef]] | None:
-        """Return the nearest layer's static and live-use bindings for *name*.
+        root_tails: bool = True,
+    ) -> tuple[tuple[ScopeNode, ...], dict[BindingRef, ContributionLayer]] | None:
+        """Return the nearest level's bare bindings for *name*, each with its contributing layer.
 
-        The search starts at *start*, or the current scope, and skips layers
-        with no binding satisfying *binding_predicate*.
+        The search starts at *start*, or the current scope, and skips levels
+        with no binding satisfying *binding_predicate*; *root_tails* is
+        :meth:`_level_bindings`'.
         """
+        for level in self._levels(start):
+            found = {
+                ref: tag
+                for ref, tag in self._level_bindings(level, name, root_tails=root_tails).items()
+                if binding_predicate is None or binding_predicate(ref)
+            }
+            if found:
+                return level, found
+        return None
 
-        def read(layer: ScopeNode) -> set[BindingRef]:
-            bindings = self._layer_bare_bindings(layer, name)
-            if binding_predicate is None:
-                return bindings
-            return {ref for ref in bindings if binding_predicate(ref)}
-
-        return self._nearest_layer(read, start)
-
-    def _layer_bare_bindings(self, layer: ScopeNode, name: NameAtom) -> set[BindingRef]:
-        """Return *layer*'s static bindings for *name*, refreshed by its live uses."""
-        bindings = set(layer.bare_contributions.get(name, ()))
+    def _layer_bare_bindings(
+        self, layer: ScopeNode, name: NameAtom
+    ) -> dict[BindingRef, ContributionLayer]:
+        """Return *layer*'s static bindings for *name*, refreshed by its live uses, with layers."""
+        bindings = dict(layer.bare_contributions.get(name, {}))
         for contribution in layer.imported_use_contributions:
             refresh = self._facade_refresh(contribution, name)
             if refresh is not None:
                 stale, refs, _ = refresh
-                bindings.difference_update(stale)
-                bindings.update(refs)
+                for ref in stale:
+                    bindings.pop(ref, None)
+                bindings.update(dict.fromkeys(refs, ContributionLayer.USE))
         for local_contribution in layer.local_use_contributions:
             # The static read above carries this contribution's snapshot,
             # taken before a later REPL entry may have redeclared one of its
             # source members; the live exposure below replaces it, so a
             # redeclared member is never a second candidate.
-            bindings.difference_update(local_contribution.bindings.get(name, ()))
+            for ref in local_contribution.bindings.get(name, ()):
+                bindings.pop(ref, None)
             sources = self._local_use_sources(local_contribution, name)
             if self._local_contribution_superseded(local_contribution):
                 # The static read above can already carry a superseded
                 # contribution's binding, so retract it rather than skip it.
-                bindings.difference_update(sources)
+                for source in sources:
+                    bindings.pop(source, None)
             else:
-                bindings.update(sources)
+                bindings.update(dict.fromkeys(sources, ContributionLayer.USE))
         return bindings
 
-    def _layer_bare_constructors(self, layer: ScopeNode, name: NameAtom) -> set[ConstructorRef]:
-        """Return *layer*'s static constructor candidates for *name*, refreshed by its live uses."""
-        constructors = set(layer.bare_constructor_contributions.get(name, ()))
+    def _layer_bare_constructors(
+        self, layer: ScopeNode, name: NameAtom
+    ) -> dict[ConstructorRef, ContributionLayer]:
+        """Return *layer*'s static constructor candidates for *name*, refreshed, with layers."""
+        constructors = dict(layer.bare_constructor_contributions.get(name, {}))
         for contribution in layer.imported_use_contributions:
             refresh = self._facade_refresh(contribution, name)
             if refresh is not None:
-                constructors.update(refresh[2])
+                constructors.update(dict.fromkeys(refresh[2], ContributionLayer.USE))
         for local_contribution in layer.local_use_contributions:
-            constructors.difference_update(local_contribution.constructors.get(name, ()))
-            candidates = {
+            for constructor in local_contribution.constructors.get(name, ()):
+                constructors.pop(constructor, None)
+            candidates = [
                 candidate
                 for source in self._local_use_sources(local_contribution, name)
                 for candidate in self._declaring_constructor_candidates(source.name, source)
-            }
+            ]
             if self._local_contribution_superseded(local_contribution):
-                constructors.difference_update(candidates)
+                for candidate in candidates:
+                    constructors.pop(candidate, None)
             else:
-                constructors.update(candidates)
+                constructors.update(dict.fromkeys(candidates, ContributionLayer.USE))
         return constructors
 
     def _facade_modules(
@@ -4626,11 +4634,11 @@ class _Resolver:
                 continue
             _, refs, constructor_refs = refresh
             for ref in refs:
-                layer.contribute_bare(atom, ref, BareContributionSource.USE_DECLARATION)
+                layer.contribute_bare(atom, ref, ContributionLayer.USE)
             if refs:
                 bindings[atom] = frozenset(refs)
             for constructor in constructor_refs:
-                layer.contribute_bare_constructor(atom, constructor)
+                layer.contribute_bare_constructor(atom, constructor, ContributionLayer.USE)
             if constructor_refs:
                 constructors[atom] = frozenset(constructor_refs)
         return replace(contribution, bindings=bindings, constructors=constructors)
@@ -4648,17 +4656,23 @@ class _Resolver:
     def type_contributions(
         self, scope_path: ScopePath, name: NameAtom, is_type: Callable[[QName], bool]
     ) -> tuple[ScopePath, frozenset[QName]] | None:
-        """Return the nearest layer above *scope_path* contributing type *name*, and its types.
+        """Return the nearest level above *scope_path* contributing type *name*, and its types.
 
-        Reads the prepared headers, so a type name's selection never depends
-        on type owners.
+        Reads the prepared headers, so the answer never depends on type
+        owners. Root import tails are left out: the type-owner index's member
+        projection (:func:`~agm.agl.scope.type_names.imported_member_selection`)
+        reads them itself, beside a qualified owner's module route.
         """
-        nearest = self._nearest_bare_contribution_layer(
+        nearest = self._bare_level_bindings(
             name,
             binding_predicate=lambda ref: ref.contributes_a_type and is_type(_ref_qname(ref)),
             start=self._scope_nodes[scope_path],
+            root_tails=False,
         )
-        return None if nearest is None else contributed_declarations(nearest[0], nearest[1])
+        if nearest is None:
+            return None
+        level, refs = nearest
+        return contributed_declarations(level[0], refs)
 
     def _declares_region(self, path: ScopePath) -> bool:
         """Whether *path* is a scope region this module declares directly.
@@ -4691,6 +4705,13 @@ class _Resolver:
             not self._type_owners.is_declared((module_id, _bare_atom(path)))
             for contribution in layer.imported_use_contributions
             for module_id, path in contribution.scope_routes.get(name, frozenset())
+        ) or any(
+            exposed == name
+            and isinstance(source, _LocalScopeRoute)
+            and self._declares_region(source.path)
+            for contribution in layer.local_use_contributions
+            if not self._local_contribution_superseded(contribution)
+            for exposed, source in self._local_use_exposures(contribution)
         )
 
     def _leading_contributions(
@@ -4713,43 +4734,24 @@ class _Resolver:
         even when the same name also has nested members of its own reachable
         by a farther qualifier segment.
 
-        A named scope's layer is a level of its own. The module root is one
-        level however many layers form it -- a REPL session chains one root
-        layer per retained entry -- so its layers are read together, with
-        the bare import tails, and an entry's grouping never changes the
-        reading. The level is returned as its layers (every root layer when
-        nothing nearer reads *name*), with ``None`` when no level reads it.
+        The levels are :meth:`_levels`', each read by :meth:`_level_bindings`,
+        so every type keeps the tag of the layer contributing it. The level
+        is returned as its layers (every root layer when nothing nearer reads
+        *name*), with ``None`` when no level reads it.
         """
-        layer: ScopeNode | None = self._scope_nodes[scope_path]
-        while layer is not None and layer.scope_path:
-            if self._layer_region_source(layer, name):
-                return (layer,), LeadingReading(ContributionLayer.USE, True)
-            types = self._layer_types(layer, name)
+        level: tuple[ScopeNode, ...] = ()
+        for level in self._levels(self._scope_nodes[scope_path]):
+            if any(self._layer_region_source(layer, name) for layer in level):
+                return level, LeadingReading(True)
+            types = {
+                qname: tag
+                for ref, tag in self._level_bindings(level, name).items()
+                if ref.contributes_a_type
+                and self._type_owners.is_declared(qname := _ref_qname(ref))
+            }
             if types:
-                return (layer,), LeadingReading(ContributionLayer.USE, False, types)
-            layer = layer.parent
-        roots = self._layer_chain(layer)
-        if any(self._layer_region_source(root, name) for root in roots):
-            return roots, LeadingReading(ContributionLayer.USE, True)
-        types = frozenset(qname for root in roots for qname in self._layer_types(root, name))
-        imported = frozenset(
-            qname
-            for qname in self._import_env.unqualified.get(name, ())
-            if self._type_owners.is_declared(qname)
-        )
-        merged = types | imported
-        if not merged:
-            return roots, None
-        tag = ContributionLayer.USE if types else ContributionLayer.IMPORTED
-        return roots, LeadingReading(tag, False, merged)
-
-    def _layer_types(self, layer: ScopeNode, name: NameAtom) -> frozenset[QName]:
-        """Return the declared types *layer* contributes as *name*."""
-        return frozenset(
-            _ref_qname(ref)
-            for ref in self._layer_bare_bindings(layer, name)
-            if ref.contributes_a_type and self._type_owners.is_declared(_ref_qname(ref))
-        )
+                return level, LeadingReading(False, types)
+        return level, None
 
     @staticmethod
     def _layer_chain(layer: ScopeNode | None) -> tuple[ScopeNode, ...]:
@@ -4760,10 +4762,14 @@ class _Resolver:
             layer = layer.parent
         return tuple(chain)
 
-    def _leading_site(self, scope_path: ScopePath, type_params: Iterable[str] = ()) -> TypeNameSite:
+    def _leading_site(self, scope_path: ScopePath) -> TypeNameSite:
         """Return *scope_path*'s type-name site, region-aware for the one leading lookup."""
-        return replace(
-            self._type_owners.site(self._module_id, scope_path, type_params),
+        return TypeNameSite(
+            module_id=self._module_id,
+            scope_path=scope_path,
+            declares=lambda path: self._type_owners.is_declared(
+                (self._module_id, _bare_atom(path))
+            ),
             declares_region=self._declares_region,
             leading_contributions=lambda name: self._leading_contributions(scope_path, name),
         )
@@ -4805,86 +4811,37 @@ class _Resolver:
         local_root = tuple(candidate for candidate in local if not candidate.owner_path)
         return local_root or local or tuple(candidates)
 
-    def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
-        """Return the nearest region's constructor candidates, including live local uses."""
-        nearest = self._nearest_layer(lambda layer: self._layer_bare_constructors(layer, name))
-        return (
-            None if nearest is None else set(self._prefer_local_constructor_candidates(nearest[1]))
-        )
-
     def _lookup_bare_contribution(
         self, name: NameAtom, span: SourceSpan, binding_predicate: Callable[[BindingRef], bool]
     ) -> BindingRef | None:
-        """Resolve one region's bare contributions satisfying *binding_predicate*.
+        """Resolve the nearest level's bare contributions satisfying *binding_predicate*.
 
-        Clashes are deferred to use sites. Each candidate's own recorded
-        :class:`~agm.agl.scope.symbols.BareContributionSource` decides its
-        origin kind: a root-position tailed import's contribution, or a
-        region-scoped import tail's (see :class:`BareContributionSource`), is
-        an :class:`ImportedModuleOrigin`; a ``use`` declaration's is a
-        :class:`UseDeclarationOrigin`. A candidate live-refreshed past the
-        static snapshot (no recorded source at *name*) can only have reached
-        visibility through a ``use`` declaration -- an import tail never
-        refreshes -- so it defaults to :class:`UseDeclarationOrigin` too.
+        The level's layers contribute together, the module root's with its
+        bare import tails (:meth:`_bare_level_bindings`); clashes surface
+        here, at the use. Several distinct constructors leave the choice to
+        the constructor decision (:meth:`_bare_constructors`), which reports
+        their ambiguity; any other clash is an ambiguous qualification, each
+        origin tagged with the layer contributing it.
         """
-        nearest = self._nearest_bare_contribution_layer(name, binding_predicate=binding_predicate)
+        nearest = self._bare_level_bindings(name, binding_predicate=binding_predicate)
         if nearest is None:
             return None
-        selected_layer, region_refs = nearest
-        root_refs: set[BindingRef] = set()
-        if selected_layer is self._root_scope:
-            root_refs = {
-                ref
-                for qname in self._import_env.unqualified.get(name, frozenset())
-                if binding_predicate(ref := self._cross_module_binding_ref(qname))
-            }
-        resolved = region_refs | root_refs
         distinct = {
-            (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
+            (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): (ref, layer)
+            for ref, layer in nearest[1].items()
         }
-        if len(distinct) == 1:
-            return next(iter(distinct.values()))
-        sources = selected_layer.bare_contributions.get(name, {})
-        origins = tuple(
-            ImportedModuleOrigin(_ref_qname(ref))
-            if ref in root_refs or sources.get(ref) is BareContributionSource.IMPORT_TAIL
-            else UseDeclarationOrigin(_ref_qname(ref))
-            for ref in distinct.values()
-        )
+        chosen = [ref for ref, _layer in distinct.values()]
+        if all(ref.kind is BinderKind.constructor_binding for ref in chosen):
+            return min(chosen, key=_binding_sort_key)
+        if len(chosen) == 1:
+            return chosen[0]
         raise AmbiguousQualificationError.for_origins(
-            (), _bare_path(name), origins, span=span, local_to=self._module_id
+            (),
+            _bare_path(name),
+            (contribution_origin(_ref_qname(ref), tag) for ref, tag in distinct.values()),
+            span=span,
+            local_to=self._module_id,
         )
-
-    def _lookup_import_env_unqualified(
-        self, name: str, span: SourceSpan, binding_predicate: Callable[[BindingRef], bool]
-    ) -> BindingRef | None:
-        """Look up a bare name in the tailed-import environment.
-
-        Only declarations satisfying *binding_predicate* are candidates.
-        Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
-        :class:`AmbiguousQualificationError` on ambiguity (clash-on-use).
-        Returns ``None`` if no tailed import contributes a candidate. Shared
-        by bare value references, bare assignment targets, and type owners.
-        """
-        qnames = {
-            qname
-            for qname in self._import_env.unqualified.get(name, frozenset())
-            if binding_predicate(self._cross_module_binding_ref(qname))
-        }
-        if not qnames:
-            return None
-        if len(qnames) > 1:
-            # Clash-on-use: more than one module exposes this name.
-            raise AmbiguousQualificationError.for_origins(
-                (),
-                (name,),
-                (ImportedModuleOrigin(qname) for qname in qnames),
-                span=span,
-                local_to=self._module_id,
-            )
-        # Exactly one QName.
-        qname = next(iter(qnames))
-        return self._make_cross_module_ref(qname)
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:
         """Look up *name* in the module's own root scope bindings only.
@@ -4966,19 +4923,34 @@ class _Resolver:
         return owner if owner is not None and owner.constructs else None
 
     def _reject_type_name_value(
-        self, qualifier: QualifierChain | None, name: str, span: SourceSpan, node_id: int
+        self, anchor: QualifierChain | None, name: str, span: SourceSpan
     ) -> None:
-        """Raise when ``qualifier::name``, naming no value, spells a type visible at its use."""
-        if self._names_visible_type(NameT(name, span, node_id, qualifier=qualifier)):
-            raise type_name_not_a_value(render_qualified_name(qualifier, name), span)
+        """Raise when bare or ``::`` (*anchor*) *name*, naming no value, spells a visible type.
 
-    def _names_visible_type(self, spelling: NameT) -> bool:
-        """Whether type name *spelling* selects a type visible at its use."""
-        return bool(self._visible_type_selection(spelling))
+        A name the one leading lookup reads as several types is ambiguous,
+        exactly as it is in type position.
+        """
+        reading = self._leading_reading(self._named_scope_path(), name, rooted=anchor is not None)
+        if reading is None or not reading.types:
+            return
+        if len(reading.types) > 1:
+            raise self._ambiguous_type_name(name, reading, span)
+        raise type_name_not_a_value(render_qualified_name(anchor, name), span)
 
-    def _visible_type_selection(self, spelling: NameT) -> frozenset[QName]:
-        """Return the declarations type name *spelling* selects at its use, by the one lookup."""
-        return type_name_selection(self._leading_site(self._named_scope_path()), spelling)
+    def type_name_key_at(
+        self, scope_path: ScopePath, spelling: NameT | AppliedT
+    ) -> DeclarationKey | None:
+        """Return the declaration type name *spelling*, written at *scope_path*, selects now.
+
+        Scope's own type-position decision (:meth:`_type_name_key`), read
+        without recording it; ``None`` when the spelling selects no
+        declaration there, the decision's own rejections included.
+        """
+        with self._named_scope(scope_path):
+            try:
+                return self._type_name_key(spelling)
+            except AglError:
+                return None
 
     def _spaced_qualifier_at(self, span: SourceSpan) -> SpacedQualifier | None:
         """Return the advisory for a self-qualified reference whose ``::`` is at *span*."""
@@ -5245,7 +5217,7 @@ class _Resolver:
             self._scope_qualified_spellings.add(node_id)
             constructor = self._module_surface_constructor(chain, name)
             if constructor is None:
-                raise self._own_root_miss(chain, name, chain.span, node_id)
+                raise self._own_root_miss(chain, name, chain.span)
             return (constructor,)
         target = self._select_qualified(chain, name)
         key = target.key
@@ -5259,7 +5231,7 @@ class _Resolver:
                 return ()
             raise type_name_not_a_value(render_qualified_name(chain, name), chain.span)
         if ref.scope_path:
-            raise _unknown_scope_member(name, ref.scope_path, chain.span)
+            raise _unknown_member(chain, name)
         raise AglScopeError(
             f"'{render_qualified_name(chain, name)}' names no constructor.", span=chain.span
         )
@@ -5295,6 +5267,7 @@ class _Resolver:
                 for candidate in own
                 if _is_root_inline_member(candidate)
             }
+            layer = ContributionLayer.DECLARED
             # Earlier REPL entries' root types, then this entry's.
             roots: Iterable[tuple[str, QName]] = (
                 (root, (self._module_id, root))
@@ -5309,6 +5282,7 @@ class _Resolver:
             if not surfaces:
                 return None
             injected = self._route_injected_members(chain, name)
+            layer = ContributionLayer.IMPORTED
             roots = (
                 (atom, origin)
                 for _module, members in surfaces
@@ -5318,7 +5292,7 @@ class _Resolver:
         if len(injected) > 1:
             raise self._ambiguous_constructor(
                 render_qualified_name(chain, name),
-                tuple(injected),
+                dict.fromkeys(injected, layer),
                 next(iter(injected.values())),
                 chain.span,
             )
@@ -5367,35 +5341,56 @@ class _Resolver:
                     )
         return injected
 
-    def _bare_constructor_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
-        """Return the constructor candidates an unqualified *name* can select.
+    def _bare_constructors(self, name: str) -> dict[ConstructorRef, ContributionLayer]:
+        """Decide the constructor candidates bare *name* selects, each with its contributing layer.
 
-        A region's scope-use contributions take precedence over the module-wide
-        candidate table, so a bare spelling inside a scope selects the same
-        constructor a qualified reference would. Absent a scope-use
-        contribution, the enclosing named scopes are searched outward -- a
-        nominal declared in the same scope (or an ancestor scope) as the bare
-        spelling is reachable exactly as a bare value reference already finds
-        it via ``ScopeNode.lookup``, ahead of the module-wide table used only
-        for a root-declared nominal.
+        The one bare constructor decision, behind a value, a pattern, an
+        ``is`` test and a receiver. The nearest of :meth:`_levels` holding a
+        candidate decides: a named scope's contributed candidates, else the
+        ones it declares; the module root's contributed candidates together
+        with its own and its import tails' (the module-wide table).
         """
-        regional = self._regional_constructor_candidates(name)
-        if regional is not None:
-            return tuple(regional)
-        scope: ScopeNode | None = self._scope
-        while scope is not None:
-            if scope.scope_path:
-                owned = self._owned_scope_constructor_candidates(scope.scope_path, name)
-                if owned:
-                    return owned
-            scope = scope.parent
-        return tuple(self._constructor_candidates.get(name, ()))
+        for level in self._levels():
+            found = {
+                candidate: layer
+                for scope in reversed(level)
+                for candidate, layer in self._layer_bare_constructors(scope, name).items()
+            }
+            if level[0] is self._root_scope:
+                for candidate in self._constructor_candidates.get(name, ()):
+                    found.setdefault(
+                        candidate,
+                        ContributionLayer.DECLARED
+                        if candidate.owner_module_id == self._module_id
+                        else ContributionLayer.IMPORTED,
+                    )
+            elif not found and level[0].scope_path:
+                found = dict.fromkeys(
+                    self._owned_scope_constructor_candidates(level[0].scope_path, name),
+                    ContributionLayer.DECLARED,
+                )
+            if found:
+                return found
+        return {}
+
+    def _value_constructors(self, name: str) -> dict[ConstructorRef, ContributionLayer]:
+        """Return the bare constructor decision's candidates a value or receiver *name* selects.
+
+        Unlike a pattern's, which its scrutinee selects among, a local
+        candidate shadows the level's others
+        (:meth:`_prefer_local_constructor_candidates`).
+        """
+        candidates = self._bare_constructors(name)
+        return {
+            candidate: candidates[candidate]
+            for candidate in self._prefer_local_constructor_candidates(candidates)
+        }
 
     def _visible_bare_constructor_candidates(
         self, name: str, span: SourceSpan
     ) -> tuple[ConstructorRef, ...]:
         """Return a bare pattern or ``is`` spelling's candidates, rejecting a spelling with none."""
-        candidates = self._bare_constructor_candidates(name)
+        candidates = tuple(self._bare_constructors(name))
         if not candidates:
             raise NoVisibleConstructorError(f"'{name}' is not a visible constructor.", span=span)
         return candidates
@@ -5454,7 +5449,7 @@ class _Resolver:
         walk(pattern, record_constructor_candidates)
         for candidate in pattern_binder_candidates(pattern):
             constructor_candidates = (
-                self._bare_constructor_candidates(candidate.name)
+                tuple(self._bare_constructors(candidate.name))
                 if not candidate.is_as_pattern
                 else ()
             )

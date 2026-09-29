@@ -2,7 +2,7 @@
   "diagnostic": {
     "line": 9,
     "message_contains": [
-      "scope path",
+      "Unknown qualifier",
       "Point"
     ]
   }

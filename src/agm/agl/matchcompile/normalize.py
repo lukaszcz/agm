@@ -319,15 +319,16 @@ def normalize_pattern(
                 BinderProvenance(node_id=node_id, name=name, span=pattern.span),
             )
         case VarPattern(node_id=node_id, name=name):
-            constructor_ref = checked.pattern_classifications[node_id]
-            if constructor_ref is None:
+            if checked.pattern_classifications[node_id] is None:
                 return WildcardCell(
                     provenance=provenance,
                     binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
+            # The checker-published owner: an alias's constructor names the
+            # alias, while its pattern matches the member the alias names.
             constructor = _nominal_constructor(
                 cast("EnumType | RecordType", subject_type),
-                constructor_ref.owner_decl_node_id,
+                checked.pattern_constructor_owners[node_id].value,
                 checked.type_env.type_table,
             )
             return ConstructorCell(constructor, (), provenance)

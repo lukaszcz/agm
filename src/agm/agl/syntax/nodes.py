@@ -259,10 +259,6 @@ class QualifierChain:
         """Whether the chain uses an absolute module anchor."""
         return self.anchor is QualifierAnchor.MODULE
 
-    def render(self) -> str:
-        """Render the chain's qualifier prefix without its selected member."""
-        return ("/" if self.anchored else "") + "/".join(self.route_segments)
-
 
 @dataclass(frozen=True, slots=True)
 class VarRef:

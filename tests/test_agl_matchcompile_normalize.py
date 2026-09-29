@@ -58,7 +58,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
 from tests._agl_helpers import next_decl_id, strip_decl_ids
-from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.match_reference import reference_action
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -683,6 +683,36 @@ def test_renamed_constructor_normalizes_to_its_canonical_member() -> None:
     assert isinstance(cell.constructor, NominalConstructor)
     assert cell.constructor.record_type.name == "some"
     assert [binder.name for binder in cell.arguments[0].binders] == ["captured"]
+
+
+def test_bare_alias_of_a_member_normalizes_to_the_member_it_names() -> None:
+    checked = _check(
+        "enum Color | Red | Blue\n"
+        "type X = Color::Red\n"
+        "record Box\n  color: Color\n"
+        "let box = Box(color = Color::Red)\n"
+        "case box of | Box(color = X) => 1 | _ => 0"
+    )
+    case = _only_case(checked.resolved.program)
+
+    cell = normalize_case(case, checked).rows[0].cells[0]
+    assert isinstance(cell, ConstructorCell)
+    member = cell.arguments[0]
+    assert isinstance(member, ConstructorCell)
+    assert isinstance(member.constructor, NominalConstructor)
+    assert member.constructor.record_type.name == "Red"
+
+
+def test_bare_alias_of_a_member_matches_that_member() -> None:
+    output = evaluate_ir_output(
+        "enum Color | Red | Blue\n"
+        "type X = Color::Red\n"
+        "def f(c: Color) -> int = case c of | X => 1 | _ => 0\n"
+        "print(f(Color::Red))\n"
+        "print(f(Color::Blue))"
+    )
+
+    assert output == "1\n0\n"
 
 
 def test_source_reference_matcher_preserves_priority_and_partial_constructor_fields() -> None:

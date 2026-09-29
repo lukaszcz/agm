@@ -39,7 +39,7 @@ into one -- and each instance asserts its own legality against the expected
 legal set: ``"ALL"`` when every grouping tried is legal, otherwise the
 literal set.
 
-:func:`_grouping_probe_verdicts` is the one per-grouping engine underlying
+:func:`_grouping_probe_outcomes` is the one per-grouping engine underlying
 :func:`repl_matrix_verdict_for_grouping`: a *header* declaration sequence
 plus a batch of *probes* (a probe is never built from *header* alone) all
 sharing that header's own setup. ``sizes[:-1]`` groups *header*'s own
@@ -62,7 +62,9 @@ verdict (may be recomputed per call; it is cheap) and asserts it, and this
 grouping's own REPL verdict, against the caller's expected ``(phase, cls)``
 -- including, when accepted, that file mode's and this grouping's own
 *identity* are equal (and, when the caller supplies one, equal to an
-expected literal too). :func:`assert_verdict_for_grouping` is its
+expected literal too) and, when the caller supplies expected origins, that
+file mode's and this grouping's own ambiguity origins (:func:`origin_kinds`)
+equal them. :func:`assert_verdict_for_grouping` is its
 single-probe special case, kept for callers with only one probe to check
 against a header. :func:`grouping_params` builds one ``pytest.param(sizes)``
 per candidate grouping over a header, so a caller parametrizes rather than
@@ -83,9 +85,11 @@ import pytest
 
 from agm.agl.diagnostics import AglError
 from agm.agl.matchcompile import compile_program_matches, match_issue_error
+from agm.agl.modules.ids import ENTRY_ID, spell_declaration
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.repl.type_display import format_type_for_repl
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import AmbiguousQualificationError, to_bare_path
 from agm.agl.syntax.nodes import Block, FuncDef
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.program import check_program
@@ -179,21 +183,26 @@ def graph_verdict(graph: "ModuleGraph") -> FileVerdict:
     reported as ``"typecheck"``. On acceptance, *identity* is the rendered
     static type of the entry module's own final item.
     """
+    return _graph_outcome(graph)[0]
+
+
+def _graph_outcome(graph: "ModuleGraph") -> tuple[FileVerdict, AglError | None]:
+    """:func:`graph_verdict`'s verdict paired with the raised error itself, if any."""
     try:
         resolved = resolve_program(graph)
     except AglError as exc:
-        return "scope", type(exc), exc.span, None
+        return ("scope", type(exc), exc.span, None), exc
     try:
         checked_program = check_program(resolved, base_caps())
     except AglError as exc:
-        return "typecheck", type(exc), exc.span, None
+        return ("typecheck", type(exc), exc.span, None), exc
     match_result = compile_program_matches(checked_program)
     if match_result.compiled is None:
         match_error = match_issue_error(match_result.issues[0])
-        return "matchcompile", type(match_error), match_error.span, None
+        return ("matchcompile", type(match_error), match_error.span, None), match_error
     entry = checked_program.modules[checked_program.entry_id]
     identity = _rendered_identity(_entry_final_type(entry), entry.type_env.type_table)
-    return "accepted", type(None), None, identity
+    return ("accepted", type(None), None, identity), None
 
 
 def _rendered_identity(value_type: "Type | None", type_table: "TypeTable | None") -> str | None:
@@ -225,8 +234,8 @@ def file_verdict(tmp_path: Path, modules: dict[str, str], *, stdlib: bool = True
     return graph_verdict(graph)
 
 
-def _check_only_verdict(session: ReplSession, text: str) -> ReplVerdict:
-    """Evaluate *text* as a ``check_only`` entry against *session*; report its verdict.
+def _check_only_outcome(session: ReplSession, text: str) -> tuple[ReplVerdict, AglError | None]:
+    """Evaluate *text* as a ``check_only`` entry against *session*; report its verdict and error.
 
     The real entry path (see module docstring): every ``check_only``
     rejection is a static one (parse/scope/typecheck/match-compile), so
@@ -235,11 +244,11 @@ def _check_only_verdict(session: ReplSession, text: str) -> ReplVerdict:
     result = session.eval_entry(text, check_only=True)
     if result.ok:
         identity = _rendered_identity(result.value_type, result.type_table)
-        return "accepted", type(None), None, identity
+        return ("accepted", type(None), None, identity), None
     failure = result.failure
     if failure is None:
         raise AssertionError("a check_only rejection always carries its static failure")
-    return "rejected", type(failure), failure.span, None
+    return ("rejected", type(failure), failure.span, None), failure
 
 
 def _write_modules(session_dir: Path, modules: dict[str, str]) -> None:
@@ -252,10 +261,10 @@ def _write_modules(session_dir: Path, modules: dict[str, str]) -> None:
         path.write_text(source, encoding="utf-8")
 
 
-def _grouping_probe_verdicts(
+def _grouping_probe_outcomes(
     session: ReplSession, header: tuple[str, ...], sizes: tuple[int, ...], probes: Mapping[K, str]
-) -> dict[K, ReplVerdict] | None:
-    """Every *probes* value's own verdict for *sizes* against *session*, or ``None`` if illegal.
+) -> dict[K, tuple[ReplVerdict, AglError | None]] | None:
+    """Every *probes* value's own outcome for *sizes* against *session*, or ``None`` if illegal.
 
     The one per-grouping engine (see module docstring): ``sizes[:-1]``
     groups *header*'s own leading items into that many setup entries via
@@ -267,7 +276,7 @@ def _grouping_probe_verdicts(
         return None
     tail = header[sum(sizes[:-1]) :]
     return {
-        key: _check_only_verdict(session, "\n".join((*tail, probe)))
+        key: _check_only_outcome(session, "\n".join((*tail, probe)))
         for key, probe in probes.items()
     }
 
@@ -287,11 +296,47 @@ def repl_matrix_verdict_for_grouping(
     standing in for whichever probe follows). Returns ``(False, {})`` when
     illegal.
     """
+    is_legal, outcomes = _repl_outcomes_for_grouping(
+        tmp_path, modules, header, sizes, probes, stdlib=stdlib
+    )
+    return is_legal, {key: verdict for key, (verdict, _failure) in outcomes.items()}
+
+
+def _repl_outcomes_for_grouping(
+    tmp_path: Path,
+    modules: dict[str, str],
+    header: tuple[str, ...],
+    sizes: tuple[int, ...],
+    probes: Mapping[K, str],
+    *,
+    stdlib: bool,
+) -> tuple[bool, dict[K, tuple[ReplVerdict, AglError | None]]]:
+    """:func:`repl_matrix_verdict_for_grouping` with each probe's raised error kept too."""
     _write_modules(tmp_path, modules)
     session = ReplSession(cwd=tmp_path, default_stdlib=stdlib)
     session.open()
-    verdicts = _grouping_probe_verdicts(session, header, sizes, probes)
-    return verdicts is not None, verdicts or {}
+    outcomes = _grouping_probe_outcomes(session, header, sizes, probes)
+    return outcomes is not None, outcomes or {}
+
+
+def origin_kinds(error: AglError | None) -> frozenset[tuple[type, str]]:
+    """*error*'s ambiguity origins as ``(origin class, declaration spelling)`` pairs.
+
+    A declaration is spelled with its module's label unless it lives in the
+    entry module (see :func:`~agm.agl.modules.ids.spell_declaration`), so a
+    file-mode and a REPL origin of the same candidate compare equal.
+    """
+    if not isinstance(error, AmbiguousQualificationError):
+        return frozenset()
+    return frozenset(
+        (
+            type(origin),
+            spell_declaration(
+                origin.declaration[0], to_bare_path(origin.declaration[1]), local_to=ENTRY_ID
+            ),
+        )
+        for origin in error.origins
+    )
 
 
 def grouping_cases(n: int) -> tuple[tuple[str, tuple[int, ...]], ...]:
@@ -314,6 +359,7 @@ def assert_verdicts_for_grouping(
     *,
     span_texts: Mapping[K, str] | None = None,
     expected_identities: Mapping[K, str] | None = None,
+    expected_origins: Mapping[K, frozenset[tuple[type, str]]] | None = None,
     stdlib: bool = True,
     expected_legal_groupings: LegalGroupings = "ALL",
 ) -> None:
@@ -329,10 +375,13 @@ def assert_verdicts_for_grouping(
     resolve to the identical declaration, not merely that neither raised --
     and, when *expected_identities* has an entry for *key*, equal to it too;
     otherwise *span_texts[key]* is the exact text the raised error's span
-    must slice out, in both modes.
+    must slice out, in both modes, both modes raise the same message, and,
+    when *expected_origins* has an entry for *key*, both modes' ambiguity
+    origins (:func:`origin_kinds`) equal it.
     """
     span_texts = span_texts or {}
     expected_identities = expected_identities or {}
+    expected_origins = expected_origins or {}
     expected_legal = (
         frozenset(all_groupings(len(header) + 1))
         if expected_legal_groupings == "ALL"
@@ -340,7 +389,7 @@ def assert_verdicts_for_grouping(
     )
     session_dir = tmp_path / "repl"
     session_dir.mkdir()
-    is_legal, verdicts = repl_matrix_verdict_for_grouping(
+    is_legal, outcomes = _repl_outcomes_for_grouping(
         session_dir, modules, header, sizes, probes, stdlib=stdlib
     )
     assert is_legal == (sizes in expected_legal), sizes
@@ -350,11 +399,12 @@ def assert_verdicts_for_grouping(
     for key, probe in probes.items():
         expected_phase, expected_cls = expected[key]
         src = "\n".join((*header, probe))
-        file_phase, file_cls, file_span, file_identity = file_verdict(
-            tmp_path, {"entry": src, **modules}, stdlib=stdlib
+        file_outcome, file_failure = _graph_outcome(
+            make_graph_from_files(tmp_path, {"entry": src, **modules}, default_stdlib=stdlib)
         )
+        file_phase, file_cls, file_span, file_identity = file_outcome
         assert (file_phase, file_cls) == (expected_phase, expected_cls), key
-        repl_phase, repl_cls, repl_span, repl_identity = verdicts[key]
+        (repl_phase, repl_cls, repl_span, repl_identity), repl_failure = outcomes[key]
         assert repl_phase == ("accepted" if expected_phase == "accepted" else "rejected"), key
         assert repl_cls == expected_cls, key
         if expected_phase == "accepted":
@@ -374,6 +424,10 @@ def assert_verdicts_for_grouping(
                 else None
             )
             assert sliced == span_texts[key], key
+            assert str(repl_failure) == str(file_failure), key
+            if key in expected_origins:
+                assert origin_kinds(file_failure) == expected_origins[key], key
+                assert origin_kinds(repl_failure) == expected_origins[key], key
 
 
 def assert_verdict_for_grouping(
@@ -385,6 +439,7 @@ def assert_verdict_for_grouping(
     *,
     span_text: str | None = None,
     expected_identity: str | None = None,
+    expected_origins: frozenset[tuple[type, str]] | None = None,
     stdlib: bool = True,
     expected_legal_groupings: LegalGroupings = "ALL",
 ) -> None:
@@ -402,6 +457,7 @@ def assert_verdict_for_grouping(
         {"_": expected},
         span_texts=None if span_text is None else {"_": span_text},
         expected_identities=None if expected_identity is None else {"_": expected_identity},
+        expected_origins=None if expected_origins is None else {"_": expected_origins},
         stdlib=stdlib,
         expected_legal_groupings=expected_legal_groupings,
     )

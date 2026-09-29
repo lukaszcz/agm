@@ -607,7 +607,7 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
 
     assert not result.ok
     assert len(result.diagnostics) == 1
-    assert "is not exported" in result.diagnostics[0].message
+    assert "Point::distance" in result.diagnostics[0].message
 
 
 # ---------------------------------------------------------------------------

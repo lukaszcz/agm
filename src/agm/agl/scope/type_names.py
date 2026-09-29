@@ -1,26 +1,19 @@
-"""The declarations a type name selects where it is written.
-
-One selection serves every consumer that must agree on it: annotations,
-alias targets, which resolve where their alias is declared, and value names
-that denote no value. A name selects, in order: this module's nearest
-lexical declaration of it; for an unqualified name, the type contributions
-(``use`` members and region import tails) of the nearest layer contributing
-it, ranked equally at the module root with root import tails; for an
-unanchored qualified path, the nearest layer's contributions of that path;
-then a qualified name's module route.
+"""Type-name lookups shared by scope and the type-owner index.
 
 A leading (single-segment) name -- a bare type name, or a qualifier chain's
-own first segment -- additionally shares the type/scope namespace with scope
-regions: :func:`leading_name_reading` is the one nearest-level lookup a bare
-type name, a qualifier's leading segment, and a method receiver all resolve
+own first segment -- shares the type/scope namespace with scope regions:
+:func:`leading_name_reading` is the one nearest-level lookup a bare type
+name, a qualifier's leading segment, and a method receiver all resolve
 through, so a nearer region always stops a farther type from merging in.
+:func:`imported_member_selection` is what an alias's member path reaches
+through the import surfaces its target is spelled through, so ``hiding``
+filters an alias's members exactly as it filters its target's.
 """
 
 from __future__ import annotations
 
-import enum
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass, field
 from typing import TypeGuard
 
 from agm.agl.modules.ids import ModuleId
@@ -32,43 +25,28 @@ from agm.agl.scope.imports import (
     QualResolutionFound,
     resolve_qualified,
 )
-from agm.agl.scope.symbols import ScopePath, TypeOwner
+from agm.agl.scope.symbols import ContributionLayer, DeclarationKey, ScopePath, TypeOwner
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
-    "ContributionLayer",
     "LeadingReading",
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
     "TypeContributions",
     "TypeNameSite",
-    "bare_type_selection",
     "imported_member_selection",
     "is_nominal_type_expr",
     "leading_name_reading",
-    "nominal_selection",
     "owner_member_selection",
     "owner_type_expr",
     "routed_qualifier_and_member",
-    "type_name_selection",
+    "selection_node_id",
+    "spells_own_declaration",
 ]
-
-
-class ContributionLayer(enum.Enum):
-    """Which layer a leading name's nearest reading came from.
-
-    ``DECLARED`` is this module's own lexical declaration; ``USE`` a ``use``
-    contribution (local or region-scoped); ``IMPORTED`` a bare import tail or
-    scope route, reachable only at the module root.
-    """
-
-    DECLARED = enum.auto()
-    USE = enum.auto()
-    IMPORTED = enum.auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,13 +55,14 @@ class LeadingReading:
 
     ``is_region`` marks a scope region's reading: decisive on its own, so
     ``types`` is always empty then -- a farther level's type never merges
-    into a nearer region. ``path`` is the declaring scope path of a
-    ``DECLARED`` reading, region or type, and ``None`` for every other layer.
+    into a nearer region. ``types`` maps each selected type to the layer that
+    contributed it, so an ambiguity names every candidate's own origin.
+    ``path`` is the declaring scope path of this module's own lexical
+    declaration, region or type, and ``None`` for a contributed reading.
     """
 
-    layer: ContributionLayer
     is_region: bool
-    types: frozenset[QName] = frozenset()
+    types: Mapping[QName, ContributionLayer] = field(default_factory=dict)
     path: ScopePath | None = None
 
 
@@ -94,50 +73,21 @@ LeadingContributions = Callable[[NameAtom], LeadingReading | None]
 """The nearest layer's :class:`LeadingReading` of a leading name, region and type alike."""
 
 
-def _no_region(_path: ScopePath) -> bool:
-    """The default ``declares_region``: a site that never sees one."""
-    return False
-
-
-def _no_leading_contribution(_name: NameAtom) -> LeadingReading | None:
-    """The default ``leading_contributions``: a site that never sees one."""
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class TypeNameSite:
     """The lexical layer a type name is written in and what it sees there.
 
     ``declares`` reports this module's own type declaration at a scope path;
-    ``is_type`` whether an import-tail selection denotes a type;
-    ``type_params`` the type parameters in scope, which shadow every declaration.
-    ``declares_region`` reports this module's own scope-region declaration at
-    a path; ``leading_contributions`` is :attr:`contributions`' counterpart
-    for :func:`leading_name_reading` -- both default to "no region" for a
-    site that never sees one (typecheck's own, region-free site).
+    ``declares_region`` this module's own scope-region declaration at a path;
+    ``leading_contributions`` the nearest level's reading of a leading name
+    beyond them.
     """
 
     module_id: ModuleId
     scope_path: ScopePath
-    import_env: ImportEnv
     declares: Callable[[ScopePath], bool]
-    contributions: TypeContributions
-    is_type: Callable[[QName], bool]
-    type_params: frozenset[str] = frozenset()
-    declares_region: Callable[[ScopePath], bool] = _no_region
-    leading_contributions: LeadingContributions = _no_leading_contribution
-
-
-def bare_type_selection(site: TypeNameSite, name: NameAtom) -> frozenset[QName]:
-    """Return what a bare *name* selects beyond own declarations."""
-    layer = site.contributions(name)
-    contributed = frozenset() if layer is None else layer[1]
-    if layer is not None and layer[0]:
-        return contributed
-    imported = frozenset(
-        qname for qname in site.import_env.unqualified.get(name, ()) if site.is_type(qname)
-    )
-    return contributed | imported
+    declares_region: Callable[[ScopePath], bool]
+    leading_contributions: LeadingContributions
 
 
 def leading_name_reading(
@@ -148,107 +98,47 @@ def leading_name_reading(
     Checked nearest first: this module's own lexical declaration -- a scope
     region or a type -- at each enclosing scope, the module root alone when
     *rooted*; then, unless *rooted* (a current-module anchor never falls
-    back further), the nearest layer *site* contributes it through -- a scope
-    region is decisive wherever it is found, so a farther level's type never
-    merges into a nearer region -- falling back to :func:`bare_type_selection`
-    when *site* carries no region-aware layer of its own (the default for a
-    site built without one, as the type-owner index's own is). Shared by a bare
-    type name (:func:`type_name_selection`), a qualifier chain's own leading
-    segment, and a method receiver's owner, so the three agree on the same
-    nearest level.
+    back further), the nearest level *site* contributes it through
+    (:attr:`TypeNameSite.leading_contributions`) -- a scope region is
+    decisive wherever it is found, so a farther level's type never merges
+    into a nearer region. Shared by a bare type name, a qualifier chain's
+    own leading segment, and a method receiver's owner, so the three agree
+    on the same nearest level.
     """
     for base in enclosing_scope_bases(site.scope_path, rooted=rooted):
         path = (*base, name)
         if site.declares_region(path):
-            return LeadingReading(ContributionLayer.DECLARED, True, path=path)
+            return LeadingReading(True, path=path)
         if site.declares(path):
             return LeadingReading(
-                ContributionLayer.DECLARED,
-                False,
-                frozenset({(site.module_id, _atom(path))}),
-                path=path,
+                False, {(site.module_id, _atom(path)): ContributionLayer.DECLARED}, path=path
             )
-    if rooted:
-        return None
-    contributed = site.leading_contributions(_atom((name,)))
-    if contributed is not None:
-        return contributed
-    bare = bare_type_selection(site, name)
-    return None if not bare else LeadingReading(ContributionLayer.IMPORTED, False, bare)
-
-
-def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> frozenset[QName]:
-    """Return every declaration *type_expr*'s name selects at *site*; several are ambiguous."""
-    return _type_name_selection(site, type_expr)[0]
-
-
-def _type_name_selection(
-    site: TypeNameSite, type_expr: NameT | AppliedT
-) -> tuple[frozenset[QName], bool]:
-    """Return *type_expr*'s selection at *site*, and whether it was reached indirectly.
-
-    A direct hit (the site's own nearest lexical declaration) carries no
-    ``hiding``: the second element is ``False`` only then. Every other route
-    -- a leading name's reading or root import tails, an unanchored
-    qualified path's contributions, or a qualified name's module route --
-    already reflects whatever ``hiding`` applies there, so the second element
-    is ``True``.
-    """
-    qualifier = type_expr.qualifier
-    if qualifier is None:
-        return _leading_type_name_selection(site, type_expr.name, None)
-    anchor = qualifier.anchor
-    segments = qualifier.route_segments
-    if not segments:
-        return _leading_type_name_selection(site, type_expr.name, anchor)
-    if anchor is not QualifierAnchor.MODULE:
-        for base in enclosing_scope_bases(
-            site.scope_path, rooted=anchor is QualifierAnchor.CURRENT_MODULE
-        ):
-            path = (*base, *segments, type_expr.name)
-            if site.declares(path):
-                return frozenset({(site.module_id, _atom(path))}), False
-    if anchor is None:
-        layer = site.contributions(_atom((*segments, type_expr.name)))
-        if layer is not None:
-            return layer[1], True
-    return _routed_selection(site, qualifier, (type_expr.name,)), True
-
-
-def _leading_type_name_selection(
-    site: TypeNameSite, name: str, anchor: QualifierAnchor | None
-) -> tuple[frozenset[QName], bool]:
-    """Return a bare or ``::``-anchored name's selection.
-
-    Delegates to :func:`leading_name_reading`, the one nearest-level lookup
-    shared with a qualifier chain's leading segment and a method receiver's
-    owner; a scope-region reading selects no type.
-    """
-    reading = leading_name_reading(site, name, rooted=anchor is QualifierAnchor.CURRENT_MODULE)
-    if reading is None:
-        return frozenset(), True
-    return reading.types, reading.layer is not ContributionLayer.DECLARED
+    return None if rooted else site.leading_contributions(_atom((name,)))
 
 
 def imported_member_selection(
-    site: TypeNameSite, owner: NameT | AppliedT, member: str
+    import_env: ImportEnv,
+    contributions: TypeContributions,
+    owner: NameT | AppliedT,
+    member: str,
 ) -> frozenset[QName]:
-    """Return what path ``owner::member`` selects through *site*'s imports, *owner* as written.
+    """Return what path ``owner::member`` selects through *import_env*, *owner* as written.
 
     The spelling reaches a member only through an import surface exposing its
-    complete path, which ``hiding`` filters: the nearest layer contributing it,
-    a bare owner's root import tails, else the owner's module route.
+    complete path, which ``hiding`` filters: the nearest layer *contributions*
+    reports for it, a bare owner's root import tails, else the owner's module
+    route.
     """
     qualifier = owner.qualifier
     segments = () if qualifier is None else qualifier.route_segments
     path = _atom((*segments, owner.name, member))
     if qualifier is None or qualifier.anchor is None:
-        layer = site.contributions(path)
+        layer = contributions(path)
         if layer is not None:
             return layer[1]
     if qualifier is None:
-        return site.import_env.unqualified.get(path, frozenset())
-    return _routed_selection(site, qualifier, (owner.name, member))
+        return import_env.unqualified.get(path, frozenset())
+    return _routed_selection(import_env, qualifier, (owner.name, member))
 
 
 def routed_qualifier_and_member(
@@ -262,51 +152,69 @@ def routed_qualifier_and_member(
 
 
 def _routed_selection(
-    site: TypeNameSite, qualifier: QualifierChain, tail: tuple[str, ...]
+    import_env: ImportEnv, qualifier: QualifierChain, tail: tuple[str, ...]
 ) -> frozenset[QName]:
     """Return what *qualifier*'s module route selects for *tail* below its later segments.
 
     A route and a bare compound spelling of the same path are checked
     together, as :func:`~agm.agl.scope.imports.resolve_qualified` does for
-    every qualified lookup; a size above one reports ambiguity, matching
-    every other selection this module returns, rather than collapsing it
-    away.
+    every qualified lookup; an ambiguous path keeps every candidate, so a
+    member any of them exposes stays reachable.
     """
-    if qualifier.anchor is QualifierAnchor.CURRENT_MODULE or not qualifier.segments:
-        return frozenset()
     route, member = routed_qualifier_and_member(qualifier, tail)
-    result = resolve_qualified(site.import_env, route, member, anchored=qualifier.anchored)
+    result = resolve_qualified(import_env, route, member, anchored=qualifier.anchored)
     if isinstance(result, QualResolutionFound):
         return frozenset({result.qname})
     if isinstance(result, QualResolutionAmbiguous):
-        return frozenset((module, member) for module in result.candidates)
+        return result.qnames
     return frozenset()
 
 
-def is_nominal_type_expr(type_expr: TypeExpr, site: TypeNameSite) -> TypeGuard[NameT | AppliedT]:
-    """Whether *type_expr* is a type name :func:`nominal_selection` can select at *site*.
+def is_nominal_type_expr(
+    type_expr: TypeExpr, type_params: Collection[str]
+) -> TypeGuard[NameT | AppliedT]:
+    """Whether *type_expr* is a type name, one scope selects a declaration for.
 
     False for anything structural: not a type name, or the bare name of one
-    of *site*'s type parameters.
+    of the enclosing declaration's *type_params*.
     """
     return isinstance(type_expr, (NameT, AppliedT)) and not (
         isinstance(type_expr, NameT)
         and type_expr.qualifier is None
-        and type_expr.name in site.type_params
+        and type_expr.name in type_params
     )
 
 
-def nominal_selection(
-    site: TypeNameSite, type_expr: TypeExpr
-) -> tuple[frozenset[QName], bool] | None:
-    """Return what *type_expr* selects at *site*, and whether indirectly.
+def selection_node_id(type_expr: NameT | AppliedT) -> int:
+    """Return the node id scope records *type_expr*'s selected declaration under.
 
-    ``None`` when *type_expr* is not :func:`is_nominal_type_expr`. See
-    :func:`_type_name_selection` for the elements of a non-``None`` result.
+    A qualified or ``::``-anchored name's is its qualifier's; a bare name's
+    is its own.
     """
-    if not is_nominal_type_expr(type_expr, site):
-        return None
-    return _type_name_selection(site, type_expr)
+    qualifier = type_expr.qualifier
+    return type_expr.node_id if qualifier is None else qualifier.node_id
+
+
+def spells_own_declaration(
+    module_id: ModuleId, scope_path: ScopePath, type_expr: NameT | AppliedT, key: DeclarationKey
+) -> bool:
+    """Whether *key*, selected for *type_expr* at *scope_path*, is reached directly.
+
+    Direct means this module's own declaration at the path the spelling
+    names from an enclosing scope: no import surface lies between, so no
+    ``hiding`` filters its members. A selection through a ``use``
+    contribution, an import tail, or a module route is indirect.
+    """
+    qualifier = type_expr.qualifier
+    anchor = None if qualifier is None else qualifier.anchor
+    if key[0] != module_id or anchor is QualifierAnchor.MODULE:
+        return False
+    segments = () if qualifier is None else qualifier.route_segments
+    rooted = anchor is QualifierAnchor.CURRENT_MODULE
+    return any(
+        (*key[1], key[2]) == (*base, *segments, type_expr.name)
+        for base in enclosing_scope_bases(scope_path, rooted=rooted)
+    )
 
 
 def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:

@@ -2461,24 +2461,26 @@ class TestMethodOrphanRule:
             (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("Point",)),
         }
 
-    def test_bare_imported_enum_member_can_own_an_orphan_method(self, tmp_path: Path) -> None:
-        """An imported enum-member route exposes its member record as a receiver."""
+    def test_selected_enum_member_path_owns_an_orphan_method(self, tmp_path: Path) -> None:
+        """A selected member path is bare as that path, never as its terminal name."""
         shapes_id = ModuleId.from_path("shapes")
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "import shapes::{Tree::Node}\n\ndef Node::extract[E](self) -> E = self.value"
-                ),
-                "shapes": "enum Tree[E]\n  | Node(value: E)",
-            },
-        )
-
-        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
-
-        assert resolved.method_declarations == {
-            (ENTRY_ID, ("Node",), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
+        files = {
+            "entry": (
+                "import shapes::{Tree::Node}\n\ndef Tree::Node::extract[E](self) -> E = self.value"
+            ),
+            "shapes": "enum Tree[E]\n  | Node(value: E)",
         }
+        resolved = resolve_program(_make_graph_from_files(tmp_path, files)).modules[ENTRY_ID]
+
+        assert resolved.resolved.method_declarations == {
+            (ENTRY_ID, ("Tree", "Node"), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
+        }
+
+        files["entry"] = (
+            "import shapes::{Tree::Node}\n\ndef Node::extract[E](self) -> E = self.value"
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(_make_graph_from_files(tmp_path / "terminal", files))
 
     def test_plain_scope_named_like_an_imported_type_can_declare_an_orphan(
         self, tmp_path: Path

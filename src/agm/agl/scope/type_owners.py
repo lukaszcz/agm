@@ -1,12 +1,12 @@
 """Constructor owners of type paths, resolved by declaration identity.
 
 A type path qualifies constructors (``Owner::Name``). What it selects is read
-from the declaration it names; an alias is followed to its target, which
-selects exactly what the same type name would in an annotation at the
-alias's own declaration (:mod:`agm.agl.scope.type_names`), never where the
-alias is used. A structural target -- not a type name, or the bare name of
-one of the alias's own type parameters -- selects nothing; a target selecting
-no declaration is presumed constructible, leaving the verdict to typecheck.
+from the declaration it names; an alias is followed to its target: the
+declaration scope selects for the target spelling in type position at the
+alias's own declaration (:data:`AliasTargets`), never where the alias is
+used. A structural target -- not a type name, or the bare name of one of the
+alias's own type parameters -- selects nothing; a target selecting no
+declaration is presumed constructible, leaving the verdict to typecheck.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.symbols import (
     ConstructorRef,
+    DeclarationKey,
     ScopePath,
     TypeOwner,
     TypeTarget,
@@ -31,10 +32,9 @@ from agm.agl.scope.symbols import (
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.scope.type_names import (
-    TypeNameSite,
     imported_member_selection,
     is_nominal_type_expr,
-    nominal_selection,
+    spells_own_declaration,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -65,10 +65,22 @@ ModuleTypeContributions = Callable[
 ]
 """The nearest layer above one module scope contributing a spelling, restricted to types."""
 
-AliasSelection = tuple[frozenset[QName], bool, NameT | AppliedT] | None
-"""What an alias's target selects, whether indirectly, and its narrowed spelling.
+AliasTargets = Callable[[QName, TypeAlias, NameT | AppliedT], DeclarationKey | None]
+"""The declaration scope selects for alias *qname*'s nominal target *spelling* where declared.
 
-See :func:`nominal_selection`.
+``None`` when scope selects none: a built-in type name.
+"""
+
+CurrentTypeSelection = Callable[[ModuleId, ScopePath, NameT | AppliedT], DeclarationKey | None]
+"""The declaration a type name spelled in one module scope selects now, if any."""
+
+AliasSelection = tuple[QName | None, bool, NameT | AppliedT] | None
+"""An alias's selected target declaration, whether reached indirectly, and its spelling.
+
+``None`` for a structural target; a ``None`` declaration for a target scope
+selects none. A target reached through an import surface (``use``, import
+tail, or module route) is indirect: its ``hiding`` filters the members the
+alias reaches.
 """
 
 
@@ -79,9 +91,11 @@ class TypeOwnerIndex:
     constructors; an enum path owns only the inline members its scope
     declares, a referenced member staying at its own path; an alias path owns
     its own constructor and selects through the owner of its target.
-    *contributions* answers what a module's lexical layers contribute, so
-    alias targets see ``use`` declarations. *retained* supplies the owners of
-    *retained_module*'s paths that earlier REPL entries declared, already
+    *contributions* answers what a module's lexical layers contribute, so a
+    target spelling's member paths see ``use`` declarations. *alias_targets*
+    answers scope's decision for an alias's target; *current_selection* what
+    a retained alias's spelling selects now. *retained* supplies the owners
+    of *retained_module*'s paths that earlier REPL entries declared, already
     resolved against the declarations they saw.
     """
 
@@ -92,6 +106,8 @@ class TypeOwnerIndex:
         constructor_refs: Mapping[QName, ConstructorRef],
         import_envs: Mapping[ModuleId, ImportEnv],
         contributions: ModuleTypeContributions,
+        alias_targets: AliasTargets,
+        current_selection: CurrentTypeSelection,
         retained_module: ModuleId | None = None,
         retained: Mapping[ScopePath, TypeOwner] | None = None,
     ) -> None:
@@ -99,6 +115,8 @@ class TypeOwnerIndex:
         self._constructor_refs = constructor_refs
         self._import_envs = import_envs
         self._contributions = contributions
+        self._decided_targets = alias_targets
+        self._current_selection = current_selection
         self._retained_module = retained_module
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
@@ -114,6 +132,8 @@ class TypeOwnerIndex:
             constructor_refs=self._constructor_refs,
             import_envs=self._import_envs,
             contributions=self._contributions,
+            alias_targets=self._decided_targets,
+            current_selection=self._current_selection,
             retained_module=module_id,
             retained=retained,
         )
@@ -142,22 +162,6 @@ class TypeOwnerIndex:
         path = _path(qname[1])
         enum = self._retained.get(path[:-1])
         return None if enum is None else enum.members.get(path[-1])
-
-    def site(
-        self, module_id: ModuleId, scope_path: ScopePath, type_params: Iterable[str] = ()
-    ) -> TypeNameSite:
-        """Return the site of a type name written in *module_id* at *scope_path*."""
-        return TypeNameSite(
-            module_id=module_id,
-            scope_path=scope_path,
-            import_env=self._import_envs[module_id],
-            declares=lambda path: self.is_declared((module_id, _atom(path))),
-            contributions=lambda name: self._contributions(
-                module_id, scope_path, name, self.is_declared
-            ),
-            is_type=self.is_declared,
-            type_params=frozenset(type_params),
-        )
 
     def referenced_member_refs(
         self, module_id: ModuleId, member: VariantRef
@@ -204,11 +208,11 @@ class TypeOwnerIndex:
         unfiltered, exactly as a fresh chain link does. Otherwise, a direct
         hit on the (non-alias) target stands as-is -- the same declaration
         has the same members -- while an indirect hit is re-checked: if its
-        own spelling still selects the target at this entry's site, the
-        target's current members are re-projected through that spelling;
-        if the spelling no longer selects exactly the target (shadowed,
-        ambiguous, or the route is gone), *retained* freezes at its
-        declaration-time members/hidden.
+        own spelling still selects the target at this entry's site
+        (*current_selection*), the target's current members are re-projected
+        through that spelling; if the spelling no longer selects exactly the
+        target (shadowed, ambiguous, or the route is gone), *retained*
+        freezes at its declaration-time members/hidden.
         """
         alias, target = retained.alias, retained.target
         if alias is None or target is None:
@@ -218,15 +222,15 @@ class TypeOwnerIndex:
             return retained
         if current.alias is not None:
             return replace(retained, members=current.members, hidden=current.hidden)
-        if not retained.indirect:
-            return retained
-        selection = self._alias_selection(qname, alias)
-        if selection is None or selection[0] != frozenset({target.qname}):
+        spelling = alias.type_expr
+        if not retained.indirect or not is_nominal_type_expr(spelling, alias.type_params):
             return retained
         module_id, atom = qname
-        reachable, hidden = self._filtered_projection(
-            module_id, _path(atom), selection[2], alias.type_params, current
-        )
+        path = _path(atom)
+        key = self._current_selection(module_id, path[:-1], spelling)
+        if key is None or self._declared_path(key) != target.qname:
+            return retained
+        reachable, hidden = self._filtered_projection(module_id, path, spelling, current)
         return replace(retained, members=reachable, hidden=hidden)
 
     def _filtered_projection(
@@ -234,26 +238,28 @@ class TypeOwnerIndex:
         module_id: ModuleId,
         path: ScopePath,
         type_expr: NameT | AppliedT,
-        type_params: Iterable[str],
         target_owner: TypeOwner,
     ) -> tuple[Mapping[str, ConstructorRef], frozenset[str]]:
         """Return an alias's reachable ``members``/``hidden``, filtered from *target_owner*.
 
         Narrows *target_owner*'s members through *type_expr* -- the alias's
-        own nominal target spelling, already narrowed by
-        :func:`nominal_selection` -- via :func:`imported_member_selection`
+        own nominal target spelling -- via :func:`imported_member_selection`
         evaluated at *path*'s site. Shared by a fresh declaration
         (:meth:`_resolve`) and a retained alias (:meth:`_current_retained_owner`),
         both of which call this only when the target is not itself an alias --
         whose own projection, already filtered at its own site, applies
         unfiltered instead.
         """
-        site = self.site(module_id, path[:-1], type_params)
+        import_env = self._import_envs[module_id]
+
+        def contributions(name: NameAtom) -> tuple[ScopePath, frozenset[QName]] | None:
+            return self._contributions(module_id, path[:-1], name, self.is_declared)
+
         reachable = {
             name: member
             for name, member in target_owner.members.items()
             if (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
-            in imported_member_selection(site, type_expr, name)
+            in imported_member_selection(import_env, contributions, type_expr, name)
         }
         hidden = target_owner.hidden | (target_owner.members.keys() - reachable.keys())
         return reachable, hidden
@@ -309,8 +315,7 @@ class TypeOwnerIndex:
         selection = self._alias_selection(qname, declaration)
         if selection is None:
             return TypeOwner(None, declaration.node_id, alias=declaration)
-        targets, indirect, type_expr = selection
-        target_qname = next(iter(targets)) if len(targets) == 1 else None
+        target_qname, indirect, type_expr = selection
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
             return presumed
@@ -321,9 +326,7 @@ class TypeOwnerIndex:
         # the same rule ``_current_retained_owner`` applies when the target
         # it re-checks turns out to be an alias itself.
         if indirect and target.alias is None:
-            reachable, hidden = self._filtered_projection(
-                module_id, path, type_expr, declaration.type_params, target
-            )
+            reachable, hidden = self._filtered_projection(module_id, path, type_expr, target)
         else:
             reachable, hidden = target.members, target.hidden
         return TypeOwner(
@@ -339,22 +342,39 @@ class TypeOwnerIndex:
         )
 
     def _alias_selection(self, qname: QName, alias: TypeAlias) -> AliasSelection:
-        """Return what alias *qname*'s target selects where declared, and whether indirectly.
+        """Return the declaration alias *qname*'s target denotes, as scope selected it.
 
-        ``None`` if the target is structural. See :func:`nominal_selection`
-        for the second element of a non-``None`` result; the third is the
-        target spelling itself, narrowed to ``NameT | AppliedT``.
+        Scope's selection (*alias_targets*) may spell a member through its
+        owner's alias (``O::Member``); the target is the member declaration
+        it denotes. See :data:`AliasSelection`.
         """
         if qname not in self._alias_targets:
-            site = self.site(qname[0], _path(qname[1])[:-1], alias.type_params)
-            type_expr = alias.type_expr
-            selection = nominal_selection(site, type_expr)
-            self._alias_targets[qname] = (
-                (*selection, type_expr)
-                if selection is not None and is_nominal_type_expr(type_expr, site)
-                else None
-            )
+            spelling = alias.type_expr
+            if not is_nominal_type_expr(spelling, alias.type_params):
+                self._alias_targets[qname] = None
+            else:
+                key = self._decided_targets(qname, alias, spelling)
+                self._alias_targets[qname] = (
+                    None if key is None else self._declared_path(key),
+                    key is not None
+                    and not spells_own_declaration(qname[0], _path(qname[1])[:-1], spelling, key),
+                    spelling,
+                )
         return self._alias_targets[qname]
+
+    def _declared_path(self, key: DeclarationKey) -> QName | None:
+        """Return the declaration *key* denotes: its own path, or a member through its owner."""
+        module_id, path, name = key
+        qname = (module_id, _atom((*path, name)))
+        if self.is_declared(qname):
+            return qname
+        owner = self.owner((module_id, _atom(path))) if path else None
+        member = None if owner is None else owner.members.get(name)
+        return (
+            None
+            if member is None
+            else (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
+        )
 
     def _enum_members(
         self, module_id: ModuleId, path: ScopePath, declaration: EnumDef
@@ -440,8 +460,7 @@ class TypeOwnerIndex:
             if not isinstance(declaration, TypeAlias):
                 return ()
             selection = self._alias_selection(current, declaration)
-            targets = None if selection is None else selection[0]
-            current = next(iter(targets)) if targets is not None and len(targets) == 1 else None
+            current = None if selection is None else selection[0]
         return ()
 
 

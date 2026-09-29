@@ -12273,8 +12273,8 @@ class TestNonGenericConstructorAsValue:
         # An `EnumName::bogus` reference in value position names a variant that
         # does not exist; scope defers this to the checker.
         err = reject_type('enum E\n  | Nope\n  | Wrap(value: int)\nlet f = E::Bogus\n"x"')
-        assert "'Bogus'" in str(err)
-        assert "'E'" in str(err)
+        assert isinstance(err, UnknownMemberError)
+        assert err.spelling == "E::Bogus"
 
 
 class TestGenericEnumQualifiersAndTypeVarScoping:

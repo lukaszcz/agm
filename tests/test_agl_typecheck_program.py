@@ -1519,7 +1519,7 @@ def test_used_alias_of_enum_selects_only_its_inline_members(tmp_path: Path) -> N
 def test_used_alias_of_referenced_enum_rejects_unknown_or_unresolved_members(
     tmp_path: Path, library: str
 ) -> None:
-    with pytest.raises(AglScopeError, match="not a member"):
+    with pytest.raises(UnknownMemberError):
         check_agl_program(
             tmp_path,
             {

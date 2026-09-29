@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": ["missing", "not declared"]}}
+{"diagnostic": {"line": 1, "message_contains": ["Scope::missing", "no visible member"]}}

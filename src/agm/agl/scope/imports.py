@@ -8,8 +8,8 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ModuleId, render_qualifier
+from agm.agl.scope.symbols import UnknownMemberError
 from agm.agl.scope.symbols import import_item_path as _item_path
-from agm.agl.scope.symbols import not_exported_error
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
@@ -292,9 +292,11 @@ class QualResolutionMissingMember:
 
 @dataclass(frozen=True, slots=True)
 class QualResolutionAmbiguous:
+    """Several declarations the path selects, through routes and bare compounds alike."""
+
     qualifier: tuple[str, ...]
     member: NameAtom
-    candidates: tuple[ModuleId, ...]
+    qnames: frozenset[QName]
 
 
 QualResolution = (
@@ -336,8 +338,7 @@ def _selected_public_atoms(
         declarations = matching_atoms(exports, prefix)
         scopes = matching_atoms(scope_exports, prefix)
         if not declarations and not scopes:
-            rendered = "::".join(prefix)
-            raise not_exported_error(rendered, module.display(), span=span)
+            raise UnknownMemberError(f"{module.display()}::{'::'.join(prefix)}", span=span)
         for atom in declarations:
             matched_exports[atom] = None
         for atom in scopes:
@@ -681,23 +682,13 @@ def resolve_qualified(
     bare_atom = _atom((*qualifier, *_path(member)))
     bare_qnames = frozenset() if anchored else env.unqualified.get(bare_atom, frozenset())
 
+    qnames = frozenset(qname for _module, qname in route_members) | bare_qnames
+    if len(qnames) > 1:
+        return QualResolutionAmbiguous(qualifier, member, qnames)
     if route_members:
-        route_qnames = {qname for _module, qname in route_members}
-        if len(route_qnames | bare_qnames) > 1:
-            modules = {module for module, _qname in route_members}
-            modules.update(module for module, _atom in bare_qnames)
-            return QualResolutionAmbiguous(
-                qualifier, member, tuple(sorted(modules, key=ModuleId.path_str))
-            )
         module, qname = route_members[0]
         return QualResolutionFound(module, qname)
     if bare_qnames:
-        if len(bare_qnames) > 1:
-            return QualResolutionAmbiguous(
-                qualifier,
-                member,
-                tuple(sorted((module for module, _atom in bare_qnames), key=ModuleId.path_str)),
-            )
         qname = next(iter(bare_qnames))
         return QualResolutionFound(qname[0], qname)
     if candidates:

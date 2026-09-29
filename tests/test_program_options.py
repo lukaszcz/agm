@@ -143,6 +143,16 @@ def _registered_command_flags() -> set[str]:
     }
 
 
+#: A parameter doc whose indented listing must print one item per line.
+_LISTING_DOC = "Aspects, e.g.:\n  simplicity\n  efficiency"
+
+
+def _keeps_listing_lines(help_text: str) -> bool:
+    """Report whether *help_text* prints :data:`_LISTING_DOC`'s items on their own lines."""
+    lines = [line.strip() for line in help_text.splitlines()]
+    return "simplicity" in lines and lines[lines.index("simplicity") + 1] == "efficiency"
+
+
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
     result = build_program_command(_program(*params, doc=doc), EXEC_RESERVED_FLAGS)
     assert isinstance(result, ProgramCommand)
@@ -1098,6 +1108,26 @@ class TestRenderHelp:
 
         assert "Tags one artifact." in command.render_help("main")
 
+    def test_an_indented_example_block_in_the_program_doc_keeps_its_lines(self) -> None:
+        doc = "Refines a subject.\n\nExamples:\n  agm refine main\n  agm refine tip\n"
+
+        text = _command(doc=doc).render_help("main")
+
+        assert "  Examples:\n    agm refine main\n    agm refine tip\n" in text
+
+    def test_prose_in_the_program_doc_still_rewraps(self) -> None:
+        text = _command(doc="Refines\na subject.").render_help("main")
+
+        assert "Refines a subject." in text
+
+    @pytest.mark.parametrize("zone", [ParamZone.NAMED_ONLY, ParamZone.POSITIONAL_ONLY])
+    def test_an_indented_example_block_in_a_parameter_doc_keeps_its_lines(
+        self, zone: ParamZone
+    ) -> None:
+        command = _command(_param("aspects", TextType(), zone, doc=_LISTING_DOC))
+
+        assert _keeps_listing_lines(command.render_help("main"))
+
     def test_a_supplied_description_overrides_the_program_doc(self) -> None:
         command = _command(_param("tag", TextType()), doc="Tags one artifact.")
 
@@ -1655,6 +1685,14 @@ class TestModuleParameterOptions:
         command = _command_with_module_params(program, foo, no_foo, qualified_shadow)
 
         assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
+
+    def test_an_indented_example_block_in_a_module_parameter_doc_keeps_its_lines(self) -> None:
+        program = self._program()
+        aspects = _module_param(program.module, "aspects", TextType(), doc=_LISTING_DOC)
+
+        command = _command_with_module_params(program, aspects)
+
+        assert _keeps_listing_lines(command.render_help("agm exec tool.agl"))
 
     def test_help_renders_a_short_only_module_parameter(self) -> None:
         program = self._program()

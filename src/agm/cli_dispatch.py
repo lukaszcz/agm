@@ -16,7 +16,7 @@ from typer.models import Context as TyperContext
 from agm.cli_support.args import ExecArgs
 from agm.config.context import current_config_context
 from agm.core import dry_run
-from agm.util.text import first_paragraph
+from agm.util.text import first_paragraph, keep_indented_paragraphs
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
@@ -209,7 +209,7 @@ def registered_group_help(
     }
     guidance = registration.doc if registration is not None and registration.doc else None
     group = click.Group(
-        help=guidance or f"Commands available under {path_name}.",
+        help=keep_indented_paragraphs(guidance or f"Commands available under {path_name}."),
         commands=listed_commands,
     )
     return group.get_help(click.Context(group, info_name=f"agm {path_name}"))

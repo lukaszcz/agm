@@ -214,6 +214,10 @@ and each name-addressed parameter is listed with its long flag, its
 `@opt-short` spelling if it has one, its value placeholder, and its own `@doc`
 prose.
 
+Help rewraps each prose paragraph to the terminal width, after removing the
+prose's common indentation. A paragraph holding an indented line — an example,
+a list, a table — keeps its line breaks and indentation.
+
 ## Host-configurable settings
 
 ### Module parameters

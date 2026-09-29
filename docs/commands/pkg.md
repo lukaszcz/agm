@@ -148,8 +148,9 @@ program = "review-tools/main::batch"
   signature options followed by one section for each closure module with visible module
   parameters. Parameter `@doc` attributes describe their options.
 - Omit `program` for a command group (must have descendant commands), whose only prose is its own
-  `doc` (TOML multiline strings work). Undeclared parent groups work automatically, with generated
-  help listing their descendants. A listing shows the opening paragraph of each command's `doc`,
+  `doc` (TOML multiline strings work; a paragraph holding an indented line keeps its layout in
+  help). Undeclared parent groups work automatically, with generated help listing their
+  descendants. A listing shows the opening paragraph of each command's `doc`,
   falling back to a generated summary when there is none.
 
 ```toml

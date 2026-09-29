@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from agm.util.text import first_paragraph, format_description_column, normalize_newlines
+import click
+
+from agm.util.text import (
+    first_paragraph,
+    format_description_column,
+    keep_indented_paragraphs,
+    normalize_newlines,
+)
 
 
 class TestNormalizeNewlines:
@@ -72,3 +79,32 @@ class TestFormatDescriptionColumn:
         lines = format_description_column((("verylongname", "alpha beta"),), width=10)
 
         assert lines == ["  verylongname  alpha", "                beta"]
+
+
+def _wrapped(text: str, width: int = 40) -> str:
+    """Render *text* as Click's help formatter lays out a paragraph block."""
+    return click.formatting.wrap_text(
+        keep_indented_paragraphs(text), width, preserve_paragraphs=True
+    )
+
+
+class TestKeepIndentedParagraphs:
+    def test_an_indented_block_keeps_its_line_breaks(self) -> None:
+        text = "Examples:\n  agm devel refine main\n  agm devel refine tip"
+
+        assert _wrapped(text) == text
+
+    def test_prose_paragraphs_still_rewrap(self) -> None:
+        assert _wrapped("Runs a loop\nuntil done.\n\nThen stops.") == (
+            "Runs a loop until done.\n\nThen stops."
+        )
+
+    def test_the_common_indentation_of_a_docstring_is_removed(self) -> None:
+        text = "\n    Refine.\n\n    Examples:\n      agm refine\n      agm refine tip\n"
+
+        assert _wrapped(text) == "Refine.\n\nExamples:\n  agm refine\n  agm refine tip"
+
+    def test_a_whitespace_only_line_separates_paragraphs(self) -> None:
+        text = "Refine\nthis.\n   \nExamples:\n  agm refine\n  agm refine tip"
+
+        assert _wrapped(text) == "Refine this.\n\nExamples:\n  agm refine\n  agm refine tip"

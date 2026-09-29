@@ -113,6 +113,7 @@ from agm.cli_support.execution_options import (
     write_execution_options,
 )
 from agm.config.engine_keys import ENGINE_KEYS, EngineKeySpec
+from agm.util.text import keep_indented_paragraphs
 
 if TYPE_CHECKING:
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -1053,7 +1054,7 @@ def _positive_option(
         default=None,
         multiple=True,
         envvar=spec.env,
-        help=spec.doc,
+        help=None if spec.doc is None else keep_indented_paragraphs(spec.doc),
         hidden=spec.hidden,
     )
 
@@ -1141,7 +1142,7 @@ def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) 
         spelling = (
             f"{spelling} {entry.param.cli.metavar or _default_metavar(entry.param, projected)}"
         )
-    help_text = entry.param.cli.doc or ""
+    help_text = keep_indented_paragraphs(entry.param.cli.doc or "")
     if entry.param.cli.env is not None:
         environment = f"[env var: {entry.param.cli.env}]"
         help_text = f"{help_text}  {environment}" if help_text else environment
@@ -1187,7 +1188,7 @@ class _ProgramClickCommand(click.Command):
         super().__init__(
             name=name,
             params=params,
-            help=description,
+            help=None if description is None else keep_indented_paragraphs(description),
             add_help_option=False,
             context_settings=settings,
         )
@@ -1809,7 +1810,7 @@ def build_program_command(
         description=program.doc,
         usage_slots=_usage_slots(positional),
         positional_help=tuple(
-            (param.cli.metavar or param.cli.name, param.cli.doc)
+            (param.cli.metavar or param.cli.name, keep_indented_paragraphs(param.cli.doc))
             for param in positional
             if param.cli.doc is not None
         ),

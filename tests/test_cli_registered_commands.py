@@ -70,6 +70,18 @@ def test_unexpected_command_resolution_errors_are_not_treated_as_registered_fall
         invoke(CliRunner(), ["unknown"])
 
 
+def test_group_help_keeps_the_indented_blocks_of_its_doc() -> None:
+    commands = {
+        "tools": CommandRegistration("tools", None, "Tools.\n\nExamples:\n  agm tools lint\n"),
+        "tools lint": CommandRegistration("tools", "tools/lint::main"),
+    }
+
+    text = dispatch.registered_group_help("tools", commands)
+
+    assert text is not None
+    assert "  Examples:\n    agm tools lint\n" in text
+
+
 def test_registered_command_resolution_prefers_the_longest_path() -> None:
     from agm.cli_dispatch import resolve_registered_command
 

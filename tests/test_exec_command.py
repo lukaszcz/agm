@@ -258,6 +258,24 @@ class TestModuleParameterHostInputs:
         assert "retries" in undecodable.output
         assert "false\n" not in undecodable.output
 
+    def test_cli_reports_argument_and_module_parameter_errors_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+    ) -> None:
+        source = tmp_path / "p.agl"
+        source.write_text(
+            "@param let level: int = 1\nprogram def main(name: text) -> unit = print name\n",
+            encoding="utf-8",
+        )
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+
+        result = invoke(runner, ["exec", str(source), "--level", "abc"])
+
+        assert result.exit_code != 0
+        assert "name" in result.output
+        assert "level" in result.output
+
     def test_exec_help_groups_module_parameters_by_module(
         self,
         tmp_path: Path,

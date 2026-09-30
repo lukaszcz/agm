@@ -679,7 +679,7 @@ def run(
         )
         if argument_preflight.argument_diagnostics:
             raise RegisteredProgramUsageError(
-                "; ".join(diag.message for diag in argument_preflight.argument_diagnostics),
+                "; ".join(diag.message for diag in argument_preflight.result.diagnostics),
                 selected_program,
             )
         if not argument_preflight.result.ok:

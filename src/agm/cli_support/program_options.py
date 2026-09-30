@@ -1407,7 +1407,8 @@ class ProgramCommand:
         an option's value being whatever token follows it. Every non-option
         token lands in the catch-all positional slot unconditionally. An
         implicit positional CLI value is mapped to its AgL named parameter;
-        the shared zone binder diagnoses any excess positional arguments.
+        the shared zone binder diagnoses any excess positional arguments, except
+        a surplus after tokens routed by name, which it would misreport.
 
         A parameter whose value came from neither a token nor its
         ``@opt-env`` variable is left out of the result entirely, so a host
@@ -1420,7 +1421,8 @@ class ProgramCommand:
             running the program.
         :raises ValueError: for any Click usage error (unknown option,
             missing value, a value given to a flag), for a parameter supplied
-            more than once, or for an optional-enum parameter given both
+            more than once, for a surplus positional token after tokens routed
+            by name, or for an optional-enum parameter given both
             polarities on the command line. A malformed ``VALUE`` — including
             a malformed optional payload (see the module docstring) — is
             not raised here: it reaches this method's caller as a deferred
@@ -1442,6 +1444,13 @@ class ProgramCommand:
             or _from_commandline(ctx, _negative_dest(index))
         )
         slots = self._token_slots(len(cli_tokens), flagged)
+        if any(slot is None for slot, _by_name in slots) and any(
+            by_name for _slot, by_name in slots
+        ):
+            # Tokens routed by name leave the binder's positional list short
+            # of the slots it walks, so it would pair a surplus token with a
+            # slot already filled instead of reporting the overflow.
+            raise ValueError("Too many positional arguments")
         positionally_filled = frozenset(slot.name for slot, _by_name in slots if slot is not None)
 
         named: dict[str, object] = {}

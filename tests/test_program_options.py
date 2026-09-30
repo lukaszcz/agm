@@ -920,6 +920,24 @@ class TestParsePositional:
         assert args.positional == ("7",)
         assert args.named == {"name": "Bob"}
 
+    def test_a_surplus_token_after_a_slot_filled_by_name_is_a_usage_error(self) -> None:
+        """The binder pairs a leftover positional token with the first
+        positional-capable parameter, misreporting it as a duplicate."""
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD),
+            _param("b", TextType(), cli_positional=True),
+        )
+        with pytest.raises(ValueError):
+            command.parse(["--a", "1", "x", "y"])
+
+    def test_a_surplus_token_after_a_cli_positional_slot_is_a_usage_error(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD),
+            _param("b", TextType(), cli_positional=True),
+        )
+        with pytest.raises(ValueError):
+            command.parse(["1", "x", "y"])
+
     def test_a_leading_dash_option_value_is_spelled_inline_or_as_the_next_token(self) -> None:
         param = _param("n", IntType())
         assert _command(param).parse(["--n=-5"]).named == {"n": "-5"}

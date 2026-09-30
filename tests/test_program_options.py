@@ -1430,6 +1430,40 @@ class TestCompletionQueries:
 
     @pytest.mark.parametrize(
         ("tokens", "expected"),
+        [
+            ([], "std"),
+            (["--std", "x"], "mode"),
+            (["--std=x"], "mode"),
+            (["-s", "x"], "mode"),
+            (["-sx"], "mode"),
+            (["--std", "x", "m"], None),
+            (["m"], "mode"),
+        ],
+    )
+    def test_the_next_positional_slot_skips_slots_supplied_by_name(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        command = _command(
+            _param("std", TextType(), ParamZone.STANDARD, short="s"),
+            _param("mode", TextType(), cli_positional=True),
+        )
+
+        slot = command.next_positional(tokens, "m")
+
+        assert (None if slot is None else slot.name) == expected
+
+    def test_a_positional_token_supplies_the_slot_it_fills_not_the_first_slot(self) -> None:
+        command = _command(
+            _param("std", TextType(), ParamZone.STANDARD),
+            _param("mode", TextType(), cli_positional=True),
+        )
+
+        parsed = command.parse(["--std", "x", "m"])
+
+        assert parsed.positionally_filled == frozenset({"mode"})
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
         [(["--trace-file", "trace.jsonl", "--no-stdlib"], "source"), (["--trace-file"], None)],
     )
     def test_host_options_and_their_values_fill_no_slot(

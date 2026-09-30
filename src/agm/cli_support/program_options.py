@@ -445,10 +445,14 @@ class ExecTail:
 
 @dataclass(frozen=True, slots=True)
 class ParsedTail:
-    """Raw program arguments and module-parameter values from one CLI tail."""
+    """Raw program arguments and module-parameter values from one CLI tail.
+
+    ``positionally_filled`` names the parameters a positional token supplied.
+    """
 
     arguments: ProgramArguments
     params: dict["StaticBindingKey", object]
+    positionally_filled: frozenset[str] = frozenset()
 
     @property
     def positional(self) -> tuple[object, ...]:
@@ -1438,7 +1442,7 @@ class ProgramCommand:
             or _from_commandline(ctx, _negative_dest(index))
         )
         slots = self._token_slots(len(cli_tokens), flagged)
-        positional_names = frozenset(slot.name for slot, _by_name in slots if slot is not None)
+        positionally_filled = frozenset(slot.name for slot, _by_name in slots if slot is not None)
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
@@ -1454,7 +1458,7 @@ class ProgramCommand:
                 flag=projected.flag,
                 negative_flag=projected.negative_flag or projected.flag,
                 paired_polarities=True,
-                suppress_positive=param.name in positional_names
+                suppress_positive=param.name in positionally_filled
                 and _from_environment(ctx, _positive_dest(index)),
             )
             if value is not _NOT_SUPPLIED:
@@ -1486,6 +1490,7 @@ class ProgramCommand:
         return ParsedTail(
             arguments=ProgramArguments(positional=tuple(positional), named=named),
             params=module_params,
+            positionally_filled=positionally_filled,
         )
 
     def value_token_indexes(
@@ -1512,12 +1517,10 @@ class ProgramCommand:
         once every positional-capable parameter is filled. Every token after
         ``--`` fills one.
         """
-        count = self._read_tokens(tokens, host_options)[1]
-        if count >= len(self.positional) or (
-            self._read_tokens([*tokens, token], host_options)[1] == count
-        ):
+        _indexes, count, flagged = self._read_tokens(tokens, host_options)
+        if self._read_tokens([*tokens, token], host_options)[1] == count:
             return None
-        return self.positional[count]
+        return self._token_slots(count + 1, flagged)[-1][0]
 
     def value_options(
         self,
@@ -1545,19 +1548,27 @@ class ProgramCommand:
 
     def _read_tokens(
         self, tokens: Sequence[str], host_options: OptionValueMap
-    ) -> tuple[frozenset[int], int]:
-        """Return the separate option-value indexes in *tokens* and its positional token count."""
+    ) -> tuple[frozenset[int], int, frozenset[str]]:
+        """Return *tokens*' separate option-value indexes, positional count, and named parameters.
+
+        The named parameters are the program parameters an option token
+        supplies by name — the ``flagged`` set :meth:`_token_slots` takes.
+        """
         long_options: dict[str, bool] = {}
         short_options: dict[str, bool] = {}
+        spelled_names: dict[str, str] = {}
         for param, projected in self.options:
             if param.cli.cli_positional:
                 continue
             long_options[projected.flag] = projected.takes_value
+            spelled_names[projected.flag] = param.name
             if projected.negative_flag is not None:
                 long_options[projected.negative_flag] = False
+                spelled_names[projected.negative_flag] = param.name
             short = _short_flag(param)
             if short is not None:
                 short_options[short] = projected.takes_value
+                spelled_names[short] = param.name
         for entry, projected in self.module_options:
             for spelling in entry.option_spellings:
                 if spelling.startswith("--"):
@@ -1568,6 +1579,7 @@ class ProgramCommand:
                     short_options[spelling] = projected.takes_value
 
         values: set[int] = set()
+        flagged: set[str] = set()
         positional = 0
         index = 0
         while index < len(tokens):
@@ -1581,6 +1593,8 @@ class ProgramCommand:
                 continue
             if token.startswith("--"):
                 flag, separator, _value = token.partition("=")
+                if flag in spelled_names:
+                    flagged.add(spelled_names[flag])
                 if separator or not long_options.get(flag, False):
                     index += 1
                     continue
@@ -1594,6 +1608,8 @@ class ProgramCommand:
                     takes_value = short_options.get(f"-{short}")
                     if takes_value is None:
                         continue
+                    if f"-{short}" in spelled_names:
+                        flagged.add(spelled_names[f"-{short}"])
                     if takes_value and offset + 1 == len(short_group) and index + 1 < len(tokens):
                         values.add(index + 1)
                         index += 2
@@ -1607,7 +1623,7 @@ class ProgramCommand:
             else:
                 positional += 1
             index += 1
-        return frozenset(values), positional
+        return frozenset(values), positional, frozenset(flagged)
 
     def render_help(
         self,
@@ -1691,17 +1707,6 @@ class ProgramCommand:
             result.append((slot, slot is not None and (slot.cli.cli_positional or passed_over)))
             position += 1
         return result
-
-    def positionally_filled_names(self, count: int) -> frozenset[str]:
-        """Return the declared names *count* positional tokens fill.
-
-        The CLI pairs positional values with its slots left to right, so the
-        first *count* of them are the ones a token supplied. Held here so
-        every surface deciding whether a positional
-        token outranks a lower-precedence layer — a configured value in
-        ``commands.exec_program`` — reads the CLI pairing rule from one place.
-        """
-        return frozenset(param.name for param in self.positional[:count])
 
 
 def _check_reservation(

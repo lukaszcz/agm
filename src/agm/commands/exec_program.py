@@ -239,10 +239,7 @@ def _bind_host_inputs(
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
-        positional_names = program_command.positionally_filled_names(
-            len(parsed_tail.arguments.positional)
-        )
-        cli_supplied_names = set(program_named) | positional_names
+        cli_supplied_names = set(program_named) | parsed_tail.positionally_filled
         for info, projected, key in argument_options:
             if key in configured_arguments and info.name not in cli_supplied_names:
                 program_named[info.name] = native_raw_value(projected, configured_arguments[key])

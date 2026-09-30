@@ -9837,8 +9837,7 @@ class TestImports:
 
 # ---------------------------------------------------------------------------
 # A qualifier ambiguous across two facade-imported modules (both matching the
-# same route) is one condition -- ``QualResolutionAmbiguous`` -- regardless of
-# where it is written. Every position reports it alike:
+# same route) is one condition regardless of where it is written. Every position reports it alike:
 # ``AmbiguousQualificationError``, never a position-specific class.
 # ---------------------------------------------------------------------------
 

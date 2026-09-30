@@ -1112,7 +1112,7 @@ def test_local_enum_witness_prefers_a_scrutinee_directed_bare_constructor(
     assert render_witness(witness) == "Missing"
 
 
-def test_local_enum_witness_prefers_bare_constructor_over_blocked_short_owner(
+def test_local_enum_witness_prefers_bare_constructor_over_its_short_owner(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -1584,11 +1584,27 @@ def test_imported_enum_witness_anchors_a_route_an_own_path_also_spells(tmp_path:
     assert render_witness(witness) == "/lib::Color::Red"
 
 
+def _witness_without_bare_spellings(tmp_path: Path, modules: dict[str, str]) -> str:
+    """The rendered witness of *modules*' one case with its bare constructor spellings removed.
+
+    Checked normalization normally prefers a scrutinee-directed bare spelling;
+    removing them exercises owner-form selection.
+    """
+    compiled = _compile_graph_case(tmp_path, modules)
+    without_bare = replace(
+        compiled.normalized,
+        case_context=replace(compiled.normalized.case_context, bare_enum_constructors=frozenset()),
+    )
+    return render_witness(
+        cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0]).witness
+    )
+
+
 def test_open_import_witness_owner_yields_to_the_route_when_an_own_path_spells_it(
     tmp_path: Path,
 ) -> None:
     """Own ``S::Color`` would win ``Color::Red`` inside ``S``, so the witness spells the route."""
-    compiled = _compile_graph_case(
+    witness = _witness_without_bare_spellings(
         tmp_path,
         {
             "lib": "enum Color\n  | Red\n  | Blue\n",
@@ -1600,13 +1616,8 @@ def test_open_import_witness_owner_yields_to_the_route_when_an_own_path_spells_i
             ),
         },
     )
-    without_bare = replace(
-        compiled.normalized,
-        case_context=replace(compiled.normalized.case_context, bare_enum_constructors=frozenset()),
-    )
-    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
 
-    assert render_witness(issue.witness) == "lib::Color::Red"
+    assert witness == "lib::Color::Red"
 
 
 def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -> None:
@@ -1636,74 +1647,40 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
     )
 
 
-def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None:
-    """A module route sharing the enum's short owner name blocks only its own variant.
+_OWNER_ROUTE = {"helpers/Owner": "def block() -> int = 1\n"}
+"""A module route named ``Owner`` reaching a member ``block``."""
 
-    ``helpers/Owner`` is a plain import without a tail, so it only contributes a
-    qualified route ``Owner::block`` to its own ``block`` member -- it never
-    puts ``block`` in scope on its own. That route collides with the local
-    enum's ``block`` variant under the short spelling ``Owner::block``, which
-    forces the diagnostic to fall back to the longer self-qualified spelling
-    for that one variant, while the untouched ``free`` variant keeps using the
-    short spelling. This exercises owner-form selection with bare constructor
-    spellings removed from the compiler context; checked normalization normally
-    prefers the scrutinee-directed bare spelling for these local variants.
-    """
-    modules = {
-        "helpers/Owner": "def block() -> int = 1\n",
-    }
-    declarations = "enum Owner\n  | block\n  | free\nenum Twin\n  | block\n  | free\n"
+_OWNER_ENUMS = "enum Owner\n  | block\n  | free\nenum Twin\n  | block\n  | free\n"
 
-    # Covers only "free" (via the ambiguous short spelling, which is fine to
-    # write since "free" itself is not a colliding member), leaving "block"
-    # -- the blocked variant -- as the missing witness.
-    covers_free = _compile_graph_case(
-        tmp_path,
-        {
-            **modules,
-            "entry": (
-                "import helpers/Owner\n"
-                f"{declarations}"
-                "let value: Owner = Owner::free\n"
-                "case value of | Owner::free => 0\n"
-            ),
-        },
-    )
-    without_bare = replace(
-        covers_free.normalized,
-        case_context=replace(
-            covers_free.normalized.case_context,
-            bare_enum_constructors=frozenset(),
-        ),
-    )
-    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
-    assert render_witness(issue.witness) == "::Owner::block"
 
-    # Covers only "block" (via the self-qualifier, which bypasses the
-    # type-name/module-route ambiguity since it never consults import
-    # routes), leaving "free" -- the unblocked variant -- as the missing
-    # witness.
-    covers_block = _compile_graph_case(
-        tmp_path,
-        {
-            **modules,
-            "entry": (
-                "import helpers/Owner\n"
-                f"{declarations}"
-                "let value: Owner = ::Owner::block\n"
-                "case value of | ::Owner::block => 0\n"
-            ),
-        },
+@pytest.mark.parametrize(("covered", "missing"), [("free", "block"), ("block", "free")])
+def test_own_enum_witness_keeps_its_short_owner_beside_a_same_named_route(
+    tmp_path: Path, covered: str, missing: str
+) -> None:
+    """``Owner::block`` selects the own member over the route's: own declarations win."""
+    entry = (
+        f"import helpers/Owner\n{_OWNER_ENUMS}"
+        f"def f(value: Owner) = case value of | Owner::{covered} => 0\n"
     )
-    without_bare = replace(
-        covers_block.normalized,
-        case_context=replace(
-            covers_block.normalized.case_context,
-            bare_enum_constructors=frozenset(),
-        ),
+    witness = _witness_without_bare_spellings(tmp_path, {**_OWNER_ROUTE, "entry": entry})
+
+    assert witness == f"Owner::{missing}"
+
+
+@pytest.mark.parametrize(("covered", "missing"), [("free", "block"), ("block", "free")])
+def test_imported_enum_witness_owner_yields_to_a_same_named_route(
+    tmp_path: Path, covered: str, missing: str
+) -> None:
+    """An imported bare ``Owner`` beside a route ``Owner`` is spelled through its own route."""
+    entry = (
+        "import lib::*\nimport helpers/Owner\n"
+        f"def f(value: Owner) = case value of | lib::Owner::{covered} => 0\n"
     )
-    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
-    assert render_witness(issue.witness) == "Owner::free"
+    witness = _witness_without_bare_spellings(
+        tmp_path, {**_OWNER_ROUTE, "lib": _OWNER_ENUMS, "entry": entry}
+    )
+
+    assert witness == f"lib::Owner::{missing}"
 
 
 def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:

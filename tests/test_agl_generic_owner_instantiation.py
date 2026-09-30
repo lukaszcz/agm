@@ -8,7 +8,7 @@ not one of its inline members (a declaration nested beneath it) are rejected
 on the applied segment where the name is looked up. A
 qualified generic type names the same declaration in every type position.
 
-Every probe is checked in file mode and in every legal REPL grouping of its
+Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
 the same verdict, error span and message, or accepted identity.
 """
@@ -25,9 +25,8 @@ from agm.agl.scope.symbols import AglScopeError, TypeArgumentsError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_file_resolves_like_inline_entry,
     assert_scenario,
-    file_params,
+    nonconstant_in_file,
     option_identity,
     rejected,
     scenario_params,
@@ -490,152 +489,155 @@ _SCENARIOS = {
     "qualified-types-in-every-type-position": Scenario(
         modules={"lib": _LIB},
         header=("import lib",),
-        probes={
-            "cast-A": accepted(
-                "let j: json = null\nj as? lib::Box[int]",
-                (
-                    "enum std/option::Option[lib::Box[int]]\n"
-                    "  | None\n"
-                    "  | Some(value: lib::Box[int])"
+        probes=nonconstant_in_file(
+            {
+                "cast-A": accepted(
+                    "let j: json = null\nj as? lib::Box[int]",
+                    (
+                        "enum std/option::Option[lib::Box[int]]\n"
+                        "  | None\n"
+                        "  | Some(value: lib::Box[int])"
+                    ),
                 ),
-            ),
-            "tyargs-A": rejected(
-                "def id[T](x: T) -> T = x\nid::[lib::Box[int]](null)",
-                AglTypeError,
-                "null",
-                phase="typecheck",
-            ),
-            "field-A": accepted("record R\n  f: lib::Box[int]\nR", "lib::Box[int] -> R"),
-            "payload-A": accepted("enum E\n  | A(f: lib::Box[int])\n  | B\nE::B", "record E::B"),
-            "exc-A": accepted("exception X extends Exception\n  f: lib::Box[int]\n1", "int"),
-            "ret-A": rejected(
-                "def f() -> lib::Box[int] = null\nf",
-                AglTypeError,
-                "def f() -> lib::Box[int] = null",
-                phase="typecheck",
-            ),
-            "var-A": rejected(
-                "var v: lib::Box[int] = null\nv",
-                AglTypeError,
-                "var v: lib::Box[int] = null",
-                phase="typecheck",
-            ),
-            "lambda-A": accepted(
-                "fn(x: lib::Box[int]) -> lib::Box[int] => x", "lib::Box[int] -> lib::Box[int]"
-            ),
-            "functype-A": accepted(
-                "let g: (lib::Box[int]) -> int = fn(x) => 1\ng", "lib::Box[int] -> int"
-            ),
-            "dict-A": accepted(
-                "let d: dict[text, lib::Box[int]] = {}\nd", "dict[text, lib::Box[int]]"
-            ),
-            "opt-A": accepted(
-                "let o: Option[lib::Box[int]] = None\no",
-                (
-                    "enum std/option::Option[lib::Box[int]]\n"
-                    "  | None\n"
-                    "  | Some(value: lib::Box[int])"
+                "tyargs-A": rejected(
+                    "def id[T](x: T) -> T = x\nid::[lib::Box[int]](null)",
+                    AglTypeError,
+                    "null",
+                    phase="typecheck",
                 ),
-            ),
-            "aliasgen-A": accepted("type AA[T] = dict[T, lib::Box[int]]\n1", "int"),
-            "scoped-def-A": accepted(
-                "scope S\n  def f(x: lib::Box[int]) -> int = 1\nend S\n\nS::f",
-                "lib::Box[int] -> int",
-            ),
-            "program-A": rejected(
-                "program def main(x: lib::Box[int] = null) -> unit = ()",
-                AglTypeError,
-                "x: lib::Box[int] = null",
-                phase="typecheck",
-            ),
-            "param-A": accepted("@param\nlet pp: Option[lib::Box[int]] = None\n1", "int"),
-            "extern-A": rejected(
-                "extern def ext(x: lib::Box[int]) -> int\n1",
-                AglScopeError,
-                "extern def ext(x: lib::Box[int]) -> int",
-            ),
-            "method-A": accepted(
-                "record W\n  n: int\ndef W::m(self, x: lib::Box[int]) -> int = 1\n1", "int"
-            ),
-            "generic-def-A": accepted("def g[T](x: T, y: lib::Box[int]) -> T = x\n1", "int"),
-            "parse-A": rejected("parse::[lib::Box[int]]", AglScopeError, "parse"),
-            "typeentry-A": rejected(
-                "lib::Box[int]",
-                AglScopeError,
-                "int",
-                type_entry="record lib::Box[int]\n  value: int",
-            ),
-            "cast-N": accepted(
-                "let j: json = null\nj as? lib::Point",
-                (option_identity("lib::Point")),
-            ),
-            "tyargs-N": rejected(
-                "def id[T](x: T) -> T = x\nid::[lib::Point](null)",
-                AglTypeError,
-                "null",
-                phase="typecheck",
-            ),
-            "field-N": accepted("record R\n  f: lib::Point\nR", "lib::Point -> R"),
-            "payload-N": accepted("enum E\n  | A(f: lib::Point)\n  | B\nE::B", "record E::B"),
-            "exc-N": accepted("exception X extends Exception\n  f: lib::Point\n1", "int"),
-            "ret-N": rejected(
-                "def f() -> lib::Point = null\nf",
-                AglTypeError,
-                "def f() -> lib::Point = null",
-                phase="typecheck",
-            ),
-            "var-N": rejected(
-                "var v: lib::Point = null\nv",
-                AglTypeError,
-                "var v: lib::Point = null",
-                phase="typecheck",
-            ),
-            "lambda-N": accepted(
-                "fn(x: lib::Point) -> lib::Point => x", "lib::Point -> lib::Point"
-            ),
-            "functype-N": accepted(
-                "let g: (lib::Point) -> int = fn(x) => 1\ng", "lib::Point -> int"
-            ),
-            "dict-N": accepted("let d: dict[text, lib::Point] = {}\nd", "dict[text, lib::Point]"),
-            "opt-N": accepted(
-                "let o: Option[lib::Point] = None\no",
-                (option_identity("lib::Point")),
-            ),
-            "aliasgen-N": accepted("type AA[T] = dict[T, lib::Point]\n1", "int"),
-            "scoped-def-N": accepted(
-                "scope S\n  def f(x: lib::Point) -> int = 1\nend S\n\nS::f", "lib::Point -> int"
-            ),
-            "program-N": rejected(
-                "program def main(x: lib::Point = null) -> unit = ()",
-                AglTypeError,
-                "x: lib::Point = null",
-                phase="typecheck",
-            ),
-            "param-N": accepted("@param\nlet pp: Option[lib::Point] = None\n1", "int"),
-            "extern-N": rejected(
-                "extern def ext(x: lib::Point) -> int\n1",
-                AglScopeError,
-                "extern def ext(x: lib::Point) -> int",
-            ),
-            "method-N": accepted(
-                "record W\n  n: int\ndef W::m(self, x: lib::Point) -> int = 1\n1", "int"
-            ),
-            "generic-def-N": accepted("def g[T](x: T, y: lib::Point) -> T = x\n1", "int"),
-            "parse-N": rejected("parse::[lib::Point]", AglScopeError, "parse"),
-            "typeentry-N": accepted("lib::Point", "int -> lib::Point"),
-        },
+                "field-A": accepted("record R\n  f: lib::Box[int]\nR", "lib::Box[int] -> R"),
+                "payload-A": accepted(
+                    "enum E\n  | A(f: lib::Box[int])\n  | B\nE::B", "record E::B"
+                ),
+                "exc-A": accepted("exception X extends Exception\n  f: lib::Box[int]\n1", "int"),
+                "ret-A": rejected(
+                    "def f() -> lib::Box[int] = null\nf",
+                    AglTypeError,
+                    "def f() -> lib::Box[int] = null",
+                    phase="typecheck",
+                ),
+                "var-A": rejected(
+                    "var v: lib::Box[int] = null\nv",
+                    AglTypeError,
+                    "var v: lib::Box[int] = null",
+                    phase="typecheck",
+                ),
+                "lambda-A": accepted(
+                    "fn(x: lib::Box[int]) -> lib::Box[int] => x", "lib::Box[int] -> lib::Box[int]"
+                ),
+                "functype-A": accepted(
+                    "let g: (lib::Box[int]) -> int = fn(x) => 1\ng", "lib::Box[int] -> int"
+                ),
+                "dict-A": accepted(
+                    "let d: dict[text, lib::Box[int]] = {}\nd", "dict[text, lib::Box[int]]"
+                ),
+                "opt-A": accepted(
+                    "let o: Option[lib::Box[int]] = None\no",
+                    (
+                        "enum std/option::Option[lib::Box[int]]\n"
+                        "  | None\n"
+                        "  | Some(value: lib::Box[int])"
+                    ),
+                ),
+                "aliasgen-A": accepted("type AA[T] = dict[T, lib::Box[int]]\n1", "int"),
+                "scoped-def-A": accepted(
+                    "scope S\n  def f(x: lib::Box[int]) -> int = 1\nend S\n\nS::f",
+                    "lib::Box[int] -> int",
+                ),
+                "program-A": rejected(
+                    "program def main(x: lib::Box[int] = null) -> unit = ()",
+                    AglTypeError,
+                    "x: lib::Box[int] = null",
+                    phase="typecheck",
+                ),
+                "param-A": accepted("@param\nlet pp: Option[lib::Box[int]] = None\n1", "int"),
+                "extern-A": replace(
+                    rejected(
+                        "extern def ext(x: lib::Box[int]) -> int\n1",
+                        AglScopeError,
+                        "extern def ext(x: lib::Box[int]) -> int",
+                    ),
+                    in_file=accepted("extern def ext(x: lib::Box[int]) -> int\n1", "int"),
+                ),
+                "method-A": accepted(
+                    "record W\n  n: int\ndef W::m(self, x: lib::Box[int]) -> int = 1\n1", "int"
+                ),
+                "generic-def-A": accepted("def g[T](x: T, y: lib::Box[int]) -> T = x\n1", "int"),
+                "parse-A": rejected("parse::[lib::Box[int]]", AglScopeError, "parse"),
+                "typeentry-A": rejected(
+                    "lib::Box[int]",
+                    AglScopeError,
+                    "int",
+                    type_entry="record lib::Box[int]\n  value: int",
+                ),
+                "cast-N": accepted(
+                    "let j: json = null\nj as? lib::Point",
+                    (option_identity("lib::Point")),
+                ),
+                "tyargs-N": rejected(
+                    "def id[T](x: T) -> T = x\nid::[lib::Point](null)",
+                    AglTypeError,
+                    "null",
+                    phase="typecheck",
+                ),
+                "field-N": accepted("record R\n  f: lib::Point\nR", "lib::Point -> R"),
+                "payload-N": accepted("enum E\n  | A(f: lib::Point)\n  | B\nE::B", "record E::B"),
+                "exc-N": accepted("exception X extends Exception\n  f: lib::Point\n1", "int"),
+                "ret-N": rejected(
+                    "def f() -> lib::Point = null\nf",
+                    AglTypeError,
+                    "def f() -> lib::Point = null",
+                    phase="typecheck",
+                ),
+                "var-N": rejected(
+                    "var v: lib::Point = null\nv",
+                    AglTypeError,
+                    "var v: lib::Point = null",
+                    phase="typecheck",
+                ),
+                "lambda-N": accepted(
+                    "fn(x: lib::Point) -> lib::Point => x", "lib::Point -> lib::Point"
+                ),
+                "functype-N": accepted(
+                    "let g: (lib::Point) -> int = fn(x) => 1\ng", "lib::Point -> int"
+                ),
+                "dict-N": accepted(
+                    "let d: dict[text, lib::Point] = {}\nd", "dict[text, lib::Point]"
+                ),
+                "opt-N": accepted(
+                    "let o: Option[lib::Point] = None\no",
+                    (option_identity("lib::Point")),
+                ),
+                "aliasgen-N": accepted("type AA[T] = dict[T, lib::Point]\n1", "int"),
+                "scoped-def-N": accepted(
+                    "scope S\n  def f(x: lib::Point) -> int = 1\nend S\n\nS::f", "lib::Point -> int"
+                ),
+                "program-N": rejected(
+                    "program def main(x: lib::Point = null) -> unit = ()",
+                    AglTypeError,
+                    "x: lib::Point = null",
+                    phase="typecheck",
+                ),
+                "param-N": accepted("@param\nlet pp: Option[lib::Point] = None\n1", "int"),
+                "extern-N": replace(
+                    rejected(
+                        "extern def ext(x: lib::Point) -> int\n1",
+                        AglScopeError,
+                        "extern def ext(x: lib::Point) -> int",
+                    ),
+                    in_file=accepted("extern def ext(x: lib::Point) -> int\n1", "int"),
+                ),
+                "method-N": accepted(
+                    "record W\n  n: int\ndef W::m(self, x: lib::Point) -> int = 1\n1", "int"
+                ),
+                "generic-def-N": accepted("def g[T](x: T, y: lib::Point) -> T = x\n1", "int"),
+                "parse-N": rejected("parse::[lib::Point]", AglScopeError, "parse"),
+                "typeentry-N": accepted("lib::Point", "int -> lib::Point"),
+            },
+            ("functype-A", "functype-N"),
+        ),
     ),
 }
-
-
-_FILE_SCENARIOS = {
-    name: replace(
-        scenario,
-        probes={key: p for key, p in scenario.probes.items() if not key.startswith("extern-")},
-    )
-    for name, scenario in _SCENARIOS.items()
-}
-"""The scenarios a file can hold: a file's ``extern def`` loads its Python companion."""
 
 
 class TestGenericOwnerInstantiation:
@@ -644,9 +646,3 @@ class TestGenericOwnerInstantiation:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_FILE_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)

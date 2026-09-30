@@ -365,7 +365,6 @@ def match_case_context(checked: CheckedPatternOwner) -> MatchCaseContext:
     return MatchCaseContext(
         module_id=checked.module_id,
         enum_owner_forms=checked.type_env.enum_owner_forms(),
-        blocked_enum_variants=checked.type_env.blocked_enum_variants(),
         bare_enum_constructors=resolve_bare_enum_constructors(checked),
         owner_program=checked.resolved.program,
     )

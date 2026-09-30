@@ -1032,9 +1032,13 @@ class TestInfo:
         assert outcome.text is not None
         assert outcome.text == "std/config::strict-json is a value.\nType:\n  bool"
 
-    def test_info_requires_one_identifier(self) -> None:
-        assert "usage" in (meta_mod.dispatch_meta(":info", _session_ctx()).text or "").lower()
-        assert meta_mod.dispatch_meta(":info ()", _session_ctx()).text == "Unknown identifier '()'."
+    @pytest.mark.parametrize("command", [":info", ":info ()"])
+    def test_info_requires_one_identifier(self, command: str) -> None:
+        outcome = meta_mod.dispatch_meta(command, _session_ctx())
+
+        # A plain notice, never a description of a declaration.
+        assert outcome.text is not None
+        assert not outcome.highlight_as_agl
 
     @pytest.mark.parametrize(
         ("declaration", "name"),

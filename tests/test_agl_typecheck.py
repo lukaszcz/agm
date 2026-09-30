@@ -798,7 +798,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         env.register_type("Foo", RecordType(name="Foo"))
         assert "Foo" in {form.owner_name for form in env.enum_owner_forms()}
-        assert env.blocked_enum_variants() == {}
         # Still mutable: a later declaration must show up rather than be masked
         # by an answer memoized from the earlier call.
         env.register_type("Bar", RecordType(name="Bar"))
@@ -808,7 +807,6 @@ class TestTypeEnvironment:
         env.seal()
         # Sealed: the enumeration is settled, so repeat asks reuse one answer.
         assert env.enum_owner_forms() is env.enum_owner_forms()
-        assert env.blocked_enum_variants() is env.blocked_enum_variants()
 
     def test_resolve_type_expr_text(self) -> None:
         env = TypeEnvironment()

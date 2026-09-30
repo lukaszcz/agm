@@ -7,7 +7,7 @@ declared it, the alias own or imported and its target own or imported. Two
 declarations of one name beneath the two spellings are one path declared
 twice, in one REPL entry or across entries.
 
-Every probe is checked in file mode and in every legal REPL grouping of its
+Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`).
 """
 
@@ -22,10 +22,8 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
-    assert_file_resolves_like_inline_entry,
     assert_repl_verdicts,
     assert_scenario,
-    file_params,
     info,
     rejected,
     scenario_params,
@@ -379,17 +377,11 @@ _SCENARIOS |= {
 
 
 class TestDeclarationsThroughAliases:
-    """Declarations through an alias, file mode and every REPL grouping."""
+    """Declarations through an alias, the file part and every REPL grouping."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)
 
 
 @pytest.mark.parametrize("spelling", ["Base", "Geo"])

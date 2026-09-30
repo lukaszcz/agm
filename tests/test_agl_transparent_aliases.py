@@ -12,12 +12,13 @@ a path through an alias: it names the target's declaration there, and a
 path naming none is an error. An alias whose target resolves to nothing is
 an error where it is declared.
 
-Every probe is checked in file mode and in every legal REPL grouping of its
+Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`).
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -36,11 +37,11 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
-    assert_file_resolves_like_inline_entry,
     assert_scenario,
-    file_params,
-    file_verdict,
+    file_statements,
     info,
+    inline_verdict,
+    nonconstant_in_file,
     rejected,
     scenario_params,
     span_text,
@@ -521,15 +522,17 @@ _GENERIC = (
     "record Box[T]\n  v: T\nrecord Box::In\n  w: int\ndef Box::g() -> int = 1\n"
     "def Box::m[T](self) -> int = 1\nenum Opt[T]\n  | Some(v: T)\n  | Non\n"
 )
-_APPLYING = (
-    "import gen::*",
-    "type IntBox = Box[int]",
-    "type IB2 = IntBox",
-    "type B2[T] = Box[T]",
-    "type X = B2[int]",
-    "type IntOpt = Opt[int]",
-)
-"""Applied aliases of ``Box[int]``: direct, through an alias, and through a generic alias."""
+_IMPORT_GEN = "import gen::*"
+_INT_BOX_ALIAS = "type IntBox = Box[int]"
+_GENERIC_ALIAS = "type B2[T] = Box[T]"
+_APPLYING: dict[str, tuple[str, ...]] = {
+    "Box[int]": (_IMPORT_GEN,),
+    "IntBox": (_IMPORT_GEN, _INT_BOX_ALIAS),
+    "IB2": (_IMPORT_GEN, _INT_BOX_ALIAS, "type IB2 = IntBox"),
+    "X": (_IMPORT_GEN, _GENERIC_ALIAS, "type X = B2[int]"),
+}
+"""``Box[int]`` and its applied aliases -- direct, through an alias, and through a
+generic alias -- each with the declarations its spelling needs."""
 _INT_BOX = "record gen::Box[int]\n  v: int"
 
 
@@ -567,18 +570,30 @@ def _applied_probes(spelling: str) -> dict[str, Probe]:
     }
 
 
-_SCENARIOS["an-applied-alias-reads-paths-as-its-applied-target"] = Scenario(
-    modules={"gen": _GENERIC},
-    header=_APPLYING,
-    probes={
-        **{
-            key: probe
-            for spelling in ("Box[int]", "IntBox", "IB2", "X")
-            for key, probe in _applied_probes(spelling).items()
-        },
-        "own-alias-spelling": accepted("IntBox::IntBox(v = 1)", _INT_BOX),
+_APPLIED_EXTRAS: dict[str, dict[str, Probe]] = {
+    "IntBox": {"own-alias-spelling": accepted("IntBox::IntBox(v = 1)", _INT_BOX)},
+    "X": {
         "generic-alias-nested-record": accepted("B2::In(w = 1)", "record gen::Box::In\n  w: int"),
         "generic-alias-static-function": accepted("B2::g()", "int"),
+    },
+}
+"""Paths beneath the alias declarations a spelling's header declares."""
+
+_SCENARIOS.update(
+    {
+        f"an-applied-alias-reads-paths-as-its-applied-target-{spelling}": Scenario(
+            modules={"gen": _GENERIC},
+            header=header,
+            probes={**_applied_probes(spelling), **_APPLIED_EXTRAS.get(spelling, {})},
+        )
+        for spelling, header in _APPLYING.items()
+    }
+)
+
+_SCENARIOS["an-applied-enum-alias-reads-members-as-its-applied-target"] = Scenario(
+    modules={"gen": _GENERIC},
+    header=(_IMPORT_GEN, "type IntOpt = Opt[int]"),
+    probes={
         "enum-member": accepted("IntOpt::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
         "enum-member-argument-mismatch": rejected(
             'IntOpt::Some(v = "s")', AglTypeError, '"s"', phase="typecheck"
@@ -700,8 +715,15 @@ def _builtin_alias_probes(text: str, array: str, applied: str) -> dict[str, Prob
         f"{text}-unknown": rejected(f"{text}::nope", UnknownMemberError, f"{text}::nope"),
         f"{text}-use": accepted(_in_region(f"use {text}::*", 'upper("a")'), "text"),
         f"{array}-method": accepted(_MAP.format(q=f"{array}::map"), "array[int] -> array[int]"),
-        f"{array}-uninferred": rejected(
-            f"{array}::map", AglTypeError, f"{array}::map", phase="typecheck"
+        # A file's statements sit in a function whose return type nothing infers.
+        f"{array}-uninferred": replace(
+            rejected(f"{array}::map", AglTypeError, f"{array}::map", phase="typecheck"),
+            in_file=rejected(
+                f"{array}::map",
+                AglTypeError,
+                file_statements(f"{array}::map"),
+                phase="typecheck",
+            ),
         ),
         f"{array}-applied": rejected(f"{array}[int]::map", TypeArgumentsError, f"{array}[int]"),
         f"{applied}-applied": rejected(f"{applied}::map", TypeArgumentsError, applied),
@@ -715,37 +737,34 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
         "type T2 = text\ntype Arr[E] = array[E]\ntype IA = array[int]\ntype T3 = T2\n"
         "type A3 = Arr[int]",
     ),
-    probes={
-        **_builtin_alias_probes("text", "array", "array[int]"),
-        **_builtin_alias_probes("T2", "Arr", "IA"),
-        **_builtin_alias_probes("U2", "Brr", "IB"),
-        "alias-of-an-alias": accepted('T3::size("ab")', "int"),
-        "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
-        "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
-        "reached-at-the-alias-site": accepted("V2::yy()", "int"),
-        "hidden-beneath-at-the-alias-site": rejected(
-            "V2::sub::zz()", HiddenMemberError, "V2::sub::zz"
-        ),
-        "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
-        "info": info(
-            "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
-        ),
-    },
+    probes=nonconstant_in_file(
+        {
+            **_builtin_alias_probes("text", "array", "array[int]"),
+            **_builtin_alias_probes("T2", "Arr", "IA"),
+            **_builtin_alias_probes("U2", "Brr", "IB"),
+            "alias-of-an-alias": accepted('T3::size("ab")', "int"),
+            "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
+            "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
+            "reached-at-the-alias-site": accepted("V2::yy()", "int"),
+            "hidden-beneath-at-the-alias-site": rejected(
+                "V2::sub::zz()", HiddenMemberError, "V2::sub::zz"
+            ),
+            "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
+            "info": info(
+                "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
+            ),
+        },
+        ("T2-use", "U2-use", "text-use"),
+    ),
 )
 
 
 class TestTransparentAliases:
-    """Alias spellings in every position, file mode and every REPL grouping."""
+    """Alias spellings in every position, the file part and every REPL grouping."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)
 
 
 _UNRESOLVED = "import base\ntype Geo = Base\n"
@@ -764,7 +783,7 @@ _UNRESOLVED = "import base\ntype Geo = Base\n"
 def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
     tmp_path: Path, entry: str
 ) -> None:
-    phase, error, span, _identity = file_verdict(
+    phase, error, span, _identity = inline_verdict(
         tmp_path, {"entry": entry, "base": _BASE, "al": _UNRESOLVED}
     )
 
@@ -783,7 +802,7 @@ def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
 def test_an_export_item_through_an_alias_naming_nothing_is_an_error_where_written(
     tmp_path: Path, export: str
 ) -> None:
-    phase, error, span, _identity = file_verdict(
+    phase, error, span, _identity = inline_verdict(
         tmp_path, {"entry": "import ex\n1", "ex": export, **_MODULES}
     )
 

@@ -266,6 +266,16 @@ class TestTypeExprs:
         walk(t, visited.append)
         assert key in visited
 
+    def test_walk_dispatches_every_syntax_node_class(self) -> None:
+        from typing import get_args, get_origin
+
+        from agm.agl.syntax import visitor
+
+        classes = {
+            get_origin(member) or member for member in get_args(visitor.SyntaxNode.__value__)
+        }
+        assert set(visitor._WALKERS) == classes
+
     def test_member_type_params_captures_owner_param_through_dict_key(self) -> None:
         # A dict field's KEY position is scanned too: an inline enum member
         # capturing an owner type parameter only through the key must still

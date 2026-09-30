@@ -26,18 +26,18 @@ from agm.agl.scope.symbols import (
 )
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     assert_verdicts,
-    grouping_batches,
     probe_table,
+    verdict_parts,
 )
 
-_CONSTRUCTOR: tuple[FilePhase, type[BaseException] | type[None]] = (
+_CONSTRUCTOR: tuple[Phase, type[BaseException] | type[None]] = (
     "scope",
     AmbiguousConstructorError,
 )
-_QUALIFICATION: tuple[FilePhase, type[BaseException] | type[None]] = (
+_QUALIFICATION: tuple[Phase, type[BaseException] | type[None]] = (
     "scope",
     AmbiguousQualificationError,
 )
@@ -98,8 +98,8 @@ class TestAmbiguousCurrentModuleMember:
 
     _HEADER = ("enum A\n  | Red", "enum B\n  | Red")
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_value(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_value(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             {},
@@ -111,7 +111,7 @@ class TestAmbiguousCurrentModuleMember:
                 origins={"value": _origins(DeclaredOrigin, "A::Red", "B::Red")},
                 spellings={"value": "::Red"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -139,8 +139,8 @@ class TestAmbiguousModuleRoute:
     _HEADER = ("import p/x/lib", "import q/x/lib")
     _PROBES = {"short": "lib::f()", "long": "x/lib::f()"}
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_every_suffix(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_every_suffix(self, tmp_path: Path, part: Part) -> None:
         origins = _origins(ImportedModuleOrigin, "p/x/lib::f", "q/x/lib::f")
         assert_verdicts(
             tmp_path,
@@ -153,7 +153,7 @@ class TestAmbiguousModuleRoute:
                 origins=dict.fromkeys(self._PROBES, origins),
                 spellings={"short": "lib::f", "long": "x/lib::f"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -199,7 +199,7 @@ class TestAmbiguousOwnerProjection:
         tmp_path: Path,
         header: tuple[str, ...],
         origins: frozenset[tuple[type, str]],
-        groupings: Groupings | None = None,
+        part: Part | None = None,
     ) -> None:
         assert_verdicts(
             tmp_path,
@@ -212,21 +212,21 @@ class TestAmbiguousOwnerProjection:
                 origins=dict.fromkeys(self._PROBES, origins),
                 spellings=dict.fromkeys(self._PROBES, "Point::Point"),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_two_import_tails(self, tmp_path: Path, part: Part) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point", "b/lib::Point::Point")
         self._assert(
             tmp_path,
             ("import a/lib::*", "import b/lib::*"),
             origins,
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_import_tail_and_use(self, tmp_path: Path, part: Part) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point") | _origins(
             UseDeclarationOrigin, "b/lib::Point::Point"
         )
@@ -234,11 +234,11 @@ class TestAmbiguousOwnerProjection:
             tmp_path,
             ("import a/lib::*", "import b/lib", "use b/lib::*"),
             origins,
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_own_owner_wins(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_own_owner_wins(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             self._POINTS,
@@ -248,5 +248,5 @@ class TestAmbiguousOwnerProjection:
                 {"call": ("accepted", type(None))},
                 identities={"call": "record Point\n  x: int"},
             ),
-            groupings=groupings,
+            part=part,
         )

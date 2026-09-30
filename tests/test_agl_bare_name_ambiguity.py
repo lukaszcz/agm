@@ -1,6 +1,6 @@
 """One verdict, with one origin per contributing layer, for an ambiguous bare name.
 
-A bare spelling several equally near candidates provide is ambiguous. What
+A bare spelling several candidates at one step provide is ambiguous. What
 the position asks decides the class: a value reference or constructor call
 asks which constructor the name denotes (:class:`AmbiguousConstructorError`),
 while a type position -- an annotation, a method receiver, a bare REPL type
@@ -10,9 +10,9 @@ and is never ambiguous. Each origin names the selected member declaration,
 with the kind of the layer that contributed it: an import tail
 (:class:`ImportedModuleOrigin`), a ``use`` declaration
 (:class:`UseDeclarationOrigin`), or this module's own declaration
-(:class:`DeclaredOrigin`). The module root is one level however REPL entries
+(:class:`DeclaredOrigin`). The module root is one step however REPL entries
 group its imports and ``use`` declarations, so every grouping agrees with
-file mode (see :mod:`tests.agl.qualifier_support`).
+the file part (see :mod:`tests.agl.qualifier_support`).
 """
 
 from __future__ import annotations
@@ -29,20 +29,20 @@ from agm.agl.scope.symbols import (
     UseDeclarationOrigin,
 )
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     all_groupings,
     assert_verdicts,
-    grouping_batches,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
-_CONSTRUCTOR: tuple[FilePhase, type[BaseException] | type[None]] = (
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
+_CONSTRUCTOR: tuple[Phase, type[BaseException] | type[None]] = (
     "scope",
     AmbiguousConstructorError,
 )
-_QUALIFICATION: tuple[FilePhase, type[BaseException] | type[None]] = (
+_QUALIFICATION: tuple[Phase, type[BaseException] | type[None]] = (
     "scope",
     AmbiguousQualificationError,
 )
@@ -88,8 +88,8 @@ def _point_origins(a_kind: type, b_kind: type) -> dict[str, frozenset[tuple[type
 class TestAmbiguousBareRecordName:
     """``Point`` from two modules: one class per position, origins from each layer."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_two_import_tails(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _POINTS,
@@ -101,11 +101,11 @@ class TestAmbiguousBareRecordName:
                 identities={"pattern": "int"},
                 origins=_point_origins(ImportedModuleOrigin, ImportedModuleOrigin),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_two_uses(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_two_uses(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _POINTS,
@@ -117,11 +117,11 @@ class TestAmbiguousBareRecordName:
                 identities={"pattern": "int"},
                 origins=_point_origins(UseDeclarationOrigin, UseDeclarationOrigin),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_import_tail_and_use(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _POINTS,
@@ -133,7 +133,7 @@ class TestAmbiguousBareRecordName:
                 identities={"pattern": "int"},
                 origins=_point_origins(ImportedModuleOrigin, UseDeclarationOrigin),
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -150,8 +150,8 @@ def _red_origins(kind: type) -> dict[str, frozenset[tuple[type, str]]]:
 class TestAmbiguousBareEnumMember:
     """Two enums injecting ``Red``: the members are the origins, of the contributing layer."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_two_import_tails(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _COLORS,
@@ -162,11 +162,11 @@ class TestAmbiguousBareEnumMember:
                 span_texts=_RED_SPANS,
                 origins=_red_origins(ImportedModuleOrigin),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_two_uses(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_two_uses(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _COLORS,
@@ -177,11 +177,11 @@ class TestAmbiguousBareEnumMember:
                 span_texts=_RED_SPANS,
                 origins=_red_origins(UseDeclarationOrigin),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_alias_use_and_import_tail(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_alias_use_and_import_tail(self, tmp_path: Path, part: Part) -> None:
         """A ``use`` of an enum alias contributes its target's members, as that target."""
         assert_verdicts(
             tmp_path,
@@ -196,7 +196,7 @@ class TestAmbiguousBareEnumMember:
                     | _origins(UseDeclarationOrigin, "one::E::Red")
                 },
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -220,8 +220,8 @@ class TestAmbiguousNamesLocalUsesContribute:
     it asks the type question and gets the annotation's verdict.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "call": "P(x = 1)",
             "annotation": "fn(p: P) => 1",
@@ -260,7 +260,7 @@ class TestAmbiguousNamesLocalUsesContribute:
                 },
             ),
             legal=_LOCAL_USES_LEGAL,
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -270,8 +270,8 @@ _LOCAL_ENUMS_HEADER = ("enum A = Some | Other", "enum B = Some | Third")
 class TestAmbiguousLocalMembers:
     """Two local enums injecting ``Some``: declared origins, however entries group them."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_value_is_an_ambiguous_constructor(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_value_is_an_ambiguous_constructor(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             {},
@@ -282,7 +282,7 @@ class TestAmbiguousLocalMembers:
                 span_texts={"value": "Some"},
                 origins={"value": _origins(DeclaredOrigin, "A::Some", "B::Some")},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -295,8 +295,8 @@ _BOOM_EXTENDS = "exception Local extends Boom"
 class TestAmbiguousBareExceptionName:
     """``Boom`` from two ``use``s: a call asks for the constructor, the rest for the type."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         origins = _origins(UseDeclarationOrigin, "m/a::Boom", "m/b::Boom")
         probes = {
             "call": 'Boom(message = "m")',
@@ -324,7 +324,7 @@ class TestAmbiguousBareExceptionName:
                 },
                 origins=dict.fromkeys(probes, origins),
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -354,15 +354,15 @@ _LOCAL_RED_PROBES = {
 }
 
 
-class TestLocalMemberWinsItsLevel:
+class TestLocalMemberWinsItsStep:
     """A local enum's ``Red`` beats an import tail's or a ``use``'s at the module root.
 
     A locally declared record, enum, enum member, or exception wins; the
     other ``Red`` is not a second candidate, for a value and a receiver alike.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_over_an_import_tail(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_over_an_import_tail(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _COLORS,
@@ -372,11 +372,11 @@ class TestLocalMemberWinsItsLevel:
                 dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
                 identities={"value": "record A::Red", "receiver": "int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_over_a_use(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_over_a_use(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _COLORS,
@@ -386,7 +386,7 @@ class TestLocalMemberWinsItsLevel:
                 dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
                 identities={"value": "record A::Red", "receiver": "int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -416,8 +416,8 @@ class TestDeclarationReachedSeveralWays:
     In an ambiguity it takes part in, its origins name both ways it was reached.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_at_the_module_root(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_at_the_module_root(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _EVERYTHING,
@@ -446,7 +446,7 @@ class TestDeclarationReachedSeveralWays:
                     "function": _reached_twice("f"),
                 },
             ),
-            groupings=groupings,
+            part=part,
         )
 
     def test_in_a_scope_region(self, tmp_path: Path) -> None:
@@ -519,7 +519,7 @@ class TestEnumMemberBesideAContributedFunction:
         function_kind: type,
         *,
         member_use: bool = False,
-        groupings: Groupings | None = None,
+        part: Part | None = None,
     ) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Color::Red") | _origins(
             function_kind, "b/lib::Red"
@@ -536,37 +536,37 @@ class TestEnumMemberBesideAContributedFunction:
                 span_texts=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, "Red"),
                 origins=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, origins),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_two_import_tails(self, tmp_path: Path, part: Part) -> None:
         self._assert(
             tmp_path,
             ("import a/lib::*", "import b/lib::*"),
             ImportedModuleOrigin,
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_import_tail_and_use(self, tmp_path: Path, part: Part) -> None:
         header = ("import a/lib::*", "import b/lib", "use b/lib::*")
         self._assert(
             tmp_path,
             header,
             UseDeclarationOrigin,
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_member_reached_twice(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_member_reached_twice(self, tmp_path: Path, part: Part) -> None:
         header = ("import a/lib::*", "import b/lib::*", "use a/lib::*")
         self._assert(
             tmp_path,
             header,
             ImportedModuleOrigin,
             member_use=True,
-            groupings=groupings,
+            part=part,
         )
 
     def test_beside_the_prelude(self, tmp_path: Path) -> None:

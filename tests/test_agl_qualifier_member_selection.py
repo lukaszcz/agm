@@ -3,7 +3,7 @@
 Every class here probes the same qualifier spelling in the four positions
 that select a member through a qualifier chain at the value level -- a
 value (constructor call or reference), a constructor pattern, an ``is``
-test and an ``as?`` cast -- in file mode and every REPL grouping (see
+test and an ``as?`` cast -- in the file part and every REPL grouping (see
 :mod:`tests.agl.qualifier_support`), asserting the phase, the class and the
 chain's own span, or the accepted identity:
 
@@ -25,19 +25,20 @@ import pytest
 from agm.agl.diagnostics import AglTypeError, HiddenMemberError
 from agm.agl.scope.symbols import UnknownMemberError
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     assert_verdicts,
-    grouping_batches,
+    nonconstant_in_file,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
 
 
 def _rejected(
     cls: type[BaseException],
-) -> tuple[FilePhase, type[BaseException] | type[None]]:
+) -> tuple[Phase, type[BaseException] | type[None]]:
     return ("scope", cls)
 
 
@@ -83,37 +84,38 @@ class TestUseRegionBesideImportedType:
     """
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    @pytest.mark.parametrize("part", verdict_parts(3))
     def test_imported_nested_type_is_reached(
-        self, tmp_path: Path, method: bool, groupings: Groupings
+        self, tmp_path: Path, method: bool, part: Part
     ) -> None:
         probes = _nearest_inner_probes(method=method)
         assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            probe_table(
-                probes,
-                {
-                    "value": _ACCEPTED,
-                    "pattern": _ACCEPTED,
-                    "is": ("typecheck", AglTypeError),
-                    "cast": ("typecheck", AglTypeError),
-                },
-                span_texts={"is": "1 is Geo::Inner", "cast": "1 as? Geo::Inner"},
-                identities={
-                    "value": "record tl::Geo::Inner\n  y: int",
-                    "pattern": "tl::Geo::Inner -> int",
-                },
+            nonconstant_in_file(
+                probe_table(
+                    probes,
+                    {
+                        "value": _ACCEPTED,
+                        "pattern": _ACCEPTED,
+                        "is": ("typecheck", AglTypeError),
+                        "cast": ("typecheck", AglTypeError),
+                    },
+                    span_texts={"is": "1 is Geo::Inner", "cast": "1 as? Geo::Inner"},
+                    identities={
+                        "value": "record tl::Geo::Inner\n  y: int",
+                        "pattern": "tl::Geo::Inner -> int",
+                    },
+                ),
+                ("is", "cast"),
             ),
-            groupings=groupings,
+            part=part,
         )
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_region_member_is_accepted(
-        self, tmp_path: Path, method: bool, groupings: Groupings
-    ) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_region_member_is_accepted(self, tmp_path: Path, method: bool, part: Part) -> None:
         probe = _region("let q = Geo::Point(x = 1)", method=method) + "\nr::q"
         assert_verdicts(
             tmp_path,
@@ -124,24 +126,25 @@ class TestUseRegionBesideImportedType:
                 {"value": _ACCEPTED},
                 identities={"value": "record shapes::Geo::Point\n  x: int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_method_path_member_is_accepted(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_method_path_member_is_accepted(self, tmp_path: Path, part: Part) -> None:
         probe = _region("let q = Geo::f()", method=True) + "\nr::q"
         assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            probe_table({"value": probe}, {"value": _ACCEPTED}, identities={"value": "int"}),
-            groupings=groupings,
+            nonconstant_in_file(
+                probe_table({"value": probe}, {"value": _ACCEPTED}, identities={"value": "int"}),
+                ("value",),
+            ),
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_region_without_method_path_lacks_it(
-        self, tmp_path: Path, groupings: Groupings
-    ) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_region_without_method_path_lacks_it(self, tmp_path: Path, part: Part) -> None:
         probe = _region("let q = Geo::f()", method=False)
         assert_verdicts(
             tmp_path,
@@ -152,7 +155,7 @@ class TestUseRegionBesideImportedType:
                 {"value": _rejected(UnknownMemberError)},
                 span_texts={"value": "Geo::f"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -168,8 +171,8 @@ _ORPHAN_SUBJECT = "let v: Shape = Shape::Square"
 class TestOrphanMethodKeepsImportedEnumMembers:
     """``def Shape::area`` on a wildcard-imported enum leaves ``Shape::Circle`` selectable."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_member_is_selected(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_member_is_selected(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "pattern": f"{_ORPHAN_SUBJECT}\ncase v of\n  | Shape::Circle => 1\n  | _ => 2",
             "is": f"{_ORPHAN_SUBJECT}\nv is Shape::Circle",
@@ -194,11 +197,11 @@ class TestOrphanMethodKeepsImportedEnumMembers:
                     "value": "record en::Shape::Circle",
                 },
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_missing_member_is_unknown(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_missing_member_is_unknown(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "pattern": f"{_ORPHAN_SUBJECT}\ncase v of\n  | Shape::Nope => 1\n  | _ => 2",
             "is": f"{_ORPHAN_SUBJECT}\nv is Shape::Nope",
@@ -214,7 +217,7 @@ class TestOrphanMethodKeepsImportedEnumMembers:
                 {key: _rejected(UnknownMemberError) for key in probes},
                 span_texts={key: "Shape::Nope" for key in probes},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -289,8 +292,8 @@ class TestHiddenNestedRecordThroughItsOwner:
             ),
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_record_owner_with_orphan_method(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_record_owner_with_orphan_method(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _NESTED_LIB,
@@ -300,7 +303,7 @@ class TestHiddenNestedRecordThroughItsOwner:
                 {key: _rejected(HiddenMemberError) for key in _NESTED_HIDDEN_PROBES},
                 span_texts={key: "Geo::Inner" for key in _NESTED_HIDDEN_PROBES},
             ),
-            groupings=groupings,
+            part=part,
         )
 
     def test_enum_owner(self, tmp_path: Path) -> None:
@@ -347,8 +350,8 @@ class TestSameLevelCandidatesSelectFullPathFirst:
     candidate hides and the other declares selects the other.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_hidden_on_one_missing_on_other(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_hidden_on_one_missing_on_other(self, tmp_path: Path, part: Part) -> None:
         probes = _two_enum_probes("Red")
         assert_verdicts(
             tmp_path,
@@ -359,11 +362,11 @@ class TestSameLevelCandidatesSelectFullPathFirst:
                 {key: _rejected(HiddenMemberError) for key in probes},
                 span_texts={key: "Color::Red" for key in probes},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_hidden_on_one_present_on_other(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_hidden_on_one_present_on_other(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "value": "Color::Red",
             "pattern": (
@@ -380,7 +383,7 @@ class TestSameLevelCandidatesSelectFullPathFirst:
                 {key: _ACCEPTED for key in probes},
                 identities={"value": "record en3::Color::Red", "pattern": "int", "is": "bool"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -394,8 +397,8 @@ _NESTED_HIDDEN_AND_PRESENT_HEADER = ("import tl::* hiding Geo::Inner", "import t
 class TestSameLevelNestedRecordSelectsFullPathFirst:
     """A nested record one owner hides and the other declares selects the other."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_accepted(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_accepted(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "value": "Geo::Inner(w = 1)",
             "pattern": (
@@ -411,7 +414,7 @@ class TestSameLevelNestedRecordSelectsFullPathFirst:
                 {key: _ACCEPTED for key in probes},
                 identities={"value": "record tl2::Geo::Inner\n  w: int", "pattern": "int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -428,8 +431,8 @@ _REGION_OWNER_HEADER = ("import tl::*", "scope R\n  def Geo::f() -> int = 1\nend
 class TestPlainRegionBesideImportedTypeOwner:
     """A local ``scope R`` with a method path ``R::Geo`` never hides the imported ``R::Geo::X``."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_imported_member_is_reached(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_imported_member_is_reached(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "value": "R::Geo::X(z = 1)",
             "pattern": "case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z",
@@ -451,7 +454,7 @@ class TestPlainRegionBesideImportedTypeOwner:
                 span_texts={"is": "1 is R::Geo::X", "cast": "1 as? R::Geo::X"},
                 identities={"value": "record tl::R::Geo::X\n  z: int", "pattern": "int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 

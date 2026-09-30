@@ -13,10 +13,9 @@ from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.imports import (
-    QualResolutionFound,
     SingleTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_member_decls,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
@@ -1070,9 +1069,9 @@ def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None
     )
 
     assert env.unqualified["Color"] == frozenset({(module, "Color")})
-    assert resolve_qualified(env, ("lib",), ("Color", "Red")) == QualResolutionFound(
-        module, (module, ("Color", "Red"))
-    )
+    assert set(qualifier_member_decls(env, ("lib",), ("Color", "Red"))) == {
+        (module, ("Color", "Red"))
+    }
 
 
 def test_unanchored_qualifier_searches_enclosing_scopes_innermost_first() -> None:

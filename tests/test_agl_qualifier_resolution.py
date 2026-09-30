@@ -11,11 +11,9 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import (
     ImportEnv,
-    QualResolutionFound,
-    QualResolutionMissingMember,
     SingleTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_member_decls,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
@@ -29,7 +27,7 @@ from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 from tests.agl.module_graph import build_inline_entry_graph, resolve_inline_entry
-from tests.agl.qualifier_support import file_verdict, graph_verdict
+from tests.agl.qualifier_support import graph_verdict, inline_verdict
 
 Outcome = Literal["accepted", "scope", "typecheck"]
 
@@ -95,7 +93,7 @@ def _module_outcome(source: str) -> Outcome:
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     """A phase-accurate verdict: which call raised, not which class."""
-    phase, _cls, _span, _identity = file_verdict(tmp_path, modules)
+    phase, _cls, _span, _identity = inline_verdict(tmp_path, modules)
     if phase == "matchcompile":
         raise AssertionError(f"unexpected matchcompile phase for {modules!r}")
     return phase
@@ -362,9 +360,9 @@ def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:
     module = ModuleId.from_path("Pal")
     env = _import_env("Pal", ("public", ("Secret", "hidden")), tail=(_item("public"),))
 
-    assert resolve_qualified(env, ("Pal",), ("Secret", "hidden")) == QualResolutionFound(
-        module, (module, ("Secret", "hidden"))
-    )
+    assert set(qualifier_member_decls(env, ("Pal",), ("Secret", "hidden"))) == {
+        (module, ("Secret", "hidden"))
+    }
 
 
 def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -> None:
@@ -403,6 +401,4 @@ def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path)
 def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:
     env = _import_env("Pal", ("public", ("Secret", "hidden")), hidden=(_item("Secret"),))
 
-    assert isinstance(
-        resolve_qualified(env, ("Pal",), ("Secret", "hidden")), QualResolutionMissingMember
-    )
+    assert not qualifier_member_decls(env, ("Pal",), ("Secret", "hidden"))

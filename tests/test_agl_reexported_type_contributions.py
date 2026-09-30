@@ -6,7 +6,7 @@ region by a scoped ``export``, is still that type through ``use`` and import
 tails alike, in every position, and ``hiding`` one of its members on such a
 surface hides it.
 
-Every probe is checked in file mode and in every legal REPL grouping of its
+Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
 the same verdict, error span and message, or accepted identity.
 """
@@ -22,9 +22,8 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
-    assert_file_resolves_like_inline_entry,
     assert_scenario,
-    file_params,
+    nonconstant_in_file,
     option_identity,
     rejected,
     scenario_params,
@@ -141,12 +140,12 @@ _SCENARIOS = {
     "region-use-of-a-reexporting-module": Scenario(
         modules=_REEXPORTS,
         header=("import mid2",),
-        probes=_in_region("use mid2::*"),
+        probes=nonconstant_in_file(_in_region("use mid2::*"), ("region-receiver",)),
     ),
     "region-use-of-a-scoped-reexport": Scenario(
         modules=_REEXPORTS,
         header=("import mid",),
-        probes=_in_region("use mid::Shapes::*"),
+        probes=nonconstant_in_file(_in_region("use mid::Shapes::*"), ("region-receiver",)),
     ),
     "hiding-on-a-use-of-a-reexporting-module": Scenario(
         modules=_REEXPORTS,
@@ -172,9 +171,3 @@ class TestReexportedTypes:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)

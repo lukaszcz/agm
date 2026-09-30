@@ -303,10 +303,6 @@ class TestRehydrationParity:
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
             assert rehydrated_module.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()
-            assert (
-                rehydrated_module.type_env.blocked_enum_variants()
-                == cm.type_env.blocked_enum_variants()
-            )
             assert rehydrated_module.type_env.all_generic_types() == cm.type_env.all_generic_types()
 
     def test_rehydrated_module_memoises_its_namespace_queries(
@@ -316,7 +312,6 @@ class TestRehydrationParity:
         for module in rehydrated.values():
             env = module.type_env
             assert env.enum_owner_forms() is env.enum_owner_forms()
-            assert env.blocked_enum_variants() is env.blocked_enum_variants()
 
     def test_rehydrated_module_reproduces_its_image(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

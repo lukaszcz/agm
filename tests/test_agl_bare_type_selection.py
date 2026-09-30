@@ -5,17 +5,18 @@ full-path lookup reads it, and scope records the one declaration it selects
 (or rejects it) before typecheck runs.
 Every class here probes one spelling in the type positions -- an annotation,
 an alias target, a type argument, an applied type, a caught exception type and
-an ``extends`` base -- in file mode and every REPL grouping (see
+an ``extends`` base -- in the file part and every REPL grouping (see
 :mod:`tests.agl.qualifier_support`), asserting the phase, the class and the
 span, or the accepted identity:
 
 - ``::Name`` reads this module's root alone, exactly like the value
   ``::Name``, and names no member there when the root lacks it;
-- a name several equally near ``use`` declarations contribute is ambiguous in
+- a name several ``use`` declarations at one step contribute is ambiguous in
   every position, a caught exception and an ``extends`` base included;
-- a scope region spelled like a type never stops its lookup, so a farther
+- a scope region spelled like a type never stops its lookup, so a later-step
   same-spelled type -- imported or this module's own -- is still selected;
-- the nearest type declaration is the one every position selects.
+- the type declaration at the first step that finds one is the one every
+  position selects.
 """
 
 from __future__ import annotations
@@ -27,19 +28,20 @@ import pytest
 from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
 from agm.agl.typecheck import AglTypeError
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     assert_verdicts,
-    grouping_batches,
+    nonconstant_in_file,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
 
 
 def _rejected(
     cls: type[BaseException],
-) -> tuple[FilePhase, type[BaseException] | type[None]]:
+) -> tuple[Phase, type[BaseException] | type[None]]:
     return ("scope", cls)
 
 
@@ -98,7 +100,7 @@ class TestAnchoredTypeNameReadsTheModuleRoot:
 
 
 # ---------------------------------------------------------------------------
-# Several equally near ``use`` contributions are ambiguous everywhere.
+# Several ``use`` contributions at one step are ambiguous everywhere.
 # ---------------------------------------------------------------------------
 
 _BOOM_MODULES = {
@@ -117,8 +119,8 @@ class TestAmbiguousBareTypeNameInEveryPosition:
     as an annotation, however REPL entries group the ``use`` declarations.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_every_position_is_ambiguous(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_every_position_is_ambiguous(self, tmp_path: Path, part: Part) -> None:
         probes = {**_type_probes("Boom"), "catch": _CATCH_BOOM, "extends": _EXTENDS_BOOM}
         spans = {key: "Boom" for key in probes}
         spans["catch"] = "catch Boom as e =>\n  ()"
@@ -132,7 +134,7 @@ class TestAmbiguousBareTypeNameInEveryPosition:
                 {key: _rejected(AmbiguousQualificationError) for key in probes},
                 span_texts=spans,
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -174,10 +176,8 @@ class TestScopeRegionNeverStopsABareTypeName:
     the alias is declared.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_use_opened_region_beside_import_tails(
-        self, tmp_path: Path, groupings: Groupings
-    ) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_use_opened_region_beside_import_tails(self, tmp_path: Path, part: Part) -> None:
         probes = {
             key: _in_region("use shapes::*", probe) for key, probe in _type_probes("Geo").items()
         }
@@ -190,7 +190,7 @@ class TestScopeRegionNeverStopsABareTypeName:
                 {key: _rejected(AmbiguousQualificationError) for key in probes},
                 span_texts={key: "Geo" for key in probes},
             ),
-            groupings=groupings,
+            part=part,
         )
 
     def test_own_region_beside_own_root_type(self, tmp_path: Path) -> None:
@@ -212,9 +212,9 @@ class TestScopeRegionNeverStopsABareTypeName:
             ),
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    @pytest.mark.parametrize("part", verdict_parts(3))
     def test_use_opened_region_beside_caught_and_base_exception(
-        self, tmp_path: Path, groupings: Groupings
+        self, tmp_path: Path, part: Part
     ) -> None:
         probes = {
             "annotation": _in_region("use b::*", "let v = fn(x: Boom) => 1") + "\nr::v",
@@ -228,12 +228,15 @@ class TestScopeRegionNeverStopsABareTypeName:
             tmp_path,
             _BOOM_REGION_MODULES,
             _BOOM_REGION_HEADER,
-            probe_table(
+            nonconstant_in_file(
+                probe_table(
+                    probes,
+                    {key: _ACCEPTED for key in probes},
+                    identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
+                ),
                 probes,
-                {key: _ACCEPTED for key in probes},
-                identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
     def test_region_alone_is_no_type(self, tmp_path: Path) -> None:
@@ -256,15 +259,15 @@ class TestScopeRegionNeverStopsABareTypeName:
 
 
 # ---------------------------------------------------------------------------
-# The nearest type declaration is selected.
+# The first step that finds a type declaration decides.
 # ---------------------------------------------------------------------------
 
 
-class TestNearestTypeDeclarationIsSelected:
-    """A type declared in the enclosing region wins over farther same-spelled types."""
+class TestFirstStepTypeDeclarationIsSelected:
+    """A type the enclosing region declares wins over same-spelled types at later steps."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_region_type_over_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_region_type_over_import_tails(self, tmp_path: Path, part: Part) -> None:
         region_geo = "record Geo\n  w: int"
         probes = {
             "annotation": _in_region(region_geo, "let v: Geo = Geo(w = 1)") + "\nr::v",
@@ -281,15 +284,13 @@ class TestNearestTypeDeclarationIsSelected:
                 {key: _ACCEPTED for key in probes},
                 identities={key: "record r::Geo\n  w: int" for key in probes},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_imported_exception_is_caught_and_extended(
-        self, tmp_path: Path, groupings: Groupings
-    ) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_imported_exception_is_caught_and_extended(self, tmp_path: Path, part: Part) -> None:
         probes = {
-            "catch": "let v = try\n  1\ncatch Boom as e =>\n  2\nv",
+            "catch": "try\n  1\ncatch Boom as e =>\n  2",
             "extends": 'exception Local extends Boom\nLocal(message = "m") is Boom',
         }
         assert_verdicts(
@@ -301,7 +302,7 @@ class TestNearestTypeDeclarationIsSelected:
                 {key: _ACCEPTED for key in probes},
                 identities={"catch": "int", "extends": "bool"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -324,8 +325,8 @@ class TestSelectedTypeIsAppliedByItsDeclaration:
     declaration is in the same REPL entry or an earlier one.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_misapplied_selection_is_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_misapplied_selection_is_rejected(self, tmp_path: Path, part: Part) -> None:
         probes = {
             "bare-alias": "def g(x: Wrapper) -> int = 1",
             "alias-arity": "def g(x: Wrapper[int, int]) -> int = 1",
@@ -347,5 +348,5 @@ class TestSelectedTypeIsAppliedByItsDeclaration:
             probe_table(
                 probes, {key: ("typecheck", AglTypeError) for key in probes}, span_texts=spans
             ),
-            groupings=groupings,
+            part=part,
         )

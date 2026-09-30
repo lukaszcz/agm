@@ -37,10 +37,8 @@ from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     ImportEnv,
     QName,
-    QualResolutionFound,
     contribution_routes,
-    qualifier_contributes,
-    resolve_qualified,
+    qualifier_member_decls,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -1186,7 +1184,6 @@ class TypeEnvironment:
         # declaration namespace, so a still-mutating environment never serves
         # a stale answer.
         self._sealed_enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None
-        self._sealed_blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -2307,25 +2304,17 @@ class TypeEnvironment:
             qualifier_anchored=qualifier_anchored,
         )
 
-    def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
-        """Return variants whose short owner spelling a same-named module route also reaches.
+    def _spelled_by_another_source(self, head: str, *, route: bool) -> bool:
+        """Whether an own path, or an import of the other kind, also spells *head*.
 
-        Such a spelling selects two declarations, so it is ambiguous. Only a
-        ``LOCAL``/``OPEN_IMPORT`` form is affected: those are the only kinds
-        written with a bare ``owner_name`` qualifier.
+        The other kind of a module route (*route*) is a bare imported name, and
+        of a bare imported name a module route. Such an owner spelling could
+        select another declaration, so a witness spells the owner through a
+        longer route instead: over-qualifying is harmless.
         """
-        template = form.type_template.template
-        if form.kind not in (
-            EnumOwnerFormKind.LOCAL,
-            EnumOwnerFormKind.OPEN_IMPORT,
-        ) or not isinstance(template, EnumType):
-            return frozenset()
-        owner_qualifier = (form.owner_name,)
-        return frozenset(
-            variant
-            for variant in self.type_table.enum_member_names(template)
-            if qualifier_contributes(self._import_env, owner_qualifier, variant)
-        )
+        env = self._import_env
+        other_kind = head in env.unqualified if route else (head,) in env.suffix_routes
+        return head in self._declared_segments or other_kind
 
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
         """Enumerate finite checked owner forms writable in this environment.
@@ -2341,8 +2330,9 @@ class TypeEnvironment:
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
         for exposed_name, qnames in self._import_env.unqualified.items():
-            # A bare imported enum owner, unless this module declares a path the name heads.
-            if not isinstance(exposed_name, str) or exposed_name in self._declared_segments:
+            if not isinstance(exposed_name, str) or self._spelled_by_another_source(
+                exposed_name, route=False
+            ):
                 continue
             type_qnames = tuple(qname for qname in qnames if self._is_program_type_candidate(qname))
             if len(type_qnames) == 1:
@@ -2355,7 +2345,6 @@ class TypeEnvironment:
                     )
                 )
         for contribution in self._import_env.contributions.values():
-            routes = contribution_routes(contribution)
             for exposed_name, qname in contribution.members.items():
                 if not isinstance(exposed_name, str) or not self._is_program_type_candidate(qname):
                     continue
@@ -2363,13 +2352,13 @@ class TypeEnvironment:
                 template = self.declared_type_template(
                     qname[0], source_name, scope_path=source_scope_path
                 )
-                for qualifier, anchored in routes:
-                    if not anchored and qualifier[0] in self._declared_segments:
+                for qualifier, anchored in contribution_routes(contribution):
+                    if not anchored and self._spelled_by_another_source(qualifier[0], route=True):
                         continue
-                    resolved = resolve_qualified(
+                    reached = qualifier_member_decls(
                         self._import_env, qualifier, exposed_name, anchored=anchored
                     )
-                    if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
+                    if reached.keys() != {qname}:
                         continue
                     forms.add(
                         EnumOwnerForm(
@@ -2395,34 +2384,6 @@ class TypeEnvironment:
         if self._sealed:
             self._sealed_enum_owner_forms = ordered
         return ordered
-
-    def blocked_enum_variants(self) -> Mapping[tuple[str, ...], frozenset[str]]:
-        """Map each short enum-owner qualifier to the variants a module route makes ambiguous.
-
-        A match-compile consumer selecting a source spelling for one concrete
-        enum constructor needs this alongside ``enum_owner_forms``: an
-        ``EnumOwnerForm`` describes only an owner spelling, never which of
-        that owner's variants a same-named module route makes ambiguous.
-        The key is the same ``(owner_name,)`` qualifier
-        ``qualifier_contributes`` checks the module routes against.
-
-        Memoized on the same terms as ``enum_owner_forms``.
-        """
-        cached = self._sealed_blocked_enum_variants
-        if cached is not None:
-            return cached
-        owner_forms = self.enum_owner_forms()
-        blocked: dict[tuple[str, ...], frozenset[str]] = {}
-        for form in owner_forms:
-            if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
-                continue
-            variants = self._blocked_short_variants(form)
-            if variants:
-                blocked[(form.owner_name,)] = variants
-        result: Mapping[tuple[str, ...], frozenset[str]] = MappingProxyType(blocked)
-        if self._sealed:
-            self._sealed_blocked_enum_variants = result
-        return result
 
     def get_generic_type_from_module(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()

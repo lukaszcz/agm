@@ -3,7 +3,7 @@
 Each qualifier is probed in the value, pattern, ``is`` and cast positions
 that take constructors, and in every type position (annotation, alias
 target, type argument, cast target, applied type) through the shared
-:func:`~tests.agl.qualifier_support.type_positions` templates, in file mode
+:func:`~tests.agl.qualifier_support.type_positions` templates, in the file part
 and in every legal REPL grouping of its scenario's header (see
 :mod:`tests.agl.qualifier_support`). An accepted probe's identity renders
 the declaration it selected: a type position's probe returns its own
@@ -34,9 +34,7 @@ from tests.agl.qualifier_support import (
     Scenario,
     accepted,
     all_groupings,
-    assert_file_resolves_like_inline_entry,
     assert_scenario,
-    file_params,
     option_identity,
     rejected,
     scenario_params,
@@ -675,9 +673,3 @@ class TestQualifierPositionMatrix:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)

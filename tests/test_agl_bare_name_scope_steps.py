@@ -7,7 +7,7 @@ So a ``use`` in a nearer region beats a same-named declaration of an
 enclosing scope, and an own declaration beats a ``use`` of its own step, for
 a constructor call or reference, an enum member's terminal name, a type name
 (annotation, alias target, type argument, applied type), a qualifier's
-leading segment, a value binding and a method receiver alike -- in file mode
+leading segment, a value binding and a method receiver alike -- in the file part
 and every REPL grouping (see :mod:`tests.agl.qualifier_support`). A pattern
 or ``is`` test's scrutinee selects among every candidate its spelling reaches.
 """
@@ -19,15 +19,16 @@ from pathlib import Path
 import pytest
 
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     all_groupings,
     assert_verdicts,
-    grouping_batches,
+    nonconstant_in_file,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
 
 # ``s`` contributes a same-spelled record, enum (with a member ``A``), generic
 # enum and binding for each of the own declarations below.
@@ -106,6 +107,24 @@ _NEARER_IDENTITIES = {
     "member-receiver": "text",
 }
 
+# The probes whose region binding ``v`` a file rejects: its initializer is
+# not constant.
+_NONCONSTANT = frozenset(
+    {
+        "pattern",
+        "member-pattern",
+        "member-is",
+        "contributed-pattern",
+        "contributed-member-is",
+        "annotation",
+        "alias",
+        "type-argument",
+        "applied-type",
+        "receiver",
+        "member-receiver",
+    }
+)
+
 # Where the own declarations enclosing region ``r`` sit: the header declaring
 # them, the scope ``r`` is written in, and the qualifier reaching them.
 _ENCLOSING = {
@@ -127,23 +146,23 @@ class TestNearerUseBeatsAnEnclosingDeclaration:
     """A ``use`` in region ``r`` beats an own declaration of an enclosing scope."""
 
     @pytest.mark.parametrize("placement", _ENCLOSING)
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_constructors(self, tmp_path: Path, placement: str, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_constructors(self, tmp_path: Path, placement: str, part: Part) -> None:
         self._assert_accepted(
             tmp_path,
             placement,
             _NEARER_CONSTRUCTOR_PROBES,
-            groupings=groupings,
+            part=part,
         )
 
     @pytest.mark.parametrize("placement", _ENCLOSING)
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_other_positions(self, tmp_path: Path, placement: str, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_other_positions(self, tmp_path: Path, placement: str, part: Part) -> None:
         self._assert_accepted(
             tmp_path,
             placement,
             _NEARER_OTHER_PROBES,
-            groupings=groupings,
+            part=part,
         )
 
     @staticmethod
@@ -151,19 +170,22 @@ class TestNearerUseBeatsAnEnclosingDeclaration:
         tmp_path: Path,
         placement: str,
         written: dict[str, tuple[str, str]],
-        groupings: Groupings,
+        part: Part,
     ) -> None:
         probes = _nearer_probes(written, placement)
         assert_verdicts(
             tmp_path,
             {},
             (_CONTRIBUTING_SCOPE, _ENCLOSING[placement][0]),
-            probe_table(
-                probes,
-                dict.fromkeys(probes, _ACCEPTED),
-                identities={key: _NEARER_IDENTITIES[key] for key in probes},
+            nonconstant_in_file(
+                probe_table(
+                    probes,
+                    dict.fromkeys(probes, _ACCEPTED),
+                    identities={key: _NEARER_IDENTITIES[key] for key in probes},
+                ),
+                _NONCONSTANT,
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -219,8 +241,8 @@ _SAME_REGION_IDENTITIES = {
 class TestOwnDeclarationBeatsAUseOfItsStep:
     """In region ``r``, an own declaration of ``r`` beats the region's ``use``."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         probes = {
             key: f"{_in_region(use, body)}\nr::v"
             for key, (use, body) in _SAME_REGION_PROBES.items()
@@ -229,12 +251,15 @@ class TestOwnDeclarationBeatsAUseOfItsStep:
             tmp_path,
             {},
             (_CONTRIBUTING_SCOPE, f"scope r\n{_indented(_OWN, 2)}\nend r"),
-            probe_table(
-                probes,
-                dict.fromkeys(probes, _ACCEPTED),
-                identities={key: _SAME_REGION_IDENTITIES[key] for key in probes},
+            nonconstant_in_file(
+                probe_table(
+                    probes,
+                    dict.fromkeys(probes, _ACCEPTED),
+                    identities={key: _SAME_REGION_IDENTITIES[key] for key in probes},
+                ),
+                _NONCONSTANT,
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -269,8 +294,8 @@ _ROOT_PROBES = {
 class TestRootDeclarationBeatsARootUse:
     """At the module root, an own declaration beats a ``use`` of the same step."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(5))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             {},
@@ -279,7 +304,7 @@ class TestRootDeclarationBeatsARootUse:
                 _ROOT_PROBES, dict.fromkeys(_ROOT_PROBES, _ACCEPTED), identities=_own_identities("")
             ),
             legal=_ROOT_USES_LEGAL,
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -295,8 +320,8 @@ _NEAREST_PROBES = {
 class TestNearestContributionDecides:
     """With no own declaration, a region's ``use`` beats a farther root import tail."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         probes = {
             key: f"scope r\n  use s::*\n{_indented(body, 2)}\nend r\nr::v"
             for key, body in _NEAREST_PROBES.items()
@@ -305,15 +330,18 @@ class TestNearestContributionDecides:
             tmp_path,
             _TAIL_LIB,
             ("import lib::*", _CONTRIBUTING_SCOPE),
-            probe_table(
-                probes,
-                dict.fromkeys(probes, _ACCEPTED),
-                identities={
-                    "call": "record s::R\n  y: text",
-                    "annotation": "s::R -> text",
-                    "pattern": "text",
-                    "qualifier-head": "record s::E::A\n  y: text",
-                },
+            nonconstant_in_file(
+                probe_table(
+                    probes,
+                    dict.fromkeys(probes, _ACCEPTED),
+                    identities={
+                        "call": "record s::R\n  y: text",
+                        "annotation": "s::R -> text",
+                        "pattern": "text",
+                        "qualifier-head": "record s::E::A\n  y: text",
+                    },
+                ),
+                _NONCONSTANT,
             ),
-            groupings=groupings,
+            part=part,
         )

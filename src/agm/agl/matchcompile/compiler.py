@@ -443,20 +443,6 @@ def _witness_for_occurrence(
     return RecordWitness(constructor.record_type, fields, qualification)
 
 
-def _short_spelling_blocked(
-    form: EnumOwnerForm, variant: str, case_context: MatchCaseContext
-) -> bool:
-    """Return whether a module route makes *form*'s short spelling ambiguous for *variant*.
-
-    Only a ``LOCAL``/``OPEN_IMPORT`` form spells its owner bare as
-    ``owner_name`` -- a spelling a same-named module route also reaches --
-    so only those kinds consult ``blocked_enum_variants``.
-    """
-    if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
-        return False
-    return variant in case_context.blocked_enum_variants.get((form.owner_name,), frozenset())
-
-
 def _source_spelling(
     constructor: NominalConstructor, subject_type: object, case_context: MatchCaseContext
 ) -> EnumOwnerForm | Literal["bare"] | None:
@@ -466,20 +452,17 @@ def _source_spelling(
     visible owner spells it.
     """
     nominal_type = subject_type if isinstance(subject_type, EnumType) else constructor.record_type
-    variant = constructor.record_type.name
     if isinstance(subject_type, EnumType):
-        declaration_identity = (subject_type.module_id, subject_type.name, variant)
+        declaration_identity = (
+            subject_type.module_id,
+            subject_type.name,
+            constructor.record_type.name,
+        )
         if declaration_identity in case_context.bare_enum_constructors:
             return "bare"
 
     matches = tuple(
-        form
-        for form in case_context.enum_owner_forms
-        if form.match(nominal_type) is not None
-        and (
-            not isinstance(subject_type, EnumType)
-            or not _short_spelling_blocked(form, variant, case_context)
-        )
+        form for form in case_context.enum_owner_forms if form.match(nominal_type) is not None
     )
     if not matches:
         return None

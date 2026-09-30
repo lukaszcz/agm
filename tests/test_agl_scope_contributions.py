@@ -8,12 +8,11 @@ from agm.agl.scope.imports import (
     ImportTarget,
     NameAtom,
     QName,
-    QualResolutionFound,
-    QualResolutionUnknownQualifier,
     SingleTarget,
     WildcardTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_candidates,
+    qualifier_member_decls,
 )
 from agm.agl.scope.symbols import (
     BinderKind,
@@ -116,9 +115,7 @@ def test_alias_route_retains_full_surface_except_its_own_hiding() -> None:
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert resolve_qualified(env, ("settings",), "timeout") == QualResolutionFound(
-        module, (module, "timeout")
-    )
+    assert set(qualifier_member_decls(env, ("settings",), "timeout")) == {(module, "timeout")}
     assert "debug" not in env.contributions[module].members
 
 
@@ -132,12 +129,8 @@ def test_alias_route_does_not_also_contribute_the_module_suffix() -> None:
         {module: _exports("std/config", "timeout")},
     )
 
-    assert resolve_qualified(env, ("settings",), "timeout") == QualResolutionFound(
-        module, (module, "timeout")
-    )
-    assert isinstance(
-        resolve_qualified(env, ("config",), "timeout"), QualResolutionUnknownQualifier
-    )
+    assert set(qualifier_member_decls(env, ("settings",), "timeout")) == {(module, "timeout")}
+    assert qualifier_candidates(env, ("config",), anchored=False) == ()
 
 
 def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
@@ -151,9 +144,7 @@ def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert resolve_qualified(env, ("config",), "debug") == QualResolutionFound(
-        module, (module, "debug")
-    )
+    assert set(qualifier_member_decls(env, ("config",), "debug")) == {(module, "debug")}
     assert "debug" not in env.contributions[module].alias_members["settings"]
 
 

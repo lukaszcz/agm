@@ -5,7 +5,7 @@ type position there -- a member reached through another alias's owner, or a
 scope region a ``use`` opens in the alias's own region, included -- so every
 position the alias is used in (annotation, constructor, owner-qualified
 constructor, pattern, ``is``) agrees with spelling the target directly, in
-file mode and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
+the file part and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
 The alias qualifies every member of its target, whatever other import also
 spells that member's full path.
 """
@@ -18,16 +18,17 @@ import pytest
 
 from agm.agl.scope.symbols import AmbiguousQualificationError
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     accepted,
     assert_repl_verdicts,
     assert_verdicts,
-    grouping_batches,
+    nonconstant_in_file,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
 
 _SLOT_LIB = {"lib": "enum Slot\n  | Filled(value: int)\n  | Empty\n\ntype O = Slot\n"}
 _FILLED = "record lib::Slot::Filled\n  value: int"
@@ -54,24 +55,24 @@ _MEMBER_IDENTITIES = {
 class TestAliasOfAMemberThroughAnImportedAliasOwner:
     """``type T = O::Filled``, ``O`` another module's alias of an enum, is that member."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_routed_owner(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_routed_owner(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _SLOT_LIB,
             ("import lib", "type T = lib::O::Filled"),
             probe_table(_MEMBER_PROBES, _MEMBER_EXPECTED, identities=_MEMBER_IDENTITIES),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_used_owner(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_used_owner(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _SLOT_LIB,
             ("import lib", "use lib::{O}", "type T = O::Filled"),
             probe_table(_MEMBER_PROBES, _MEMBER_EXPECTED, identities=_MEMBER_IDENTITIES),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -88,8 +89,8 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
     selects the root import's type, which no region hides.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_every_position(self, tmp_path: Path, part: Part) -> None:
         def region(body: str) -> str:
             return f"scope r\n  use shapes::*\n  {body}\nend r\nr::v"
 
@@ -97,39 +98,42 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
             tmp_path,
             _GEO_LIB,
             ("import tl::*", _SHAPES),
-            probe_table(
-                {
-                    "value": region("let v = Geo::Point(x = 1)"),
-                    "annotation": region("let v = fn(p: Geo::Point) => p.x"),
-                    "alias": region("type X = Geo::Point\n  let v = fn(p: X) => p.x"),
-                    "alias-constructor": region("type X = Geo::Point\n  let v = X(x = 1)"),
-                    "pattern": region(
-                        "let v = fn(p: Geo::Point) => case p of\n    | Geo::Point(x) => x"
-                    ),
-                    "bare-type-past-region": region("let v = fn(p: Geo) => p"),
-                },
-                {
-                    "value": _ACCEPTED,
-                    "annotation": _ACCEPTED,
-                    "alias": _ACCEPTED,
-                    "alias-constructor": _ACCEPTED,
-                    "pattern": _ACCEPTED,
-                    "bare-type-past-region": _ACCEPTED,
-                },
-                identities={
-                    "value": _POINT,
-                    "annotation": "shapes::Geo::Point -> int",
-                    "alias": "shapes::Geo::Point -> int",
-                    "alias-constructor": _POINT,
-                    "pattern": "shapes::Geo::Point -> int",
-                    "bare-type-past-region": "tl::Geo -> tl::Geo",
-                },
+            nonconstant_in_file(
+                probe_table(
+                    {
+                        "value": region("let v = Geo::Point(x = 1)"),
+                        "annotation": region("let v = fn(p: Geo::Point) => p.x"),
+                        "alias": region("type X = Geo::Point\n  let v = fn(p: X) => p.x"),
+                        "alias-constructor": region("type X = Geo::Point\n  let v = X(x = 1)"),
+                        "pattern": region(
+                            "let v = fn(p: Geo::Point) => case p of\n    | Geo::Point(x) => x"
+                        ),
+                        "bare-type-past-region": region("let v = fn(p: Geo) => p"),
+                    },
+                    {
+                        "value": _ACCEPTED,
+                        "annotation": _ACCEPTED,
+                        "alias": _ACCEPTED,
+                        "alias-constructor": _ACCEPTED,
+                        "pattern": _ACCEPTED,
+                        "bare-type-past-region": _ACCEPTED,
+                    },
+                    identities={
+                        "value": _POINT,
+                        "annotation": "shapes::Geo::Point -> int",
+                        "alias": "shapes::Geo::Point -> int",
+                        "alias-constructor": _POINT,
+                        "pattern": "shapes::Geo::Point -> int",
+                        "bare-type-past-region": "tl::Geo -> tl::Geo",
+                    },
+                ),
+                ("annotation", "alias", "pattern", "bare-type-past-region"),
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_retained_alias(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_retained_alias(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _GEO_LIB,
@@ -142,7 +146,7 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
                     "annotation": "shapes::Geo::Point -> int",
                 },
             ),
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -177,8 +181,8 @@ class TestAliasKeepsItsTargetPastALaterDeclaration:
 class TestBareAliasOfAMemberInAPattern:
     """A bare alias of an enum member matches that member, alone or as a field's pattern."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_alias_pattern(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_alias_pattern(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             {},
@@ -199,7 +203,7 @@ class TestBareAliasOfAMemberInAPattern:
                     "fn(b: Box) => case b of\n  | Box(color = X) => 1\n  | _ => 0", "Box -> int"
                 ),
             },
-            groupings=groupings,
+            part=part,
         )
 
 
@@ -222,8 +226,8 @@ class TestAliasMembersBesideSameSpelledImports:
     alias still reaches its target's member.
     """
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_route_owner_beside_a_bare_compound(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_route_owner_beside_a_bare_compound(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _ROUTE_SLOT,
@@ -234,11 +238,11 @@ class TestAliasMembersBesideSameSpelledImports:
                 span_texts={"direct": "lib::Slot::Filled"},
                 identities={"member": "record lib::Slot::Filled\n  value: int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_bare_compound_owner_beside_another(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_bare_compound_owner_beside_another(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _ROUTE_SLOT,
@@ -249,11 +253,11 @@ class TestAliasMembersBesideSameSpelledImports:
                 span_texts={"direct": "lib::Slot::Filled"},
                 identities={"member": "record o::lib::Slot::Filled\n  value: int"},
             ),
-            groupings=groupings,
+            part=part,
         )
 
-    @pytest.mark.parametrize("groupings", grouping_batches(4))
-    def test_route_owner_beside_another_route(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_route_owner_beside_another_route(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _TWO_COLORS,
@@ -264,5 +268,5 @@ class TestAliasMembersBesideSameSpelledImports:
                 span_texts={"direct": "types::Color::Red"},
                 identities={"member": "record one/types::Color::Red"},
             ),
-            groupings=groupings,
+            part=part,
         )

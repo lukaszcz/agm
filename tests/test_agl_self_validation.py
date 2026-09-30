@@ -234,7 +234,6 @@ def test_disabled_validation_still_memoises_checked_namespace_queries(
 
     assert env.enum_owner_forms()
     assert env.enum_owner_forms() is env.enum_owner_forms()
-    assert env.blocked_enum_variants() is env.blocked_enum_variants()
 
 
 def test_disabled_validation_skips_the_inference_region_leak_check(

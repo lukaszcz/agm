@@ -8,7 +8,7 @@ every surface that injects it -- a facade ``use``, a module ``use``, an import
 tail at the root or inside a region. Spelled bare in a type position, it
 names no type.
 
-Every probe is checked in file mode and in every legal REPL grouping of its
+Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`), and a file
 resolves exactly like the inline entry.
 """
@@ -25,9 +25,7 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
-    assert_file_resolves_like_inline_entry,
     assert_scenario,
-    file_params,
     rejected,
     scenario_params,
 )
@@ -119,9 +117,3 @@ class TestInjectedMemberQualifiers:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
-
-    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
-    def test_a_file_resolves_like_the_inline_entry(
-        self, tmp_path: Path, scenario: Scenario
-    ) -> None:
-        assert_file_resolves_like_inline_entry(tmp_path, scenario)

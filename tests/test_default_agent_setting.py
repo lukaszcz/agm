@@ -69,7 +69,7 @@ def test_engine_key_uses_the_agent_nominal_type() -> None:
     assert repr(get_engine_key_type("default-agent")) == "Agent"
 
 
-def test_non_agl_command_does_not_import_agl() -> None:
+def test_non_agl_command_does_not_import_agl(tmp_path: Path) -> None:
     script = (
         "import sys\n"
         "from click.testing import CliRunner\n"
@@ -78,12 +78,21 @@ def test_non_agl_command_does_not_import_agl() -> None:
         "result = CliRunner().invoke(get_command(cli.app), ['config', 'env'])\n"
         "assert result.exit_code == 0, result.output\n"
         "assert not any(name == 'agm.agl' or name.startswith('agm.agl.') for name in sys.modules)\n"
+        "print(result.output)\n"
     )
+    # The command runs in a project of the test's own, so the subprocess -- which the
+    # in-process discovery fence does not reach -- never climbs to a host project.
+    subprocess.run(["git", "init", "-q", str(tmp_path / "repo")], check=True)
     result = subprocess.run(
-        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
     )
 
     assert result.returncode == 0, result.stderr
+    assert f"PROJ_DIR={tmp_path.resolve()}" in result.stdout
 
 
 def test_default_agent_initializer_and_qualified_write_are_visible() -> None:

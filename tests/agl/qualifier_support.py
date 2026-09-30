@@ -4,42 +4,43 @@ A qualifier verdict (:data:`Verdict`) is a 4-tuple ``(phase, cls, span,
 identity)``:
 
 ``phase``
-    FILE mode (:func:`graph_verdict`, :func:`file_verdict`) is
-    ``"scope"``/``"typecheck"``/``"matchcompile"``/``"accepted"``, classified
-    by which real pipeline call raised -- never by the raised exception's
-    class alone, since more than one phase can raise the same class. A REPL
-    entry has no phase-by-phase call of its own --
+    A whole program -- the inline ``agm exec -c`` graph (:func:`graph_verdict`,
+    :func:`inline_verdict`) or a real ``agm exec <file>`` entry -- has a
+    :data:`Phase`: ``"scope"``/``"typecheck"``/``"matchcompile"``/``"accepted"``,
+    classified by which real pipeline call raised -- never by the raised
+    exception's class alone, since more than one phase can raise the same
+    class. A REPL entry has no phase-by-phase call of its own --
     :class:`~agm.agl.repl.entry.EntryResult` carries one ``check_only``
     outcome -- so its own phase is only ``"accepted"``/``"rejected"``, or
     ``"type-entry"`` when an entry that is no value is accepted as a type
     spelling alone; a REPL verdict's *class* and *span* are asserted to match
-    the file-mode verdict for the identical text instead, which implies the
-    same phase.
+    the expected ones instead, which implies the same phase.
 ``cls``/``span``
     The raised exception's class and span, or ``(NoneType, None)`` when
     accepted.
 ``identity``
     Set only when accepted: the rendered static type of the entry's final
-    expression (FILE mode: the checked entry module's own node types; REPL
+    expression (a program: the checked entry module's own node types; REPL
     mode: ``EntryResult.value_type``, rendered the same way) -- proof of
     which declaration was selected, not merely that nothing raised.
 
 A case is a *header* declaration sequence plus a batch of :class:`Probe`\\ s
-sharing it. :func:`assert_verdicts` checks every probe once in file mode
-(the header and the probe as one inline entry) and then in every way to
+sharing it. :func:`assert_verdicts` checks every probe against its expected
+verdict in its *file part* -- the header and the probe as one inline entry,
+the same text as a real file (:func:`file_source`), and the same text as one
+REPL entry, all three rejecting with one message -- and in every other way to
 group the header into REPL entries (:func:`all_groupings` over
-``len(header) + 1`` items, the ``+ 1`` standing for whichever probe
-follows): per grouping, one session evaluates ``sizes[:-1]`` setup entries
-through :meth:`~agm.agl.repl.session.ReplSession.eval_entry`; whether they
-all succeed *is* the grouping's legality, asserted against the expected
-legal set. Only a legal grouping goes on to answer every probe as its own
+``len(header) + 1`` items, the ``+ 1`` standing for whichever probe follows).
+Per grouping, one session evaluates ``sizes[:-1]`` setup entries through
+:meth:`~agm.agl.repl.session.ReplSession.eval_entry`; whether they all succeed
+*is* the grouping's legality, asserted against the expected legal set. Only a
+legal grouping goes on to answer every probe as its own
 ``eval_entry(check_only=True)`` final entry against the header's unconsumed
 tail -- the real entry path, never promoting state, so a rejection's
-structured cause is ``EntryResult.failure``. Both modes must reach the
-probe's expected phase-and-class, span text or identity, and a rejected
-probe the same message in both. An ``info`` probe has no file mode: once
-the tail is promoted, ``:info`` of its name must report the expected
-description, or raise the expected class spanning the expected text.
+structured cause is ``EntryResult.failure``. An ``info`` probe has neither an
+inline entry nor a file: once the tail is promoted, ``:info`` of its name must
+report the expected description, or raise the expected class spanning the
+expected text.
 
 Probes come from :func:`accepted`, :func:`rejected`, :func:`info` and
 :func:`info_rejected`; :func:`type_positions` and
@@ -48,15 +49,13 @@ and :func:`option_identity` is the identity an ``as?`` cast pins.
 :func:`span_text` slices an error's span out of its source for tests that
 check a rejection outside the harness.
 
-:class:`Scenario` tables feed :func:`assert_scenario` through
-:func:`scenario_params`, one test per chunk of a scenario's probes and batch
-of its groupings, so each test stays cheap; a test computes file mode once
-per probe, not once per grouping. A test that calls :func:`assert_verdicts`
-itself batches its groupings through :func:`grouping_batches`.
-:func:`assert_repl_verdicts` checks one REPL history of separate entries,
-for histories that no file shares. :func:`assert_file_resolves_like_inline_entry`
-compares the inline ``agm exec -c`` graph with the same text as a real
-``agm exec <file>`` entry (see :func:`file_source`).
+A check splits into :data:`Part`\\ s, one test case each, so each case stays
+cheap: :class:`Scenario` tables feed :func:`assert_scenario` through
+:func:`scenario_params`, one part per chunk of a scenario's probes and either
+its file part or a batch of its groupings; a test that calls
+:func:`assert_verdicts` itself takes its parts from :func:`verdict_parts`.
+:func:`assert_repl_verdicts` checks one REPL history of separate entries, for
+histories that no file shares.
 
 :func:`all_groupings`, :func:`eval_setup_entries`, :func:`eval_grouped_final`
 and :func:`legal_groupings` are the general-purpose entry-grouping helpers
@@ -66,14 +65,15 @@ shared with ``tests/test_agl_repl_session.py``.
 from __future__ import annotations
 
 import textwrap
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 import pytest
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, AglTypeError
 from agm.agl.matchcompile import compile_program_matches, match_issue_error
 from agm.agl.modules.ids import ENTRY_ID, Reader, spell_declaration
 from agm.agl.modules.loader import parse_entry_module
@@ -83,8 +83,9 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AmbiguousQualificationError, to_bare_path
 from agm.agl.syntax.nodes import Block, FuncDef, Item, LetDecl, VarDecl
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_file_graph_from_files, make_graph_from_files
+from tests.agl.ir_harness import base_caps, make_file_graph_from_files, make_inline_graph_from_files
 
 if TYPE_CHECKING:
     from agm.agl.modules.loader import ModuleGraph
@@ -92,14 +93,16 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type
     from agm.agl.typecheck.env import CheckedModule
 
-FilePhase = Literal["scope", "typecheck", "matchcompile", "accepted"]
+Phase = Literal["scope", "typecheck", "matchcompile", "accepted"]
 ReplPhase = Literal["accepted", "type-entry", "rejected"]
-FileVerdict = tuple[FilePhase, type[BaseException] | type[None], SourceSpan | None, str | None]
+ProgramVerdict = tuple[Phase, type[BaseException] | type[None], SourceSpan | None, str | None]
 ReplVerdict = tuple[ReplPhase, type[BaseException] | type[None], SourceSpan | None, str | None]
-Verdict = FileVerdict | ReplVerdict
+Verdict = ProgramVerdict | ReplVerdict
 LegalGroupings = frozenset[tuple[int, ...]] | Literal["ALL"]
 Origins = frozenset[tuple[type, str]]
 Groupings = tuple[tuple[int, ...], ...]
+Part = Literal["file"] | Groupings
+"""One test case's share of a verdict check: the file part, or a batch of other groupings."""
 
 K = TypeVar("K")
 T = TypeVar("T")
@@ -167,7 +170,7 @@ def legal_groupings(
     return frozenset(sizes for sizes in groupings if is_legal(make_session(), sizes))
 
 
-def graph_verdict(graph: "ModuleGraph") -> FileVerdict:
+def graph_verdict(graph: "ModuleGraph") -> ProgramVerdict:
     """Resolve, type-check, and match-compile *graph*; report which phase, if any, raised.
 
     Classifies by which call raised, not by the exception's class: scope
@@ -180,8 +183,14 @@ def graph_verdict(graph: "ModuleGraph") -> FileVerdict:
     return _graph_outcome(graph)[0]
 
 
-def _graph_outcome(graph: "ModuleGraph") -> tuple[FileVerdict, AglError | None]:
-    """:func:`graph_verdict`'s verdict paired with the raised error itself, if any."""
+def _graph_outcome(
+    graph: "ModuleGraph", *, wrapped: bool = False
+) -> tuple[ProgramVerdict, AglError | None]:
+    """:func:`graph_verdict`'s verdict paired with the raised error itself, if any.
+
+    *wrapped* says a real file holds the entry's statements in its final
+    ``def`` (:func:`file_source`), whose body's final item the identity reads.
+    """
     try:
         resolved = resolve_program(graph)
     except AglError as exc:
@@ -195,7 +204,7 @@ def _graph_outcome(graph: "ModuleGraph") -> tuple[FileVerdict, AglError | None]:
         match_error = match_issue_error(match_result.issues[0])
         return ("matchcompile", type(match_error), match_error.span, None), match_error
     entry = checked_program.modules[checked_program.entry_id]
-    identity = _rendered_identity(_entry_final_type(entry), entry.type_env.type_table)
+    identity = _rendered_identity(_entry_final_type(entry, wrapped), entry.type_env.type_table)
     return ("accepted", type(None), None, identity), None
 
 
@@ -206,25 +215,27 @@ def _rendered_identity(value_type: "Type | None", type_table: "TypeTable | None"
     return format_type_for_repl(value_type, type_table)
 
 
-def _entry_final_type(entry: "CheckedModule") -> "Type | None":
+def _entry_final_type(entry: "CheckedModule", wrapped: bool) -> "Type | None":
     """Static type of *entry*'s final source item.
 
     An inline command's items sit inside the host's synthetic entry
-    function, whose body is always a ``Block``, not directly at module top
-    level; a real, source-declared ``program def`` needs no such unwrapping.
+    function, and a *wrapped* file's inside its final ``def``, not directly
+    at module top level.
     """
     items = entry.resolved.program.body.items
-    if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
+    if items and isinstance(items[-1], FuncDef) and (items[-1].is_synthetic or wrapped):
         body = items[-1].body
-        items = body.items if isinstance(body, Block) else ()
+        items = body.items if isinstance(body, Block) else () if body is None else (body,)
     if not items:
         return None
     return entry.node_types.get(items[-1].node_id)
 
 
-def file_verdict(tmp_path: Path, modules: dict[str, str], *, stdlib: bool = True) -> FileVerdict:
-    """Build *modules* as files into one real graph and classify it via :func:`graph_verdict`."""
-    graph = make_graph_from_files(tmp_path, modules, default_stdlib=stdlib)
+def inline_verdict(
+    tmp_path: Path, modules: dict[str, str], *, stdlib: bool = True
+) -> ProgramVerdict:
+    """Build *modules* into one inline graph and classify it via :func:`graph_verdict`."""
+    graph = make_inline_graph_from_files(tmp_path, modules, default_stdlib=stdlib)
     return graph_verdict(graph)
 
 
@@ -274,27 +285,29 @@ def grouping_params(n: int) -> list[object]:
 class Probe:
     """One probe's source and expected verdict.
 
-    *detail* is the rendered identity when accepted (``None`` only for a
-    caller that pins no identity, whose two modes must still agree), else
-    the exact text the error's span slices out. *type_entry* is the identity
-    the REPL renders when the probe alone is read as a type spelling;
-    *origins* and *spelling* pin an ambiguity's structured fields. An *info*
-    probe's text is a name ``:info`` describes: *detail* is the description
-    when accepted.
+    *detail* is the rendered identity when accepted, else the exact text
+    the error's span slices out. *type_entry* is the identity the REPL
+    renders when the probe alone is read as a type spelling; *origins* and
+    *spelling* pin an ambiguity's structured fields. An *info* probe's text
+    is a name ``:info`` describes: *detail* is the description when
+    accepted. *in_file* is the verdict a real file holding the text reaches
+    instead, where a file reads it differently (an ``extern def``, a
+    non-constant binding; see :func:`nonconstant_in_file`).
     """
 
     text: str
-    phase: FilePhase
+    phase: Phase
     error: type[AglError] | None
-    detail: str | None
+    detail: str
     type_entry: str | None = None
     origins: Origins | None = None
     spelling: str | None = None
     info: bool = False
+    in_file: Probe | None = None
 
 
 def accepted(text: str, identity: str) -> Probe:
-    """A probe file mode accepts with rendered *identity*."""
+    """A probe every mode accepts with rendered *identity*."""
     return Probe(text, "accepted", None, identity)
 
 
@@ -308,12 +321,12 @@ def rejected(
     error: type[AglError],
     span: str,
     *,
-    phase: FilePhase = "scope",
+    phase: Phase = "scope",
     type_entry: str | None = None,
     origins: Origins | None = None,
     spelling: str | None = None,
 ) -> Probe:
-    """A probe file mode rejects in *phase* with *error* spanning *span*."""
+    """A probe every mode rejects, a program in *phase*, with *error* spanning *span*."""
     return Probe(text, phase, error, span, type_entry, origins, spelling)
 
 
@@ -325,6 +338,37 @@ def info(name: str, description: str) -> Probe:
 def info_rejected(name: str, error: type[AglError], span: str) -> Probe:
     """``:info name`` raising scope's *error* spanning *span*."""
     return Probe(name, "scope", error, span, info=True)
+
+
+def nonconstant_in_file(probes: Mapping[K, Probe], keys: Collection[K]) -> dict[K, Probe]:
+    """*probes*, where a real file rejects each of *keys*' last binding as not constant.
+
+    An inline entry's bindings, in its scope regions too, need no constant
+    initializer; a file's root and scoped ones do. The rejection spans the
+    initializer of the last ``let`` or ``var`` the probe's text writes.
+    """
+    return {
+        key: probe
+        if key not in keys
+        else replace(
+            probe,
+            in_file=rejected(
+                probe.text, AglTypeError, _last_initializer(probe.text), phase="typecheck"
+            ),
+        )
+        for key, probe in probes.items()
+    }
+
+
+def _last_initializer(text: str) -> str:
+    """The initializer text of the last ``let`` or ``var`` binding *text* writes."""
+    bindings: list[LetDecl | VarDecl] = []
+    walk(
+        parse_entry_module(text, entry_path=None, inline_command=True).program,
+        lambda node: bindings.append(node) if isinstance(node, (LetDecl, VarDecl)) else None,
+    )
+    span = max(bindings, key=lambda binding: binding.span.start_offset).value.span
+    return text[span.start_offset : span.end_offset]
 
 
 _TYPE_POSITIONS: dict[str, tuple[str, str]] = {
@@ -358,7 +402,7 @@ def type_positions_rejected(
     error: type[AglError],
     span: str | None = None,
     *,
-    phase: FilePhase = "scope",
+    phase: Phase = "scope",
 ) -> dict[str, Probe]:
     """Probes of *q* in every type position, each rejected with *error* spanning *span* (*q*)."""
     return {
@@ -371,7 +415,7 @@ def type_positions_rejected(
 
 def probe_table(
     texts: Mapping[K, str],
-    expected: Mapping[K, tuple[FilePhase, type[BaseException] | type[None]]],
+    expected: Mapping[K, tuple[Phase, type[BaseException] | type[None]]],
     *,
     span_texts: Mapping[K, str] | None = None,
     identities: Mapping[K, str] | None = None,
@@ -381,8 +425,8 @@ def probe_table(
 ) -> dict[K, Probe]:
     """One :class:`Probe` per *texts* entry, from its ``(phase, class)`` in *expected*.
 
-    A rejected probe's *span_texts* entry is required; every other mapping
-    is optional per key.
+    An accepted probe's *identities* entry and a rejected probe's
+    *span_texts* entry are required; every other mapping is optional per key.
     """
     span_texts = span_texts or {}
     identities = identities or {}
@@ -393,7 +437,7 @@ def probe_table(
     for key, text in texts.items():
         phase, cls = expected[key]
         if phase == "accepted":
-            table[key] = Probe(text, phase, None, identities.get(key))
+            table[key] = accepted(text, identities[key])
             continue
         assert issubclass(cls, AglError), key
         table[key] = rejected(
@@ -417,27 +461,20 @@ def span_text(text: str, span: SourceSpan | None) -> str | None:
     return None if span is None else text[span.start_offset : span.end_offset]
 
 
-def _check_file_probe(
-    tmp_path: Path,
-    modules: Mapping[str, str],
-    header: tuple[str, ...],
+def _assert_program_outcome(
     key: object,
+    outcome: tuple[ProgramVerdict, AglError | None],
     probe: Probe,
-    stdlib: bool,
-) -> tuple[str | None, AglError | None]:
-    """Assert *probe*'s file-mode verdict; return its identity and raised error."""
-    src = "\n".join((*header, probe.text))
-    (phase, cls, span, identity), failure = _graph_outcome(
-        make_graph_from_files(tmp_path, {"entry": src, **modules}, default_stdlib=stdlib)
-    )
+    sliced: Callable[[SourceSpan | None], str | None],
+) -> None:
+    """Assert a whole program's *outcome* is *probe*'s; *sliced* reads a span's source text."""
+    (phase, cls, span, identity), failure = outcome
     assert (phase, cls) == (probe.phase, _probe_class(probe)), key
     if probe.error is None:
-        assert identity is not None, key
-        assert probe.detail is None or identity == probe.detail, key
-    else:
-        assert span_text(src, span) == probe.detail, key
-        _assert_ambiguity_fields(key, failure, probe)
-    return identity, failure
+        assert identity == probe.detail, key
+        return
+    assert sliced(span) == probe.detail, key
+    _assert_ambiguity_fields(key, failure, probe)
 
 
 def _assert_ambiguity_fields(key: object, failure: AglError | None, probe: Probe) -> None:
@@ -490,14 +527,14 @@ def _assert_grouping(
     header: tuple[str, ...],
     sizes: tuple[int, ...],
     probes: Mapping[K, Probe],
-    file_outcomes: Mapping[K, tuple[str | None, AglError | None]] | None,
+    inline_failures: Mapping[K, AglError | None] | None,
     legal: frozenset[tuple[int, ...]],
     stdlib: bool,
 ) -> None:
     """Assert *sizes*'s legality and, when legal, every probe's REPL verdict (module docstring).
 
-    Without *file_outcomes*, an accepted probe's identity is its own *detail*
-    and a rejection's message is compared with nothing.
+    With *inline_failures*, a rejection's message must also be the inline
+    entry's.
     """
     session_dir = tmp_path / ("repl-" + ".".join(map(str, sizes)))
     session_dir.mkdir()
@@ -531,14 +568,11 @@ def _assert_grouping(
             continue
         assert phase == ("accepted" if probe.error is None else "rejected"), (key, sizes)
         assert cls == _probe_class(probe), (key, sizes)
-        file_identity, file_failure = (
-            (probe.detail, None) if file_outcomes is None else file_outcomes[key]
-        )
         if probe.error is None:
-            assert identity == file_identity, (key, sizes)
+            assert identity == probe.detail, (key, sizes)
             continue
         assert span_text("\n".join((*tail, probe.text)), span) == probe.detail, (key, sizes)
-        assert file_outcomes is None or str(failure) == str(file_failure), (key, sizes)
+        assert inline_failures is None or str(failure) == str(inline_failures[key]), (key, sizes)
         _assert_ambiguity_fields((key, sizes), failure, probe)
 
 
@@ -546,20 +580,52 @@ def _legal_set(header: tuple[str, ...], legal: LegalGroupings) -> frozenset[tupl
     return frozenset(all_groupings(len(header) + 1)) if legal == "ALL" else legal
 
 
-def _file_outcomes(
+def _assert_file_part(
     tmp_path: Path,
     modules: Mapping[str, str],
     header: tuple[str, ...],
     probes: Mapping[K, Probe],
+    legal: frozenset[tuple[int, ...]],
     stdlib: bool,
-) -> dict[K, tuple[str | None, AglError | None]]:
+) -> None:
+    """Assert every probe as an inline entry, a real file and one REPL entry (module docstring).
+
+    The real file rejects with the inline entry's message; the REPL entry, a
+    grouping every header has, with the inline entry's too.
+    """
+    inline_dir = tmp_path / "inline"
     file_dir = tmp_path / "file"
     file_dir.mkdir()
-    return {
-        key: _check_file_probe(file_dir, modules, header, key, probe, stdlib)
-        for key, probe in probes.items()
-        if not probe.info
-    }
+    # The real file's Python companion, which a file's ``extern def`` needs.
+    (file_dir / "entry.py").touch()
+    inline_failures: dict[K, AglError | None] = {}
+    for key, probe in probes.items():
+        if probe.info:
+            continue
+        source = "\n".join((*header, probe.text))
+        inline = _graph_outcome(
+            make_inline_graph_from_files(
+                inline_dir, {"entry": source, **modules}, default_stdlib=stdlib
+            )
+        )
+        _assert_program_outcome(key, inline, probe, partial(span_text, source))
+        inline_failures[key] = inline[1]
+        text, body_start = file_source(source)
+        file = _graph_outcome(
+            make_file_graph_from_files(
+                file_dir,
+                {"entry": text, **modules},
+                default_stdlib=stdlib,
+                entry_path=file_dir / "entry.agl",
+            ),
+            wrapped=body_start < len(text),
+        )
+        file_probe = probe.in_file or probe
+        _assert_program_outcome(key, file, file_probe, partial(_file_span_text, text, body_start))
+        assert probe.in_file is not None or str(file[1]) == str(inline[1]), key
+    _assert_grouping(
+        tmp_path, modules, header, (len(header) + 1,), probes, inline_failures, legal, stdlib
+    )
 
 
 def assert_verdicts(
@@ -570,37 +636,38 @@ def assert_verdicts(
     *,
     legal: LegalGroupings = "ALL",
     stdlib: bool = True,
-    groupings: Groupings | None = None,
+    part: Part | None = None,
 ) -> None:
-    """Assert every probe in file mode once, then in each REPL grouping of *header*.
+    """Assert every probe in its file part, then in each other REPL grouping of *header*.
 
     *legal* is the set of full groupings (over ``len(header) + 1`` items)
-    whose setup entries succeed, ``"ALL"`` when every one does. *groupings*
-    narrows the groupings replayed to one batch of :func:`grouping_batches`;
-    ``None`` is every grouping.
+    whose setup entries succeed, ``"ALL"`` when every one does. *part*
+    narrows the check to one :func:`verdict_parts` part; ``None`` is all of
+    it.
     """
-    groupings = groupings or all_groupings(len(header) + 1)
-    assert all(sum(sizes) == len(header) + 1 for sizes in groupings), groupings
-    file_outcomes = _file_outcomes(tmp_path, modules, header, probes, stdlib)
-    expected_legal = _legal_set(header, legal)
+    legal_set = _legal_set(header, legal)
+    if part is None or part == "file":
+        _assert_file_part(tmp_path, modules, header, probes, legal_set, stdlib)
+    groupings = _other_groupings(len(header) + 1) if part is None else part
+    if groupings == "file":
+        return
+    assert set(groupings) <= set(_other_groupings(len(header) + 1)), groupings
     for sizes in groupings:
-        _assert_grouping(
-            tmp_path, modules, header, sizes, probes, file_outcomes, expected_legal, stdlib
-        )
+        _assert_grouping(tmp_path, modules, header, sizes, probes, None, legal_set, stdlib)
 
 
 def assert_verdict(
     tmp_path: Path,
     modules: Mapping[str, str],
     decls: tuple[str, ...],
-    expected: tuple[FilePhase, type[BaseException] | type[None]],
+    expected: tuple[Phase, type[BaseException] | type[None]],
     *,
     span_text: str | None = None,
     identity: str | None = None,
     origins: Origins | None = None,
     legal: LegalGroupings = "ALL",
     stdlib: bool = True,
-    groupings: Groupings | None = None,
+    part: Part | None = None,
 ) -> None:
     """:func:`assert_verdicts` for one probe: *decls*'s last item after the header before it."""
     assert_verdicts(
@@ -616,7 +683,7 @@ def assert_verdict(
         ),
         legal=legal,
         stdlib=stdlib,
-        groupings=groupings,
+        part=part,
     )
 
 
@@ -631,8 +698,8 @@ def assert_repl_verdicts(
     """Assert every probe's REPL verdict after *entries*, each its own successful entry.
 
     For a REPL-only history that no file shares -- a later entry importing or
-    redeclaring what an earlier one already decided -- so no file mode is
-    compared: an accepted probe's identity is its expected *detail*.
+    redeclaring what an earlier one already decided -- so no inline entry
+    or file is compared.
     """
     sizes = (*(1 for _ in entries), 1)
     _assert_grouping(tmp_path, modules, entries, sizes, probes, None, frozenset({sizes}), stdlib)
@@ -642,102 +709,96 @@ def assert_repl_verdicts(
 class Scenario:
     """Modules, a shared header and its probes, with the header's legal REPL groupings.
 
-    *groupings* narrows the REPL groupings a check replays to one batch of
-    them (see :func:`scenario_params`); ``None`` is every grouping.
+    *part* narrows a check to one part of it (see :func:`scenario_params`);
+    ``None`` is all of it.
     """
 
     header: tuple[str, ...]
     probes: Mapping[str, Probe]
     modules: Mapping[str, str] = field(default_factory=dict)
     legal: LegalGroupings = "ALL"
-    groupings: Groupings | None = None
+    part: Part | None = None
 
 
 def assert_scenario(tmp_path: Path, scenario: Scenario) -> None:
-    """:func:`assert_verdicts` for every probe of *scenario*, over its groupings."""
+    """:func:`assert_verdicts` for every probe of *scenario*, over its part."""
     assert_verdicts(
         tmp_path,
         scenario.modules,
         scenario.header,
         scenario.probes,
         legal=scenario.legal,
-        groupings=scenario.groupings,
+        part=scenario.part,
     )
 
 
-_GROUPINGS_PER_CASE = 2
-"""REPL groupings one test case replays at most: each opens a session and sets its header up."""
+_CHECKS_PER_CASE = 24
+"""Cost one test case spends at most, in ``check_only`` entries against a set-up header."""
 
-_PROBES_PER_CASE = 8
-"""Probes one scenario test case checks: each in file mode, then once per grouping."""
+_SESSION_CHECKS = 4
+"""What opening a session and setting its header up costs, in ``check_only`` entries."""
+
+_PROBES_PER_FILE_CASE = 16
+"""Probes one file-part case checks, each as an inline entry, a real file and a REPL entry."""
 
 
 def _batches(items: Sequence[T], size: int) -> list[tuple[T, ...]]:
     return [tuple(items[i : i + size]) for i in range(0, len(items), size)]
 
 
-def _grouping_batches(n: int) -> list[Groupings]:
-    return _batches(all_groupings(n), _GROUPINGS_PER_CASE)
+def _other_groupings(n: int) -> Groupings:
+    """Every grouping over *n* items but the single entry, which the file part replays."""
+    return all_groupings(n)[:-1]
 
 
-def grouping_batches(n: int) -> list[object]:
-    """``pytest.param(groupings)`` per batch of the groupings over *n* items.
+def _grouping_parts(n: int, probes: int) -> list[tuple[Part, str]]:
+    """Batches of the other groupings over *n* items, each with its id, for *probes* probes.
 
-    For a test that passes it as :func:`assert_verdicts`' *groupings*, so each
-    of its cases replays few enough groupings to stay cheap.
+    Each grouping opens one session and answers every probe in it, so fewer
+    groupings share a case the more probes each answers.
     """
+    per_case = max(1, _CHECKS_PER_CASE // (_SESSION_CHECKS + probes))
     return [
-        pytest.param(batch, id=f"groupings{index + 1}")
-        for index, batch in enumerate(_grouping_batches(n))
+        (batch, "groupings-" + ".".join(map(str, batch[0])))
+        for batch in _batches(_other_groupings(n), per_case)
     ]
 
 
-def _scenario_parts(
-    name: str,
-    scenario: Scenario,
-    probes_per_part: int,
-    batches: Sequence[Groupings | None],
-) -> list[object]:
-    """``pytest.param`` per chunk of *scenario*'s probes by each of its grouping *batches*."""
-    chunks = _batches(list(scenario.probes), probes_per_part)
-    params: list[object] = []
-    for index, chunk in enumerate(chunks):
-        probes = {key: scenario.probes[key] for key in chunk}
-        for batch_index, batch in enumerate(batches):
-            part_id = name if len(chunks) == 1 else f"{name}-part{index + 1}"
-            if len(batches) > 1:
-                part_id += f"-groupings{batch_index + 1}"
-            part = replace(scenario, probes=probes, groupings=batch)
-            params.append(pytest.param(part, id=part_id))
-    return params
+def verdict_parts(n: int, *, probes: int = 8) -> list[object]:
+    """``pytest.param(part)`` per part of an :func:`assert_verdicts` check over *n* items.
+
+    *probes* is how many probes the check asserts, which sizes its batches.
+    """
+    return [
+        pytest.param("file", id="file"),
+        *(pytest.param(batch, id=part_id) for batch, part_id in _grouping_parts(n, probes)),
+    ]
 
 
 def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
-    """``pytest.param(scenario)`` per chunk of every scenario's probes and batch of its groupings.
+    """``pytest.param(scenario)`` per part of every chunk of every scenario's probes.
 
-    For :func:`assert_scenario`: every part replays the scenario's header in
-    its own sessions, few enough times to stay cheap.
+    For :func:`assert_scenario`. The file part checks chunks of
+    :data:`_PROBES_PER_FILE_CASE` probes; the groupings, chunks of as many
+    as one case answers in one session. A chunk is named by its first probe
+    key when its scenario has more than one.
     """
     params: list[object] = []
     for name, scenario in scenarios.items():
-        batches = _grouping_batches(len(scenario.header) + 1)
-        params += _scenario_parts(name, scenario, _PROBES_PER_CASE, batches)
-    return params
-
-
-_FILE_PROBES_PER_CASE = 16
-"""Probes one :func:`assert_file_resolves_like_inline_entry` case resolves, twice each."""
-
-
-def file_params(scenarios: Mapping[str, Scenario]) -> list[object]:
-    """``pytest.param(scenario)`` per chunk of every scenario's probes.
-
-    For :func:`assert_file_resolves_like_inline_entry`, which replays no REPL
-    grouping.
-    """
-    params: list[object] = []
-    for name, scenario in scenarios.items():
-        params += _scenario_parts(name, scenario, _FILE_PROBES_PER_CASE, (None,))
+        n = len(scenario.header) + 1
+        keys = list(scenario.probes)
+        for size, parts in (
+            (_PROBES_PER_FILE_CASE, lambda _probes: [("file", "file")]),
+            (_CHECKS_PER_CASE - _SESSION_CHECKS, lambda probes: _grouping_parts(n, probes)),
+        ):
+            chunks = _batches(keys, size)
+            for chunk in chunks:
+                prefix = name if len(chunks) == 1 else f"{name}-{chunk[0]}"
+                probes = {key: scenario.probes[key] for key in chunk}
+                params += [
+                    pytest.param(replace(scenario, probes=probes, part=part), id=f"{prefix}-{id_}")
+                    for part, id_ in parts(len(chunk))
+                ]
     return params
 
 
@@ -768,50 +829,17 @@ def file_source(source: str) -> tuple[str, int]:
         for item in items
         if not (isinstance(item, FuncDef) and item.is_synthetic)
     ), source
-    head = source[:start] + _FILE_ENTRY_HEAD
-    return head + textwrap.indent(source[start:], "  "), len(head)
+    return source[:start] + file_statements(source[start:]), start + len(_FILE_ENTRY_HEAD)
 
 
-def _scope_failure(graph: "ModuleGraph") -> AglError | None:
-    """The error resolving *graph* raises, or ``None``."""
-    try:
-        resolve_program(graph)
-    except AglError as exc:
-        return exc
-    return None
+def file_statements(statements: str) -> str:
+    """*statements* in the function a file holds its inline entry's statements in."""
+    return _FILE_ENTRY_HEAD + textwrap.indent(statements, "  ")
 
 
-def assert_file_resolves_like_inline_entry(tmp_path: Path, scenario: Scenario) -> None:
-    """Assert every probe of *scenario* resolves as a file exactly as as an inline entry.
-
-    ``agm exec <file>`` and ``agm exec -c`` read the same text in source
-    order: scope accepts both, or rejects both with the same class, span and
-    message. The file holds the entry's statements in a function
-    (:func:`file_source`); only resolution is compared, since a file's root
-    initializers must also be constant. ``info`` probes have no file.
-    """
-    modules = dict(scenario.modules)
-    for key, probe in scenario.probes.items():
-        if probe.info:
-            continue
-        source = "\n".join((*scenario.header, probe.text))
-        inline = _scope_failure(
-            make_graph_from_files(tmp_path / key / "inline", {"entry": source, **modules})
-        )
-        text, body_start = file_source(source)
-        file_dir = tmp_path / key / "file"
-        file_dir.mkdir(parents=True)
-        file = _scope_failure(
-            make_file_graph_from_files(
-                file_dir, {"entry": text, **modules}, entry_path=file_dir / "entry.agl"
-            )
-        )
-        assert type(file) is type(inline), key
-        if file is None or inline is None:
-            continue
-        assert file.span is not None and inline.span is not None, key
-        sliced = text[file.span.start_offset : file.span.end_offset]
-        if file.span.start_offset >= body_start:
-            sliced = sliced.replace("\n  ", "\n")
-        assert sliced == source[inline.span.start_offset : inline.span.end_offset], key
-        assert str(file) == str(inline), key
+def _file_span_text(text: str, body_start: int, span: SourceSpan | None) -> str | None:
+    """The slice of file *text* that *span* covers, with its body lines' indent removed."""
+    sliced = span_text(text, span)
+    if sliced is None or span is None or span.start_offset < body_start:
+        return sliced
+    return sliced.replace("\n  ", "\n")

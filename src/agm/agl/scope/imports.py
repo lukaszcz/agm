@@ -32,11 +32,6 @@ __all__ = [
     "NameAtom",
     "PathAtom",
     "QName",
-    "QualResolution",
-    "QualResolutionAmbiguous",
-    "QualResolutionFound",
-    "QualResolutionMissingMember",
-    "QualResolutionUnknownQualifier",
     "ScopeOrigins",
     "SingleTarget",
     "WildcardTarget",
@@ -45,13 +40,11 @@ __all__ = [
     "contribution_routes",
     "matching_atoms",
     "qualifier_candidates",
-    "qualifier_contributes",
     "qualifier_decls",
     "qualifier_hides",
     "qualifier_member_decls",
     "qualifier_members",
     "qualifier_scope_paths",
-    "resolve_qualified",
     "declares_bare_constructor",
 ]
 
@@ -313,41 +306,6 @@ class ImportEnv:
 # the dataclass is frozen and every mapping field is frozen in ``__post_init__``,
 # so nothing can mutate ``contributions``/``unqualified`` through a reference.
 EMPTY_IMPORT_ENV = ImportEnv(contributions={}, unqualified={})
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionFound:
-    module: ModuleId
-    qname: QName
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionUnknownQualifier:
-    qualifier: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionMissingMember:
-    qualifier: tuple[str, ...]
-    member: NameAtom
-    candidates: tuple[ModuleId, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionAmbiguous:
-    """Several declarations the path selects, through routes and bare compounds alike."""
-
-    qualifier: tuple[str, ...]
-    member: NameAtom
-    qnames: frozenset[QName]
-
-
-QualResolution = (
-    QualResolutionFound
-    | QualResolutionUnknownQualifier
-    | QualResolutionMissingMember
-    | QualResolutionAmbiguous
-)
 
 
 @dataclass(slots=True)
@@ -747,24 +705,6 @@ def _route_scope_paths(contribution: ModuleContribution, route: str | None) -> f
     )
 
 
-def _member_qname(
-    contribution: ModuleContribution,
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    *,
-    anchored: bool,
-) -> QName | None:
-    """Find a member through the declaration routes named by *qualifier*."""
-    member_path = _path(member)
-    qnames = {
-        qname
-        for route in _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        for exposed, qname in _route_members(contribution, route).items()
-        if _path(exposed) == member_path
-    }
-    return next(iter(qnames)) if len(qnames) == 1 else None
-
-
 def qualifier_members(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
 ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
@@ -858,39 +798,3 @@ def _route_hidden(contribution: ModuleContribution, route: str | None) -> frozen
         if route is None
         else contribution.alias_hidden.get(route, frozenset())
     )
-
-
-def qualifier_contributes(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> bool:
-    return any(
-        _member_qname(env.contributions[module], qualifier, member, anchored=anchored) is not None
-        for module in qualifier_candidates(env, qualifier, anchored=anchored)
-    )
-
-
-def resolve_qualified(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> QualResolution:
-    candidates = qualifier_candidates(env, qualifier, anchored=anchored)
-    route_members = tuple(
-        (module, qname)
-        for module in candidates
-        if (qname := _member_qname(env.contributions[module], qualifier, member, anchored=anchored))
-        is not None
-    )
-    bare_atom = _atom((*qualifier, *_path(member)))
-    bare_qnames = frozenset() if anchored else env.unqualified.get(bare_atom, frozenset())
-
-    qnames = frozenset(qname for _module, qname in route_members) | bare_qnames
-    if len(qnames) > 1:
-        return QualResolutionAmbiguous(qualifier, member, qnames)
-    if route_members:
-        module, qname = route_members[0]
-        return QualResolutionFound(module, qname)
-    if bare_qnames:
-        qname = next(iter(bare_qnames))
-        return QualResolutionFound(qname[0], qname)
-    if candidates:
-        return QualResolutionMissingMember(qualifier, member, candidates)
-    return QualResolutionUnknownQualifier(qualifier)

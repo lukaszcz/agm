@@ -114,8 +114,6 @@ def _record_register_type(env: TypeEnvironment) -> None:
 
 def _query_register_type(env: TypeEnvironment) -> object:
     resolved = env.get_type("Shapes::Color")
-    # blocked_enum_variants() needs module routes only a program-context env has,
-    # so it is trivially equal here; program-level parity covers it.
     return (resolved, env.enum_owner_forms())
 
 

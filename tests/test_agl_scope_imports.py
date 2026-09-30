@@ -10,12 +10,10 @@ from agm.agl.scope.imports import (
     ModuleContribution,
     NameAtom,
     QName,
-    QualResolutionFound,
-    QualResolutionMissingMember,
     SingleTarget,
     build_import_env,
+    qualifier_member_decls,
     qualifier_members,
-    resolve_qualified,
 )
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
@@ -87,22 +85,18 @@ def test_plain_import_contributes_the_full_qualified_surface_without_bare_names(
     env = _build([decl], {module: _exports("tools/text", "trim", "split")})
 
     assert env.unqualified == {}
-    assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
-        module, (module, "trim")
-    )
-    assert resolve_qualified(env, ("text",), "split") == QualResolutionFound(
-        module, (module, "split")
-    )
+    assert set(qualifier_member_decls(env, ("text",), "trim")) == {(module, "trim")}
+    assert set(qualifier_member_decls(env, ("text",), "split")) == {(module, "split")}
 
 
-def test_wildcard_tail_resolves_a_member_through_its_bare_owner() -> None:
+def test_wildcard_tail_exposes_a_member_path_beneath_its_bare_owner() -> None:
     decl = _decl("tools/geo", tail=())
     module = _module("tools/geo")
     point = (module, ("Geo", "Point"))
 
     env = _build([decl], {module: {"Geo": (module, "Geo"), ("Geo", "Point"): point}})
 
-    assert resolve_qualified(env, ("Geo",), "Point") == QualResolutionFound(module, point)
+    assert env.unqualified[("Geo", "Point")] == frozenset({point})
 
 
 def test_positive_tail_injects_bare_names_without_narrowing_qualified_access() -> None:
@@ -112,9 +106,7 @@ def test_positive_tail_injects_bare_names_without_narrowing_qualified_access() -
     env = _build([decl], {module: _exports("tools/text", "trim", "split")})
 
     assert env.unqualified == {"trim": frozenset({(module, "trim")})}
-    assert resolve_qualified(env, ("text",), "split") == QualResolutionFound(
-        module, (module, "split")
-    )
+    assert set(qualifier_member_decls(env, ("text",), "split")) == {(module, "split")}
 
 
 def test_tail_rename_is_additive_for_bare_spelling() -> None:
@@ -127,9 +119,7 @@ def test_tail_rename_is_additive_for_bare_spelling() -> None:
         "clean": frozenset({(module, "trim")}),
         "trim": frozenset({(module, "trim")}),
     }
-    assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
-        module, (module, "trim")
-    )
+    assert set(qualifier_member_decls(env, ("text",), "trim")) == {(module, "trim")}
 
 
 def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> None:
@@ -145,6 +135,7 @@ def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> N
                 False,
                 frozenset({"Facade"}),
                 alias_members={"Facade": {"shared": qname}},
+                alias_member_decls={"Facade": {"shared": frozenset()}},
             ),
             right: ModuleContribution(
                 right,
@@ -152,14 +143,13 @@ def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> N
                 False,
                 frozenset({"Facade"}),
                 alias_members={"Facade": {"shared": qname}},
+                alias_member_decls={"Facade": {"shared": frozenset()}},
             ),
         },
         unqualified={},
     )
 
-    result = resolve_qualified(env, ("Facade",), "shared")
-    assert isinstance(result, QualResolutionFound)
-    assert result.qname == qname
+    assert set(qualifier_member_decls(env, ("Facade",), "shared")) == {qname}
 
 
 def test_plain_hiding_repairs_a_shared_suffix_route() -> None:
@@ -176,9 +166,7 @@ def test_plain_hiding_repairs_a_shared_suffix_route() -> None:
         },
     )
 
-    assert resolve_qualified(env, ("config",), "shared") == QualResolutionFound(
-        right, (right, "shared")
-    )
+    assert set(qualifier_member_decls(env, ("config",), "shared")) == {(right, "shared")}
 
 
 def test_wildcard_tail_distributes_hiding_to_routes_and_bare_names() -> None:
@@ -188,10 +176,8 @@ def test_wildcard_tail_distributes_hiding_to_routes_and_bare_names() -> None:
     env = _build([decl], {module: _exports("tools/text", "trim", "debug")})
 
     assert env.unqualified == {"trim": frozenset({(module, "trim")})}
-    assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
-        module, (module, "trim")
-    )
-    assert isinstance(resolve_qualified(env, ("text",), "debug"), QualResolutionMissingMember)
+    assert set(qualifier_member_decls(env, ("text",), "trim")) == {(module, "trim")}
+    assert not qualifier_member_decls(env, ("text",), "debug")
 
 
 def test_repeated_imports_union_each_declarations_unhidden_routes() -> None:

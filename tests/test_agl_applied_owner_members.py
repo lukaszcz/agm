@@ -6,7 +6,7 @@ nested ``record E::Inner`` or a member the enum references from its own path --
 is reached only through the owner's bare path: applying the owner to type
 arguments first is a scope error on the applied segment, alike for a
 constructor call or reference, a pattern, an annotation and an alias target --
-in file mode and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
+in the file part and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
 A pattern spelling the nested declaration through the owner's bare path
 matches that declaration alone, never one of the enum's members.
 """
@@ -20,15 +20,15 @@ import pytest
 from agm.agl.diagnostics import AglTypeError
 from agm.agl.scope.symbols import TypeArgumentsError
 from tests.agl.qualifier_support import (
-    FilePhase,
-    Groupings,
+    Part,
+    Phase,
     assert_verdicts,
-    grouping_batches,
     probe_table,
+    verdict_parts,
 )
 
-_ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
-_REJECTED: tuple[FilePhase, type[BaseException] | type[None]] = ("scope", TypeArgumentsError)
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
+_REJECTED: tuple[Phase, type[BaseException] | type[None]] = ("scope", TypeArgumentsError)
 
 _OWNERS = {
     "enum": "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int",
@@ -164,8 +164,8 @@ _ROUTED_PROBES = {
 class TestImportedAppliedOwner:
     """An imported owner, spelled through its route or a ``use``, selects alike."""
 
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_nested_declaration_is_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_nested_declaration_is_rejected(self, tmp_path: Path, part: Part) -> None:
         assert_verdicts(
             tmp_path,
             _LIBRARY,
@@ -175,5 +175,5 @@ class TestImportedAppliedOwner:
                 dict.fromkeys(_ROUTED_PROBES, _REJECTED),
                 span_texts=dict.fromkeys(_ROUTED_PROBES, "E[int]"),
             ),
-            groupings=groupings,
+            part=part,
         )

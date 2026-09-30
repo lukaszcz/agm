@@ -384,6 +384,7 @@ def test_os_chdir_from_a_removed_directory_raises_encoding_error_when_after_is_i
     assert not result.ok
     assert result.error is not None
     assert result.error.type_name == "EncodingError"
+    assert Path(real_getcwd()) == target
 
 
 def test_os_chdir_resolves_a_symlink_to_its_physical_directory(

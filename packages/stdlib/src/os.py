@@ -92,7 +92,8 @@ def chdir(directory: str, vars_: MutableMapping[str, str]) -> None:
     the directory is unchanged either way. The starting directory is
     registered once, on a session's first `chdir`, to be restored when the
     host session ends. A working directory that no longer exists can be left:
-    `OLDPWD` then takes the previous `PWD`, and nothing is restored.
+    `OLDPWD` then takes the previous `PWD`, and nothing is restored, not even
+    after an `EncodingError`.
     """
     before = _cwd_or_none()
     run_fs_action(FsError, directory, "chdir", lambda: os.chdir(directory))

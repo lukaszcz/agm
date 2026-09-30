@@ -25,7 +25,8 @@ end ChdirInternals
 # Raises `std/fs::FsError(path = dir, operation = "chdir")` on failure, or
 # `EncodingError` if the directory before or after is not valid Unicode,
 # leaving the directory unchanged. Leaving a working directory that no longer
-# exists is allowed; `OLDPWD` then keeps the previous `PWD`.
+# exists is allowed; `OLDPWD` then keeps the previous `PWD`, and the directory
+# cannot be restored after an `EncodingError`.
 def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.vars)
 
 # Whether standard input and output are both connected to a terminal.

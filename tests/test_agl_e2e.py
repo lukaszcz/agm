@@ -2169,7 +2169,8 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         # favor of the scoped Option/Result/Sandbox imports.
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))
         source = source.replace(
-            "ParsePolicy::Retry(n = std/config::parse-error-retries)", "ParsePolicy::Abort"
+            "parse-error-retries: int = std/config::parse-error-retries",
+            "parse-error-retries: int = 0",
         )
         if name == "session":
             source = source.replace(_SESSION_STATIC_DECLARATIONS, "")

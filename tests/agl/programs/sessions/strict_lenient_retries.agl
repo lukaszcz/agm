@@ -3,12 +3,12 @@ program def main() -> unit =
   let strict: int = session.ask(
     "strict parser",
     strict-json = true,
-    on-parse-error = Retry(n = 1),
+    parse-error-retries = 1,
   )
   let lenient: int = session.ask(
     "lenient parser",
     strict-json = false,
-    on-parse-error = Retry(n = 1),
+    parse-error-retries = 1,
   )
   print strict
   print lenient

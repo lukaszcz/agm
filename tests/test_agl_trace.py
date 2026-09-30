@@ -437,7 +437,7 @@ class TestAgentCallRecord:
 
 class TestRetryRecords:
     def test_retry_produces_multiple_attempt_records(self, tmp_path: Path) -> None:
-        """With on_parse_error: retry[2], failed attempts appear in the trace."""
+        """With parse-error-retries = 2, failed attempts appear in the trace."""
         trace_path = tmp_path / "trace.jsonl"
         call_count = 0
 
@@ -452,7 +452,7 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", parse-error-retries = 2)\nx',
             trace_file=trace_path,
         )
         records = _load_jsonl(trace_path)
@@ -490,7 +490,7 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", parse-error-retries = 2)\nx',
             trace_file=trace_path,
         )
         records = _load_jsonl(trace_path)
@@ -508,7 +508,7 @@ class TestRetryRecords:
         rt = _agent_runtime(agent, strict_json=True)
         src = (
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx'
+            'let x: int = impl.ask("get int", parse-error-retries = 1)\nx'
         )
         try:
             _run_inline(rt, src, trace_file=trace_path)
@@ -1340,7 +1340,7 @@ class TestUnparseableFeedback:
         result = _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", parse-error-retries = 1)\nx',
             trace_file=trace_path,
         )
         assert result.ok
@@ -1366,7 +1366,7 @@ class TestUnparseableFeedback:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", parse-error-retries = 1)\nx',
             trace_file=trace_path,
         )
         records = _load_jsonl(trace_path)
@@ -1401,7 +1401,7 @@ class TestUnparseableFeedback:
             result = _run_inline(
                 rt,
                 'let impl = AgentCommand("impl")\n'
-                'let x: int = impl.ask("q", on-parse-error = ParsePolicy::Abort())\n'
+                'let x: int = impl.ask("q", parse-error-retries = 0)\n'
                 "x",
             )
         # The program raises AgentParseError; run returns ok=False.

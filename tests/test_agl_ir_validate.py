@@ -2701,7 +2701,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         validate_ir(prog, deep=False)  # no exception
@@ -2720,7 +2720,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {})  # empty contracts
         with pytest.raises(InvalidIrError, match="9999"):
@@ -2752,7 +2752,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
@@ -2787,7 +2787,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="duplicate.*A"):
@@ -2819,7 +2819,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="defs but decode is None"):
@@ -2850,7 +2850,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
@@ -2881,7 +2881,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            on_parse_error=IrConstText(location=LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):

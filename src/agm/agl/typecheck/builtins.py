@@ -28,6 +28,7 @@ from agm.agl.semantics.types import (
     ExceptionType,
     FunctionType,
     InferenceVarType,
+    IntType,
     RecordType,
     TextType,
     Type,
@@ -96,13 +97,13 @@ class PendingBuiltinObligation:
 
     @property
     def has_parse_shaping_option(self) -> bool:
-        """Whether any of ``format`` / ``strict-json`` / ``on-parse-error`` is set."""
+        """Whether any of ``format`` / ``strict-json`` / ``parse-error-retries`` is set."""
         return bool(self.parse_option_spans)
 
     @property
-    def has_parse_error_option(self) -> bool:
-        """Whether the ``on-parse-error`` option is set."""
-        return any(name == "on-parse-error" for name, _ in self.parse_option_spans)
+    def has_parse_error_retries_option(self) -> bool:
+        """Whether the ``parse-error-retries`` option is set."""
+        return any(name == "parse-error-retries" for name, _ in self.parse_option_spans)
 
     def strict_json_span(self) -> SourceSpan:
         """Return the span of the ``strict-json`` option.
@@ -237,17 +238,17 @@ class BuiltinCallChecker:
     """
 
     _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict-json", "on-parse-error", "sandbox", "env"}
+        {"agent", "format", "strict-json", "parse-error-retries", "sandbox", "env"}
     )
 
     # ask-request never accepts 'env': the built request record has no env
     # field (printing a record must never leak secrets).
     _ASK_REQUEST_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict-json", "on-parse-error", "sandbox"}
+        {"agent", "format", "strict-json", "parse-error-retries", "sandbox"}
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"env", "cwd", "timeout", "sandbox", "format", "strict-json", "on-parse-error"}
+        {"env", "cwd", "timeout", "sandbox", "format", "strict-json", "parse-error-retries"}
     )
 
     # ask arguments meaningful only when the call carries its own agent: a
@@ -867,7 +868,7 @@ class BuiltinCallChecker:
             env_type = self._resolve_environ_type(callee, env_na.span)
             env_type_actual = self._ctx._check_expr(env_na.value, expected=env_type)
             self._ctx._assert_assignable_from(env_type_actual, env_type, env_na.span, env_na.value)
-        self._check_parse_policy_option(named)
+        self._check_parse_error_retries_option(named)
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -897,15 +898,18 @@ class BuiltinCallChecker:
             return
         self._record_parsed_contract(obligation, use="an agent output type")
 
-    def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
-        """Warn when ``on-parse-error`` is set on a text target, where it can never fire."""
-        if not (obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)):
+    def _warn_noop_parse_error_retries_on_text(self, obligation: PendingBuiltinObligation) -> None:
+        """Warn when ``parse-error-retries`` is set on a text target, where it can never fire."""
+        if not (
+            obligation.has_parse_error_retries_option
+            and isinstance(obligation.target_type, TextType)
+        ):
             return
         self._ctx._append_warning(
             Diagnostic(
                 message=(
-                    "'on-parse-error' has no effect on a text target: a text result "
-                    "never fails parsing, so the policy can never fire."
+                    "'parse-error-retries' has no effect on a text target: a text result "
+                    "never fails parsing, so no retry can ever fire."
                 ),
                 line=obligation.span.start_line,
                 column=obligation.span.start_col,
@@ -942,7 +946,7 @@ class BuiltinCallChecker:
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
         self._check_exec_spawn_options(named)
-        self._check_parse_policy_option(named)
+        self._check_parse_error_retries_option(named)
         format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -998,14 +1002,13 @@ class BuiltinCallChecker:
                 actual, sandbox_type, named["sandbox"].span, named["sandbox"].value
             )
 
-    def _check_parse_policy_option(self, named: dict[str, NamedArg]) -> None:
-        """Check an ``on-parse-error`` argument as an ordinary ``ParsePolicy`` expression."""
-        if "on-parse-error" not in named:
+    def _check_parse_error_retries_option(self, named: dict[str, NamedArg]) -> None:
+        """Check a ``parse-error-retries`` argument as an ordinary ``int`` expression."""
+        if "parse-error-retries" not in named:
             return
-        policy = named["on-parse-error"]
-        policy_type = self.contract_type("ParsePolicy")
-        actual = self._ctx._check_expr(policy.value, expected=policy_type)
-        self._ctx._assert_assignable_from(actual, policy_type, policy.span, policy.value)
+        retries = named["parse-error-retries"]
+        actual = self._ctx._check_expr(retries.value, expected=IntType())
+        self._ctx._assert_assignable_from(actual, IntType(), retries.span, retries.value)
 
     def _standard_option_text_type(self) -> EnumType:
         """Return the loaded ``std/option::Option[text]`` handle when present."""
@@ -1016,7 +1019,7 @@ class BuiltinCallChecker:
 
         The single source of truth every checker-side resolution of a
         host-contract built-in nominal (``ExecResult``, ``AgentRequest``,
-        ``Agent``, ``ParsePolicy``) goes through: a program's own ``builtin
+        ``Agent``) goes through: a program's own ``builtin
         record``/``builtin enum`` declaration of *name* — at whatever scope
         path it is written, so a scoped declaration is recognized at its own
         path rather than the root — when the shared ``TypeTable`` has one
@@ -1243,7 +1246,7 @@ class BuiltinCallChecker:
         """Capture the spans of the parse-shaping named args for later diagnostics."""
         return tuple(
             (name, named[name].span)
-            for name in ("format", "strict-json", "on-parse-error")
+            for name in ("format", "strict-json", "parse-error-retries")
             if name in named
         )
 
@@ -1274,7 +1277,7 @@ class BuiltinCallChecker:
         spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
         assert not contains_inference_var(spec.target_type)
         self._ctx._record_contract_spec(obligation.node_id, spec)
-        self._warn_noop_parse_error_on_text(obligation)
+        self._warn_noop_parse_error_retries_on_text(obligation)
         return spec
 
     def _finalize_exec(self, obligation: PendingBuiltinObligation) -> None:

@@ -64,11 +64,6 @@ _CAPS = HostCapabilities(
 # ``builtin def``, exactly like any other reference.
 _ASK_BUILTIN_SOURCE = (
     "builtin\n"
-    "enum ParsePolicy =\n"
-    "  | Abort\n"
-    "  | Retry(n: int)\n"
-    "\n"
-    "builtin\n"
     "enum Agent =\n"
     "  | AgentCommand(command: text)\n"
     '  | AgentClaude(model: text = "", thinking: text = "")\n'
@@ -80,7 +75,7 @@ _ASK_BUILTIN_SOURCE = (
     '  agent: Agent = AgentCommand(command = "x"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
     ") -> T\n"
 )

@@ -405,19 +405,6 @@ timed-out: bool
 
 Field access works normally: `res.stdout`, `res.exit-code`, etc.
 
-### `ParsePolicy`
-
-An enum used as the `on-parse-error` argument to `ask` and typed `exec`:
-
-```text
-enum ParsePolicy
-  | Abort
-  | Retry(n: int)
-```
-
-`Abort` is the portable default. `Retry(n: N)` permits up to `N`
-corrective retries after the initial attempt.
-
 ### `Agent`
 
 `Agent` is a built-in enum describing an agent backend. Its members are the

@@ -11,8 +11,8 @@ value that should receive the request:
 ```agl
 ask "Summarize %{topic}"
 reviewer.ask("Review this artifact:\n%{artifact}")
-reviewer.ask("Review %{artifact}", on-parse-error = Retry(n = 2))
-reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
+reviewer.ask("Review %{artifact}", parse-error-retries = 2)
+reviewer.ask::[Review]("Review %{artifact}", parse-error-retries = 2)
 ```
 
 ## `ask` — the agent call function
@@ -22,7 +22,7 @@ reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,
     format: text = "", strict-json: bool = false,
-    on-parse-error: ParsePolicy = ParsePolicy::Abort,
+    parse-error-retries: int = std/config::parse-error-retries,
     sandbox: AgentSandbox = std/config::default-sandbox,
     env: Environ = std/env::environ) -> T
 ```
@@ -35,7 +35,7 @@ An `Agent` value also provides the method form:
 ```text
 Agent::ask(self, prompt: text, format: text = "",
            strict-json: bool = false,
-           on-parse-error: ParsePolicy = ParsePolicy::Abort,
+           parse-error-retries: int = std/config::parse-error-retries,
            sandbox: AgentSandbox = std/config::default-sandbox,
            env: Environ = std/env::environ) -> T
 ```
@@ -84,7 +84,7 @@ parse options. `ask` remains legal as a record/enum **field name**.
 ```text
 Session::ask[T](self, prompt: text, format: text = "",
                 strict-json: bool = false,
-                on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+                parse-error-retries: int = std/config::parse-error-retries) -> T
 ```
 
 It sends the prompt through that live session, so the session's stored agent
@@ -135,7 +135,7 @@ program def main() -> unit =
 A bare `ask $ ...` uses the default session and `reviewer.ask $ ...` opens
 the short-lived session for its receiver. Use `ask(...)` or
 `reviewer.ask(...)` when setting `format`, `strict-json`, or
-`on-parse-error`. Read the environment in the prompt with
+`parse-error-retries`. Read the environment in the prompt with
 `%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
 environment hole — and pipe the result when chaining is needed, as in
 `print <| ask $ …`
@@ -263,12 +263,13 @@ process for the session.
 Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
 `Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
 the same transport default, but its session lasts only for that call and its
-retries; use `Session::open` to keep the conversation after the call. A single-attempt
-`Agent::ask`, or one with a `text` or `unit` target (which can never fail parsing), sends exactly
-one prompt, so the Claude, Codex, and Pi CLI backends run their plain prompt command. With
-corrective retries, every attempt shares one conversation and a retry is a short follow-up. An
-`AgentCommand` without `%{SESSION_ID}` cannot continue one, so each retry reruns the command with
-the original prompt, format instructions, the failed response and its validation errors.
+retries; use `Session::open` to keep the conversation after the call. An `Agent::ask` with
+`parse-error-retries = 0`, or one with a `text` or `unit` target (which can never fail
+parsing), sends exactly one prompt, so the Claude, Codex, and Pi CLI backends run their plain
+prompt command. With corrective retries, every attempt shares one conversation and a retry is a
+short follow-up. An `AgentCommand` without `%{SESSION_ID}` cannot continue one, so each retry
+reruns the command with the original prompt, format instructions, the failed response and its
+validation errors.
 
 ## Target types: types as contracts
 
@@ -296,7 +297,7 @@ The target type drives the call's **output contract**:
   register more),
 - a JSON Schema derived from the type,
 - format instructions delivered to the agent alongside the prompt,
-- runtime validation, the parse policy on failure, and the typed value bound
+- runtime validation, corrective retries on failure, and the typed value bound
   on success.
 
 `unit` is the exception: the call is dispatched once without an output
@@ -309,7 +310,7 @@ program def main() -> unit =
   ask "Notify the reviewer."
 ```
 
-Because nothing is parsed, `format`, `strict-json`, and `on-parse-error` are
+Because nothing is parsed, `format`, `strict-json`, and `parse-error-retries` are
 invalid for a `unit` target.
 
 You normally never write "Return JSON matching …" yourself — the type
@@ -414,32 +415,21 @@ explicitly selects lenient parsing, overriding a host default. It is a
 static error unless the selected codec is `json`. When omitted, the host
 default applies; the portable default is **lenient recovery** (see below).
 
-### `on-parse-error`
+### `parse-error-retries`
 
-The parse policy for invalid structured output. The value is a `ParsePolicy`
-— one of two members from the standard-library enum:
-
-<!-- agl-check: fragment -->
-```agl
-enum ParsePolicy
-  | Abort
-  | Retry(n: int)
-```
-
-- `Abort` — raise `AgentParseError` on the first invalid output (the default).
-- `Retry(n: N)` — after the initial call, make up to `N` additional
-  corrective calls; raise `AgentParseError` if all fail.
+The number of corrective retries after invalid structured output, an `int`
+evaluated once per call; the call makes at most `1 + parse-error-retries`
+attempts before raising `AgentParseError` ([Parse retries](#parse-retries)).
+When omitted, it reads `std/config::parse-error-retries` at the call, so an
+earlier write to that setting applies. A negative count raises `RangeError` before dispatch.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = reviewer.ask(
-  "Review %{artifact}",
-  on-parse-error = Retry(n = 2)
-)
+let r: Review = reviewer.ask("Review %{artifact}", parse-error-retries = 2)
 ```
 
-A policy on a `text` target produces a static **warning** — text never
-fails parsing, so the policy can never fire.
+On a `text` target it produces a static **warning** — text never fails
+parsing, so no retry can ever fire.
 
 ### `sandbox`
 
@@ -503,7 +493,7 @@ category-based validation summary, never validation paths, keys, or other
 response-derived details. A retry in a continuing conversation sends only that
 summary plus a JSON-format reminder; one that cannot continue resends the
 complete prompt with the failed response
-([Parse policies and retries](#parse-policies-and-retries)).
+([Parse retries](#parse-retries)).
 
 ## The JSON wire format
 
@@ -628,9 +618,9 @@ as ambiguous. Schema validation is always strict regardless of lenient mode.
 With `strict-json = true` (or a host default of strict), the response must be
 exactly one bare JSON value with nothing but surrounding whitespace.
 
-## Parse policies and retries
+## Parse retries
 
-For a call with `on-parse-error = Retry(n = N)`, attempt 1 sends the rendered
+For a call with `parse-error-retries = N`, attempt 1 sends the rendered
 prompt plus its output-format instructions. The output is then parsed and
 validated. Each failed parse or validation sends at most `N` retries
 (`N + 1` attempts total). When the session continues a conversation — every
@@ -644,8 +634,8 @@ the failed response, the validation summary, and the reminder. The summary
 never exposes response-derived paths, keys, or values. Success returns the
 typed value; exhausting the attempts raises **`AgentParseError`**.
 
-With `Abort` (the default), the first parse or validation failure raises
-`AgentParseError` directly.
+With `N = 0`, the first parse or validation failure raises `AgentParseError`
+directly.
 
 ## Transport and session failures
 
@@ -655,7 +645,7 @@ UTF-8, or a failed Pi RPC prompt — raises **`AgentCallError`**. Undecodable
 output surfaces as `cause = "protocol_failure"`, with the message giving the
 byte offset of the first invalid byte; the stderr tail in `metadata` is `""`
 if it is itself undecodable. It is catchable and is never retried by
-`on-parse-error`, with no opt-out: agent CLIs are specified to emit UTF-8.
+`parse-error-retries`, with no opt-out: agent CLIs are specified to emit UTF-8.
 **`SessionError`** instead reports a session lifecycle, capability, or
 non-ask backend failure: opening or using a closed session, a sandbox
 preparation failure at open, an unsupported operation or transport, and failed
@@ -666,7 +656,7 @@ the requested structured contract.
 ## Text targets
 
 For a `text` target the raw output is bound verbatim — no parsing, no
-validation. `on-parse-error` on such a call draws a static warning.
+validation. `parse-error-retries` on such a call draws a static warning.
 
 ## What the agent receives
 
@@ -695,7 +685,7 @@ ask-request[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 ```

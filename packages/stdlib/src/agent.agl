@@ -5,11 +5,6 @@ import std/option::Option
 import std/sandbox::Sandbox
 
 builtin
-enum ParsePolicy =
-  | Abort
-  | Retry(n: int)
-
-builtin
 enum Agent
   | AgentCommand(command: text)
   | AgentClaude(model: text = "", thinking: text = "")
@@ -56,7 +51,7 @@ builtin def ask[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
+  parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
@@ -65,7 +60,7 @@ builtin def Agent::ask[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
+  parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
@@ -74,7 +69,7 @@ builtin def Agent::ask-request[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
+  parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 builtin def ask-request[T](
@@ -82,6 +77,6 @@ builtin def ask-request[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
+  parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest

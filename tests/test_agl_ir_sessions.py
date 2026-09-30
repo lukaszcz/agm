@@ -217,18 +217,11 @@ def test_free_ask_lowers_through_the_default_session() -> None:
     assert isinstance(answer.session, IrSessionDefault)
 
 
-def _retry_count_operand(ask: IrSessionAsk) -> IrExpr:
-    """Return the ``n`` operand of *ask*'s ``Retry`` policy construction."""
-    policy = ask.on_parse_error
-    assert isinstance(policy, IrMakeRecord)
-    return dict(policy.fields)["n"]
-
-
 def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> None:
     program = lower_inline_ir(
         "let session = Session::default()\n"
         'let answer: int = session.ask("How many?", format = "json", strict-json = true, '
-        "on-parse-error = Retry(n = 2))\n"
+        "parse-error-retries = 2)\n"
         "()"
     )
     answer = next(
@@ -240,7 +233,7 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
 
     assert isinstance(answer, IrSessionAsk)
     assert answer.contract_id in program.contracts
-    retries = _retry_count_operand(answer)
+    retries = answer.parse_error_retries
     assert isinstance(retries, IrConstInt)
     assert retries.value == 2
     assert program.contracts == {
@@ -265,8 +258,8 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
 def test_session_methods_lower_to_session_nodes() -> None:
     values = _main_let_values(
         "let session = Session::default()\n"
-        'let retried: text = session.ask("retry", on-parse-error = Retry(n = 2))\n'
-        'let aborted: text = session.ask("abort", on-parse-error = ParsePolicy::Abort)\n'
+        'let retried: text = session.ask("retry", parse-error-retries = 2)\n'
+        'let aborted: text = session.ask("abort", parse-error-retries = 0)\n'
         'let defaulted: text = session.ask("default")\n'
         "session.compact()\n"
         'session.compact("retain decisions")\n'
@@ -281,12 +274,13 @@ def test_session_methods_lower_to_session_nodes() -> None:
     asks = [values[name] for name in ("retried", "aborted", "defaulted")]
     assert all(isinstance(ask, IrSessionAsk) for ask in asks)
     retried, aborted, defaulted = (ask for ask in asks if isinstance(ask, IrSessionAsk))
-    retried_count = _retry_count_operand(retried)
+    retried_count = retried.parse_error_retries
     assert isinstance(retried_count, IrConstInt)
     assert retried_count.value == 2
-    assert isinstance(aborted.on_parse_error, IrMakeRecord)
-    assert aborted.on_parse_error.fields == ()
-    default_count = _retry_count_operand(defaulted)
+    aborted_count = aborted.parse_error_retries
+    assert isinstance(aborted_count, IrConstInt)
+    assert aborted_count.value == 0
+    default_count = defaulted.parse_error_retries
     assert isinstance(default_count, IrBuiltinLoad)
     assert default_count.key == builtin_var_key(STD_CONFIG_ID, (), "parse-error-retries")
     assert all(isinstance(ask.session, IrLoad) for ask in asks if isinstance(ask, IrSessionAsk))
@@ -374,7 +368,7 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
             session=session,
             prompt=IrConstText(location=_LOC, value="prompt"),
             contract_id=contract_id,
-            on_parse_error=IrConstText(location=_LOC, value="policy"),
+            parse_error_retries=IrConstInt(location=_LOC, value=0),
         ),
         *(
             IrSessionOp(location=_LOC, session=session, op=op, arg=arg)
@@ -401,7 +395,7 @@ def test_session_ask_rejects_unknown_contract() -> None:
         session=IrConstText(location=_LOC, value="session"),
         prompt=IrConstText(location=_LOC, value="prompt"),
         contract_id=ContractId(99),
-        on_parse_error=IrConstText(location=_LOC, value="policy"),
+        parse_error_retries=IrConstInt(location=_LOC, value=0),
     )
     with pytest.raises(InvalidIrError, match="contract_id"):
         validate_ir(_program(missing_contract))

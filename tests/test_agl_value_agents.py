@@ -797,7 +797,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         'std/config::default-agent := AgentCommand("first")\n'
         'let first: text = ask("one")\n'
         'std/config::default-agent := AgentClaude("sonnet", "medium")\n'
-        'let second: int = ask("two", on-parse-error = Retry(n = 0))\n'
+        'let second: int = ask("two", parse-error-retries = 0)\n'
         "second",
     )
 

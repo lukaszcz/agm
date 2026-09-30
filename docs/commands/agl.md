@@ -112,8 +112,8 @@ a direct `agm repl` entry is a static error.
     `std/fs::temp-dir` instead of removing them, when the run ends with `debug` set;
   - turns trace logging on unless `trace` or `trace-file` is given on the CLI or in
     configuration.
-- `--parse-error-retries N`: Seed `std/config::parse-error-retries`, the corrective retry count
-  used by `ask`'s default parse policy (overrides `[exec] parse-error-retries`; default 4). A
+- `--parse-error-retries N`: Seed `std/config::parse-error-retries`, the default
+  `parse-error-retries` for `ask` (overrides `[exec] parse-error-retries`; default 4). A
   negative `N` exits 1 before execution.
 
 ### Program arguments
@@ -428,7 +428,7 @@ timeout = "30m"             # initial shell-exec and agent idle timeout
 trace = false               # trace logging off by default; set true to enable
 # trace-file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
 debug = false               # keep std/fs temporary paths after exit; trace unless configured
-parse-error-retries = 4     # corrective retry count used by ask's default parse policy
+parse-error-retries = 4     # default parse-error-retries for ask
 
 ```
 

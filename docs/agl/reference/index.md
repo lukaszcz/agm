@@ -51,7 +51,7 @@ let impl = AgentCommand("impl")
 def review-and-fix(artifact: text) -> text =
   let r: Review = reviewer.ask(
     "Review the artifact for correctness:\n%{artifact}",
-    on-parse-error = Retry(n = 2)
+    parse-error-retries = 2
   )
   case r of
     | Pass => artifact
@@ -74,7 +74,7 @@ program def main(spec: text) -> unit =
 | ------- | -------- |
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, declaration attributes, operator precedence |
 | [Program structure](program-structure.md) | Modules, `program def` entry points and their parameters, items, binders, inline forms |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, copying (`copy`/`shallow-copy`), and parsing (`parse`/`try-parse`) |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, copying (`copy`/`shallow-copy`), and parsing (`parse`/`try-parse`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, `$` literals, escapes, `%{…}` interpolation, uniform rendering rules |
@@ -82,7 +82,7 @@ program def main(spec: text) -> unit =
 | [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
 | [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
-| [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
+| [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
 | [Attributes](attributes.md) | `@name` declaration attributes: placement, catalog, zones, `@doc`, `@extern-name`, command registration, program parameter options |
@@ -118,7 +118,7 @@ AgL distinguishes three failure layers:
 1. **Static errors** — syntax, scope, type, case-exhaustiveness, and
    case-redundancy errors. A program with a static error never executes any
    expression and never calls any agent.
-2. **Static warnings** — advisory diagnostics such as `on-parse-error` on a
+2. **Static warnings** — advisory diagnostics such as `parse-error-retries` on a
    `text` target. Warnings never prevent execution.
 3. **Runtime exceptions** — typed, catchable in-language values such as
    `AgentParseError`, `MaxIterationsExceeded`, or `RecursionError`. Uncaught

@@ -981,13 +981,6 @@ _EXEC_RESULT_TYPE = RecordType(
     name="ExecResult", module_id=RESERVED_ID, decl_id=_reserved_id("ExecResult")
 )
 
-# ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
-# ``Abort`` — abort on parse error (no fields).
-# ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(
-    name="ParsePolicy", module_id=RESERVED_ID, decl_id=_reserved_id("ParsePolicy")
-)
-
 # ``Agent`` — a plain enum data value that specifies an agent backend.
 _AGENT_TYPE = EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent"))
 
@@ -1114,7 +1107,6 @@ HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
-    "ParsePolicy": _PARSE_POLICY_TYPE,
     "Agent": _AGENT_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,

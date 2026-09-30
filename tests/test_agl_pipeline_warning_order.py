@@ -11,7 +11,7 @@ from tests._agl_helpers import agl_roots, prepare_inline_code, run_inline_code
 
 _FAILING_SOURCE = (
     'let idle = AgentCommand("idle")\n'
-    'let response: text = ask("Q", on-parse-error = ParsePolicy::Abort())\n'
+    'let response: text = ask("Q", parse-error-retries = 0)\n'
     "case true of\n"
     "  | true => ()\n"
 )
@@ -19,7 +19,7 @@ _FAILING_SOURCE = (
 _CACHED_SOURCE = (
     "# cached header\n"
     'let idle = AgentCommand("idle")\n'
-    'let response: text = ask("Q", on-parse-error = ParsePolicy::Abort())\n'
+    'let response: text = ask("Q", parse-error-retries = 0)\n'
     "case true of\n"
     "  | true => ()\n"
     "  | false => ()\n"

@@ -58,7 +58,7 @@ _HELP_GROUPS: tuple[_HelpGroup, ...] = (
     _HelpGroup("trace", "Enable or disable trace logging."),
     _HelpGroup("trace_file", "Write the JSONL trace to PATH."),
     _HelpGroup("debug", "Debug mode."),
-    _HelpGroup("parse_error_retries", "Corrective retry count used by ask's default parse policy."),
+    _HelpGroup("parse_error_retries", "Default parse-error-retries for ask."),
 )
 
 

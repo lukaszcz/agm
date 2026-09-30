@@ -9,7 +9,7 @@ Coverage:
 - is_json_shaped: False for both types.
 - is_assignable: exact-only for both types (positive + negative).
 - comparable_types: False for unit/function; unchanged for scalars.
-- TypeEnvironment: prelude types (ExecResult, ParsePolicy) and RecursionError
+- TypeEnvironment: prelude types (ExecResult, Agent) and RecursionError
   exception registered in every fresh env.
 - seed_from: does not duplicate/clobber prelude types, but carries a
   program's own ``builtin`` declaration of one forward across entries.
@@ -621,21 +621,11 @@ class TestTypeEnvironmentPrelude:
         assert fields["stderr"] == TextType()
         assert fields["timed-out"] == BoolType()
 
-    def test_parse_policy_resolves(self) -> None:
+    def test_agent_resolves(self) -> None:
         env = TypeEnvironment()
-        t = env.get_type("ParsePolicy")
+        t = env.get_type("Agent")
         assert isinstance(t, EnumType)
-        assert t.name == "ParsePolicy"
-
-    def test_parse_policy_variants(self) -> None:
-        env = TypeEnvironment()
-        t = env.get_type("ParsePolicy")
-        assert isinstance(t, EnumType)
-        members = env.type_table.enum_member_names(t)
-        # Abort has no fields.
-        assert dict(env.type_table.record_fields(members["Abort"])) == {}
-        # Retry has n: int.
-        assert dict(env.type_table.record_fields(members["Retry"])) == {"n": IntType()}
+        assert t.name == "Agent"
 
     def test_recursion_error_resolves(self) -> None:
         env = TypeEnvironment()
@@ -657,11 +647,11 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, RecordType)
         assert t.name == "ExecResult"
 
-    def test_resolve_named_type_parse_policy(self) -> None:
+    def test_resolve_named_type_agent(self) -> None:
         env = TypeEnvironment()
-        t = env.resolve_named_type("ParsePolicy")
+        t = env.resolve_named_type("Agent")
         assert isinstance(t, EnumType)
-        assert t.name == "ParsePolicy"
+        assert t.name == "Agent"
 
     def test_source_type_match_requires_graph_context(self) -> None:
         env = TypeEnvironment()
@@ -685,7 +675,7 @@ class TestSeedFrom:
         target.seed_from(source)
         # Prelude types are still available.
         assert isinstance(target.get_type("ExecResult"), RecordType)
-        assert isinstance(target.get_type("ParsePolicy"), EnumType)
+        assert isinstance(target.get_type("Agent"), EnumType)
 
     def test_seed_does_not_overwrite_prelude_with_a_bare_no_identity_binding(self) -> None:
         # A binding carrying NO_DECL_ID (never a real declaration's identity —
@@ -768,10 +758,10 @@ class TestUnregisterName:
         # Still present.
         assert env.get_type("ExecResult") is not None
 
-    def test_cannot_unregister_parse_policy(self) -> None:
+    def test_cannot_unregister_agent(self) -> None:
         env = TypeEnvironment()
-        env.unregister_name("ParsePolicy")
-        assert env.get_type("ParsePolicy") is not None
+        env.unregister_name("Agent")
+        assert env.get_type("Agent") is not None
 
     def test_cannot_unregister_builtin_exception(self) -> None:
         env = TypeEnvironment()

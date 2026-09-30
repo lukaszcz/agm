@@ -5,7 +5,7 @@
 # standard library, so it declares its own `Exception` root alongside every
 # other builtin name it uses. Includes a scoped `builtin def` (`exec`)
 # dispatching to a scoped `builtin record` (`ExecResult`) at a real host
-# boundary, and a scoped `builtin enum` (`ParsePolicy`) matched by case.
+# boundary, and a scoped `builtin enum` (`SessionTransport`) matched by case.
 scope Stdlib
   builtin record ExecResult
     stdout: text
@@ -14,9 +14,9 @@ scope Stdlib
     timed-out: bool
 
   builtin
-  enum ParsePolicy =
-    | Abort
-    | Retry(n: int)
+  enum SessionTransport
+    | Cli
+    | Rpc
 
   builtin
   exception Exception
@@ -36,15 +36,15 @@ scope Stdlib
     catch RangeError as e =>
       e.message
 
-  def classify(policy: ParsePolicy) -> text =
-    case policy of
-      | ParsePolicy::Abort => "abort"
-      | ParsePolicy::Retry(n) => "retry %{n}"
+  def classify(transport: SessionTransport) -> text =
+    case transport of
+      | SessionTransport::Cli => "cli"
+      | SessionTransport::Rpc => "rpc"
 end Stdlib
 
 program def main(code: int) -> unit =
   let r = Stdlib::ExecResult(stdout = "hi", exit-code = code, stderr = "", timed-out = false)
   Stdlib::print(r.stdout)
   Stdlib::print(Stdlib::report(r.exit-code))
-  Stdlib::print(Stdlib::classify(Stdlib::ParsePolicy::Retry(n = 2)))
+  Stdlib::print(Stdlib::classify(Stdlib::SessionTransport::Rpc))
   Stdlib::print(Stdlib::exec("echo host").stdout)

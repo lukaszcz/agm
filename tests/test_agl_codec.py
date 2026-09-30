@@ -124,7 +124,7 @@ def _sp() -> SourceSpan:
 
 
 def _ask_builtin_items() -> tuple[Item, ...]:
-    """Real ``ParsePolicy``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
+    """Real ``Agent``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
 
     ``_check_program_with_json`` builds a hand-crafted single-module program
     that never imports ``std/prelude`` (see ``resolve_and_check_program_ast``),
@@ -139,11 +139,6 @@ def _ask_builtin_items() -> tuple[Item, ...]:
     """
     program = parse_program(
         "builtin\n"
-        "enum ParsePolicy =\n"
-        "  | Abort\n"
-        "  | Retry(n: int)\n"
-        "\n"
-        "builtin\n"
         "enum Agent =\n"
         "  | AgentCommand(command: text)\n"
         '  | AgentClaude(model: text = "", thinking: text = "")\n'
@@ -155,7 +150,7 @@ def _ask_builtin_items() -> tuple[Item, ...]:
         '  agent: Agent = AgentCommand(command = "x"),\n'
         '  format: text = "",\n'
         "  strict-json: bool = false,\n"
-        "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+        "  parse-error-retries: int = 0,\n"
         "  sandbox: AgentSandbox = Disabled,\n"
         ") -> T\n",
         start_id=500_000,
@@ -2327,29 +2322,14 @@ class TestValidationErrorsThroughRuntime:
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        #  on_parse_error: Retry(n: 1) as a named arg to ask().
-        # Constructors are now Call nodes (no separate Constructor AST node).
-        retry_ctor = ast.Call(
-            callee=ast.VarRef(name="Retry", span=_sp(), node_id=_nid()),
-            args=(),
-            named_args=(
-                ast.NamedArg(
-                    name="n",
-                    value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
-                    span=_sp(),
-                    node_id=_nid(),
-                ),
-            ),
-            span=_sp(),
-            node_id=_nid(),
-        )
+        # parse-error-retries = 1 as a named arg to ask().
         retry_call = ast.Call(
             callee=ast.VarRef(name="ask", span=_sp(), node_id=_nid()),
             args=(_template(_text_seg("Get issue.")),),
             named_args=(
                 ast.NamedArg(
-                    name="on-parse-error",
-                    value=retry_ctor,
+                    name="parse-error-retries",
+                    value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
                     span=_sp(),
                     node_id=_nid(),
                 ),

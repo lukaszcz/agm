@@ -15,7 +15,7 @@ from agm.core.process import CapturedOutput, ProcessCaptureResult
 from tests._agl_helpers import (
     agl_roots,
     let_root_capture,
-    policy_ir,
+    retries_ir,
     session_sandbox_context,
     unavailable_sandbox_context,
     write_sandbox_home,
@@ -234,7 +234,7 @@ def test_t7_retry_success() -> None:
             return _ok("not_a_number\n")
         return _ok("99\n")
 
-    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
+    source = 'let n: int = exec("cmd", parse-error-retries = 1)\nn'
     call_count[0] = 0
     ir_snap = completed_bindings(run_inline_ir_with_shell(source, fake_shell))
 
@@ -266,7 +266,7 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
         'let n: int = exec("cmd", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '
         'timeout = Option[text]::Some(value = "2s"), '
-        "on-parse-error = Retry(n = 1))\n"
+        "parse-error-retries = 1)\n"
         "n"
     )
     snapshot = completed_bindings(run_inline_ir_with_shell(source, fake_shell))
@@ -291,7 +291,7 @@ def test_t8_retry_exhaustion() -> None:
     Routes through evaluate_ir_raises_with_shell and keeps shell failures in
     the ExecError family.
     """
-    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 2))\nn'
+    source = 'let n: int = exec("cmd", parse-error-retries = 2)\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.type_name == "ExecError"
@@ -315,7 +315,7 @@ def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_
         runs.append(" ".join(args))
         return _ok("not_a_number\n")
 
-    source = f'let n: int = exec("cmd", on-parse-error = Retry(n = {retries}))\nn'
+    source = f'let n: int = exec("cmd", parse-error-retries = {retries})\nn'
     exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
 
     assert exc.type_name == "ExecError"
@@ -427,7 +427,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
             (),
         ),
         contract_id=cid,
-        on_parse_error=policy_ir(1, loc),
+        parse_error_retries=retries_ir(1, loc),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -598,7 +598,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
             return _ok("not_a_number\n")
         return _fail(1, stdout="", stderr="retry failed")
 
-    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
+    source = 'let n: int = exec("cmd", parse-error-retries = 1)\nn'
     call_count[0] = 0
     exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
     assert exc.type_name == "ExecError"
@@ -678,7 +678,7 @@ def test_parsed_form_undecodable_stdout_raises_without_retrying() -> None:
             spawn_error=None,
         )
 
-    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 2))\nn'
+    source = 'let n: int = exec("cmd", parse-error-retries = 2)\nn'
     exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
     assert exc.type_name == "ExecError"
     assert len(runs) == 1
@@ -876,7 +876,7 @@ def test_sandboxed_exec_retry_reprepares_the_sandbox_on_every_attempt(
     write_sandbox_home(home)
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
 
-    source = 'let n: int = exec("cmd", sandbox = Some(Sandbox()), on-parse-error = Retry(n = 1))\nn'
+    source = 'let n: int = exec("cmd", sandbox = Some(Sandbox()), parse-error-retries = 1)\nn'
     call_count = [0]
     argv_log: list[list[str]] = []
 

@@ -10040,7 +10040,7 @@ class TestExecCommand:
             "  | Pass\n"
             'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
             'let review: Review = reviewer.ask("Review now", '
-            "on-parse-error = Retry(n = 1), sandbox = AgentSandbox::Disabled)\n"
+            "parse-error-retries = 1, sandbox = AgentSandbox::Disabled)\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
             encoding="utf-8",

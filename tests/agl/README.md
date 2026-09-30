@@ -22,7 +22,7 @@ Layout:
 |-----------|-------------------|
 | `attributes/` | Declaration attributes: `@arg-*` zones on functions, lambdas, records, exceptions, enum members, and `program def` |
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
-| `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
+| `calls/` | `ask` parse-error retries, format options |
 | `canonical/` | Multi-agent review/fix workflows |
 | `casts/` | `as`/`as?` casts and `CastError`/`JsonParseError` handling |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |

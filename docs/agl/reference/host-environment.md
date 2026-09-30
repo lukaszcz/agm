@@ -26,7 +26,7 @@ A conforming host processes a program in this order:
 
 A failure in steps 1–5 means **nothing executes**: no statement runs, no
 agent is called, no shell command is spawned. Warnings (for example a useless
-`on-parse-error` on a `text` target) are reported on every path and never
+`parse-error-retries` on a `text` target) are reported on every path and never
 prevent execution.
 
 ## Agents
@@ -446,7 +446,8 @@ Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
 `exec` calls, respectively. `debug` is read once, when the host session ends
 (the run, or the REPL session): if it is `true` then, the temporary files and
 directories `std/fs` created are kept rather than removed. `parse-error-retries` is the
-corrective retry count used by `ask`'s default parse policy. A write the engine cannot
+default `parse-error-retries` of each subsequent `ask`
+([Agent calls](agent-calls.md#parse-error-retries)). A write the engine cannot
 accept raises a catchable exception and leaves the setting unchanged: `RangeError`
 ([Exceptions](exceptions.md#rangeerror)) for a negative `parse-error-retries`, `TypeError`
 ([Exceptions](exceptions.md#typeerror)) for a `timeout` whose text is not a duration or a
@@ -472,7 +473,7 @@ of the run without rolling back the assigned `trace` or `trace-file` value.
 
 | Setting | Portable default | Used when |
 | ------- | ---------------- | --------- |
-| Default parse policy | `abort` | call without `on-parse-error` |
+| Corrective parse retries | `parse-error-retries` setting (`ask` forms), `0` (`exec`) | call without `parse-error-retries` |
 | Default JSON parsing mode | lenient recovery | JSON-codec call without `strict-json` |
 | Agent idle timeout | host-defined | every agent dispatch |
 

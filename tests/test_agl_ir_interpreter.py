@@ -105,7 +105,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
-from tests._agl_helpers import policy_ir
+from tests._agl_helpers import retries_ir
 
 # ---------------------------------------------------------------------------
 # Helper factories
@@ -2522,7 +2522,7 @@ class TestIrAsk:
                         ),
                     ),
                     contract_id=contract_id,
-                    on_parse_error=policy_ir(1, prompt_location),
+                    parse_error_retries=retries_ir(1, prompt_location),
                     sandbox=IrConstText(_LOC, "unused"),
                     env=IrConstText(_LOC, "unused"),
                 ),
@@ -2592,7 +2592,7 @@ class TestIrExec:
             timeout=_none_option(location),
             sandbox=_none_option(location),
             contract_id=cid,
-            on_parse_error=policy_ir(max_attempts, location),
+            parse_error_retries=retries_ir(max_attempts, location),
         )
         return ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2673,7 +2673,7 @@ class TestIrExec:
             timeout=_none_option(_LOC),
             sandbox=_none_option(_LOC),
             contract_id=cid,
-            on_parse_error=policy_ir(1, _LOC),
+            parse_error_retries=retries_ir(1, _LOC),
         )
         sym_desc = SymbolDescriptor(
             symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID
@@ -2767,7 +2767,7 @@ class TestIrExec:
             timeout=_none_option(_LOC),
             sandbox=_none_option(_LOC),
             contract_id=cid,
-            on_parse_error=policy_ir(2, _LOC),
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2939,7 +2939,7 @@ class TestIrExec:
             timeout=_none_option(_LOC),
             sandbox=_none_option(_LOC),
             contract_id=cid,
-            on_parse_error=policy_ir(2, _LOC),
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -3024,7 +3024,7 @@ class TestIrExec:
             timeout=_none_option(_LOC),
             sandbox=_none_option(_LOC),
             contract_id=cid,
-            on_parse_error=policy_ir(2, _LOC),
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -3095,7 +3095,7 @@ class TestIrExec:
             timeout=_none_option(_LOC),
             sandbox=_none_option(_LOC),
             contract_id=cid,
-            on_parse_error=policy_ir(1, _LOC),
+            parse_error_retries=retries_ir(1, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,

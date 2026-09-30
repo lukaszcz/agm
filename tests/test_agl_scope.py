@@ -1501,9 +1501,9 @@ class TestScopedBuiltinDeclarations:
                 "ExecResult",
             ),
             (
-                "scope A\n  builtin\n  enum ParsePolicy =\n    | Abort\n"
-                "  builtin\n  enum ParsePolicy =\n    | Abort\nend A\n\n()",
-                "ParsePolicy",
+                "scope A\n  builtin\n  enum SessionTransport =\n    | Cli\n"
+                "  builtin\n  enum SessionTransport =\n    | Cli\nend A\n\n()",
+                "SessionTransport",
             ),
             (
                 "scope A\n  builtin exception RangeError extends Exception\n"
@@ -2431,9 +2431,9 @@ class TestParentScopeSeam:
             pytest.param(
                 "prelude",
                 "",
-                "Retry",
-                "ParsePolicy",
-                "Retry(n = 1)",
+                "AgentCommand",
+                "Agent",
+                'AgentCommand(command = "x")',
                 id="prelude-payload-variant",
             ),
             pytest.param(

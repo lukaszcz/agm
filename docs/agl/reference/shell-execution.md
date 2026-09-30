@@ -152,7 +152,7 @@ program def main() -> unit =
 it returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout;
 and a `unit` target discards successful output. Use `exec(...)` instead when
 the command needs named parsing options (`format`, `strict-json`, or
-`on-parse-error`).
+`parse-error-retries`).
 
 ## Interpolation in shell templates
 
@@ -206,7 +206,7 @@ not produce an `ExecResult` with `timed-out = true`.
 ### Parsed form — target is any non-`ExecResult` or `unit` type
 
 When the target type is neither `ExecResult` nor `unit`, `exec` parses stdout
-into that type (honouring `format`, `strict-json`, and `on-parse-error`) and
+into that type (honouring `format`, `strict-json`, and `parse-error-retries`) and
 **raises `ExecError` on a nonzero exit**:
 
 <!-- agl-check: fragment -->
@@ -214,7 +214,7 @@ into that type (honouring `format`, `strict-json`, and `on-parse-error`) and
 let out: text = exec "cat %{path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
-  on-parse-error = Retry(n = 1)
+  parse-error-retries = 1
 )
 ```
 
@@ -233,7 +233,7 @@ program def main() -> unit =
   let completed: unit = exec "make lint"
 ```
 
-Because no output is parsed, `format`, `strict-json`, and `on-parse-error` are
+Because no output is parsed, `format`, `strict-json`, and `parse-error-retries` are
 invalid for a `unit` target.
 
 ## Execution semantics
@@ -256,7 +256,7 @@ invalid for a `unit` target.
 | Form / outcome | Streams decoded | On undecodable bytes |
 |-----------------|------------------|-----------------------|
 | Structured, any exit | stdout and stderr | raises `ExecError`; a decodable stream keeps its text, the undecodable one is `""` |
-| Parsed or text, exit 0 | stdout | raises `ExecError` immediately — never an `on-parse-error` retry, since the bytes did not fail to parse; they cannot be text at all |
+| Parsed or text, exit 0 | stdout | raises `ExecError` immediately — never a `parse-error-retries` retry, since the bytes did not fail to parse; they cannot be text at all |
 | Parsed/text/unit, nonzero exit | stdout and stderr, for the `ExecError` fields | the nonzero-exit `ExecError` is raised as usual; each undecodable field is `""` |
 | Unit, exit 0 | none — stdout is discarded | no error |
 | Timeout (any form) | stdout and stderr, both truncated | the timeout `ExecError` is raised; an incomplete **trailing** UTF-8 sequence is dropped rather than treated as invalid (`timed-out = true` already marks the output incomplete); an invalid byte elsewhere still fails |
@@ -282,8 +282,10 @@ named parameters as `ask`:
 
 - `format` — codec name (a `text` value); normally auto-selected.
 - `strict-json` — `bool`; opts the JSON codec into strict parsing.
-- `on-parse-error` — `ParsePolicy`; controls retry behavior on parse
-  failures in the parsed form. In the structured and unit forms, where no
+- `parse-error-retries` — `int`; the number of retries after a parse failure
+  in the parsed form. It defaults to `0` and, unlike `ask`'s, never reads
+  `std/config::parse-error-retries`. A negative count raises `RangeError`
+  before the command is spawned. In the structured and unit forms, where no
   stdout parsing happens, passing this parameter is a static error.
 
 ## Retries

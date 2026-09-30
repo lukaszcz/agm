@@ -1239,7 +1239,7 @@ class TestNominalsEmpty:
             )
 
         assert prog.nominals[nominal_id_for(prog, "ExecResult")].kind is NominalKind.RECORD
-        assert prog.nominals[nominal_id_for(prog, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[nominal_id_for(prog, "Agent")].kind is NominalKind.ENUM
         assert prog.nominals[nominal_id_for(prog, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_mutable_record_nominal_names_its_mutable_fields(self) -> None:

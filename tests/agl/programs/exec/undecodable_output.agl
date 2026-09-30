@@ -1,5 +1,5 @@
 # Undecodable exec output: strict UTF-8 decoding per form, the ""-field
-# rule for an undecodable stream, and no on-parse-error retry for a decode
+# rule for an undecodable stream, and no parse-error-retries retry for a decode
 # failure (invalid bytes are not a content mismatch, unlike a parse failure).
 
 program def main(mode: int) -> unit =
@@ -12,7 +12,7 @@ program def main(mode: int) -> unit =
           print "caught structured"
     | 2 =>
         try
-          let data: dict[text, int] = exec("cat output", on-parse-error = Retry(n = 1))
+          let data: dict[text, int] = exec("cat output", parse-error-retries = 1)
           print data
         catch ExecError as e =>
           print "caught parsed"

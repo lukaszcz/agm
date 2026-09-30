@@ -587,11 +587,7 @@ def _builtin_function_signature(
                     _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict-json", BoolType(), has_default=True),
-                    _std_param(
-                        "on-parse-error",
-                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
-                        has_default=True,
-                    ),
+                    _std_param("parse-error-retries", IntType(), has_default=True),
                     _std_param(
                         "sandbox",
                         BUILTIN_PRELUDE_TYPES["AgentSandbox"],
@@ -609,11 +605,7 @@ def _builtin_function_signature(
                     _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict-json", BoolType(), has_default=True),
-                    _std_param(
-                        "on-parse-error",
-                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
-                        has_default=True,
-                    ),
+                    _std_param("parse-error-retries", IntType(), has_default=True),
                     _std_param(
                         "sandbox",
                         BUILTIN_PRELUDE_TYPES["AgentSandbox"],

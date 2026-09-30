@@ -108,9 +108,9 @@ def test_session_ask_records_parse_options_and_output_contract_metadata() -> Non
     checked = _check(
         "let session = Session::default()\n"
         'let count: int = session.ask("count", format = "json", strict-json = true, '
-        "on-parse-error = Retry(n = 2))\n"
+        "parse-error-retries = 2)\n"
         'let summary: text = session.ask("summarize", format = "text", '
-        "on-parse-error = ParsePolicy::Abort)\n"
+        "parse-error-retries = 0)\n"
         "summary"
     )
 

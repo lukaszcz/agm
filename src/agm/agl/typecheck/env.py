@@ -1189,7 +1189,7 @@ class TypeEnvironment:
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
-        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always
+        # Built-in prelude types (AgL: ExecResult, Agent) are always
         # available.  Field/variant names AND zones for constructor-kind
         # registration come from the shared prelude ``TypeDef`` literals (via
         # ``TypeTable.field_kinds``) — the handles themselves carry no shape

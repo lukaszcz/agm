@@ -34,7 +34,7 @@ A block ending in a bare `let` has type
 ```agl
 let review: Review = reviewer.ask(
   "Review %{artifact}",
-  on-parse-error = Retry(n = 2)
+  parse-error-retries = 2
 )
 let count = 3
 ```
@@ -428,8 +428,8 @@ let h: Holder[int] = Holder::Tagged(by = 7)   # qualified — unambiguous
 
 An enum member's bare spelling is an injected convenience, so among the names
 one import surface exposes it yields to a record or exception constructor
-declaring that very name, whichever module declares each: bare `Abort` is the
-prelude's exception, while the member stays reachable as `ParsePolicy::Abort`.
+declaring that very name, whichever module declares each; the member stays
+reachable qualified.
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `Tagged` hides the outer
@@ -449,7 +449,7 @@ constructor's own scope** depends on whether the constructor stays reachable:
 - A constructor **declared in another module** may be claimed, since module
   qualification still reaches it. This covers the **prelude** names —
   exception types (`Abort`, `AgentParseError`, …), enum members (`Some`,
-  `Retry`, …), and records (`ExecResult`, `AgentRequest`). They are
+  `AgentCommand`, …), and records (`ExecResult`, `AgentRequest`). They are
   conveniences, not reserved words.
 - A **record**, **exception**, or **type alias** declared in the *same* module
   may **not** be claimed. Its constructor name is the declaration itself, with
@@ -464,7 +464,7 @@ enum Color
 
 let Red = 5                 # allowed — 'Color::Red' still names the member
 let ExecResult = 0          # allowed — declared in another module
-def Retry(n: int) -> int = n + 1
+def AgentCommand(n: int) -> int = n + 1
 
 scope Collision
   record Widget

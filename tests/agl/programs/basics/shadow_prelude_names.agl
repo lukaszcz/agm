@@ -5,7 +5,7 @@
 # shadows it for a function, both without an "already declared" collision.
 
 # `let` shadows the built-in `ExecResult` standard-library record constructor.
-def Retry(x: int) -> int = x + 1
+def AgentCommand(x: int) -> int = x + 1
 
 program def main(n: int) -> unit =
   let ExecResult = n * 2
@@ -15,5 +15,5 @@ program def main(n: int) -> unit =
   let AgentRequest = "req-%{n}"
   print AgentRequest
 
-  # `def` shadows the built-in `Retry` exception constructor.
-  print "%{Retry(n)}"
+  # `def` shadows the built-in `AgentCommand` enum-member constructor.
+  print "%{AgentCommand(n)}"

@@ -1495,8 +1495,6 @@ _AGENT_REQUEST_FIELDS = (
     "  sandbox: AgentSandbox\n"
 )
 
-_PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
-
 # A plain (non-``builtin``) ``Option`` declaration, shaped like the standard
 # library's own, for arrangements that declare their own host-contract types
 # without loading the standard library: ``AgentRequest``'s canonical shape
@@ -1515,7 +1513,7 @@ _ASK_REQUEST_OPTIONS = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS = (
@@ -1523,7 +1521,7 @@ _ASK_REQUEST_FREE_OPTIONS = (
     '  agent: Agent = AgentCommand(command = "noop"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
@@ -2203,7 +2201,7 @@ class TestBuiltinIdentityAcrossModules:
 # ---------------------------------------------------------------------------
 # Builtin identity for the other host-contract nominals: ``AgentRequest``
 # (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
-# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
+# ``ask``/``ask-request``).
 #
 # Every one of these resolutions goes through a program's own ``builtin``
 # declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
@@ -2212,7 +2210,7 @@ class TestBuiltinIdentityAcrossModules:
 # ``TestBuiltinIdentity*`` above, covering the same arrangements
 # (root/scoped, with/without the standard library, same-entry/earlier-entry/
 # imported-module declarations, and the no-declaration-at-all regression)
-# for each of the three.
+# for each of the two.
 # ---------------------------------------------------------------------------
 
 
@@ -2282,7 +2280,6 @@ class TestAgentRequestBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
             f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
@@ -2404,7 +2401,6 @@ class TestAgentArgumentBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
             f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
@@ -2553,137 +2549,6 @@ class TestHostRaisedExceptionContractIdentity:
         assert result.ok, result.diagnostics
         assert result.error is None
         assert isinstance(result.value, TextValue)
-
-
-class TestParsePolicyBuiltinIdentity:
-    """``on-parse-error`` is typed against the program's own ``ParsePolicy`` declaration."""
-
-    def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
-        """The reported rejection: a static constructor of the program's own
-        scoped ``ParsePolicy``, written at its own qualified path
-        (``A::ParsePolicy::Retry``), was rejected because the qualifier
-        check only ever accepted the bare root spelling."""
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Retry(n = 2))'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_scoped_parse_policy_abort_constructor_accepted_by_exec(self) -> None:
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Abort)'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_root_parse_policy_without_stdlib_accepted_by_exec(self) -> None:
-        s = open_session(default_stdlib=False)
-        declare = s.eval_entry(
-            f"builtin\nrecord ExecResult\n{_EXEC_RESULT_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
-            "builtin def exec(command: text) -> ExecResult\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry('let r = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_on_parse_error_without_named_program_syntax_still_accepts_canonical_forms(
-        self,
-    ) -> None:
-        """Regression: a program that declares none of its own builtin types
-        keeps every canonical ``on_parse_error`` spelling accepted exactly as
-        before this fix."""
-        s = open_session()
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            bare = s.eval_entry('let a = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
-        assert bare.ok, bare.diagnostics
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            qualified = s.eval_entry(
-                'let b = exec::[int]("echo hi", on-parse-error = ParsePolicy::Abort)'
-            )
-        assert qualified.ok, qualified.diagnostics
-
-    def test_on_parse_error_uses_a_local_binding_named_abort_as_an_ordinary_policy(self) -> None:
-        """``on-parse-error`` is an ordinary expression: a local ``Abort``
-        binding holding a policy is that policy, not the ``Abort`` exception."""
-        s = open_session()
-        shell = FakeShell(stdout="7")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                "let Abort = ParsePolicy::Retry(n = 3)\n"
-                'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(7)
-
-    def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
-        """A local binding shadowing ``Retry`` is not a constructor and cannot be called."""
-        s = open_session()
-        result = s.eval_entry(
-            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn'
-        )
-        assert not result.ok
-
-    def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
-        """Regression: an unrelated enum's constructor is still rejected as
-        ``on_parse_error``, with the program's own scoped ``ParsePolicy``
-        also live -- the shape-mismatch direction of this fix."""
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-        not_policy = s.eval_entry("enum NotPolicy\n  | Abort")
-        assert not_policy.ok, not_policy.diagnostics
-
-        result = s.eval_entry('let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())')
-        assert not result.ok
-        assert any("ParsePolicy" in d.message for d in result.diagnostics)
-
-    def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
-        self, tmp_path: Path
-    ) -> None:
-        """A wildcard import brings ``Lib::ParsePolicy`` into scope at its own
-        path without the module route prefix -- the qualifier spelling this
-        fix recognizes (a module-route-qualified spelling like
-        ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
-        as it was for the canonical ``ParsePolicy`` before it: an on_parse_error
-        constructor was never recognized through an import route prefix)."""
-        (tmp_path / "lib.agl").write_text(
-            f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
-        )
-        s = repl_session_with_root(tmp_path)
-        declare = s.eval_entry("import lib::*")
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = Lib::ParsePolicy::Retry(n = 2))'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
 
 
 # ---------------------------------------------------------------------------

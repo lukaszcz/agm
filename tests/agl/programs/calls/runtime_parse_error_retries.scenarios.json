@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "computed_policies_set_each_calls_attempts",
+      "name": "computed_counts_set_each_calls_attempts",
       "params": {"mode": 0},
       "agents": {"reviewer": ["bad", "bad", "5", "bad", "6"]},
       "shell": [
@@ -12,7 +12,7 @@
       "expect": {"stdout": "5\n6\n7\n", "calls": {"reviewer": 5}}
     },
     {
-      "name": "computed_policy_exhaustion_reports_its_attempts",
+      "name": "computed_count_exhaustion_reports_its_attempts",
       "params": {"mode": 0},
       "agents": {"reviewer": ["bad", "bad", "bad"]},
       "expect": {
@@ -58,7 +58,7 @@
       "expect": {"stdout_contains": ["\"max_attempts\": 4"]}
     },
     {
-      "name": "exec_without_a_policy_makes_a_single_attempt",
+      "name": "exec_without_a_count_makes_a_single_attempt",
       "params": {"mode": 7},
       "shell": [{"command": "echo x", "stdout": "bad"}],
       "expect": {"raises": {"type": "ExecError"}}

@@ -1074,22 +1074,6 @@ program def main() -> unit =
 `RecursionError` is catchable with `try`/`catch`. The limit counts
 activation frames across all `def` calls including mutual recursion.
 
-## Syntactic arguments
-
-The types the language's own constructs name are ordinary values: a
-`ParsePolicy` or an `ExecResult` can be bound, passed to a function, and
-returned from one.
-
-```agl
-def make-policy(retries: int) -> ParsePolicy =
-  if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
-```
-
-The `on-parse-error` argument of `ask`/`exec` is the one exception: it requires
-a **syntactic** static constructor written at the call site (`Abort`, or
-`Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
-from a function like `make-policy` cannot be passed to it.
-
 ## Complete example
 
 ```agl
@@ -1105,7 +1089,7 @@ def summarize-issues(issues: array[text]) -> text =
 def review-artifact(artifact: text) -> Review =
   let r: Review = reviewer.ask(
     "Review this artifact:\n%{artifact}",
-    on-parse-error = Retry(n = 2)
+    parse-error-retries = 2
   )
   r
 

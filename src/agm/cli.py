@@ -196,7 +196,7 @@ def _parse_error_retries_option() -> int | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Corrective retry count used by ask's default parse policy.",
+        help="Default parse-error-retries for ask.",
     )
 
 

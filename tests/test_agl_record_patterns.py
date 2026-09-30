@@ -305,9 +305,10 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
 
 
 def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
-    """``::Retry`` names the prelude variant the current module can see."""
+    """``::AgentCommand`` names the prelude variant the current module can see."""
     checked = accept(
-        "let policy: ParsePolicy = Retry(n = 2)\ncase policy of | ::Retry(n) => n | _ => 0\n"
+        'let agent: Agent = AgentCommand(command = "x")\n'
+        'case agent of | ::AgentCommand(command) => command | _ => ""\n'
     )
 
     case = checked.resolved.program.body.items[-1]
@@ -316,7 +317,7 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.owner_name == "Retry"
+    assert selected.owner_name == "AgentCommand"
 
 
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:

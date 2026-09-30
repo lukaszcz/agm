@@ -82,7 +82,6 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "CyclicValueError",
     # Built-in prelude types (mirrors semantics.types.BUILTIN_PRELUDE_TYPE_NAMES).
     "ExecResult",
-    "ParsePolicy",
     "Agent",
     "OutputContract",
     "OutputContractOption",
@@ -127,8 +126,6 @@ AGENT_SANDBOX_MEMBERS: tuple[str, ...] = ("Disabled", "Native", "Sandbox")
 #: below).
 RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType(
     {
-        ("ParsePolicy", "Abort"): -1000,
-        ("ParsePolicy", "Retry"): -1001,
         ("Agent", "AgentCommand"): -1010,
         ("Agent", "AgentClaude"): -1011,
         ("Agent", "AgentCodex"): -1012,

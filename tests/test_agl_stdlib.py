@@ -113,11 +113,10 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert (
         params[3].name == "strict-json" and params[3].type == BoolType() and params[3].has_default
     )
-    policy_param = params[4]
-    assert policy_param.name == "on-parse-error"
-    assert isinstance(policy_param.type, EnumType)
-    assert policy_param.type.name == "ParsePolicy"
-    assert policy_param.has_default is True
+    retries_param = params[4]
+    assert retries_param.name == "parse-error-retries"
+    assert retries_param.type == IntType()
+    assert retries_param.has_default is True
 
 
 def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
@@ -127,7 +126,7 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     ask = _builtin_function_signature("ask")
     assert ask is not None
     ask_params = {param.name: param.type for param in ask.params}
-    assert ask_params["on-parse-error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
+    assert ask_params["parse-error-retries"] == IntType()
     ask_request = _builtin_function_signature("ask-request")
     assert ask_request is not None
     assert ask_request.result == BUILTIN_PRELUDE_TYPES["AgentRequest"]

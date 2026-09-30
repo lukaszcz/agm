@@ -23,7 +23,7 @@ program def main(mode: int, raw: text = "") -> unit =
     | 3 =>
         let builder: Agent = AgentCommand("builder")
         try
-          let m: Msg = builder.ask("Build the message.", on-parse-error = Retry(n = 1))
+          let m: Msg = builder.ask("Build the message.", parse-error-retries = 1)
           print m.text
         catch AgentParseError as e =>
           print "agent parse error after %{e.attempts} attempts"

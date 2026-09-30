@@ -1385,14 +1385,14 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             agent=agent_expr,
             prompt=prompt_expr,
             contract_id=contract_id,
-            on_parse_error=policy_expr,
+            parse_error_retries=retries_expr,
             sandbox=sandbox_expr,
             env=env_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
-            _validate_expr(policy_expr, ctx)
+            _validate_expr(retries_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             _validate_expr(env_expr, ctx)
             if ctx.deep:
@@ -1425,12 +1425,12 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             session=session_expr,
             prompt=prompt_expr,
             contract_id=contract_id,
-            on_parse_error=policy_expr,
+            parse_error_retries=retries_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(session_expr, ctx)
             _validate_expr(prompt_expr, ctx)
-            _validate_expr(policy_expr, ctx)
+            _validate_expr(retries_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
@@ -1457,13 +1457,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             agent=agent_expr,
             prompt=prompt_expr,
             contract_id=contract_id,
-            on_parse_error=policy_expr,
+            parse_error_retries=retries_expr,
             sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
-            _validate_expr(policy_expr, ctx)
+            _validate_expr(retries_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
@@ -1478,7 +1478,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             cwd=cwd_expr,
             timeout=timeout_expr,
             contract_id=contract_id,
-            on_parse_error=policy_expr,
+            parse_error_retries=retries_expr,
             sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
@@ -1486,7 +1486,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(env_expr, ctx)
             _validate_expr(cwd_expr, ctx)
             _validate_expr(timeout_expr, ctx)
-            _validate_expr(policy_expr, ctx)
+            _validate_expr(retries_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:

@@ -167,7 +167,7 @@ def test_every_retry_attempt_carries_the_configured_effort(
     )
     source = (
         'let answer: int = AgentClaude("opus", "").ask("hi", '
-        "on-parse-error = ParsePolicy::Retry(n = 2), sandbox = AgentSandbox::Disabled)\n"
+        "parse-error-retries = 2, sandbox = AgentSandbox::Disabled)\n"
         "print answer\n"
     )
 

@@ -145,7 +145,7 @@ def test_exec_retries_with_the_output_contract_feedback(
     write_file_program(
         program,
         'let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count", '
-        "on-parse-error = Retry(n = 1))\n"
+        "parse-error-retries = 1)\n"
         "print answer\n",
     )
     fake_agent_transport.queue(
@@ -178,7 +178,7 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
         program,
         "try\n"
         '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask('
-        '"count", on-parse-error = ParsePolicy::Abort)\n'
+        '"count", parse-error-retries = 0)\n'
         "  print answer\n"
         f"catch {caught_type} as error =>\n"
         "  print render(error.agent)\n",

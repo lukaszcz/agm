@@ -16,7 +16,7 @@ def sum-tree(t: Tree) -> int =
 program def main() -> unit =
   let builder: Agent = AgentCommand("builder")
   try
-    let t: Tree = builder.ask("Build a tree.", on-parse-error = Retry(n = 1))
+    let t: Tree = builder.ask("Build a tree.", parse-error-retries = 1)
     print sum-tree(t)
   catch AgentParseError as e =>
     print "schema: %{e.expected-schema}"

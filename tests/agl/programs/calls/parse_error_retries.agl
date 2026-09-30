@@ -1,4 +1,4 @@
-# Parse policies: default retries (std/config::parse-error-retries), Retry(n)
+# Parse error retries: default (std/config::parse-error-retries), explicit
 # corrective retries, explicit abort, format option, trailing comma in call options.
 enum Review
   | Pass
@@ -9,8 +9,8 @@ program def main() -> unit =
   let strict-default: Review = ask("First review.", agent = reviewer)
   print "first ok"
 
-  let with-retry: Review = ask("Second review.", agent = reviewer, on-parse-error = Retry(n = 2))
+  let with-retry: Review = ask("Second review.", agent = reviewer, parse-error-retries = 2)
   print "second ok"
 
-  let aborting: Review = ask("Third review.", agent = reviewer, format = "json", on-parse-error = ParsePolicy::Abort)
+  let aborting: Review = ask("Third review.", agent = reviewer, format = "json", parse-error-retries = 0)
   print "third ok"

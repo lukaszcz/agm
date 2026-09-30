@@ -181,9 +181,9 @@ def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_p
     )
     check_program(resolve_program(graph), HostCapabilities())
     _check(
-        "enum Holder\n  | holder(policy: ParsePolicy)\n"
-        "let item = holder(ParsePolicy::Retry(n = 1))\n"
-        "case item of | holder(ParsePolicy::Retry(n)) => n"
+        "enum Holder\n  | holder(agent: Agent)\n"
+        'let item = holder(AgentCommand(command = "x"))\n'
+        "case item of | holder(AgentCommand(command)) => command"
     )
 
 

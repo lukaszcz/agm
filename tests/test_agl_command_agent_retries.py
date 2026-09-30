@@ -52,7 +52,7 @@ def _ask(command: str, target: str, retries: int) -> str:
     return (
         "program def main() -> unit =\n"
         f'  let answer = AgentCommand("{command}").ask::[{target}]("question", '
-        f"sandbox = AgentSandbox::Disabled, on-parse-error = Retry(n = {retries}))\n"
+        f"sandbox = AgentSandbox::Disabled, parse-error-retries = {retries})\n"
         "  print(answer)\n"
     )
 

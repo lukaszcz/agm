@@ -623,7 +623,7 @@ class _BuiltinOperands:
     sandbox: IrExpr | None = None
     target_type: Type | None = None
     path: str | None = None
-    on_parse_error: IrExpr | None = None
+    parse_error_retries: IrExpr | None = None
 
     @property
     def subject(self) -> IrExpr:
@@ -2581,7 +2581,7 @@ class _Lowerer:
                 timeout=self._lower_optional(named.get("timeout")),
                 sandbox=self._lower_optional(named.get("sandbox")),
                 target_type=self._node_type(call_node.node_id),
-                on_parse_error=self._lower_optional(named.get("on-parse-error")),
+                parse_error_retries=self._lower_optional(named.get("parse-error-retries")),
             )
         if receiver is None:
             return operands
@@ -2665,7 +2665,7 @@ class _Lowerer:
                     session=session,
                     sandbox=operands.sandbox,
                     env=operands.env,
-                    on_parse_error=operands.on_parse_error,
+                    parse_error_retries=operands.parse_error_retries,
                 )
 
             case BuiltinKind.ASK_REQUEST:
@@ -2681,7 +2681,7 @@ class _Lowerer:
                     session=None,
                     sandbox=operands.sandbox,
                     env=None,
-                    on_parse_error=operands.on_parse_error,
+                    parse_error_retries=operands.parse_error_retries,
                 )
 
             case BuiltinKind.EXEC:
@@ -2696,10 +2696,10 @@ class _Lowerer:
                     cwd=cwd if operands.cwd is None else operands.cwd,
                     timeout=timeout if operands.timeout is None else operands.timeout,
                     sandbox=sandbox if operands.sandbox is None else operands.sandbox,
-                    on_parse_error=(
-                        self._abort_policy_operand(loc)
-                        if operands.on_parse_error is None
-                        else operands.on_parse_error
+                    parse_error_retries=(
+                        IrConstInt(location=loc, value=0)
+                        if operands.parse_error_retries is None
+                        else operands.parse_error_retries
                     ),
                 )
 
@@ -3768,18 +3768,11 @@ class _Lowerer:
             key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
         )
 
-    def _abort_policy_operand(self, loc: Location) -> IrExpr:
-        """Build ``ParsePolicy::Abort``: one attempt."""
-        abort = self._link.builtin_nominals.resolve_member("ParsePolicy", "Abort")
-        return IrMakeRecord(location=loc, nominal=abort.nominal, fields=())
-
-    def _default_parse_policy_operand(self, loc: Location) -> IrExpr:
-        """Build ``ParsePolicy::Retry(n = std/config::parse-error-retries)``, read per call."""
-        retry = self._link.builtin_nominals.resolve_member("ParsePolicy", "Retry")
-        retries = IrBuiltinLoad(
+    def _default_parse_error_retries_operand(self, loc: Location) -> IrExpr:
+        """Read ``std/config::parse-error-retries`` per call."""
+        return IrBuiltinLoad(
             location=loc, key=builtin_var_key(STD_CONFIG_ID, (), "parse-error-retries")
         )
-        return IrMakeRecord(location=loc, nominal=retry.nominal, fields=(("n", retries),))
 
     def _default_environ_operand(self, loc: Location) -> IrExpr:
         """Read the ambient environment, or empty when ``std/env`` isn't loaded."""
@@ -3801,7 +3794,7 @@ class _Lowerer:
         session: IrExpr | None,
         sandbox: IrExpr | None,
         env: IrExpr | None,
-        on_parse_error: IrExpr | None,
+        parse_error_retries: IrExpr | None,
     ) -> IrExpr:
         """Build an ask operation from already-lowered direct or closure operands."""
         loc = self._loc(span)
@@ -3833,7 +3826,7 @@ class _Lowerer:
         def selected_env() -> IrExpr:
             return env or self._default_environ_operand(loc)
 
-        policy = on_parse_error or self._default_parse_policy_operand(loc)
+        retries = parse_error_retries or self._default_parse_error_retries_operand(loc)
 
         if is_request:
             selected_agent = agent or IrBuiltinLoad(
@@ -3845,7 +3838,7 @@ class _Lowerer:
                 agent=selected_agent,
                 prompt=prompt,
                 contract_id=contract_id,
-                on_parse_error=policy,
+                parse_error_retries=retries,
                 sandbox=selected_sandbox(),
             )
         if session is not None:
@@ -3856,7 +3849,7 @@ class _Lowerer:
                 session=session,
                 prompt=prompt,
                 contract_id=contract_id,
-                on_parse_error=policy,
+                parse_error_retries=retries,
             )
         assert agent is not None, "compiler bug: non-session ask requires an Agent receiver"
         return IrAsk(
@@ -3864,7 +3857,7 @@ class _Lowerer:
             agent=agent,
             prompt=prompt,
             contract_id=contract_id,
-            on_parse_error=policy,
+            parse_error_retries=retries,
             sandbox=selected_sandbox(),
             env=selected_env(),
         )
@@ -3895,7 +3888,7 @@ class _Lowerer:
         cwd: IrExpr,
         timeout: IrExpr,
         sandbox: IrExpr,
-        on_parse_error: IrExpr,
+        parse_error_retries: IrExpr,
     ) -> IrExec:
         """Build an exec operation from already-lowered direct or closure operands."""
         spec = self._checked.contract_specs.get(node_id)
@@ -3912,7 +3905,7 @@ class _Lowerer:
             cwd=cwd,
             timeout=timeout,
             contract_id=self._alloc_contract(contract_req),
-            on_parse_error=on_parse_error,
+            parse_error_retries=parse_error_retries,
             sandbox=sandbox,
         )
 

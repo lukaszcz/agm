@@ -39,7 +39,7 @@ program def main(mode: int, settings: path = "unused") -> unit =
           print "stdout [%{e.stdout}]"
           print "timed %{e.timed-out}"
     | 9 =>
-        let n: int = exec("cmd", sandbox = Some(Sandbox()), on-parse-error = Retry(n = 1))
+        let n: int = exec("cmd", sandbox = Some(Sandbox()), parse-error-retries = 1)
         print n
     | _ =>
         print "unknown mode"

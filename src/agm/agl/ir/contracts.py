@@ -593,7 +593,7 @@ class ContractRequest:
 
     @property
     def can_fail_parsing(self) -> bool:
-        """Whether agent output can fail to parse, so a parse policy can ever retry."""
+        """Whether agent output can fail to parse, so a parse-error retry can ever happen."""
         return not self.is_unit and self.codec_name != "text"
 
 

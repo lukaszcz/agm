@@ -1,4 +1,4 @@
-import std/agent::{Agent, AgentSandbox, ParsePolicy}
+import std/agent::{Agent, AgentSandbox}
 import std/config
 import std/env::Environ
 import std/errors::Exception
@@ -37,7 +37,7 @@ builtin def Session::ask[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
+  parse-error-retries: int = std/config::parse-error-retries,
 ) -> T
 builtin def Session::compact(self, instructions: text = "") -> unit
 builtin def Session::reset(self) -> unit

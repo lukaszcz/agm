@@ -71,7 +71,7 @@ from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.ir.contracts import DecodePlan
 from agm.agl.ir.ids import Location, NominalId
-from agm.agl.ir.nodes import IrBind, IrConstInt, IrExpr, IrMakeRecord, IrSequence
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrExpr, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -945,10 +945,6 @@ def record_variant(value: Value, descriptors: ValueDescriptors) -> str:
     return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
 
 
-def policy_ir(max_attempts: int, location: Location) -> IrExpr:
-    """Build the ``ParsePolicy`` operand IR allowing *max_attempts* attempts."""
-    declared = NO_BUILTIN_DECLARATIONS.resolve_member
-    if max_attempts == 1:
-        return IrMakeRecord(location, declared("ParsePolicy", "Abort").nominal, ())
-    retries = IrConstInt(location, max_attempts - 1)
-    return IrMakeRecord(location, declared("ParsePolicy", "Retry").nominal, (("n", retries),))
+def retries_ir(max_attempts: int, location: Location) -> IrExpr:
+    """Build the ``parse-error-retries`` operand IR allowing *max_attempts* attempts."""
+    return IrConstInt(location, max_attempts - 1)

@@ -1784,17 +1784,17 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
         r = accept_type(
-            "scope A\n  builtin\n  enum ParsePolicy =\n    | Abort\n    | Retry(n: int)\nend A\n"
+            "scope A\n  builtin\n  enum SessionTransport =\n    | Cli\n    | Rpc\nend A\n"
             "\n"
-            "def classify(value: A::ParsePolicy) -> text =\n"
+            "def classify(value: A::SessionTransport) -> text =\n"
             "  case value of\n"
-            '    | A::ParsePolicy::Abort => "abort"\n'
-            '    | A::ParsePolicy::Retry(n) => "retry"\n'
-            "classify(A::ParsePolicy::Retry(n = 3))\n",
+            '    | A::SessionTransport::Cli => "cli"\n'
+            '    | A::SessionTransport::Rpc => "rpc"\n'
+            "classify(A::SessionTransport::Rpc)\n",
             default_stdlib=False,
         )
         assert r.resolved.program is not None
-        handle = r.type_env.get_type("A::ParsePolicy")
+        handle = r.type_env.get_type("A::SessionTransport")
         assert isinstance(handle, EnumType)
         assert handle.scope_path == ("A",)
 
@@ -1955,15 +1955,15 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             "scope A\n"
             "  builtin\n"
-            "  enum ParsePolicy[T] =\n"
-            "    | Abort\n"
-            "    | Retry(n: T)\n"
+            "  enum SessionTransport[T] =\n"
+            "    | Cli\n"
+            "    | Rpc(n: T)\n"
             "end A\n"
             "\n"
             "()",
             default_stdlib=False,
         )
-        assert "ParsePolicy" in err.to_diagnostic().message
+        assert "SessionTransport" in err.to_diagnostic().message
 
     def test_builtin_shape_check_reports_a_proper_diagnostic_for_a_cross_kind_name(self) -> None:
         """``RangeError`` is a valid builtin name, but only as an exception —
@@ -2084,8 +2084,8 @@ class TestScopedBuiltinTypes:
     def test_scoped_builtin_agent_method_reroots_its_receiver_and_sibling_types(self) -> None:
         """A scoped Agent method validates after removing its enclosing scope.
 
-        The receiver belongs to ``A::Agent`` while ``ParsePolicy`` is its
-        sibling at ``A``.  Both must reroot to the canonical host signature.
+        The receiver belongs to ``A::Agent`` and must reroot to the canonical
+        host signature.
         """
         r = accept_type(
             "scope A\n"
@@ -2094,15 +2094,12 @@ class TestScopedBuiltinTypes:
             '    | AgentClaude(model: text = "", thinking: text = "")\n'
             '    | AgentCodex(model: text = "", thinking: text = "")\n'
             '    | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
-            "  builtin enum ParsePolicy\n"
-            "    | Abort\n"
-            "    | Retry(n: int)\n"
             "  builtin def Agent::ask[T](\n"
             "    self,\n"
             "    prompt: text,\n"
             '    format: text = "",\n'
             "    strict-json: bool = false,\n"
-            "    on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "    parse-error-retries: int = 0,\n"
             "    sandbox: AgentSandbox = Disabled,\n"
             "  ) -> T\n"
             "end A\n"
@@ -2115,13 +2112,11 @@ class TestScopedBuiltinTypes:
         method = next(item for item in region.items if isinstance(item, FuncDef))
         signature = r.type_env.get_binding_type(method.node_id)
         assert isinstance(signature, FunctionType)
-        receiver_type, _prompt, _format, _strict, policy_type, _sandbox = signature.params
-        # Receiver and sibling default both keep the scoped identity locally,
-        # even though the signature validates against the canonical contract.
+        receiver_type = signature.params[0]
+        # The receiver keeps its scoped identity locally, even though the
+        # signature validates against the canonical contract.
         assert isinstance(receiver_type, EnumType)
         assert receiver_type.scope_path == ("A",)
-        assert isinstance(policy_type, EnumType)
-        assert policy_type.scope_path == ("A",)
 
     def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
         """The re-rooted comparison must still discriminate a genuine
@@ -2406,13 +2401,12 @@ class TestBuiltinPreludeTypes:
         er = BUILTIN_PRELUDE_TYPES["ExecResult"]
         assert isinstance(er, RecordType)
 
-    def test_prelude_types_parse_policy(self) -> None:
-        assert "ParsePolicy" in BUILTIN_PRELUDE_TYPES
-        pp = BUILTIN_PRELUDE_TYPES["ParsePolicy"]
-        assert isinstance(pp, EnumType)
-        variant_names = {member.name for member in BUILTIN_PRELUDE_TYPE_DEFS["ParsePolicy"].members}
-        assert "Abort" in variant_names
-        assert "Retry" in variant_names
+    def test_prelude_types_agent(self) -> None:
+        assert "Agent" in BUILTIN_PRELUDE_TYPES
+        agent = BUILTIN_PRELUDE_TYPES["Agent"]
+        assert isinstance(agent, EnumType)
+        variant_names = {member.name for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members}
+        assert "AgentCommand" in variant_names
 
     def test_builtin_prelude_type_names_coverage(self) -> None:
         assert len(BUILTIN_PRELUDE_TYPE_NAMES) > 0
@@ -2986,32 +2980,8 @@ class TestAsk:
         err = reject_type('let n: int = ask("Q", format = "json", strict-json = "yes")\nn')
         assert "strict-json" in str(err).lower() or "bool" in str(err).lower()
 
-    def test_ask_on_parse_error_retry(self) -> None:
-        accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 3))\nn')
-
-    def test_ask_on_parse_error_bare_abort_varref(self) -> None:
-        # Bare ``Abort`` (no parens) is accepted as abort policy.
-        accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort)\nn')
-
-    def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
-        # Bare ``ParsePolicy::Abort`` (no parens) is accepted as abort policy.
-        accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort)\nn')
-
-    def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
-        # A qualified constructor with the wrong owner is rejected.
-        err = reject_type(
-            'enum FooBar\n  | Abort\nlet n: int = ask("Q", on-parse-error = FooBar::Abort())\nn'
-        )
-        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
-
-    def test_ask_on_parse_error_bare_wrong_qualifier_raises(self) -> None:
-        # Bare ``SomethingElse::Abort`` (no parens, non-ParsePolicy qualifier) is
-        # rejected even though the field name is "Abort".
-        err = reject_type(
-            "enum SomethingElse\n  | Abort\n"
-            'let n: int = ask("Q", on-parse-error = SomethingElse::Abort)\nn'
-        )
-        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+    def test_ask_parse_error_retries(self) -> None:
+        accept_type('let n: int = ask("Q", parse-error-retries = 3)\nn')
 
     def test_ask_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = ask("Q")\nf(1)')
@@ -3114,7 +3084,7 @@ class TestAskRequest:
             'ask-request::[int]("Q")',
             'ask-request::[int]("Q", format = "json")',
             'ask-request::[int]("Q", strict-json = true)',
-            'ask-request::[int]("Q", on-parse-error = Retry(n = 1))',
+            'ask-request::[int]("Q", parse-error-retries = 1)',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q", strict-json = true)',
         ),
@@ -3292,7 +3262,7 @@ class TestExec:
         )
 
     def test_non_final_exec_rejects_parse_options(self) -> None:
-        reject_type('exec("ls", on-parse-error = ParsePolicy::Abort())\n()')
+        reject_type('exec("ls", parse-error-retries = 0)\n()')
 
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
@@ -3316,16 +3286,16 @@ class TestExec:
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
-    def test_exec_on_parse_error_text_warns(self) -> None:
-        r = accept_type('let x: text = exec("ls", on-parse-error = ParsePolicy::Abort())\nx')
+    def test_exec_parse_error_retries_text_warns(self) -> None:
+        r = accept_type('let x: text = exec("ls", parse-error-retries = 0)\nx')
         assert len(r.warnings) == 1
-        assert "on-parse-error" in r.warnings[0].message
+        assert "parse-error-retries" in r.warnings[0].message
 
     def test_exec_accepts_abort_policy(self) -> None:
-        accept_type('let n: int = exec("ls", on-parse-error = ParsePolicy::Abort())\nn')
+        accept_type('let n: int = exec("ls", parse-error-retries = 0)\nn')
 
     def test_exec_accepts_retry_policy(self) -> None:
-        accept_type('let n: int = exec("ls", on-parse-error = Retry(n = 2))\nn')
+        accept_type('let n: int = exec("ls", parse-error-retries = 2)\nn')
 
     def test_exec_strict_json_without_json_raises(self) -> None:
         err = reject_type('let x: text = exec("ls", strict-json = true)\nx')
@@ -9070,90 +9040,43 @@ class TestVarAssign:
 
 
 # ---------------------------------------------------------------------------
-# ParsePolicy constructors
+# parse-error-retries option
 # ---------------------------------------------------------------------------
 
 
-class TestParsePolicy:
-    def test_on_parse_error_abort(self) -> None:
-        accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort())\nn')
+class TestParseErrorRetries:
+    def test_zero_retries(self) -> None:
+        accept_type('let n: int = ask("Q", parse-error-retries = 0)\nn')
 
-    def test_on_parse_error_retry(self) -> None:
-        accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 5))\nn')
+    def test_positive_retries(self) -> None:
+        accept_type('let n: int = ask("Q", parse-error-retries = 5)\nn')
 
-    def test_on_parse_error_invalid_constructor_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on-parse-error = 42)\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
+    def test_non_int_raises(self) -> None:
+        reject_type('let n: int = ask("Q", parse-error-retries = "bad")\nn')
 
-    def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
-        # Abort is nullary, so every supplied argument is surplus.
-        err = reject_type(
-            'let n: int = ask("Q", on-parse-error = ParsePolicy::Abort(message = "x"))\nn'
-        )
-        assert "on-parse-error" in str(err).lower() or "Abort" in str(err)
+    def test_removed_on_parse_error_option_is_rejected(self) -> None:
+        reject_type('let n: int = ask("Q", on-parse-error = 0)\nn')
+        reject_type('let n: int = exec("ls", on-parse-error = 0)\nn')
 
-    def test_on_parse_error_retry_no_n_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry())\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
-
-    def test_on_parse_error_unrelated_unqualified_constructor_raises(self) -> None:
-        """An unqualified call to a real, resolvable constructor that is
-        simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
-        genuine constructor identity is required, not merely that SOME
-        constructor resolves."""
-        err = reject_type('record Foo\nlet n: int = ask("Q", on-parse-error = Foo())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
-
-    def test_on_parse_error_wrong_qualifier_raises(self) -> None:
-        # 'Other' is not a declared type name, so this fails at scope time.
-        err = reject_any('let n: int = ask("Q", on-parse-error = Other::Abort())\nn')
-        err_str = str(err).lower()
-        assert "on-parse-error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
-
-    def test_on_parse_error_text_target_warns(self) -> None:
-        r = accept_type('ask("Q", on-parse-error = ParsePolicy::Abort())')
+    def test_text_target_warns(self) -> None:
+        r = accept_type('ask("Q", parse-error-retries = 0)')
         assert len(r.warnings) == 1
-        assert "on-parse-error" in r.warnings[0].message
+        assert "parse-error-retries" in r.warnings[0].message
 
-    def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
-        """A qualifier segment carrying an explicit type argument
-        (``ParsePolicy[int]::``) is never an accepted ``on_parse_error``
-        spelling, regardless of what it would otherwise resolve to."""
-        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy[int]::Abort())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
-
-    def test_retry_with_non_int_n_raises(self) -> None:
-        reject_type('let n: int = ask("Q", on-parse-error = Retry(n = "bad"))\nn')
-
-    def test_on_parse_error_accepts_a_computed_policy(self) -> None:
+    def test_accepts_a_computed_count(self) -> None:
         accept_type(
-            "let k = 2\n"
-            "let policy = ParsePolicy::Retry(n = k + 1)\n"
-            'let n: int = ask("Q", on-parse-error = policy)\n'
+            'let k = 2\nlet count = k + 1\nlet n: int = ask("Q", parse-error-retries = count)\nn'
+        )
+
+    def test_accepts_a_count_returned_by_a_function(self) -> None:
+        accept_type(
+            "def count-for(k: int) -> int = k\n"
+            'let n: int = ask("Q", parse-error-retries = count-for(3))\n'
             "n"
         )
 
-    def test_on_parse_error_accepts_a_policy_returned_by_a_function(self) -> None:
-        accept_type(
-            "def policy-for(k: int) -> ParsePolicy = ParsePolicy::Retry(n = k)\n"
-            'let n: int = ask("Q", on-parse-error = policy-for(3))\n'
-            "n"
-        )
-
-    def test_on_parse_error_accepts_a_computed_policy_on_exec(self) -> None:
-        accept_type(
-            'let n: int = exec("echo 1", on-parse-error = ParsePolicy::Retry(n = 1 + 1))\nn'
-        )
-
-    def test_retry_with_wrong_key_raises(self) -> None:
-        # Exercises line 880 -> falls through to raise
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(m = 3))\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
-
-    def test_parse_policy_unknown_variant_raises(self) -> None:
-        # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
-        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Bad())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
+    def test_accepts_a_computed_count_on_exec(self) -> None:
+        accept_type('let n: int = exec("echo 1", parse-error-retries = 1 + 1)\nn')
 
 
 # ---------------------------------------------------------------------------
@@ -9161,7 +9084,7 @@ class TestParsePolicy:
 # ``Agent`` (the agent an ``ask``/``ask-request`` dispatches to, supplied as
 # the ``agent`` argument or as the receiver), ``AgentRequest``
 # (``ask-request``'s result), the host-raised built-in exceptions carrying an
-# ``Agent``-typed field, and ``ParsePolicy`` (``on_parse_error``). Each
+# ``Agent``-typed field. Each
 # resolves against a program's own ``builtin`` declaration of the name, and
 # each host contract whose own fields are nominal must keep the standard
 # identity in them, since that is what the host fills them with.
@@ -9186,8 +9109,6 @@ _AGENT_REQUEST_FIELDS_TC = (
     "  sandbox: AgentSandbox\n"
 )
 
-_PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
-
 # ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
 # carries the same shaping options and target type parameter. The free form
 # also declares the optional ``agent`` the receiver form takes from its
@@ -9196,7 +9117,7 @@ _ASK_REQUEST_OPTIONS_TC = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS_TC = (
@@ -9204,7 +9125,7 @@ _ASK_REQUEST_FREE_OPTIONS_TC = (
     '  agent: Agent = AgentCommand(command = "x"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL_TC = (
@@ -9220,7 +9141,7 @@ _ASK_REQUEST_NO_STDLIB_DECL_TC = (
     '  agent: Agent = "",\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
     "  sandbox: AgentSandbox = Disabled,\n"
     ") -> AgentRequest\n"
 )
@@ -9294,7 +9215,6 @@ class TestHostContractBuiltinIdentity:
             "  | None\n"
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            f"builtin enum ParsePolicy\n{_PARSE_POLICY_VARIANTS_TC}"
             f"{_ASK_REQUEST_NO_STDLIB_DECL_TC}"
             'ask-request("hi")\n',
             default_stdlib=False,
@@ -9322,38 +9242,6 @@ class TestHostContractBuiltinIdentity:
         )
         assert "target-type" in err.to_diagnostic().message
         assert "Option" in err.to_diagnostic().message
-
-    def test_scoped_parse_policy_constructor_accepted_by_on_parse_error(self) -> None:
-        r = accept_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Retry(n = 5))\n'
-            "end A\n()\n"
-        )
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
-        assert r.node_types[let_decl.value.node_id] == IntType()
-
-    def test_scoped_parse_policy_abort_accepted_by_on_parse_error(self) -> None:
-        r = accept_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Abort)\n'
-            "end A\n()\n"
-        )
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
-        assert r.node_types[let_decl.value.node_id] == IntType()
-
-    def test_on_parse_error_rejects_unrelated_qualifier_with_a_scoped_parse_policy_live(
-        self,
-    ) -> None:
-        err = reject_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}end A\n"
-            "enum NotPolicy\n  | Abort\n"
-            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())\n'
-        )
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_scoped_builtin_ask_request_signature_mentioning_sibling_types_typechecks(
         self,
@@ -9438,7 +9326,7 @@ class TestHostContractBuiltinIdentity:
             "  prompt: text,\n"
             '  format: text = "",\n'
             "  strict-json: bool = false,\n"
-            "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "  parse-error-retries: int = 0,\n"
             "  sandbox: AgentSandbox = Disabled,\n"
             "  env: Environ = environ,\n"
             ") -> T\n"
@@ -10823,7 +10711,7 @@ class TestAskUnknownArgs:
         # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
             'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
-            " strict-json = true, on-parse-error = ParsePolicy::Abort())\nn"
+            " strict-json = true, parse-error-retries = 0)\nn"
         )
         assert r.resolved.program is not None
 
@@ -10961,10 +10849,10 @@ class TestExecUnknownArgs:
         assert "exec" in str(err).lower() or "positional" in str(err).lower()
 
     def test_exec_valid_named_arg_combinations_still_accepted(self) -> None:
-        # format, strict_json, on_parse_error are valid for exec.
+        # format, strict_json, parse_error_retries are valid for exec.
         r = accept_type(
             'let n: int = exec("ls", format = "json", strict-json = true,'
-            " on-parse-error = ParsePolicy::Abort())\nn"
+            " parse-error-retries = 0)\nn"
         )
         assert r.resolved.program is not None
 
@@ -11023,9 +10911,9 @@ class TestExecStructured:
         err = reject_type('exec("ls", strict-json = true)')
         assert "ExecResult" in str(err) or "strict-json" in str(err).lower()
 
-    def test_exec_structured_on_parse_error_rejected(self) -> None:
-        err = reject_type('exec("ls", on-parse-error = ParsePolicy::Abort())')
-        assert "ExecResult" in str(err) or "on-parse-error" in str(err).lower()
+    def test_exec_structured_parse_error_retries_rejected(self) -> None:
+        err = reject_type('exec("ls", parse-error-retries = 0)')
+        assert "ExecResult" in str(err) or "parse-error-retries" in str(err).lower()
 
     def test_exec_parsed_form_has_no_structured_exec(self) -> None:
         r = accept_type('let n: int = exec("ls", format = "json")\nn')

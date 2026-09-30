@@ -2160,7 +2160,7 @@ def parse_classification(target: Type, table: TypeTable) -> CastKind:
 # Prelude type shapes — the single source of truth for built-in nominal types
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
-# prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
+# prelude types (``ExecResult``, ``Agent``, ``OutputContract``,
 # ``OutputContractOption``, ``AgentRequest``, ``SessionTransport``, ``Session``,
 # ``SessionStats``, ``SessionError``, ``Sandbox``, ``AgentSandbox``) and the
 # generic ``Option`` template.  ``create_seeded_type_table``, the scope resolver's builtin
@@ -2228,10 +2228,6 @@ def _builtin_enum_defs(
     )
 
 
-_PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
-    "ParsePolicy",
-    (("Abort", ()), ("Retry", (("n", IntType()),))),
-)
 _AGENT_NATIVE_MEMBERS: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = (
     ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
     ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
@@ -2386,7 +2382,6 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         ),
         field_kinds=_standard(_fields),
     ),
-    "ParsePolicy": _PARSE_POLICY_DEF,
     "Agent": _AGENT_DEF,
     "OutputContract": TypeDef(
         kind="record",
@@ -2530,7 +2525,6 @@ OPTIONAL_TYPE_DEF = replace(_OPTIONAL_DEF, decl_node_id=_reserved_id("Optional")
 BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
     member.decl_node_id: member
     for member in (
-        *_PARSE_POLICY_MEMBER_DEFS,
         *_AGENT_MEMBER_DEFS,
         *_OUTPUT_CONTRACT_OPTION_MEMBER_DEFS,
         *_SESSION_TRANSPORT_MEMBER_DEFS,
@@ -2858,7 +2852,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_EXCEPTI
 def create_seeded_type_table() -> TypeTable:
     """Return a fresh ``TypeTable`` pre-populated with built-in defs.
 
-    Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
+    Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``,
     ``Agent``, ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
     generic ``OPTION_TYPE_DEF`` and ``OPTIONAL_TYPE_DEF``, and
     ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every

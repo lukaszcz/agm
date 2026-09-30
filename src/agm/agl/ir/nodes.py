@@ -1060,14 +1060,14 @@ class IrCopyValue:
 
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ask(prompt, agent:, on_parse_error:, sandbox:, env:) builtin call.
+    """IR host-op: ask(prompt, agent:, parse_error_retries:, sandbox:, env:) builtin call.
 
     Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
     through the value-driven agent runtime, parses the response via the contract,
     and returns the typed Value.
 
-    ``on_parse_error`` evaluates to a ``ParsePolicy`` value, decoded once per
-    call into the attempt count: 1 for Abort, 1+n for Retry(n).
+    ``parse_error_retries`` evaluates to an ``int``, read once per call; the
+    attempt count is ``1 + parse_error_retries``.
     ``sandbox`` evaluates to an ``AgentSandbox`` value, decoded once and reused
     across every retry attempt. ``env`` evaluates to an ``Environ`` value (or an
     empty dict without ``std/env``), likewise decoded once and reused across
@@ -1078,7 +1078,7 @@ class IrAsk:
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    on_parse_error: "IrExpr"
+    parse_error_retries: "IrExpr"
     sandbox: "IrExpr"
     env: "IrExpr"
 
@@ -1146,7 +1146,7 @@ class IrSessionAsk:
     session: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    on_parse_error: "IrExpr"
+    parse_error_retries: "IrExpr"
 
 
 class IrSessionOpKind(enum.StrEnum):
@@ -1190,7 +1190,7 @@ class IrAskRequest:
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    on_parse_error: "IrExpr"
+    parse_error_retries: "IrExpr"
     sandbox: "IrExpr"
 
 
@@ -1209,7 +1209,7 @@ class IrExec:
     cwd: "IrExpr"
     timeout: "IrExpr"
     contract_id: "ContractId"
-    on_parse_error: "IrExpr"
+    parse_error_retries: "IrExpr"
     sandbox: "IrExpr"
 
 

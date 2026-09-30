@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "zero_default_retries_and_exhaustion_match_one_shot_parse_policies",
+      "name": "zero_default_retries_and_exhaustion_match_one_shot_parse_error_retries",
       "runtime": {"parse_error_retries": 0},
       "agents": {
         "writer": {"responses": ["bad", "bad", "bad", "bad", "bad", "context"]}

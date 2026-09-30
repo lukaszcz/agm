@@ -192,7 +192,7 @@ initializer exits, in which case it has bottom type. See
 try
   let review: Review = reviewer.ask(
     "Review %{artifact}",
-    on-parse-error = Retry(n = 2)
+    parse-error-retries = 2
   )
   print "reviewed: %{review}"
 catch AgentParseError as e =>
@@ -352,7 +352,7 @@ Field lists below are in addition to the base `message`.
 ### `AgentCallError`
 
 An agent **transport** failure: the agent could not run. Not eligible for
-`on-parse-error` retries ([Agent calls](agent-calls.md)).
+`parse-error-retries` retries ([Agent calls](agent-calls.md)).
 
 ```text
 agent: Agent      # the selected backend
@@ -367,7 +367,7 @@ undecodable stderr tail in `metadata` is `""`.
 ### `AgentParseError`
 
 Structured agent output failed parsing or validation after all attempts
-allowed by the parse policy.
+allowed by `parse-error-retries`.
 
 ```text
 agent: Agent            # selected backend
@@ -401,7 +401,7 @@ timed-out: bool
 
 An undecodable stream's field is always `""`; the message names the stream
 and the byte offset of the first invalid byte. A decode failure in the
-parsed form is never retried by `on-parse-error`.
+parsed form is never retried by `parse-error-retries`.
 
 ### `SessionError`
 
@@ -610,9 +610,11 @@ pattern: text   # the pattern that failed to compile
 Raised when `int.pow` receives a negative exponent, `decimal.sqrt` receives a
 negative receiver, `decimal.pow` receives a negative exponent on a zero base,
 a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
-loop entry, or a negative `parse-error-retries` is written
-([Host environment](host-environment.md#engine-settings)). Carries only the
-base fields. It is catchable.
+loop entry, a negative `parse-error-retries` is written
+([Host environment](host-environment.md#engine-settings)), or a call's
+`parse-error-retries` option is negative (raised before any dispatch;
+[Agent calls](agent-calls.md#parse-error-retries)). Carries only the base
+fields. It is catchable.
 
 ```text
 (base fields only)
@@ -656,7 +658,7 @@ how equality and tracing treat one.
 | Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, non-positive range `for` step (`by k` with `k ≤ 0`), or negative `parse-error-retries` write | `RangeError` |
+| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, non-positive range `for` step (`by k` with `k ≤ 0`), or negative `parse-error-retries` write or call option | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |

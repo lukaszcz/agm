@@ -95,6 +95,16 @@ def test_plain_import_contributes_the_full_qualified_surface_without_bare_names(
     )
 
 
+def test_wildcard_tail_resolves_a_member_through_its_bare_owner() -> None:
+    decl = _decl("tools/geo", tail=())
+    module = _module("tools/geo")
+    point = (module, ("Geo", "Point"))
+
+    env = _build([decl], {module: {"Geo": (module, "Geo"), ("Geo", "Point"): point}})
+
+    assert resolve_qualified(env, ("Geo",), "Point") == QualResolutionFound(module, point)
+
+
 def test_positive_tail_injects_bare_names_without_narrowing_qualified_access() -> None:
     decl = _decl("tools/text", tail=(_item("trim"),))
     module = _module("tools/text")

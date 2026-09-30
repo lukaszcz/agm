@@ -328,15 +328,25 @@ def _type_argument_mismatch(
 
 
 def _enum_owner_mismatch(
-    owner: str, resolved: EnumType, actual: EnumType, span: SourceSpan
+    owner: str, resolved: EnumType, actual: EnumType, span: SourceSpan, *, local_to: ModuleId
 ) -> AglTypeError:
-    """Return the diagnostic for a qualifier naming an enum other than the matched one."""
+    """Return the diagnostic for a qualifier naming an enum other than the matched one.
+
+    Both enums are spelled as a reader in *local_to* would write them.
+    """
     if resolved.decl_id == actual.decl_id:
         return _type_argument_mismatch(owner, resolved, actual, span)
     return AglTypeError(
-        f"Qualifier '{owner}' resolves to enum '{resolved.name}', "
-        f"but the value has enum type '{actual.name}'.",
+        f"Qualifier '{owner}' resolves to enum '{_spell_enum(resolved, local_to)}', "
+        f"but the value has enum type '{_spell_enum(actual, local_to)}'.",
         span=span,
+    )
+
+
+def _spell_enum(enum_type: EnumType, local_to: ModuleId) -> str:
+    """Spell *enum_type*'s declaration as a reader in *local_to* would write it."""
+    return spell_declaration(
+        enum_type.module_id, (*enum_type.scope_path, enum_type.name), local_to=local_to
     )
 
 
@@ -5141,8 +5151,6 @@ class _Checker:
                 matching,
                 subject="'is' member",
             )
-        elif constructor is None:
-            self._check_exception_variant_qualification(node.qualifier, node.variant, node.span)
         related = (
             None if constructor is None else self._related_exception(exception_type, constructor)
         )
@@ -5153,18 +5161,6 @@ class _Checker:
             )
         self._record_selected_constructor_ref(node.node_id, ConstructorRef.for_nominal(related))
         return BoolType()
-
-    def _check_exception_variant_qualification(
-        self, qualifier: QualifierChain, variant: str, span: SourceSpan
-    ) -> None:
-        """Surface a deferred qualifier-route failure for a qualified exception 'is' target.
-
-        The resolver defers a bad imported owner route on ``is`` tests,
-        leaving the constructor unresolved; resolving the spelling as a
-        ``QUALIFIER::Name`` type raises the real cause. A valid route falls
-        through to the caller's mismatch.
-        """
-        self._env.resolve_qualified_name_type(qualifier, variant, span=span)
 
     def _related_exception(
         self, exception_type: ExceptionType, candidate: ConstructorRef
@@ -6439,7 +6435,11 @@ class _Checker:
             owner, _type_params = self._local_qualified_owner(qualifier, span)
             if isinstance(owner, EnumType):
                 return _enum_owner_mismatch(
-                    render_qualifier_path(qualifier), owner, enum_type, span
+                    render_qualifier_path(qualifier),
+                    owner,
+                    enum_type,
+                    span,
+                    local_to=self._module_id,
                 )
         return self._constructor_outside_enum(variant, enum_type, candidates, span)
 
@@ -6580,10 +6580,9 @@ class _Checker:
         else:
             binding, constructor = self._select_pattern_slot_fallback(slot)
             if (
-                binding.kind is BinderKind.constructor_binding
-                and constructor is None
-                and self._slot_has_references(slot)
-            ):
+                slot.ambiguous_outside
+                or (binding.kind is BinderKind.constructor_binding and constructor is None)
+            ) and self._slot_has_references(slot):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
                     span=self._slot_reference_span(match_site, slot),
@@ -6599,10 +6598,11 @@ class _Checker:
     def _select_pattern_slot_fallback(
         self, slot: PatternSlot
     ) -> tuple[BindingRef, ConstructorRef | None]:
-        """Select a checked constructor or lexical fallback for *slot*.
+        """Select a checked constructor or what *slot*'s name reads outside its pattern.
 
-        A ``constructor_binding`` paired with ``None`` means the constructor
-        spelling stayed ambiguous outside the pattern.
+        Scope decided the reading outside; with none, the pattern's own
+        constructors are read. A ``constructor_binding`` paired with ``None``
+        means they disagree.
         """
         alternative = slot.alternative
         if alternative is None:
@@ -6631,12 +6631,7 @@ class _Checker:
                 self._slot_resolution[slot_id],
                 self._slot_constructor_refs.get(slot_id),
             )
-        if alternative.kind is not BinderKind.constructor_binding:
-            return alternative, None
-        constructor_candidates = self._resolved.constructor_candidates.get(slot.name, ())
-        if len(constructor_candidates) != 1:
-            return alternative, None
-        return alternative, constructor_candidates[0]
+        return alternative, slot.alternative_constructor
 
     def _slot_has_references(self, slot: PatternSlot) -> bool:
         """Whether a branch-body reference directly resolves to *slot*."""

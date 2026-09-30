@@ -889,13 +889,6 @@ class TestTypeEnvironment:
         )
         assert result == FunctionType(params=(IntType(),), result=TextType())
 
-    def test_resolve_unknown_name_raises(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        with pytest.raises(AglTypeError, match="Unknown type"):
-            env.resolve_type_expr(NameT(name="NonExistent", span=mk_span(), node_id=1))
-
     def test_binding_type_roundtrip(self) -> None:
         env = TypeEnvironment()
         env.set_binding_type(42, IntType())

@@ -61,6 +61,7 @@ __all__ = [
     "TypeOwnerIndex",
     "beneath",
     "declared_member_scopes",
+    "injected_members",
     "owned_constructors",
     "retired_member_scopes",
     "root_type_names",
@@ -740,11 +741,34 @@ def owned_constructors(
                 for name, member in owner.members.items():
                     yield name, member, path, bare
                 if bare:
-                    for injected in owner.injected:
-                        if _is_current(module_id, owners, injected):
-                            yield injected.owner_name, injected, (), True
+                    for injected in _current_injected(module_id, owners, owner):
+                        yield injected.owner_name, injected, (), True
         elif owner.constructible:
             yield path[-1], owner.constructor, path[:-1], bare
+
+
+def injected_members(
+    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner]
+) -> Iterator[tuple[ScopePath, str, ConstructorRef]]:
+    """Yield ``(step, name, constructor)`` for each member module *module_id*'s enums inject.
+
+    An enum at path ``P`` injects its inline members, and its referenced
+    members while it is the declaration *owners* hold at their paths, as
+    bare names at its own step ``P[:-1]``.
+    """
+    for path, owner in owners.items():
+        if owner.constructor is None and owner.alias is None:
+            for name, member in owner.members.items():
+                yield path[:-1], name, member
+            for injected in _current_injected(module_id, owners, owner):
+                yield path[:-1], injected.owner_name, injected
+
+
+def _current_injected(
+    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner], owner: TypeOwner
+) -> Iterator[ConstructorRef]:
+    """Yield enum *owner*'s referenced members still current in *owners* (:func:`_is_current`)."""
+    return (injected for injected in owner.injected if _is_current(module_id, owners, injected))
 
 
 def _is_current(

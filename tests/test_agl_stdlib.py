@@ -59,7 +59,7 @@ def test_core_stdlib_is_bare_by_default() -> None:
 
 def test_no_stdlib_disables_default_open_import() -> None:
     with pytest.raises(AglScopeError, match="'Some' is not defined"):
-        resolve_inline_entry("let x: Option[int] = Some(value = 1)\nx\n", default_stdlib=False)
+        resolve_inline_entry("let x = Some(value = 1)\nx\n", default_stdlib=False)
 
 
 def test_no_stdlib_reports_bare_print_as_undefined() -> None:

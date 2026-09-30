@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic, unknown_type
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -90,7 +90,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
     contains_inference_var,
-    is_builtin_type_name,
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
@@ -1854,29 +1853,15 @@ class TypeEnvironment:
             return local_name
         return None
 
-    def _local_type_name(
-        self,
-        qualifier: QualifierChain | None,
-        name: str,
-        key: DeclKey | None,
-        span: SourceSpan | None,
-    ) -> str | None:
+    def _local_type_name(self, name: str, key: DeclKey | None) -> str | None:
         """Return the stored name a type name selecting *key* resolves through here, if any.
 
         This module's own declaration's stored name (:meth:`_own_type_name`);
-        for a bare *name* scope selected no declaration for, a built-in
-        fallback name -- the reserved binding every module's type namespace
-        carries -- else an unknown type. ``None`` for a declaration only the
-        program tables carry, and for a qualified name scope selected no
-        declaration for.
+        for a name scope selected no declaration for, the built-in type name
+        *name* -- the only names scope leaves unselected, always bare. ``None``
+        for a declaration only the program tables carry.
         """
-        if key is not None:
-            return self._own_type_name(key)
-        if qualifier is not None:
-            return None
-        if is_builtin_type_name(name):
-            return name
-        raise unknown_type(name, span)
+        return name if key is None else self._own_type_name(key)
 
     def _resolve_selected_type(
         self,
@@ -1896,7 +1881,7 @@ class TypeEnvironment:
         program tables.
         """
         key = self._selected_key(node_id)
-        local_name = self._local_type_name(qualifier, name, key, span)
+        local_name = self._local_type_name(name, key)
         rendered = render_qualified_name(qualifier, name)
         if local_name is not None:
             return self._resolve_name_type(
@@ -1938,17 +1923,17 @@ class TypeEnvironment:
                 resolving=resolving,
                 type_vars=type_vars,
             )
-        if key is not None:
-            generic = self._program_generic_table.get(key)
-            if generic is not None:
-                return self.instantiate_from_gdef(key[2], generic, args, span=span)
-            self._ensure_program_alias_resolved(key, span)
-            alias = self._program_alias_table.get(key)
-            if alias is not None:
-                return self.instantiate_alias(key[2], alias, args, span=span)
-            if key in self._program_type_table:
-                raise AglTypeError(f"Type '{rendered}' does not take type arguments.", span=span)
-        raise AglTypeError(f"'{rendered}' does not name a type.", span=span)
+        # No *local_name* means scope selected *key*, a declaration of the
+        # program tables: generic, an alias, or a type taking no arguments.
+        selected = cast(DeclKey, key)
+        generic = self._program_generic_table.get(selected)
+        if generic is not None:
+            return self.instantiate_from_gdef(selected[2], generic, args, span=span)
+        self._ensure_program_alias_resolved(selected, span)
+        alias = self._program_alias_table.get(selected)
+        if alias is not None:
+            return self.instantiate_alias(selected[2], alias, args, span=span)
+        raise AglTypeError(f"Type '{rendered}' does not take type arguments.", span=span)
 
     def _resolve_local_applied_type(
         self,
@@ -2137,7 +2122,7 @@ class TypeEnvironment:
             selected = self._selected_key(selection_node_id(type_expr))
             return self._resolve_applied_key(
                 selected,
-                self._local_type_name(qualifier, type_expr.name, selected, eff_span),
+                self._local_type_name(type_expr.name, selected),
                 rendered,
                 resolved_args,
                 eff_span,
@@ -2196,18 +2181,6 @@ class TypeEnvironment:
         if typ is not None:
             return typ
         return BUILTIN_ALIAS_TARGETS[name]
-
-    def resolve_qualified_name_type(
-        self,
-        qualifier: QualifierChain,
-        name: str,
-        *,
-        span: SourceSpan | None,
-    ) -> Type:
-        """Resolve a qualified type reference ``QUALIFIER::Name`` to what scope selected for it."""
-        return self._resolve_selected_type(
-            qualifier.node_id, qualifier, name, span=span, _resolving=frozenset()
-        )
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return source-owned ``(name, type)`` pairs from the type namespace.
@@ -2341,11 +2314,11 @@ class TypeEnvironment:
         )
 
     def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
-        """Return variants whose short owner spelling is occupied by a module route.
+        """Return variants whose short owner spelling a same-named module route also reaches.
 
-        Only a ``LOCAL``/``OPEN_IMPORT`` form can be shadowed this way: those
-        are the only kinds writable as a bare ``owner_name`` qualifier, which
-        is exactly the qualifier a same-named module route also competes for.
+        Such a spelling selects two declarations, so it is ambiguous. Only a
+        ``LOCAL``/``OPEN_IMPORT`` form is affected: those are the only kinds
+        written with a bare ``owner_name`` qualifier.
         """
         template = form.type_template.template
         if form.kind not in (
@@ -2429,7 +2402,7 @@ class TypeEnvironment:
         return ordered
 
     def blocked_enum_variants(self) -> Mapping[tuple[str, ...], frozenset[str]]:
-        """Map each short enum-owner qualifier to the variants a module route blocks.
+        """Map each short enum-owner qualifier to the variants a module route makes ambiguous.
 
         A match-compile consumer selecting a source spelling for one concrete
         enum constructor needs this alongside ``enum_owner_forms``: an

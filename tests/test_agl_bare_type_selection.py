@@ -244,12 +244,12 @@ class TestScopeRegionNeverStopsABareTypeName:
             _LOCAL_REGION_HEADER,
             probe_table(
                 probes,
-                {key: ("scope" if key == "alias" else "typecheck", AglTypeError) for key in probes},
+                {key: ("scope", AglTypeError) for key in probes},
                 span_texts={
-                    "annotation": "x: Geo",
-                    "alias": "type A = Geo",
+                    "annotation": "Geo",
+                    "alias": "Geo",
                     "type-argument": "Geo",
-                    "applied": "x: Geo[int]",
+                    "applied": "Geo[int]",
                 },
             ),
         )

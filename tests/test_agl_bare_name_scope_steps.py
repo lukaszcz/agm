@@ -188,16 +188,17 @@ def _own_identities(own: str) -> dict[str, str]:
     }
 
 
-# Region ``r`` declares the own declarations beside its ``use``. Only the
-# module root makes an enum member's terminal name a bare value, so inside
-# ``r`` the ``use`` supplies the bare member; a member path only the ``use``
-# reaches is the contributed member.
+# Region ``r`` declares the own declarations beside its ``use``. An enum
+# injects its members' terminal names at its own step, so inside ``r`` the own
+# member beats the ``use``'s; a member only the ``use`` reaches is the
+# contributed member.
 _SAME_REGION_PROBES: dict[str, tuple[str, str]] = {
     "call": ("use s::*", "let v = R(x = 1)"),
     "reference": ("use s::*", "let v = R"),
     "pattern": ("use s::*", "let v = case r::R(x = 1) of\n  | R(x) => x"),
-    "member-call": ("use s::E::*", 'let v = A(y = "a")'),
+    "member-call": ("use s::E::*", "let v = A(x = 1)"),
     "member-reference": ("use s::E::*", "let v = A"),
+    "contributed-member": ("use s::E::*", "let v = B"),
     "annotation": ("use s::*", "let v = fn(e: R) => e.x"),
     "alias": ("use s::*", "type T = R\nlet v = fn(t: T) => t.x"),
     "type-argument": ("use s::*", "let v = fn(o: Option[R]) => 1"),
@@ -210,8 +211,7 @@ _SAME_REGION_PROBES: dict[str, tuple[str, str]] = {
 }
 _SAME_REGION_IDENTITIES = {
     **_own_identities("r::"),
-    "member-call": "record s::E::A\n  y: text",
-    "member-reference": "text -> s::E::A",
+    "contributed-member": "record s::E::B",
     "qualifier-member": "record s::E::B",
 }
 

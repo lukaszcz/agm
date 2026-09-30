@@ -626,8 +626,10 @@ class PatternSlot:
     """Parallel metadata for candidates owned by one pattern match site.
 
     ``match_site_node_id`` identifies the owning case branch.
-    ``alternative`` is an enclosing ordinary binding or an outer pattern-slot
-    binding, if one is visible.
+    ``alternative`` is what the name reads outside the pattern -- an
+    enclosing binding, an outer pattern-slot binding, or a declaration --
+    if anything, and ``alternative_constructor`` the constructor it names.
+    ``ambiguous_outside`` is set when that reading is ambiguous.
     """
 
     slot_id: int
@@ -635,6 +637,8 @@ class PatternSlot:
     candidates: tuple[SlotCandidate, ...]
     alternative: BindingRef | None
     match_site_node_id: int
+    alternative_constructor: ConstructorRef | None = None
+    ambiguous_outside: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -797,35 +801,15 @@ class ScopeNode:
     )
     uses: list[UseDecl] = field(default_factory=list)
 
-    def lookup(
-        self, name: str, *, member_predicate: Callable[[BindingRef], bool] | None = None
-    ) -> BindingRef | None:
-        """Search lexical bindings and named-scope members outward.
-
-        A named-scope member *member_predicate* rejects is skipped, so the
-        search continues outward past it.
-        """
+    def lookup(self, name: str) -> BindingRef | None:
+        """Search this layer's and its parents' lexical bindings outward."""
         scope: ScopeNode | None = self
         while scope is not None:
-            ref = scope.own_binding(name, member_predicate=member_predicate)
+            ref = scope.bindings.get(name)
             if ref is not None:
                 return ref
             scope = scope.parent
         return None
-
-    def own_binding(
-        self, name: str, *, member_predicate: Callable[[BindingRef], bool] | None = None
-    ) -> BindingRef | None:
-        """Return this layer's own lexical binding or named-scope member *name*.
-
-        A named-scope member *member_predicate* rejects is not one.
-        """
-        ref = self.bindings.get(name)
-        if ref is None and self.scope_path:
-            ref = self.members.get(name)
-            if ref is not None and member_predicate is not None and not member_predicate(ref):
-                ref = None
-        return ref
 
     def entry_copy(self) -> "ScopeNode":
         """Copy this layer into a REPL entry's own image.

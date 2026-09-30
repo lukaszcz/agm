@@ -45,17 +45,17 @@ def _unknown(text: str, chain: str) -> Probe:
     return rejected(text, UnknownQualifierError, chain)
 
 
-def _no_type(text: str, parameter: str) -> Probe:
-    """*text* rejected by typecheck: the annotation of *parameter* names no type."""
-    return rejected(text, AglTypeError, parameter, phase="typecheck")
+def _no_type(text: str, name: str) -> Probe:
+    """*text* rejected by scope: the annotation *name* names no type."""
+    return rejected(text, AglTypeError, name)
 
 
 def _root_probes() -> dict[str, Probe]:
     """Every position spelling an injected member as a qualifier, at the root."""
     return {
         "injected-value": accepted("Other", "record pk/lib::E::Other"),
-        "bare-annotation": _no_type("fn(x: Other) => 1", "x: Other"),
-        "bare-reused-annotation": _no_type("fn(x: Rec) => 1", "x: Rec"),
+        "bare-annotation": _no_type("fn(x: Other) => 1", "Other"),
+        "bare-reused-annotation": _no_type("fn(x: Rec) => 1", "Rec"),
         "value": _unknown("Other::Other", _OTHER),
         "constructor": _unknown("Rec::Rec(x = 1)", _REC),
         "annotation": _unknown("fn(x: Other::Other) => 1", _OTHER),
@@ -82,8 +82,8 @@ def _region_probes() -> dict[str, Probe]:
         "injected-value": accepted(
             _in_region("let q = Other") + "\n\ns::q", "record pk/lib::E::Other"
         ),
-        "bare-annotation": _no_type(_in_region("def f(x: Other) -> int = 1"), "x: Other"),
-        "bare-reused-annotation": _no_type(_in_region("def f(x: Rec) -> int = 1"), "x: Rec"),
+        "bare-annotation": _no_type(_in_region("def f(x: Other) -> int = 1"), "Other"),
+        "bare-reused-annotation": _no_type(_in_region("def f(x: Rec) -> int = 1"), "Rec"),
         "value": _unknown(_in_region("let q = Other::Other"), _OTHER),
         "constructor": _unknown(_in_region("let q = Rec::Rec(x = 1)"), _REC),
         "annotation": _unknown(_in_region("def f(x: Other::Other) -> int = 1"), _OTHER),

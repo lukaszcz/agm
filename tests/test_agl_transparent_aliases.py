@@ -190,19 +190,13 @@ _SCENARIOS = {
         probes={
             "alias-value": rejected("Geo(x = 1)", AglScopeError, "Geo"),
             "alias-pattern": rejected(_BASE_PATTERN, NoVisibleConstructorError, "Geo(x)"),
-            "alias-annot": rejected("fn(p: Geo) => p", AglTypeError, "p: Geo", phase="typecheck"),
-            "alias-alias": rejected("type AA = Geo\nfn(p: AA) => p", AglTypeError, "type AA = Geo"),
-            "alias-tyarg": rejected(
-                "fn(p: array[Geo]) => p", AglTypeError, "Geo", phase="typecheck"
-            ),
-            "alias-cast": rejected(
-                "fn(p: text) => p as? Geo", AglTypeError, "p as? Geo", phase="typecheck"
-            ),
+            "alias-annot": rejected("fn(p: Geo) => p", AglTypeError, "Geo"),
+            "alias-alias": rejected("type AA = Geo\nfn(p: AA) => p", AglTypeError, "Geo"),
+            "alias-tyarg": rejected("fn(p: array[Geo]) => p", AglTypeError, "Geo"),
+            "alias-cast": rejected("fn(p: text) => p as? Geo", AglTypeError, "Geo"),
             "beneath-the-alias": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
             "routed-alias": rejected("al::Geo(x = 1)", HiddenMemberError, "al::Geo"),
-            "beneath-it-through-another-alias": rejected(
-                "fn(p: Sh) => p", AglTypeError, "p: Sh", phase="typecheck"
-            ),
+            "beneath-it-through-another-alias": rejected("fn(p: Sh) => p", AglTypeError, "Sh"),
             "unrelated-alias": accepted("fn(p: Uh) => p", "base::Oops -> base::Oops"),
         },
     ),
@@ -227,9 +221,7 @@ _SCENARIOS = {
             "beneath-the-alias": rejected("Geo::f", HiddenMemberError, "Geo::f"),
             "routed-beneath-the-alias": rejected("al::Geo::f", HiddenMemberError, "al::Geo::f"),
             "anchored-beneath-the-alias": rejected("/al::Geo::f", HiddenMemberError, "/al::Geo::f"),
-            "beneath-it-through-another-alias": rejected(
-                "fn(p: Sh) => p", AglTypeError, "p: Sh", phase="typecheck"
-            ),
+            "beneath-it-through-another-alias": rejected("fn(p: Sh) => p", AglTypeError, "Sh"),
             "unrelated-alias": accepted("fn(p: Uh) => p", "base::Oops -> base::Oops"),
         },
     ),
@@ -415,17 +407,13 @@ _SCENARIOS = {
                 "target-value": rejected("Base(x = 1)", AglScopeError, "Base"),
                 "alias-value": rejected("Geo(x = 1)", AglScopeError, "Geo"),
                 "alias-pattern": rejected(_BASE_PATTERN, NoVisibleConstructorError, "Geo(x)"),
-                "alias-annot": rejected(
-                    "fn(p: Geo) => p", AglTypeError, "p: Geo", phase="typecheck"
-                ),
+                "alias-annot": rejected("fn(p: Geo) => p", AglTypeError, "Geo"),
                 "beneath-the-target": rejected(
                     "Base::Inner(y = 1)", UnknownQualifierError, "Base::Inner"
                 ),
                 "beneath-the-alias": rejected("Geo::f", UnknownQualifierError, "Geo::f"),
                 "routed-alias": rejected("ex::Geo(x = 1)", UnknownMemberError, "ex::Geo"),
-                "beneath-it-through-another-alias": rejected(
-                    "fn(p: Sh) => p", AglTypeError, "p: Sh", phase="typecheck"
-                ),
+                "beneath-it-through-another-alias": rejected("fn(p: Sh) => p", AglTypeError, "Sh"),
                 "unrelated-alias": accepted("fn(p: Uh) => p", "base::Oops -> base::Oops"),
                 "other-import": accepted("base::Base::Inner(y = 1)", _INNER),
             },
@@ -644,6 +632,15 @@ _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
 )
 
 
+_SCENARIOS["ill-founded-aliases-denote-no-shared-type"] = Scenario(
+    modules={"c1": "type T = array[T]\n", "c2": "type T = array[T]\n"},
+    header=("import c1::*", "import c2::*"),
+    probes={"clash": rejected("fn(p: T) => p", AmbiguousQualificationError, "T")},
+    # Either import alone is an entry whose cyclic alias typecheck rejects.
+    legal=frozenset({(3,)}),
+)
+
+
 _DENOTED_TWICE = (
     "import gen::*\ntype F = int -> bool\ntype G = int -> bool\ntype IntBox = Box[int]\n"
     "type IB2 = Box[int]\ntype H = int -> text\n"
@@ -655,12 +652,10 @@ _SCENARIOS |= {
         modules={"gen": _GENERIC, "hd": _DENOTED_TWICE},
         header=("import hd::* hiding F, IntBox",),
         probes={
-            "hidden": rejected("fn(f: F) => f(1)", AglTypeError, "f: F", phase="typecheck"),
-            "same-type": rejected("fn(f: G) => f(1)", AglTypeError, "f: G", phase="typecheck"),
+            "hidden": rejected("fn(f: F) => f(1)", AglTypeError, "F"),
+            "same-type": rejected("fn(f: G) => f(1)", AglTypeError, "G"),
             "same-type-routed": rejected("fn(f: hd::G) => f(1)", HiddenMemberError, "hd::G"),
-            "same-applied-type": rejected(
-                "fn(p: IB2) => p.v", AglTypeError, "p: IB2", phase="typecheck"
-            ),
+            "same-applied-type": rejected("fn(p: IB2) => p.v", AglTypeError, "IB2"),
             "another-type": accepted("fn(f: H) => f(1)", "(int -> text) -> text"),
         },
     ),
@@ -674,12 +669,9 @@ _SCENARIOS |= {
         header=("import hd\nimport ex::*",),
         probes={
             "use": rejected(
-                _in_region("use hd::* hiding F", "fn(f: G) => f(1)"),
-                AglTypeError,
-                "f: G",
-                phase="typecheck",
+                _in_region("use hd::* hiding F", "fn(f: G) => f(1)"), AglTypeError, "G"
             ),
-            "export": rejected("fn(f: G) => f(1)", AglTypeError, "f: G", phase="typecheck"),
+            "export": rejected("fn(f: G) => f(1)", AglTypeError, "G"),
             "export-another-type": accepted("fn(f: H) => f(1)", "(int -> text) -> text"),
         },
     ),
@@ -778,7 +770,7 @@ def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
 
     assert (phase, error) == ("scope", AglTypeError)
     assert span is not None and span.source.label.endswith("al.agl")
-    assert span_text(_UNRESOLVED, span) == "type Geo = Base"
+    assert span_text(_UNRESOLVED, span) == "Base"
 
 
 @pytest.mark.parametrize(

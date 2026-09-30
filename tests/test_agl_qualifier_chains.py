@@ -692,7 +692,7 @@ def test_use_aliases_and_hiding_do_not_leak_enum_variants(tmp_path: Path, use_de
         _entry_resolution(
             tmp_path,
             {
-                "entry": f"import lib\n{use_decl}\ndef selected() -> Flag = Ready",
+                "entry": f"import lib\n{use_decl}\ndef selected() -> lib::Flag = Ready",
                 "lib": "enum Flag\n  | Ready\n  | Waiting",
             },
         )

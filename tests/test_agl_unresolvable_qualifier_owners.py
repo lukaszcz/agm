@@ -250,20 +250,11 @@ _SCENARIOS = {
         header=("import lib",),
         probes={
             "helper-applied": rejected(
-                "let x: lib::helper[int] = null\nx",
-                AglTypeError,
-                "let x: lib::helper[int] = null",
-                phase="typecheck",
+                "let x: lib::helper[int] = null\nx", AglTypeError, "lib::helper"
             ),
-            "helper-name": rejected(
-                "fn(x: lib::helper) => 1", AglTypeError, "x: lib::helper", phase="typecheck"
-            ),
-            "constant-name": rejected(
-                "fn(x: lib::konst) => 1", AglTypeError, "x: lib::konst", phase="typecheck"
-            ),
-            "constant-applied": rejected(
-                "fn(x: lib::konst[int]) => 1", AglTypeError, "x: lib::konst[int]", phase="typecheck"
-            ),
+            "helper-name": rejected("fn(x: lib::helper) => 1", AglTypeError, "lib::helper"),
+            "constant-name": rejected("fn(x: lib::konst) => 1", AglTypeError, "lib::konst"),
+            "constant-applied": rejected("fn(x: lib::konst[int]) => 1", AglTypeError, "lib::konst"),
             "libN-member": rejected("fn(x: lib::N::Foo) => 1", UnknownMemberError, "lib::N::Foo"),
             "libN-member-applied": rejected(
                 "fn(x: lib::N::Foo[int]) => 1", UnknownMemberError, "lib::N::Foo"

@@ -17,7 +17,7 @@ owns the order and the verdicts.
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol, TypeAlias
 
@@ -31,6 +31,7 @@ from agm.agl.scope.symbols import (
     ContributionLayer,
     DeclarationKey,
     DeclarationSelection,
+    Layers,
     OwnerMemberSelection,
     QName,
     QualificationOrigin,
@@ -39,6 +40,7 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     UnknownMemberError,
     UnknownQualifierError,
+    add_layers,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
@@ -235,6 +237,14 @@ class PathSources(DeclarationNames, Protocol):
         """The enum member module qualifier *chain*'s surface injects as *member*."""
         ...
 
+    def injected_at(self, step: ScopePath, name: str) -> Reading:
+        """The enum members injected as bare *name* at *step*.
+
+        An enum injects its members at its own step: the module's own enums'
+        members are its own, and any other is contributed.
+        """
+        ...
+
     def inline_arity(self, owner: DeclarationKey, member: str, written: str) -> int | None:
         """The type parameters type *owner*, spelled *written*, takes when it owns *member* inline.
 
@@ -315,13 +325,24 @@ def lookup_bare(
     *,
     span: SourceSpan,
     local_to: ModuleId,
+    contributions: bool = True,
+    constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
 ) -> QualifiedTarget | AglError | None:
     """Return what bare *name*, written in *scope_path*, selects; ``None`` when nothing.
 
-    *span* locates an ambiguity.
+    A value spelling also reads, at each step, the enum members injected
+    there (:meth:`PathSources.injected_at`) once no own declaration at the
+    step's full path claims the name. Without *contributions*, only the
+    module's own declarations and injections are read. *span* locates an
+    ambiguity; *constructors*, when given, reports one among constructors
+    alone.
     """
-    anchor = _anchor(sources, None, scope_path)
-    return _Walk(sources, anchor.steps, (), None, (name,), local_to, span).find(kind)
+    steps = tuple(
+        _step(sources, step, injects=kind is LookupKind.VALUE, contributions=contributions)
+        for step in lookup_steps(scope_path)
+    )
+    walk = _Walk(sources, steps, (), None, (name,), local_to, span, constructors=constructors)
+    return walk.find(kind)
 
 
 def lookup_declared(
@@ -341,10 +362,12 @@ def lookup_declared(
     their own member tables select. Finding nothing is then an owner-table
     refusal, a hidden member when a ``hiding`` removed *path*, else an
     unknown member of it, since every prefix of a declaring path is a scope
-    path of the module's own. *span* locates a bare spelling's ambiguity.
+    path of the module's own. A bare value spelling (no *written*) also reads
+    the enum members injected at the parent step, as :func:`lookup_bare`
+    does. *span* locates a bare spelling's ambiguity.
     """
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
-    parent = _step(sources, path[:-1])
+    parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
     step = replace(parent, path=path[: len(path) - len(names)])
     walk = _Walk(sources, (step,), (), written, names, local_to, span)
     found = walk.find(kind)
@@ -480,17 +503,29 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
     )
 
 
-def _step(sources: PathSources, step: ScopePath) -> _Step:
+def _step(
+    sources: PathSources, step: ScopePath, *, injects: bool = False, contributions: bool = True
+) -> _Step:
     """Return *step* reading own declarations and contributions.
 
     An own declaration at a full path wins it, so the contributions there are
-    read only when there is none. Every type a prefix reaches owns what its
-    member table selects, the contributed ones beside an own one included.
+    read only when there is none -- and, when *injects*, the enum members
+    injected at *step*, an own one winning like an own declaration. Without
+    *contributions*, only the own ones are read. Every type a prefix reaches
+    owns what its member table selects, the contributed ones beside an own
+    one included.
     """
 
     def read(path: ScopePath, kind: LookupKind) -> Reading:
         own = sources.own_at(path, kind)
-        return own if own.candidates else sources.contributed_at(step, path, kind)
+        if own.candidates:
+            return own
+        injected = sources.injected_at(step, path[-1]) if injects else Reading()
+        if contributions:
+            return sources.contributed_at(step, path, kind) + injected
+        return Reading(
+            tuple(c for c in injected.candidates if c.layer is ContributionLayer.DECLARED)
+        )
 
     def owners(path: ScopePath) -> Reading:
         return sources.own_at(path, LookupKind.TYPE) + sources.contributed_at(
@@ -503,7 +538,8 @@ def _step(sources: PathSources, step: ScopePath) -> _Step:
 class _Walk:
     """One spelling's walk over its anchor's steps for one kind.
 
-    *route* is the module route the spelling leads with, if any.
+    *route* is the module route the spelling leads with, if any;
+    *constructors*, when given, reports an ambiguity among constructors alone.
     """
 
     def __init__(
@@ -515,8 +551,11 @@ class _Walk:
         names: ScopePath,
         local_to: ModuleId,
         span: SourceSpan,
+        *,
+        constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
     ) -> None:
         self._sources = sources
+        self._constructors = constructors
         self._steps = steps
         self._route = route
         self._chain = chain
@@ -569,6 +608,9 @@ class _Walk:
         if selected is None:
             return None
         if not isinstance(selected, Candidate):
+            competing = _by_constructor(selected)
+            if self._constructors is not None and competing is not None:
+                return self._constructors(competing)
             return self._ambiguous(
                 selected, self._names[step.start :], self._span if chain is None else chain.span
             )
@@ -690,14 +732,14 @@ class _Walk:
         )
 
     def _ambiguous(
-        self, origins: tuple[QualificationOrigin, ...], names: ScopePath, span: SourceSpan
+        self, candidates: tuple[Candidate, ...], names: ScopePath, span: SourceSpan
     ) -> AmbiguousQualificationError:
-        """Return the error for spelling *names*, at *span*, selecting several declarations."""
+        """Return the error for spelling *names*, at *span*, selecting several *candidates*."""
         chain = self._chain
         return AmbiguousQualificationError.for_origins(
             self._route,
             names,
-            origins,
+            (candidate.origin for candidate in candidates),
             anchored=chain is not None and chain.anchored,
             span=span,
             local_to=self._local_to,
@@ -741,8 +783,8 @@ def _reached_as(reading: Reading, owner: Candidate) -> Reading:
 
 def _decided(
     candidates: Iterable[Candidate], identity: Callable[[DeclarationKey], object]
-) -> Candidate | tuple[QualificationOrigin, ...] | None:
-    """The one candidate selected, own first; the origins when several distinct ones compete.
+) -> Candidate | tuple[Candidate, ...] | None:
+    """The one candidate selected, own first; every competing one when several distinct ones do.
 
     Candidates are distinct when they name distinct declarations by
     *identity* (:meth:`PathSources.denotes`): an alias renaming a declaration
@@ -763,7 +805,7 @@ def _decided(
         key = target.constructor if target.key is None else identity(target.key)
         distinct.setdefault(key, []).append(candidate)
     if len(distinct) > 1:
-        return tuple(candidate.origin for reached in distinct.values() for candidate in reached)
+        return tuple(candidate for reached in distinct.values() for candidate in reached)
     if not distinct:
         return None
     ((named, reached),) = distinct.items()
@@ -777,8 +819,19 @@ def _decided(
     return min(reached, key=spelled_first)
 
 
+def _by_constructor(candidates: Iterable[Candidate]) -> dict[ConstructorRef, Layers] | None:
+    """*candidates*' constructors, each with every layer reaching it; ``None`` if one names none."""
+    constructors: dict[ConstructorRef, Layers] = {}
+    for candidate in candidates:
+        constructor = candidate.target.constructor
+        if constructor is None:
+            return None
+        add_layers(constructors, constructor, (candidate.layer,))
+    return constructors
+
+
 def _is_beneath(
-    target: QualifiedTarget | Candidate | tuple[QualificationOrigin, ...] | None,
+    target: QualifiedTarget | Candidate | tuple[Candidate, ...] | None,
     owner: DeclarationKey,
 ) -> bool:
     """Whether *target* is declared directly beneath type *owner*."""

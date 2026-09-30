@@ -102,6 +102,18 @@ def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -
     assert "whitespace" in diagnostic
 
 
+def test_spaced_qualifier_near_miss_repairs_an_own_scope_member(tmp_path: Path) -> None:
+    """A tight spelling selecting an own scope's member is repaired like a module route."""
+    entry = "scope lib\n  def x() -> int = 1\nend lib\n\nlib ::x()"
+
+    with pytest.raises(AglScopeError) as raised:
+        resolve_repl_graph(_graph(tmp_path, entry))
+
+    span = raised.value.span
+    assert span is not None
+    assert entry[span.start_offset : span.end_offset] == "::"
+
+
 def test_spaced_qualifier_near_miss_repairs_a_bare_imported_type_member(tmp_path: Path) -> None:
     """A spelling an import tail makes available bare is repaired like a module route."""
     entry = "import lib::*\nGeo ::Point(x = 1)"

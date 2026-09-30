@@ -271,10 +271,14 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
 def unknown_type(name: str, span: SourceSpan | None) -> AglTypeError:
     """Return the diagnostic for a bare type name selecting nothing and naming no built-in type.
 
-    Raised by typecheck for a type position, and by scope for an alias's
-    target where the alias is declared.
+    Raised by scope, where the name is written.
     """
     return AglTypeError(f"Unknown type '{name}'.", span=span)
+
+
+def not_a_type(spelling: str, span: SourceSpan | None) -> AglTypeError:
+    """Return the diagnostic for a qualified type spelling selecting only a value."""
+    return AglTypeError(f"'{spelling}' does not name a type.", span=span)
 
 
 class HiddenMemberError(AglTypeError):

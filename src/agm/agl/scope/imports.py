@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agl.modules.ids import ModuleId, render_route_member, spell_declaration
+from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import MissRepair, UnknownMemberError
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
@@ -52,9 +52,7 @@ __all__ = [
     "qualifier_members",
     "qualifier_scope_paths",
     "resolve_qualified",
-    "route_spelling",
     "declares_bare_constructor",
-    "try_resolve_qualified_member",
 ]
 
 PathAtom: TypeAlias = tuple[str, ...]
@@ -871,31 +869,6 @@ def qualifier_contributes(
         _member_qname(env.contributions[module], qualifier, member, anchored=anchored) is not None
         for module in qualifier_candidates(env, qualifier, anchored=anchored)
     )
-
-
-def try_resolve_qualified_member(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> QName | None:
-    """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
-    result = resolve_qualified(env, qualifier, member, anchored=anchored)
-    return result.qname if isinstance(result, QualResolutionFound) else None
-
-
-def route_spelling(env: ImportEnv, origin: QName) -> str | None:
-    """Return the shortest ``route::path`` spelling that resolves to *origin* through *env*.
-
-    Every import route exposing *origin* is tried; ``None`` when none selects
-    it uniquely.
-    """
-    spellings = (
-        render_route_member(qualifier, _path(atom), anchored=anchored)
-        for contribution in env.contributions.values()
-        for atom, qname in contribution.members.items()
-        if qname == origin
-        for qualifier, anchored in contribution_routes(contribution)
-        if try_resolve_qualified_member(env, qualifier, atom, anchored=anchored) == origin
-    )
-    return min(spellings, key=len, default=None)
 
 
 def resolve_qualified(

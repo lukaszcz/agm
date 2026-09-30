@@ -61,9 +61,7 @@ def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments() 
 
 
 def test_qualified_enum_constructor_pattern_rejects_arguments_on_a_non_generic_owner() -> None:
-    error = rejection(
-        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1"
-    )
+    error = rejection("enum E\n  | M\nlet value: E = M\ncase value of | E[int]::M() => 0 | _ => 1")
 
     assert isinstance(error, AglScopeError)
 

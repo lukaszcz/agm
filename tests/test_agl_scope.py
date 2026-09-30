@@ -2427,26 +2427,6 @@ class TestParentScopeSeam:
         assert ref.name == "k"
         assert ref.mutable is False
 
-    def test_constructor_binding_with_no_candidates_does_not_error(self) -> None:
-        """A constructor_binding from a parent scope with no ambient candidates
-        is resolved (scope pass succeeds) but constructor_refs is NOT populated.
-        This covers the len(candidates)==0 branch in _resolve_varref."""
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        session_scope = prior.root_scope
-        # No retained type owners passed → candidates is empty for 'Pass'.
-        entry = resolve_entry(
-            "Pass()",
-            parent_scope=session_scope,
-        )
-        # Scope resolution succeeds but does NOT populate constructor_refs.
-        from agm.agl.syntax.nodes import Call as _Call
-
-        call_node = entry.program.body.items[0]
-        assert isinstance(call_node, _Call)
-        assert isinstance(call_node.callee, VarRef)
-        # Without ambient candidates, constructor_refs is not populated.
-        assert call_node.callee.node_id not in entry.constructor_refs
-
     def test_ambient_nullary_variant_retains_bare_pattern_metadata(self) -> None:
         prior = parse_and_resolve_repl("enum Flag\n  | mark\nmark()")
         entry = resolve_entry(
@@ -2726,7 +2706,7 @@ class TestDirectASTConstruction:
     def test_try_with_catch_binder(self) -> None:
         err_use = _make_varref("err")
         clause = CatchClause(
-            exc_type="SomeError",
+            exc_type="Exception",
             binding="err",
             body=err_use,
             span=_sp(),

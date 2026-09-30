@@ -265,6 +265,25 @@ _LATER_OWN_BINDINGS = 'scope Agent\n  let cnt: text = "own"\n  def f() -> text =
 _X_A = "scope X\n  def a() -> int = 1\nend X\n"
 _X_B = 'scope X\n  def b() -> text = "2"\nend X\n'
 _ALIASED_MODULE = f"{_USE_LIB}\nscope Deep\n  def d() -> int = 4\nend Deep\n"
+_WRAPPED_COLOR = (
+    "enum Color\n  | Red\n  | Blue\nenum Wrap\n  | wrap(shade: Color)\n"
+    "def rank(c: Color) -> int = 1\n"
+)
+_SIGNAL = "enum Signal\n  | Red\n  | Green\n"
+_BOUND_GEO = "record R\n  x: int\nlet Geo: R = R(x = 1)\n"
+_SCOPED_COLOR = "scope S\n  enum Color\n    | Red\n    | Blue\nend S"
+
+
+def _branch(value: str, *, region: bool) -> str:
+    """A ``wrap(Red)`` branch reading *value*, at the root or in region ``S`` using ``Color``."""
+    pad = "  " if region else ""
+    body = (
+        f"{pad}def a(w: Wrap) -> int =\n{pad}  case w of\n{pad}    | wrap(Red) => {value}\n"
+        f"{pad}    | wrap(Blue) => 0\n"
+    )
+    if not region:
+        return f"{body}a(wrap(Color::Blue))"
+    return f"scope S\n  use Color::*\n{body}end S\n\nS::a(wrap(Color::Blue))"
 
 
 _SCENARIOS = {
@@ -531,8 +550,14 @@ _SCENARIOS = {
         modules={"two": "enum Color\n  | Red\n  | Green\n"},
         header=("import two::*", "enum Shade\n  | Dark\n  | Light"),
         probes={
-            "own": rejected("fn(x: Dark) => x", AglTypeError, "x: Dark", phase="typecheck"),
-            "imported": rejected("fn(x: Red) => x", AglTypeError, "x: Red", phase="typecheck"),
+            "own": rejected("fn(x: Dark) => x", AglTypeError, "Dark"),
+            "imported": rejected("fn(x: Red) => x", AglTypeError, "Red"),
+            "in-a-region": rejected(
+                _in_region("use two::*", "fn(x: Red) => x"), AglTypeError, "Red"
+            ),
+            "unknown": rejected("fn(x: Nowhere) => x", AglTypeError, "Nowhere"),
+            "imported-qualified": rejected("fn(x: two::Red) => x", AglTypeError, "two::Red"),
+            "own-qualified": rejected("fn(x: ::Dark) => x", AglTypeError, "::Dark"),
         },
     ),
     "a-use-combines-the-scopes-earlier-uses-expose": Scenario(
@@ -1260,12 +1285,7 @@ _SCENARIOS = {
             "constructor": accepted(
                 _in_region("use e::Pt::*", "Pt(x = 1)"), "record e::Pt\n  x: int"
             ),
-            "no-type": rejected(
-                _in_region("use e::Pt::*", "fn(p: Pt) => p"),
-                AglTypeError,
-                "p: Pt",
-                phase="typecheck",
-            ),
+            "no-type": rejected(_in_region("use e::Pt::*", "fn(p: Pt) => p"), AglTypeError, "Pt"),
             "nested-type": accepted(
                 _in_region("use e::Pt::*", "fn(p: In) => p"), "e::Pt::In -> e::Pt::In"
             ),
@@ -1391,6 +1411,66 @@ _SCENARIOS = {
                 "scope S1::S2\n  let v = X::k()\nend S1::S2\n\nS1::S2::v", "bool"
             ),
             "root-step": accepted("X::f()", "int"),
+        },
+    ),
+    "a-branch-reads-a-constructor-pattern-name-like-a-bare-value": Scenario(
+        modules={"M": _WRAPPED_COLOR, "N": _SIGNAL},
+        header=("import M::*", "import N::*", "record Red\n  q: int"),
+        probes={
+            "own-at-the-root": accepted(_branch("Red(q = 1).q", region=False), "int"),
+            "use-in-a-region": rejected(
+                _branch("Red(q = 1).q", region=True), AglTypeError, "q = 1", phase="typecheck"
+            ),
+            "use-member-in-a-region": accepted(_branch("rank(Red)", region=True), "int"),
+        },
+    ),
+    "a-branch-reading-an-ambiguous-constructor-pattern-name": Scenario(
+        modules={"M": _WRAPPED_COLOR, "N": _SIGNAL},
+        header=("import M::*", "import N::*"),
+        probes={
+            "ambiguous": rejected(
+                _branch("rank(Red)", region=False),
+                AglTypeError,
+                "Red",
+                phase="typecheck",
+            ),
+            "use-in-a-region": accepted(_branch("rank(Red)", region=True), "int"),
+        },
+    ),
+    "a-field-access-object-reads-like-a-bare-value": Scenario(
+        modules={"D": _BOUND_GEO},
+        header=("import D", "record Geo\n  y: int"),
+        probes={
+            "use-in-a-region": accepted(
+                "scope S\n  use D::{Geo}\n  def f() -> int = Geo.x\nend S\n\nS::f()", "int"
+            ),
+            "own-type-at-the-root": rejected("Geo.y", AglScopeError, "Geo"),
+            "own-type-in-a-region": rejected(
+                "scope S\n  def f() -> int = Geo.y\nend S", AglScopeError, "Geo"
+            ),
+        },
+    ),
+    "an-enum-injects-its-members-at-its-own-step": Scenario(
+        header=(_SCOPED_COLOR, "def Red() -> int = 1"),
+        probes={
+            "in-its-scope": accepted(
+                "scope S\n  let v = Red\nend S\n\nS::v", "record S::Color::Red"
+            ),
+            "in-a-nested-scope": accepted(
+                "scope S::T\n  let v = Blue\nend S::T\n\nS::T::v", "record S::Color::Blue"
+            ),
+            "pattern-in-its-scope": accepted(
+                "scope S\n  def f(c: Color) -> int =\n    case c of\n      | Red => 1\n"
+                "      | Blue => 2\nend S\n\nS::f(S::Color::Red)",
+                "int",
+            ),
+            "outside-its-scope": accepted("Red()", "int"),
+            "outside-its-scope-other-member": rejected("Blue", AglScopeError, "Blue"),
+            "no-member-path": rejected("S::Red", UnknownMemberError, "S::Red"),
+            "own-record-at-its-step": accepted(
+                "scope S\n  record Red\n    q: int\n  let v = Red(q = 1)\nend S\n\nS::v",
+                "record S::Red\n  q: int",
+            ),
         },
     ),
     "a-hiding-at-an-enclosing-step-holds-in-a-nested-region": Scenario(

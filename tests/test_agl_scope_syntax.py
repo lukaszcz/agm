@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.pipeline import RunResult
@@ -423,7 +424,7 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
 
 
 def test_use_rejects_operator_alias_for_scope_route() -> None:
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AglTypeError):
         resolve_inline_entry(
             "use Point as >>\n\nscope Point\n  def distance() -> int = 1\nend Point"
         )

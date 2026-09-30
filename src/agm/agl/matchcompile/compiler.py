@@ -449,8 +449,8 @@ def _short_spelling_blocked(
     """Return whether a module route makes *form*'s short spelling ambiguous for *variant*.
 
     Only a ``LOCAL``/``OPEN_IMPORT`` form spells its owner bare as
-    ``owner_name`` -- the same qualifier a same-named module route competes
-    for -- so only those kinds consult ``blocked_enum_variants``.
+    ``owner_name`` -- a spelling a same-named module route also reaches --
+    so only those kinds consult ``blocked_enum_variants``.
     """
     if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
         return False

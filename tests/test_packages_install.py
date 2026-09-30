@@ -929,7 +929,7 @@ def test_uninstall_cleans_an_interrupted_tombstone_after_a_different_reinstall(
     monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
     second_source = _package(tmp_path / "second", "alpha", "2.0.0")
     (second_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
-        'program def main() -> string = "replacement"\n', encoding="utf-8"
+        'program def main() -> text = "replacement"\n', encoding="utf-8"
     )
     second = install_directory(second_source, home=home, env={})
     new_provenance = second.root.parent / ".provenance" / "2.0.0.toml"

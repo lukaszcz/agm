@@ -1026,6 +1026,36 @@ def test_ambiguous_record_constructor_reports_module_qualified_origins(
     assert excinfo.value.repair == "a/lib::Point"
 
 
+@pytest.mark.parametrize(
+    "own",
+    [
+        pytest.param("", id="route"),
+        pytest.param("scope lib\n  def Point() -> int = 1\nend lib\n", id="own-scope-of-the-route"),
+    ],
+)
+def test_ambiguous_record_constructor_repair_selects_it_where_written(
+    tmp_path: Path, own: str
+) -> None:
+    """The repair of an ambiguous bare constructor selects the first candidate
+    where the bare spelling was written, even when an own scope claims its
+    shortest route spelling."""
+    modules = {"lib": "record Point\n  x: int\n", "lib2": "record Point\n  x: int\n"}
+    header = f"import lib::*\nimport lib2::*\n{own}"
+    with pytest.raises(AmbiguousConstructorError) as excinfo:
+        resolve_program(
+            make_graph_from_files(
+                tmp_path / "ambiguous", {**modules, "entry": f"{header}let p = Point(x = 1)\n"}
+            )
+        )
+    repaired = f"{header}let p: /lib::Point = {excinfo.value.repair}(x = 1)\n"
+    check_program(
+        resolve_program(
+            make_graph_from_files(tmp_path / "repaired", {**modules, "entry": repaired})
+        ),
+        base_caps(),
+    )
+
+
 def test_ambiguous_routed_owner_selects_unknown_member_when_no_candidate_declares_it(
     tmp_path: Path,
 ) -> None:
@@ -2190,15 +2220,14 @@ def test_enum_variant_expansion_never_contributes_a_bare_type(
     """A bare-exposed enum's variant name is unknown in type position, not hidden.
 
     Variant expansion offers ``Other``/``Rec`` as a constructor and pattern
-    candidate only: scope accepts the spelling, and typecheck rejects the
-    annotation the same way an undeclared type would (plain ``AglTypeError``),
-    never as a :class:`HiddenMemberError`/:class:`ReferencedMemberError` --
-    those mean a route to a real member exists but is currently blocked, which
-    is not the case here since no route ever contributes the name as a type.
+    candidate only: scope rejects the annotation the same way an undeclared
+    type (plain ``AglTypeError``), never as a
+    :class:`HiddenMemberError`/:class:`ReferencedMemberError` -- those mean a
+    route to a real member exists but is currently blocked, which is not the
+    case here since no route ever contributes the name as a type.
     """
-    resolved = resolve_program(make_graph_from_files(tmp_path, {"entry": entry, **modules}))
     with pytest.raises(AglTypeError) as raised:
-        check_program(resolved, base_caps())
+        resolve_program(make_graph_from_files(tmp_path, {"entry": entry, **modules}))
     assert type(raised.value) is AglTypeError
 
 

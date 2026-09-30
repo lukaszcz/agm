@@ -66,10 +66,10 @@ def temp_dir() -> str:
 
 
 def _restore_start_directory(directory: str) -> None:
-    """Change back to *directory*; skip it if it no longer exists."""
+    """Change back to *directory*; skip it if it is no longer enterable."""
     try:
         os.chdir(directory)
-    except FileNotFoundError:
+    except OSError:
         pass
 
 

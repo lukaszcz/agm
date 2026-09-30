@@ -372,6 +372,30 @@ def test_os_chdir_start_directory_restore_skips_a_directory_that_no_longer_exist
     assert Path(os.getcwd()) == target
 
 
+def test_os_chdir_start_directory_restore_skips_a_start_path_that_is_no_longer_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run-end restore never crashes the run when the start path became a file."""
+    start = tmp_path / "start"
+    target = tmp_path / "target"
+    start.mkdir()
+    target.mkdir()
+    monkeypatch.chdir(start)
+    source = (
+        "import std/fs\n"
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        f'  os::chdir("{target}")\n'
+        f'  fs::remove("{start}")\n'
+        f'  fs::write("{start}", "x")\n'
+    )
+
+    result = _run(source)
+
+    assert result.ok
+    assert Path(os.getcwd()) == target
+
+
 # ---------------------------------------------------------------------------
 # std/os::is-interactive, platform, cpu-count, which, user
 # ---------------------------------------------------------------------------

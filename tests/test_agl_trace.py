@@ -379,12 +379,23 @@ class TestAgentCallRecord:
             "thinking": "",
         }
 
-    def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
+    def test_text_ask_record_reports_a_single_attempt(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("result"))
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\nlet x: text = impl.ask("do work")\nx',
+            trace_file=trace_path,
+        )
+        call_recs = [r for r in _load_jsonl(trace_path) if r.get("kind") == "agent_request"]
+        assert call_recs[0].get("max_attempts") == 1
+
+    def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        rt = _agent_runtime(_agent_returning("7"))
+        _run_inline(
+            rt,
+            'let impl = AgentCommand("impl")\nlet x: int = impl.ask("do work")\nx',
             trace_file=trace_path,
         )
         records = _load_jsonl(trace_path)

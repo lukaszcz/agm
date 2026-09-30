@@ -1,0 +1,51 @@
+# Explicit call operands evaluate once, in signature order, before dispatch.
+def note-text(label: text, value: text) -> text =
+  print label
+  value
+
+def note-int(label: text, value: int) -> int =
+  print label
+  value
+
+def note-sandbox(label: text) -> Option[Sandbox] =
+  print label
+  None
+
+def note-mode(label: text) -> AgentSandbox =
+  print label
+  AgentSandbox::Native
+
+program def main(mode: int) -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  case mode of
+    | 0 =>
+        let out: text = ask(
+          note-text("prompt", "p"),
+          agent = reviewer,
+          parse-error-retries = note-int("retries", 0),
+          sandbox = note-mode("sandbox"),
+        )
+        print out
+    | 1 =>
+        let out: text = reviewer.ask(
+          note-text("prompt", "p"),
+          parse-error-retries = note-int("retries", 0),
+          sandbox = note-mode("sandbox"),
+        )
+        print out
+    | 2 =>
+        let request = ask-request::[text](
+          note-text("prompt", "p"),
+          agent = reviewer,
+          parse-error-retries = note-int("retries", 0),
+          sandbox = note-mode("sandbox"),
+        )
+        print request.prompt
+    | _ =>
+        let out: text = exec(
+          note-text("command", "echo x"),
+          timeout = Some(note-text("timeout", "5s")),
+          sandbox = note-sandbox("sandbox"),
+          parse-error-retries = note-int("retries", 0),
+        )
+        print out

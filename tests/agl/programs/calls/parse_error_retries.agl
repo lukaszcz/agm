@@ -1,5 +1,5 @@
 # Parse error retries: default (std/config::parse-error-retries), explicit
-# corrective retries, explicit abort, format option, trailing comma in call options.
+# corrective retries, zero retries, format option, trailing comma in call options.
 enum Review
   | Pass
   | Fail(issues: array[text])

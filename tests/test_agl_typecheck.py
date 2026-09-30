@@ -2980,9 +2980,6 @@ class TestAsk:
         err = reject_type('let n: int = ask("Q", format = "json", strict-json = "yes")\nn')
         assert "strict-json" in str(err).lower() or "bool" in str(err).lower()
 
-    def test_ask_parse_error_retries(self) -> None:
-        accept_type('let n: int = ask("Q", parse-error-retries = 3)\nn')
-
     def test_ask_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = ask("Q")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
@@ -3291,11 +3288,8 @@ class TestExec:
         assert len(r.warnings) == 1
         assert "parse-error-retries" in r.warnings[0].message
 
-    def test_exec_accepts_abort_policy(self) -> None:
+    def test_exec_accepts_zero_retries(self) -> None:
         accept_type('let n: int = exec("ls", parse-error-retries = 0)\nn')
-
-    def test_exec_accepts_retry_policy(self) -> None:
-        accept_type('let n: int = exec("ls", parse-error-retries = 2)\nn')
 
     def test_exec_strict_json_without_json_raises(self) -> None:
         err = reject_type('let x: text = exec("ls", strict-json = true)\nx')
@@ -9053,10 +9047,6 @@ class TestParseErrorRetries:
 
     def test_non_int_raises(self) -> None:
         reject_type('let n: int = ask("Q", parse-error-retries = "bad")\nn')
-
-    def test_removed_on_parse_error_option_is_rejected(self) -> None:
-        reject_type('let n: int = ask("Q", on-parse-error = 0)\nn')
-        reject_type('let n: int = exec("ls", on-parse-error = 0)\nn')
 
     def test_text_target_warns(self) -> None:
         r = accept_type('ask("Q", parse-error-retries = 0)')

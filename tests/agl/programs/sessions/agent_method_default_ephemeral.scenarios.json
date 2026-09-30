@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "agent_method_default_policy_retries_in_one_ephemeral_session",
+      "name": "agent_method_default_retries_retries_in_one_ephemeral_session",
       "runtime": {"session_host": true},
       "agents": {"writer": ["not a number", "not a number", "not a number", "not a number", "not a number"]},
       "expect": {

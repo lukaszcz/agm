@@ -11,6 +11,7 @@ agm exec [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
          [--trace|--trace-file PATH|--no-trace]
+         [--debug|--no-debug] [--parse-error-retries N]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
          (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE) [ARG]... [--NAME VALUE]...
@@ -534,7 +535,7 @@ drives shell execution.
 | Code | Meaning |
 |------|---------|
 | `0` | The workflow completed successfully, or `std/os::exit(0)` requested success |
-| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or program-argument validation failure; it can also be requested with `std/os::exit(1)` |
+| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error (including an invalid engine setting from the CLI, a config table, `@config`, or the manifest), or program-argument validation failure; it can also be requested with `std/os::exit(1)` |
 | `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/os::exit(2)` |
 | `3`–`255` | Requested by `std/os::exit(code)` |
 | `128+N` | Terminated by signal `N` (SIGTERM → `143`, SIGHUP → `129`), after the run's cleanup |
@@ -641,6 +642,7 @@ agm repl [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
          [--trace|--trace-file PATH|--no-trace]
+         [--debug|--no-debug] [--parse-error-retries N]
          [--quiet] [--no-stdlib] [--plain]
 ```
 
@@ -798,7 +800,7 @@ exiting.
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent`/`--default-agent` or `[exec] default-sandbox`/`--default-sandbox`, or an unwritable `--trace-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure, reported before the prompt appears: an invalid engine setting from the CLI or `[exec]` (such as a blank or unreadable `default-agent`/`default-sandbox`, a negative `parse-error-retries`, or a non-bool `strict-json`, `trace`, or `debug`), another invalid `[exec]` value, or an unwritable `--trace-file` |
 
 ### Examples
 

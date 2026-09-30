@@ -428,6 +428,30 @@ def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     assert result.error.type_name == "AgentCallError"
 
 
+def test_agent_method_maps_ephemeral_open_failures_to_session_errors() -> None:
+    class FailingOpenHost(_Host):
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+            env: dict[str, str],
+        ) -> str:
+            del permission_mode, sandbox, env
+            raise SessionHostError("unavailable", "open")
+
+    result = _run(
+        'program def main() -> unit =\n  let r: text = AgentCommand("bad").ask("prompt")\n  ()',
+        FailingOpenHost(),
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "SessionError"
+
+
 def test_free_ask_maps_an_undecodable_agent_value_to_an_agent_call_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

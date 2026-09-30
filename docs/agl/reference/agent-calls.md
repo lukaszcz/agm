@@ -268,8 +268,8 @@ retries; use `Session::open` to keep the conversation after the call. An `Agent:
 parsing), sends exactly one prompt, so the Claude, Codex, and Pi CLI backends run their plain
 prompt command. With corrective retries, every attempt shares one conversation and a retry is a
 short follow-up. An `AgentCommand` without `%{SESSION_ID}` cannot continue one, so each retry
-reruns the command with the original prompt, format instructions, the failed response and its
-validation errors.
+reruns the command with the original prompt, format instructions, the failed response, and the
+validation summary.
 
 ## Target types: types as contracts
 
@@ -489,10 +489,10 @@ rendered prompt is delivered to the agent verbatim, together with the
 contract's format instructions; the host must not perform further template
 or environment-variable expansion over it. The prompt is delivered through its
 session. Corrective feedback includes a
-category-based validation summary, never validation paths, keys, or other
-response-derived details. A retry in a continuing conversation sends only that
-summary plus a JSON-format reminder; one that cannot continue resends the
-complete prompt with the failed response
+category-based validation summary; the summary never contains validation paths,
+keys, or other response-derived details. A retry in a continuing conversation
+sends only that summary plus a JSON-format reminder; one that cannot continue
+resends the complete prompt with the failed response
 ([Parse retries](#parse-retries)).
 
 ## The JSON wire format
@@ -666,8 +666,9 @@ Each dispatch delivers to the host agent:
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
-- the 0-based attempt number; retries include only a category-based validation
-  summary and a format reminder. The summary excludes response-derived
+- the 0-based attempt number; a retry in a continuing conversation includes
+  only a category-based validation summary and a format reminder
+  ([Parse retries](#parse-retries)). The summary excludes response-derived
   validation paths, keys, and values.
 
 See [Host environment](host-environment.md).

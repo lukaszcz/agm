@@ -408,7 +408,7 @@ n
 
 
 def test_retry_success_second_attempt() -> None:
-    """Retry policy: first response is invalid JSON, second is valid."""
+    """Retries: first response is invalid JSON, second is valid."""
     source = """\
 let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, parse-error-retries = 1)
@@ -427,7 +427,7 @@ n
 
 
 def test_retry_exhausted_raises() -> None:
-    """Retry policy: all attempts fail → AgentParseError raised."""
+    """Retries: all attempts fail → AgentParseError raised."""
     source = """\
 let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, parse-error-retries = 1)
@@ -726,7 +726,7 @@ req
     ]
 
 
-def test_ask_request_records_its_retry_policy() -> None:
+def test_ask_request_records_its_retry_budget() -> None:
     """``parse-error-retries`` shapes the attempt budget recorded on the request."""
     source = """\
 let worker = AgentCommand("worker")

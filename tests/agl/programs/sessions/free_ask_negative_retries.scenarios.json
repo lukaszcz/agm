@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "negative_count_opens_no_pi_default_session",
+      "params": {"pi": true},
+      "runtime": {"session_host": true},
+      "agents": {"writer": ["7"]},
+      "expect": {"stdout": "range\n", "calls": {"writer": 0}, "sessions": []}
+    },
+    {
+      "name": "negative_count_precedes_a_command_default_without_a_session_id",
+      "params": {"pi": false},
+      "runtime": {"session_host": true, "enforce_command_sessions": true},
+      "agents": {"writer": ["7"]},
+      "expect": {"stdout": "range\n", "calls": {"writer": 0}, "sessions": []}
+    }
+  ]
+}

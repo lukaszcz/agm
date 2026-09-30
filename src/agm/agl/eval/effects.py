@@ -344,7 +344,7 @@ class EffectHandlers:
                 f"got {type(agent_val).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
-        max_attempts = self._eval_max_attempts(retries_expr)
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
         permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
         env = self._decode_environ(self._ctx._eval(env_expr))
 
@@ -374,10 +374,11 @@ class EffectHandlers:
         entries = cast(DictValue, vars_value).entries
         return {name: cast(TextValue, entry).value for name, entry in entries.items()}
 
-    def _eval_max_attempts(self, retries_expr: IrExpr) -> int:
-        """Evaluate a ``parse-error-retries`` operand once into ``1 + retries`` attempts.
+    def _eval_max_attempts(self, retries_expr: IrExpr, contract_id: ContractId) -> int:
+        """Evaluate a ``parse-error-retries`` operand once into the attempt budget.
 
-        A negative count raises the catchable ``RangeError``.
+        That is ``1 + retries``, or 1 when the contract's output can never fail
+        parsing. A negative count raises the catchable ``RangeError``.
         """
         retries = cast(IntValue, self._ctx._eval(retries_expr)).value
         if retries < 0:
@@ -388,7 +389,8 @@ class EffectHandlers:
                     nominals=self._ctx._program.builtin_nominals,
                 )
             )
-        return 1 + retries
+        can_retry = self._ctx._program.contracts[contract_id].can_fail_parsing
+        return 1 + retries if can_retry else 1
 
     def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
         """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
@@ -733,7 +735,7 @@ class EffectHandlers:
                 spec,
                 transport,
                 ask_in_session,
-                single_prompt=max_attempts == 1 or not contract.can_fail_parsing,
+                single_prompt=max_attempts == 1,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
                 env=env,
@@ -745,9 +747,16 @@ class EffectHandlers:
 
     def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
         """Send a prompt through a session and run its shared retry engine."""
-        handle, agent, _transport, _sandbox = self._session_parts(self._ctx._eval(node.session))
+        # An explicit receiver is an operand and evaluates first; the implicit
+        # default session is obtained only after the count is validated.
+        session = (
+            None if isinstance(node.session, IrSessionDefault) else self._ctx._eval(node.session)
+        )
         prompt = self._text_of(self._ctx._eval(node.prompt))
-        max_attempts = self._eval_max_attempts(node.parse_error_retries)
+        max_attempts = self._eval_max_attempts(node.parse_error_retries, node.contract_id)
+        handle, agent, _transport, _sandbox = self._session_parts(
+            self._ctx._eval(node.session) if session is None else session
+        )
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
         try:
@@ -917,7 +926,7 @@ class EffectHandlers:
                 f"got {type(agent_value).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
-        max_attempts = self._eval_max_attempts(retries_expr)
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
         # The AgL-visible request carries the raw evaluated AgentSandbox value
         # verbatim, exactly as it carries the raw agent value: ask-request
         # never dispatches, so nothing decodes it.
@@ -1181,7 +1190,6 @@ class EffectHandlers:
         # Evaluate every call operand once. Retried parsing reruns the shell,
         # not the argument expressions, just as an ordinary call would.
         cmd = self._text_of(self._ctx._eval(command_expr))
-        max_attempts = self._eval_max_attempts(retries_expr)
         env = self._decode_environ(self._ctx._eval(env_expr))
         nominals = self._ctx._program.builtin_nominals
         cwd_value = self._ctx._eval(cwd_expr)
@@ -1204,6 +1212,7 @@ class EffectHandlers:
         sandbox_value = self._ctx._eval(sandbox_expr)
         assert isinstance(sandbox_value, RecordValue)
         limits = decode_exec_sandbox(sandbox_value, nominals)
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
         spec = None if limits is None else limits.for_command(profile_name_for_shell(cmd))
 
         contract = self._ctx._program.contracts[contract_id]

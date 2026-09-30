@@ -88,7 +88,8 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "AgentRequest",
     # Host-minted std/option::Option (see runtime/option.py).
     "Option",
-    # Appended prelude types preserve every established reserved identity above.
+    # Reserved ids are positional; the artifact cache key (`_compiler_digest()`
+    # in artifact_storage.py) covers any change to this list.
     "SessionTransport",
     "Session",
     "SessionStats",

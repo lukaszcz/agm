@@ -205,16 +205,15 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 
 
 def engine_default_settings() -> "dict[str, Value]":
-    """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
+    """Build the typed engine-default value for every defaulted scalar engine key.
 
     Derives the raw values from the shared engine-key catalog, then decodes
-    them via :func:`convert_config_value` (``false`` or ``None``),
-    building its own fresh seeded ``TypeTable`` rather than requiring one from
-    the caller.
+    them via :func:`convert_config_value`, building its own fresh seeded
+    ``TypeTable`` rather than requiring one from the caller.
 
-    ``default-agent`` is an ``Agent`` value rather than a scalar or
-    ``Option[text]`` one and has no host-side default: it comes from the
-    ``std/config`` ``builtin var`` declaration like any other declared default.
+    ``default-agent`` is an ``Agent`` value rather than a scalar one and has no
+    host-side default: it comes from the ``std/config`` ``builtin var``
+    declaration like any other declared default.
     """
     return build_engine_config_seeds(
         {spec.name: spec.default for spec in ENGINE_KEYS if spec.has_default}

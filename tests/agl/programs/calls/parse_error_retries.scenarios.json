@@ -17,7 +17,7 @@
       }
     },
     {
-      "name": "default_policy_retries_four_times_then_aborts",
+      "name": "default_retries_retries_four_times_then_aborts",
       "agents": {
         "reviewer": [
           "nonsense 1",
@@ -46,7 +46,7 @@
       }
     },
     {
-      "name": "default_policy_recovers_on_fifth_attempt",
+      "name": "default_retries_recovers_on_fifth_attempt",
       "agents": {
         "reviewer": [
           "nonsense 1",

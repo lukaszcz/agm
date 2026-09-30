@@ -46,6 +46,7 @@ from typing import Any, NamedTuple, Protocol
 import pytest
 
 from agm.agent.session import (
+    SessionAgentError,
     SessionCapabilities,
     SessionHostError,
     SessionOperation,
@@ -215,6 +216,7 @@ class ScriptedAgent:
         """
         from agm.agent.runner import command_targets_session_id
         from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+        from agm.util.interp import InterpolationError
 
         if transport == "scripted":
             session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
@@ -228,7 +230,7 @@ class ScriptedAgent:
             )
         spec = agent
         continues_conversation = True
-        unsupported_one_shot = False
+        command_without_session_id = False
         if transport == "rpc":
             if not isinstance(spec, AgentPi):
                 raise SessionHostError("RPC transport is only supported by AgentPi", "open")
@@ -239,11 +241,10 @@ class ScriptedAgent:
             backend_type = _ScriptedSessionBackend
             if isinstance(spec, AgentCommand):
                 try:
-                    argv = spec.argv()
-                except ValueError as error:
-                    raise SessionHostError(str(error), "open") from error
-                continues_conversation = command_targets_session_id(argv)
-                unsupported_one_shot = self.require_session_id and not continues_conversation
+                    continues_conversation = command_targets_session_id(spec.argv())
+                except (ValueError, InterpolationError) as error:
+                    raise SessionAgentError(str(error), "open") from error
+                command_without_session_id = self.require_session_id and not continues_conversation
                 capabilities = frozenset({SessionOperation.ASK})
                 supports_name = False
             elif isinstance(spec, AgentClaude):
@@ -269,7 +270,7 @@ class ScriptedAgent:
             capabilities,
             supports_name=supports_name,
             continues_conversation=continues_conversation,
-            unsupported_one_shot=unsupported_one_shot,
+            command_without_session_id=command_without_session_id,
         )
 
     def _fork_session(self, parent: _ScriptedSession) -> Any:
@@ -288,7 +289,7 @@ class ScriptedAgent:
             backend._native_capabilities,
             supports_name=backend._supports_name,
             continues_conversation=backend.continues_conversation,
-            unsupported_one_shot=backend._unsupported_one_shot,
+            command_without_session_id=backend._command_without_session_id,
         )
 
     def _next_response(self) -> str:
@@ -806,15 +807,18 @@ class _ScenarioSessionHost:
 
     @staticmethod
     def _raise_host_error(error: SessionHostError) -> None:
+        from agm.agl.runtime.sessions import SessionAgentError as AglSessionAgentError
         from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
 
+        if isinstance(error, SessionAgentError):
+            raise AglSessionAgentError(error.message, error.operation) from error
         raise AglSessionHostError(error.message, error.operation) from error
 
 
 class _ScriptedSessionBackend:
     """In-memory backend constrained to one production transport's surface.
 
-    ``unsupported_one_shot`` mirrors a command without a session placeholder:
+    ``command_without_session_id`` mirrors a command without a session placeholder:
     it opens only for a single-prompt or ephemeral session.
     """
 
@@ -826,10 +830,10 @@ class _ScriptedSessionBackend:
         *,
         supports_name: bool,
         continues_conversation: bool,
-        unsupported_one_shot: bool = False,
+        command_without_session_id: bool = False,
     ) -> None:
         self.continues_conversation = continues_conversation
-        self._unsupported_one_shot = unsupported_one_shot
+        self._command_without_session_id = command_without_session_id
         self._agent = agent
         self._session = session
         self._native_capabilities = native_capabilities
@@ -850,7 +854,7 @@ class _ScriptedSessionBackend:
         return self.capabilities.supports(SessionOperation(operation))
 
     def open(self, request: Any) -> None:
-        if self._unsupported_one_shot and not (request.single_prompt or request.ephemeral):
+        if self._command_without_session_id and not (request.single_prompt or request.ephemeral):
             self._agent.sessions.remove(self._session)
             raise SessionHostError("command session requires a session placeholder", "open")
         if request.name and not self._supports_name:

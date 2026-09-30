@@ -211,7 +211,7 @@ def test_t6_spawn_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Retry policy — fail first attempt, succeed on retry
+# Retries — fail first attempt, succeed on retry
 # ---------------------------------------------------------------------------
 
 

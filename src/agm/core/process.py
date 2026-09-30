@@ -105,19 +105,32 @@ def _wait_for_process_group_exit(pgid: int, *, grace: float) -> None:
         time.sleep(0.01)
 
 
+_Handler = Callable[[int, FrameType | None], object] | signal.Handlers
+
+
 @contextlib.contextmanager
-def _terminating_signals_handled_by(
-    handler: Callable[[int, FrameType | None], NoReturn],
-) -> Iterator[None]:
-    """Install *handler* for SIGTERM and SIGHUP inside the block."""
-    previous = {
-        number: signal.signal(number, handler) for number in (signal.SIGTERM, signal.SIGHUP)
-    }
+def _signals_handled_by(signals: tuple[int, ...], handler: _Handler) -> Iterator[None]:
+    """Install *handler* for *signals* inside the block, restoring the previous ones after.
+
+    A no-op off the main thread: ``signal.signal`` only works there, and
+    process-wide disposition is never a non-main thread's to change.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {number: signal.signal(number, handler) for number in signals}
     try:
         yield
     finally:
         for number, restored in previous.items():
             signal.signal(number, restored)
+
+
+def _terminating_signals_handled_by(
+    handler: Callable[[int, FrameType | None], NoReturn],
+) -> AbstractContextManager[None]:
+    """Install *handler* for SIGTERM and SIGHUP inside the block."""
+    return _signals_handled_by((signal.SIGTERM, signal.SIGHUP), handler)
 
 
 def _raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
@@ -605,24 +618,6 @@ def run_foreground(
     return result.returncode
 
 
-@contextlib.contextmanager
-def _signals_ignored(signals: tuple[int, ...]) -> Iterator[None]:
-    """Ignore *signals* inside the block, restoring their previous handlers after.
-
-    A no-op off the main thread: ``signal.signal`` only works there, and
-    process-wide disposition is never a non-main thread's to change.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-    previous = {number: signal.signal(number, signal.SIG_IGN) for number in signals}
-    try:
-        yield
-    finally:
-        for number, restored in previous.items():
-            signal.signal(number, restored)
-
-
 _IGNORED_WHILE_WAITING = (signal.SIGINT, signal.SIGQUIT)
 
 
@@ -649,7 +644,7 @@ def run_foreground_ignoring_signals(
             stdin_text=None,
             interrupt_cleanup_cmd=None,
         ) as (process, _readers, _queue),
-        _signals_ignored(_IGNORED_WHILE_WAITING),
+        _signals_handled_by(_IGNORED_WHILE_WAITING, signal.SIG_IGN),
     ):
         return process.wait()
 

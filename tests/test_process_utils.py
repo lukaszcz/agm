@@ -1694,6 +1694,27 @@ class TestTerminationSignalsReachCleanup:
 
         assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
 
+    @pytest.mark.parametrize(
+        "guard", (terminating_signals_raise_interrupt, terminating_signals_exit)
+    )
+    def test_the_guard_is_a_no_op_off_the_main_thread(
+        self, guard: Callable[[], AbstractContextManager[None]]
+    ) -> None:
+        errors: list[BaseException] = []
+
+        def enter_guard() -> None:
+            try:
+                with guard():
+                    pass
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=enter_guard)
+        thread.start()
+        thread.join()
+
+        assert errors == []
+
     def test_a_registered_cleanup_command_arms_termination_signals(self) -> None:
         """While the child runs, SIGTERM must route into the cleanup path."""
         armed: list[Any] = []

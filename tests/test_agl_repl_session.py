@@ -517,7 +517,7 @@ class TestPersistence:
         session = open_session()
         assert session.eval_entry("record Alias\n  x: int").ok
 
-        rejected = session.eval_entry("type Alias = int\ndef Alias::m(self) -> int = 1")
+        rejected = session.eval_entry("type Alias = int -> int\ndef Alias::m(self) -> int = 1")
 
         assert not rejected.ok
         message = rejected.diagnostics[0].message

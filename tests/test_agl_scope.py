@@ -2131,10 +2131,10 @@ class TestMethodReceiverClassification:
     @pytest.mark.parametrize(
         ("source", "alias", "target"),
         (
-            ("type Count = int\ndef Count::value(self) -> int = 1", "Count", "int"),
+            ("type Count = int -> int\ndef Count::value(self) -> int = 1", "Count", "int -> int"),
             # The alias below the method is still an alias scope: receiver
             # classification reads the whole module, not the text above it.
-            ("def Count::value(self) -> int = 1\ntype Count = int", "Count", "int"),
+            ("def Count::value(self) -> int = 1\ntype Count = int -> int", "Count", "int -> int"),
         ),
         ids=("alias-above", "alias-below"),
     )

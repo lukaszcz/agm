@@ -50,6 +50,7 @@ from agm.agl.syntax.nodes import (
     UseDecl,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import TypeExpr, named_builtin_type
 from agm.agl.zones import ParamZone
 
 ScopePath = tuple[str, ...]
@@ -87,15 +88,18 @@ BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class BuiltinMethodReceiver:
-    """A builtin method receiver and the receiver type parameter(s) its head binds.
+    """A builtin method receiver and the method type parameters its head binds.
 
-    ``key_type_parameter`` is set only for a bare-key ``dict[K, V]`` receiver;
-    a ``dict[text, V]`` receiver leaves it unset, matching only text-keyed dicts.
+    ``parameters`` are the indices, among the method's first ``arity`` type
+    parameter slots (its head's), of the receiver's type arguments in the
+    builtin's order: an array's element, a dict's key and value -- a
+    ``dict[text, V]`` receiver has its value's alone, matching only
+    text-keyed dicts.
     """
 
     name: str
-    type_parameter: str | None = None
-    key_type_parameter: str | None = None
+    parameters: tuple[int, ...] = ()
+    arity: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,7 +520,12 @@ class TypeOwner:
     beneath the enum's own path (``enum Box = ... | Box::Item``): such a name
     selects like a declared member wherever the enum is spelled, through an
     alias too (``B::Item`` with ``type B = Box``). ``arity`` is the number of
-    type parameters the declaration itself takes.
+    type parameters the declaration itself takes. ``builtin`` is, for an
+    alias of a built-in type (directly or through aliases), that type in
+    terms of the alias's own type parameters; ``scopes`` are then the scope
+    paths the built-in's name names as a qualifier where the alias of it is
+    declared -- that module's own path spelled so among them -- and
+    ``hidden`` is relative to them.
     """
 
     constructor: ConstructorRef | None
@@ -530,6 +539,18 @@ class TypeOwner:
     target: TypeTarget | None = None
     own_path_referenced: frozenset[str] = frozenset()
     arity: int = 0
+    builtin: TypeExpr | None = None
+    scopes: frozenset[QName] = frozenset()
+
+    @property
+    def builtin_name(self) -> str | None:
+        """The name of the built-in type :attr:`builtin` is, if any."""
+        named = None if self.builtin is None else named_builtin_type(self.builtin)
+        return None if named is None else named.name
+
+    def hides(self, path: ScopePath) -> bool:
+        """Whether *path* beneath the alias's target, or a path above it, is :attr:`hidden`."""
+        return any(path[:end] in self.hidden for end in range(1, len(path) + 1))
 
     @property
     def constructs(self) -> bool:

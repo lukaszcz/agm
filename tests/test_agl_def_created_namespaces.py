@@ -403,7 +403,7 @@ _SCENARIOS = {
         modules={"al": _AL_2},
         header=("import al::*",),
         probes={
-            "receiver": rejected("def Geo::m(self) -> int = 1", AglScopeError, "self"),
+            "receiver": accepted("def Geo::m(self) -> int = 1\nGeo::m(1)", "int"),
             "nope-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
             "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
             "method-val": rejected("Geo::m(1)", UnknownMemberError, "Geo::m"),

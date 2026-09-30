@@ -47,6 +47,7 @@ from agm.agl.syntax.types import render_qualified_name, render_qualifier_path
 __all__ = [
     "NOT_HIDDEN",
     "Candidate",
+    "DeclarationNames",
     "Hiding",
     "LookupKind",
     "Misfit",
@@ -127,20 +128,37 @@ A declaration every way removes -- it or one above it -- is reached no way.
 NOT_HIDDEN: Hiding = frozenset({frozenset()})
 
 
-def removes(
-    hiding: Hiding, key: DeclarationKey, identity: Callable[[DeclarationKey], DeclarationKey]
-) -> bool:
+class DeclarationNames(Protocol):
+    """What declaration a key names."""
+
+    def identity(self, key: DeclarationKey) -> DeclarationKey:
+        """The declaration *key* names: a renaming alias's is its target's."""
+        ...
+
+    def denotes(self, key: DeclarationKey) -> object:
+        """What *key* names in an ambiguity: its :meth:`identity`, or the type an alias denotes.
+
+        Two aliases denoting one type are one, whatever their declarations.
+        """
+        ...
+
+
+def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> bool:
     """Whether every way of *hiding* removes the declaration *key* names, or one above it.
 
-    *identity* names it (:meth:`PathSources.identity`).
+    *names* names it: an alias denoting the type a removed alias denotes is
+    removed too.
     """
     if hiding == NOT_HIDDEN:
         return False
-    module, path, name = identity(key)
+    named = names.identity(key)
+    module, path, name = named
     full = (*path, name)
+    denoted = names.denotes(key)
     return all(
         any(
-            hidden[0] == module and full[: len(hidden[1]) + 1] == (*hidden[1], hidden[2])
+            (hidden[0] == module and full[: len(hidden[1]) + 1] == (*hidden[1], hidden[2]))
+            or (denoted != named and names.denotes(hidden) == denoted)
             for hidden in way
         )
         for way in hiding
@@ -161,10 +179,10 @@ class Candidate:
     hiding: Hiding = NOT_HIDDEN
 
 
-def is_removed(candidate: Candidate, identity: Callable[[DeclarationKey], DeclarationKey]) -> bool:
+def is_removed(candidate: Candidate, names: DeclarationNames) -> bool:
     """Whether every way that reached *candidate* removes its declaration (:func:`removes`)."""
     key = candidate.target.key
-    return key is not None and removes(candidate.hiding, key, identity)
+    return key is not None and removes(candidate.hiding, key, names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +200,7 @@ class Reading:
         return Reading(self.candidates + other.candidates, self.refusals + other.refusals)
 
 
-class PathSources(Protocol):
+class PathSources(DeclarationNames, Protocol):
     """The declarations and contributions a lookup reads, by full path."""
 
     def own_at(self, path: ScopePath, kind: LookupKind) -> Reading:
@@ -240,17 +258,6 @@ class PathSources(Protocol):
 
     def own_origins(self, path: ScopePath) -> frozenset[QName]:
         """Full *path* when it is one of the module's own scope paths or types."""
-        ...
-
-    def identity(self, key: DeclarationKey) -> DeclarationKey:
-        """The declaration *key* names: a renaming alias's is its target's."""
-        ...
-
-    def denotes(self, key: DeclarationKey) -> object:
-        """What *key* names in an ambiguity: its :meth:`identity`, or the type an alias denotes.
-
-        Two aliases denoting one type are one, whatever their declarations.
-        """
         ...
 
     def aliases(self, key: DeclarationKey) -> bool:
@@ -613,7 +620,7 @@ class _Walk:
         kept = tuple(
             candidate
             for candidate in reading.candidates
-            if not is_removed(candidate, self._sources.identity)
+            if not is_removed(candidate, self._sources)
         )
         chain = self._chain
         if len(kept) == len(reading.candidates) or chain is None:

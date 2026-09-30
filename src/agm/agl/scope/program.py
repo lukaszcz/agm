@@ -1044,6 +1044,14 @@ def resolve_program(
         hidden = resolved_modules[module_id].resolved.type_owners[path].hidden
         return frozenset(paths).difference(hidden)
 
+    def builtin_scopes(qname: QName, name: str) -> frozenset[QName]:
+        module_id, atom = qname
+        path = _path(atom)
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver.scopes_named_at(path[:-1], name)
+        return resolved_modules[module_id].resolved.type_owners[path].scopes
+
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
     ) -> TypeSelection | None:
@@ -1072,6 +1080,7 @@ def resolve_program(
         alias_targets=alias_target,
         declared_beneath=declared_beneath,
         reached_paths=reached_paths,
+        builtin_scopes=builtin_scopes,
         current_selection=current_selection,
     )
 

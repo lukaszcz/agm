@@ -278,6 +278,88 @@ _SCENARIOS |= {
 }
 
 
+_BUILTIN_TARGETS = (
+    "type U2 = text\ntype Brr[E] = array[E]\ntype IB = array[int]\n"
+    "type TD[V] = dict[text, V]\ntype Sw[A, B] = dict[B, A]\n"
+)
+"""Aliases of built-in types, declared through an import; ``Sw`` swaps its arguments."""
+
+
+def _builtin_head_probes(text: str, array: str, applied: str) -> dict[str, Probe]:
+    """Declarations beneath aliases of ``text``, ``array[E]`` and ``array[int]``, or those.
+
+    Each is the declaration written through the target: the same verdict and path.
+    """
+    return {
+        f"{text}-method": accepted(f'def {text}::m(self) -> int = 1\n"a".m()', "int"),
+        f"{text}-method-by-target": accepted(
+            f'def {text}::m(self) -> int = 1\ntext::m("a")', "int"
+        ),
+        f"{text}-static-by-target": accepted(f"def {text}::f() -> int = 1\ntext::f()", "int"),
+        f"{text}-static": accepted(f"def {text}::f() -> int = 1\n{text}::f()", "int"),
+        f"{text}-twice": rejected(
+            f"def {text}::f() -> int = 1\ndef text::f() -> int = 2",
+            DuplicateDeclarationError,
+            "def text::f() -> int = 2",
+        ),
+        f"{text}-region": accepted(
+            f'scope {text}\n  def g(self) -> int = 1\nend {text}\n"a".g()', "int"
+        ),
+        f"{array}-method": accepted(f"def {array}[E]::m(self) -> int = 1\n[1].m()", "int"),
+        f"{array}-method-by-target": accepted(
+            f"def {array}[E]::m(self) -> int = 1\narray::m([1])", "int"
+        ),
+        f"{array}-bare-method": rejected(f"def {array}::m(self) -> int = 1", AglScopeError, array),
+        f"{array}-static": rejected(
+            f"def {array}[E]::f() -> int = 1", TypeArgumentsError, f"{array}[E]"
+        ),
+        f"{applied}-method": rejected(f"def {applied}::m(self) -> int = 1", AglScopeError, applied),
+        f"{applied}-static": rejected(
+            f"def {applied}::f() -> int = 1", TypeArgumentsError, applied
+        ),
+    }
+
+
+_SCENARIOS["declared-beneath-an-alias-of-a-builtin-type"] = Scenario(
+    modules={"bi": _BUILTIN_TARGETS},
+    header=("import bi::*", "type T2 = text\ntype Arr[E] = array[E]\ntype IA = array[int]"),
+    probes={
+        **_builtin_head_probes("text", "array", "array[int]"),
+        **_builtin_head_probes("T2", "Arr", "IA"),
+        **_builtin_head_probes("U2", "Brr", "IB"),
+        "own-by-alias": accepted('def text::m(self) -> int = 1\nT2::m("a")', "int"),
+        "renaming-alias-of-an-alias": accepted(
+            "type A4[Y] = Arr[Y]\ndef A4[Z]::m(self) -> int = 1\n[1].m()", "int"
+        ),
+        "applied-alias-of-an-alias": rejected(
+            "type A3 = Arr[int]\ndef A3::m(self) -> int = 1", AglScopeError, "A3"
+        ),
+        "arguments-within-a-function-type": rejected(
+            "type Fn[X] = array[(bi::U2, Brr[X]) -> X]\ndef Fn[E]::m(self) -> int = 1",
+            AglScopeError,
+            "Fn[E]",
+        ),
+        "one-argument-twice": rejected(
+            "type Same[E] = dict[E, E]\ndef Same[E]::m(self) -> int = 1", AglScopeError, "Same[E]"
+        ),
+        "applied-scalar": rejected(
+            "type P[X] = text\ndef P[int]::m(self) -> int = 1", TypeArgumentsError, "P[int]"
+        ),
+        "no-receiver-scope": rejected("def unit::m(self) -> int = 1", AglScopeError, "self"),
+        "no-receiver-scope-by-alias": rejected(
+            "type Un = unit\ndef Un::m(self) -> int = 1", AglScopeError, "self"
+        ),
+        "too-many-arguments": rejected(
+            "def Arr[E, F]::m(self) -> int = 1", TypeArgumentsError, "Arr[E, F]"
+        ),
+        "text-keyed": accepted('def TD[V]::m(self) -> int = 1\n{"a": 1}.m()', "int"),
+        "arguments-in-target-order": accepted(
+            'def Sw[V, K]::key(self, k: K) -> K = k\n{"a": 1}.key("b")', "text"
+        ),
+    },
+)
+
+
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, file mode and every REPL grouping."""
 

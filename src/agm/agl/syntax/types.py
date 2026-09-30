@@ -8,8 +8,8 @@ appear in the source.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from agm.agl.syntax.spans import SourceSpan
@@ -141,6 +141,49 @@ class AppliedT:
 TypeExpr = (
     TextT | JsonT | BoolT | IntT | DecimalT | NameT | ArrayT | DictT | UnitT | FuncT | AppliedT
 )
+
+
+def named_builtin_type(type_expr: TypeExpr) -> NameT | AppliedT | None:
+    """Return built-in type *type_expr* as the type name it is written with; ``None`` otherwise.
+
+    ``text`` is the name ``text``, ``array[int]`` the name ``array`` applied to
+    ``int``; a function type or a declared type name is no built-in's name.
+    """
+    span, node_id = type_expr.span, type_expr.node_id
+    if isinstance(type_expr, ArrayT):
+        return AppliedT("array", (type_expr.elem,), span, node_id)
+    if isinstance(type_expr, DictT):
+        return AppliedT("dict", (type_expr.key, type_expr.value), span, node_id)
+    if isinstance(type_expr, (TextT, JsonT, BoolT, IntT, DecimalT, UnitT)):
+        return NameT(render_type_expr(type_expr), span, node_id)
+    return None
+
+
+def substitute_type_names(type_expr: TypeExpr, bound: Mapping[str, TypeExpr]) -> TypeExpr:
+    """Return *type_expr* with each unqualified name *bound* maps replaced by its type."""
+    if isinstance(type_expr, NameT):
+        return (
+            type_expr if type_expr.qualifier is not None else bound.get(type_expr.name, type_expr)
+        )
+    if isinstance(type_expr, AppliedT):
+        return replace(
+            type_expr, args=tuple(substitute_type_names(arg, bound) for arg in type_expr.args)
+        )
+    if isinstance(type_expr, ArrayT):
+        return replace(type_expr, elem=substitute_type_names(type_expr.elem, bound))
+    if isinstance(type_expr, DictT):
+        return replace(
+            type_expr,
+            key=substitute_type_names(type_expr.key, bound),
+            value=substitute_type_names(type_expr.value, bound),
+        )
+    if isinstance(type_expr, FuncT):
+        return replace(
+            type_expr,
+            params=tuple(substitute_type_names(param, bound) for param in type_expr.params),
+            result=substitute_type_names(type_expr.result, bound),
+        )
+    return type_expr
 
 
 def member_type_params(

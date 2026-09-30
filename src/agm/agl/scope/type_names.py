@@ -13,12 +13,13 @@ from typing import TypeGuard
 
 from agm.agl.scope.symbols import ScopePath, TypeOwner
 from agm.agl.syntax.nodes import QualifierChain, QualifierSegment, TypeAlias, VariantRef
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, named_builtin_type
 
 __all__ = [
     "MemberHidden",
     "MemberReferenced",
     "MemberSelection",
+    "applies_target",
     "is_nominal_type_expr",
     "member_chain",
     "owner_member_selection",
@@ -52,7 +53,24 @@ def renames_target(alias: TypeAlias) -> bool:
     target = alias.type_expr
     if isinstance(target, NameT):
         return not alias.type_params
-    return isinstance(target, AppliedT) and alias.type_params == tuple(
+    return isinstance(target, AppliedT) and _passes_parameters(alias, target)
+
+
+def applies_target(alias: TypeAlias) -> bool:
+    """Whether *alias* applies its target type name, a built-in's included, to other arguments.
+
+    ``type A = m::B[int]`` and ``type A = array[int]`` do; ``type A[T] =
+    array[T]`` passes its own parameters through, and ``type A = text``
+    applies nothing.
+    """
+    target = alias.type_expr
+    named = target if isinstance(target, (NameT, AppliedT)) else named_builtin_type(target)
+    return isinstance(named, AppliedT) and not _passes_parameters(alias, named)
+
+
+def _passes_parameters(alias: TypeAlias, target: AppliedT) -> bool:
+    """Whether applied *target*'s arguments are exactly *alias*'s type parameters, in order."""
+    return alias.type_params == tuple(
         arg.name if isinstance(arg, NameT) and arg.qualifier is None else None
         for arg in target.args
     )

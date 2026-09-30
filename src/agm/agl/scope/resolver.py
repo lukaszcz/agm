@@ -150,10 +150,10 @@ from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
     MemberHidden,
     MemberReferenced,
+    applies_target,
     is_nominal_type_expr,
     member_chain,
     owner_member_selection,
-    renames_target,
     selection_node_id,
 )
 from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors, root_type_names
@@ -257,6 +257,7 @@ from agm.agl.syntax.types import (
     render_qualified_name,
     render_qualifier_path,
     render_type_expr,
+    substitute_type_names,
 )
 from agm.agl.syntax.visitor import SyntaxNode, walk
 
@@ -471,6 +472,15 @@ def _type_qnames(refs: Iterable[BindingRef]) -> Iterator[QName]:
 def _item_order(named: ItemDeclaration) -> PathAtom:
     """Order import items naming declarations by the path they spell."""
     return named.item
+
+
+def _head_arguments(head: TypeExpr | None) -> tuple[TypeExpr, ...]:
+    """The type arguments ``def`` head *head* is written applied to, which its type slots lead."""
+    if isinstance(head, ArrayT):
+        return (head.elem,)
+    if isinstance(head, DictT):
+        return (head.key, head.value)
+    return head.args if isinstance(head, AppliedT) else ()
 
 
 def _key_qname(key: DeclarationKey) -> QName:
@@ -930,7 +940,9 @@ class _Resolver:
         A scope path whose whole spelling selects a type declares that type's
         path: through an alias, its target's (``def Geo::m`` with ``type Geo
         = Base`` declares ``Base::m``). Any other declares its parent's path
-        and its own name. Own scope paths declaring one path are one path: a
+        and its own name -- through an alias of a built-in type, the
+        built-in's name (``def T::f`` with ``type T = text`` declares
+        ``text::f``). Own scope paths declaring one path are one path: a
         spelling of any reaches what the others declare (:meth:`own_at`).
 
         The first lookup reading them records them. Recording one path may
@@ -958,11 +970,13 @@ class _Resolver:
             if key is not None and not self._type_owners.settled(_key_qname(key)):
                 waiting.append(path)
                 continue
-            if key is not None:
+            owner = None if key is None else self._type_owners.owner(_key_qname(key))
+            builtin = None if owner is None else owner.builtin_name
+            if key is not None and builtin is None:
                 qname = _key_qname(self.identity(key))
             else:
                 module_id, atom = self._declared_paths.get(parent, (self._module_id, ()))
-                qname = (module_id, _bare_atom((*_bare_path(atom), path[-1])))
+                qname = (module_id, _bare_atom((*_bare_path(atom), builtin or path[-1])))
             self._declared_paths[path] = qname
             if qname != (self._module_id, _bare_atom(path)):
                 self._declaring_paths[qname] = (*self._declaring_paths.get(qname, ()), path)
@@ -1234,7 +1248,9 @@ class _Resolver:
     def _classify_function_head(self, declaration: FuncDef, written_in: ScopePath) -> None:
         """Classify one ``def``'s head, written in named scope *written_in*, and its receiver,
         after preceding lexical contributions are visible."""
-        head = declaration.receiver_type
+        written = declaration.receiver_type
+        applied = self._applied_builtin_head(declaration, written_in)
+        head = written if applied is None else applied
         if head is None:
             self._reject_applied_head(written_in, declaration.scope_path[len(written_in) :])
         elif not declaration.is_method:
@@ -1244,7 +1260,7 @@ class _Resolver:
         receiver = declaration.params[0]
         owner_path = tuple(segment.name for segment in declaration.scope_path)
         owner = (
-            self._receiver_head(owner_path, head)
+            self._receiver_head(owner_path, head, _head_arguments(written))
             if head is not None
             else self._receiver_owner(declaration.scope_path, receiver, written_in)
         )
@@ -1278,29 +1294,87 @@ class _Resolver:
             ):
                 raise TypeArgumentsError(segment.name, None, span=segment.span)
 
-    def _receiver_head(self, owner_path: ScopePath, head: TypeExpr) -> ReceiverOwner:
-        """Classify method head *head*, written with type arguments, at *owner_path*.
+    def _applied_builtin_head(self, declaration: FuncDef, written_in: ScopePath) -> TypeExpr | None:
+        """Return the applied built-in type ``def`` *declaration*'s head spells through an alias.
+
+        Its one-segment head -- as written, else the whole path -- selecting
+        an alias of a built-in type spells that type applied as the alias
+        applies it (``IA`` with ``type IA = array[int]``), or as its own
+        written arguments, as many as the alias takes, apply the alias
+        (``Arr[E]`` with ``type Arr[T] = array[T]`` spells ``array[E]``).
+        ``None`` for any other head: one spelling a built-in's bare name is
+        read as that name (:meth:`_receiver_type_owner`).
+        """
+        segments = declaration.scope_path
+        if len(segments[len(written_in) :] or segments) != 1:
+            return None
+        found = lookup_declared(
+            self,
+            tuple(segment.name for segment in segments),
+            None,
+            LookupKind.TYPE,
+            span=segments[-1].span,
+            local_to=self._module_id,
+        )
+        owner = (
+            self._type_owners.owner(_key_qname(found.key))
+            if isinstance(found, QualifiedTarget) and found.key is not None
+            else None
+        )
+        if owner is None or owner.builtin is None or owner.alias is None:
+            return None
+        written = declaration.receiver_type
+        parameters = owner.alias.type_params
+        if not isinstance(written, AppliedT):
+            if parameters or not isinstance(owner.builtin, (ArrayT, DictT)):
+                return None
+            return replace(owner.builtin, span=segments[-1].span)
+        if len(written.args) != len(parameters):
+            raise TypeArgumentsError(written.name, len(parameters), span=written.span)
+        bound = dict(zip(parameters, written.args, strict=True))
+        return replace(substitute_type_names(owner.builtin, bound), span=written.span)
+
+    def _builtin_receiver(self, name: str, span: SourceSpan) -> ReceiverOwner:
+        """Classify a method on built-in type *name*, spelled bare at *span*.
+
+        A generic receiver binds its type parameters only in applied form.
+        """
+        if name in ("array", "dict"):
+            raise AglScopeError(
+                "Builtin method receivers must use their bare generic form "
+                "(array[T] or dict[K, V]).",
+                span=span,
+            )
+        return ReceiverOwner(self._module_id, (name,), BuiltinMethodReceiver(name))
+
+    def _receiver_head(
+        self, owner_path: ScopePath, head: TypeExpr, written: tuple[TypeExpr, ...]
+    ) -> ReceiverOwner:
+        """Classify method head *head*, applied to type arguments *written*, at *owner_path*.
 
         Only a builtin receiver in its bare generic form (``array[E]``,
-        ``dict[K, V]``) or ``dict[text, V]`` takes them; any other head
-        declares beneath a type application.
+        ``dict[K, V]``) or ``dict[text, V]`` takes them, each of its own a
+        distinct one of *written*'s names; any other head declares beneath a
+        type application.
         """
-        if isinstance(head, ArrayT) and isinstance(head.elem, NameT):
-            builtin = BuiltinMethodReceiver("array", head.elem.name)
-        elif (
-            isinstance(head, DictT)
-            and isinstance(head.value, NameT)
-            and isinstance(head.key, (NameT, TextT))
-        ):
-            key = head.key.name if isinstance(head.key, NameT) else None
-            builtin = BuiltinMethodReceiver("dict", head.value.name, key)
-        elif isinstance(head, (ArrayT, DictT)):
+        slots = [argument for argument in written if isinstance(argument, NameT)]
+        arguments: tuple[TypeExpr, ...]
+        if isinstance(head, ArrayT):
+            name, arguments = "array", (head.elem,)
+        elif isinstance(head, DictT):
+            name = "dict"
+            arguments = (head.value,) if isinstance(head.key, TextT) else (head.key, head.value)
+        else:
+            raise TypeArgumentsError(owner_path[-1], None, span=head.span)
+        indices = {id(slot): index for index, slot in enumerate(slots)}
+        parameters = tuple(indices.get(id(argument), -1) for argument in arguments)
+        if -1 in parameters or len(set(parameters)) != len(parameters):
             raise AglScopeError(
                 "Builtin method receivers must use their bare generic form.", span=head.span
             )
-        else:
-            raise TypeArgumentsError(owner_path[-1], None, span=head.span)
-        return ReceiverOwner(self._module_id, owner_path, builtin)
+        return ReceiverOwner(
+            self._module_id, owner_path, BuiltinMethodReceiver(name, parameters, len(slots))
+        )
 
     def _receiver_owner(
         self, segments: tuple[ScopeSegment, ...], receiver: Param, written_in: ScopePath
@@ -1338,7 +1412,8 @@ class _Resolver:
         A path declaring no type may end in a constructor its parent step
         reads bare, whose owner the bare constructor decision there
         (:meth:`_step_value_constructors`) selects; a one-segment head -- as
-        written, else the whole path -- may name a built-in receiver type.
+        written, else the whole path -- may name a built-in receiver type, or
+        an alias of one, which is that type's name.
         """
         path = tuple(segment.name for segment in segments)
         chain = (
@@ -1361,18 +1436,14 @@ class _Resolver:
         if isinstance(found, AglError):
             return found
         key = None if found is None else found.key
-        owner = None if key is None else self._receiver_key_owner(key, span)
+        table = None if key is None else self._type_owners.owner(_key_qname(key))
+        builtin = None if table is None else table.builtin_name
+        owner = None if key is None or builtin is not None else self._receiver_key_owner(key, span)
         if owner is not None:
             return owner
-        if len(written or segments) == 1 and path[-1] in BUILTIN_METHOD_RECEIVER_NAMES:
-            if path[-1] in ("array", "dict"):
-                # A generic receiver binds its type parameters only in applied form.
-                raise AglScopeError(
-                    "Builtin method receivers must use their bare generic form "
-                    "(array[T] or dict[K, V]).",
-                    span=(written or segments)[-1].span,
-                )
-            return ReceiverOwner(self._module_id, path[-1:], BuiltinMethodReceiver(path[-1]))
+        name = builtin or path[-1]
+        if len(written or segments) == 1 and name in BUILTIN_METHOD_RECEIVER_NAMES:
+            return self._builtin_receiver(name, (written or segments)[-1].span)
         owners: dict[ReceiverOwner, list[QualificationOrigin]] = {}
         for candidate, layers in self._step_value_constructors(path[:-1], path[-1]).items():
             owners.setdefault(
@@ -2347,7 +2418,7 @@ class _Resolver:
         and what the ``hiding`` names read the type owners.
         """
         hiding = self._hiding((decl.node_id,), qname)
-        if removes(hiding, self._qname_decl_key(qname), self.identity):
+        if removes(hiding, self._qname_decl_key(qname), self):
             return
         constructor = self._cross_module_constructor(qname)
         if constructor is not None:
@@ -2381,7 +2452,7 @@ class _Resolver:
                     (qname[0], _bare_atom(path)) not in selected_qnames
                     or declares_bare_constructor(exposures.get(atom, ()), self._all_public_types)
                 )
-            ) or removes(hiding, self._qname_decl_key(constructor.qname), self.identity):
+            ) or removes(hiding, self._qname_decl_key(constructor.qname), self):
                 continue
             scope.contribute_bare(
                 atom, self._variant_binding_ref(constructor, span), ContributionLayer.IMPORTED
@@ -3804,7 +3875,7 @@ class _Resolver:
             error = self._owner_member_error(table, spelling, name, chain.span)
             if error is not None:
                 return Reading(refusals=(error,))
-            if table.target is not None and not (
+            if (table.target is not None or table.builtin is not None) and not (
                 index == len(segments)
                 and (name in table.members or table.select(name, segments[-1].name) is not None)
             ):
@@ -3839,16 +3910,38 @@ class _Resolver:
         """What *path* beneath *alias* (whose owner is *table*) selects as a declaration of *kind*.
 
         An alias segment stands for its target's path; a path a ``hiding``
-        at the alias's site removed is refused.
+        at the alias's site removed is refused. An alias of a built-in type
+        stands for each of its :attr:`~TypeOwner.scopes`, and for this
+        module's own path its name spells, however this module spells the
+        declarations beneath.
         """
+        name = table.builtin_name
+        if name is not None:
+            if table.hides(path):
+                return self._hidden_beneath(chain, path)
+            scopes = table.scopes | {(self._module_id, _bare_atom((name,)))}
+            return sum(
+                (
+                    self._declared_at(
+                        (module_id, _bare_atom((*_bare_path(atom), *path))), layer, kind
+                    )
+                    for module_id, atom in scopes
+                ),
+                Reading(),
+            )
         beneath = self._type_owners.beneath_alias(alias, table, path)
         if beneath is None:
             return Reading()
         qname, hidden = beneath
         if hidden:
-            spelling = render_qualifier_path(chain)
-            return Reading(refusals=(HiddenMemberError(spelling, path[-1], span=chain.span),))
+            return self._hidden_beneath(chain, path)
         return self._declared_at(qname, layer, kind)
+
+    @staticmethod
+    def _hidden_beneath(chain: QualifierChain, path: ScopePath) -> Reading:
+        """The refusal of *path*, which *chain* spells beneath an alias, as hidden."""
+        spelling = render_qualifier_path(chain)
+        return Reading(refusals=(HiddenMemberError(spelling, path[-1], span=chain.span),))
 
     def _declared_at(self, qname: QName, layer: ContributionLayer, kind: LookupKind) -> Reading:
         """The declaration at full path *qname*, as one of *kind*, made visible by *layer*."""
@@ -3886,12 +3979,7 @@ class _Resolver:
         """Whether type *key* is an alias applying its target to type arguments of its own."""
         owners = self._type_owners
         reached = owners.owner(owners.identity(_key_qname(key)))
-        return (
-            reached is not None
-            and reached.alias is not None
-            and isinstance(reached.alias.type_expr, AppliedT)
-            and not renames_target(reached.alias)
-        )
+        return reached is not None and reached.alias is not None and applies_target(reached.alias)
 
     def hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
         """Whether a ``hiding`` of a contribution anchored at or above *step* removed *path*."""
@@ -3928,7 +4016,7 @@ class _Resolver:
             removes(
                 self._hiding(decls, qname),
                 self._declaration_beneath(qname, path[end:]),
-                self.identity,
+                self,
             )
             for end in range(1, len(path))
             for qname, decls in exposed(_bare_atom(path[:end])).items()
@@ -4205,7 +4293,7 @@ class _Resolver:
         *declaration* is *qname*'s own or a member's beneath it.
         """
         decls = self._import_env.unqualified_decls.get(exposed, {}).get(qname, ())
-        return removes(self._hiding(decls, qname), self._qname_decl_key(declaration), self.identity)
+        return removes(self._hiding(decls, qname), self._qname_decl_key(declaration), self)
 
     def _imported_bindings(self, step: ScopePath, path: ScopePath) -> dict[BindingRef, Layers]:
         """Return what import tails anchored at or above *step* bind at full *path*, with layers.
@@ -4215,7 +4303,7 @@ class _Resolver:
         return {
             ref: layers
             for ref, (layers, hiding) in self._imported(step, path).items()
-            if not removes(hiding, (ref.module_id, ref.scope_path, ref.name), self.identity)
+            if not removes(hiding, (ref.module_id, ref.scope_path, ref.name), self)
         }
 
     def _use_exposures(
@@ -4239,7 +4327,7 @@ class _Resolver:
         exposed = (
             self._exposed_binding(candidate.target, decl.span)
             for candidate, decl in self._use_exposures(step, path, kind)
-            if not is_removed(candidate, self.identity)
+            if not is_removed(candidate, self)
         )
         for ref in filter(None, exposed):
             add_layers(bindings, ref, (ContributionLayer.USE,))
@@ -4267,9 +4355,7 @@ class _Resolver:
             for constructor, layers in layer.bare_constructor_contributions.get(atom, {}).items():
                 add_layers(constructors, constructor, layers)
         for candidate, _decl in self._use_exposures(step, path, kind):
-            if candidate.target.constructor is not None and not is_removed(
-                candidate, self.identity
-            ):
+            if candidate.target.constructor is not None and not is_removed(candidate, self):
                 add_layers(constructors, candidate.target.constructor, (ContributionLayer.USE,))
         return constructors
 
@@ -4591,6 +4677,12 @@ class _Resolver:
                     HiddenMemberError,
                 )
             )
+
+    def scopes_named_at(self, scope_path: ScopePath, name: str) -> frozenset[QName]:
+        """Return the scope paths *name*, a qualifier at *scope_path*, names."""
+        chain = QualifierChain(None, (), name, self._program.span, self._program.node_id)
+        with self._full_view():
+            return lookup_origins(self, chain, scope_path)
 
     def type_name_selection_at(
         self, scope_path: ScopePath, spelling: NameT | AppliedT | VariantRef

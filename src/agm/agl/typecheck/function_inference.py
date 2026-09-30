@@ -808,15 +808,8 @@ def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type,
     receiver = owner.builtin
     if receiver is None:
         return None
-    if receiver.name == "array":
-        type_parameter = _method_signature_type_params(node, 1)[0]
-        return ArrayType(TypeVarType(type_parameter)), 1, receiver.name
-    if receiver.name == "dict":
-        if receiver.key_type_parameter is not None:
-            key_param, value_param = _method_signature_type_params(node, 2)[:2]
-            return DictType(TypeVarType(key_param), TypeVarType(value_param)), 2, receiver.name
-        type_parameter = _method_signature_type_params(node, 1)[0]
-        return DictType(TextType(), TypeVarType(type_parameter)), 1, receiver.name
+    slots = _method_signature_type_params(node, receiver.arity)
+    parameters = [TypeVarType(slots[index]) for index in receiver.parameters]
     scalar_types: dict[str, Type] = {
         "text": TextType(),
         "json": JsonType(),
@@ -824,7 +817,15 @@ def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type,
         "decimal": DecimalType(),
         "bool": BoolType(),
     }
-    return scalar_types[receiver.name], 0, receiver.name
+    if receiver.name == "array":
+        receiver_type: Type = ArrayType(parameters[0])
+    elif receiver.name == "dict":
+        receiver_type = (
+            DictType(*parameters) if len(parameters) == 2 else DictType(TextType(), parameters[0])
+        )
+    else:
+        receiver_type = scalar_types[receiver.name]
+    return receiver_type, receiver.arity, receiver.name
 
 
 def _receiver_type(

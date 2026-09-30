@@ -644,6 +644,104 @@ _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
 )
 
 
+_DENOTED_TWICE = (
+    "import gen::*\ntype F = int -> bool\ntype G = int -> bool\ntype IntBox = Box[int]\n"
+    "type IB2 = Box[int]\ntype H = int -> text\n"
+)
+"""Aliases denoting one type twice, and one denoting another."""
+
+_SCENARIOS |= {
+    "hiding-an-alias-removes-every-alias-that-import-brings-denoting-its-type": Scenario(
+        modules={"gen": _GENERIC, "hd": _DENOTED_TWICE},
+        header=("import hd::* hiding F, IntBox",),
+        probes={
+            "hidden": rejected("fn(f: F) => f(1)", AglTypeError, "f: F", phase="typecheck"),
+            "same-type": rejected("fn(f: G) => f(1)", AglTypeError, "f: G", phase="typecheck"),
+            "same-type-routed": rejected("fn(f: hd::G) => f(1)", HiddenMemberError, "hd::G"),
+            "same-applied-type": rejected(
+                "fn(p: IB2) => p.v", AglTypeError, "p: IB2", phase="typecheck"
+            ),
+            "another-type": accepted("fn(f: H) => f(1)", "(int -> text) -> text"),
+        },
+    ),
+    "hiding-an-alias-leaves-other-imports-aliases-of-its-type": Scenario(
+        modules={"gen": _GENERIC, "hd": _DENOTED_TWICE, "hx": "type G = int -> bool\n"},
+        header=("import hd::* hiding F\nimport hx::*",),
+        probes={"other-import": accepted("fn(f: G) => f(1)", "(int -> bool) -> bool")},
+    ),
+    "a-use-or-export-hiding-an-alias-removes-aliases-denoting-its-type": Scenario(
+        modules={"gen": _GENERIC, "hd": _DENOTED_TWICE, "ex": "import hd\nexport hd hiding F\n"},
+        header=("import hd\nimport ex::*",),
+        probes={
+            "use": rejected(
+                _in_region("use hd::* hiding F", "fn(f: G) => f(1)"),
+                AglTypeError,
+                "f: G",
+                phase="typecheck",
+            ),
+            "export": rejected("fn(f: G) => f(1)", AglTypeError, "f: G", phase="typecheck"),
+            "export-another-type": accepted("fn(f: H) => f(1)", "(int -> text) -> text"),
+        },
+    ),
+}
+
+
+_BUILTIN_TARGETS = "type U2 = text\ntype Brr[E] = array[E]\ntype IB = array[int]\n"
+"""Aliases of built-in types, read through an import."""
+_TEXT_SCOPE = (
+    "def text::zz() -> int = 1\ndef text::yy() -> int = 2\n"
+    "def text::sub::zz() -> int = 1\ndef text::sub::yy() -> int = 2\n"
+)
+_HIDING_SITE = "import tx::* hiding text::zz, text::sub::zz\ntype V2 = text\n"
+"""An alias of ``text`` where a ``hiding`` removed ``text::zz`` and ``text::sub::zz``."""
+_MAP = "fn(p: array[int]) => {q}(p, fn(x: int) => x + 1)"
+
+
+def _builtin_alias_probes(text: str, array: str, applied: str) -> dict[str, Probe]:
+    """Paths beneath aliases of ``text``, ``array[E]`` and ``array[int]``, read as theirs.
+
+    *text*, *array* and *applied* spell the three aliases, or the targets themselves.
+    """
+    return {
+        f"{text}-method-value": accepted(f"{text}::size", "text -> int"),
+        f"{text}-method-call": accepted(f'{text}::size("ab")', "int"),
+        f"{text}-unknown": rejected(f"{text}::nope", UnknownMemberError, f"{text}::nope"),
+        f"{text}-use": accepted(_in_region(f"use {text}::*", 'upper("a")'), "text"),
+        f"{array}-method": accepted(_MAP.format(q=f"{array}::map"), "array[int] -> array[int]"),
+        f"{array}-uninferred": rejected(
+            f"{array}::map", AglTypeError, f"{array}::map", phase="typecheck"
+        ),
+        f"{array}-applied": rejected(f"{array}[int]::map", TypeArgumentsError, f"{array}[int]"),
+        f"{applied}-applied": rejected(f"{applied}::map", TypeArgumentsError, applied),
+    }
+
+
+_SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
+    modules={"bi": _BUILTIN_TARGETS, "tx": _TEXT_SCOPE, "bj": _HIDING_SITE},
+    header=(
+        "import bi::*\nimport bj::*",
+        "type T2 = text\ntype Arr[E] = array[E]\ntype IA = array[int]\ntype T3 = T2\n"
+        "type A3 = Arr[int]",
+    ),
+    probes={
+        **_builtin_alias_probes("text", "array", "array[int]"),
+        **_builtin_alias_probes("T2", "Arr", "IA"),
+        **_builtin_alias_probes("U2", "Brr", "IB"),
+        "alias-of-an-alias": accepted('T3::size("ab")', "int"),
+        "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
+        "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
+        "reached-at-the-alias-site": accepted("V2::yy()", "int"),
+        "hidden-beneath-at-the-alias-site": rejected(
+            "V2::sub::zz()", HiddenMemberError, "V2::sub::zz"
+        ),
+        "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
+        "info": info(
+            "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
+        ),
+    },
+)
+
+
 class TestTransparentAliases:
     """Alias spellings in every position, file mode and every REPL grouping."""
 

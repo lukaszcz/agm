@@ -34,6 +34,7 @@ from agm.agl.diagnostics import AglError, dollar_spacing_hint
 from agm.agl.modules.ids import (
     ENTRY_ID,
     ModuleId,
+    Reader,
     render_route_member,
     spell_declaration,
     spell_scope_path,
@@ -777,9 +778,9 @@ class ScopeNode:
     - ``bindings``: lexical value bindings introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
-    - ``bare_contributions``/``bare_constructor_contributions``: selected
-      imports snapshotted for this region. Each entry carries every
-      :class:`ContributionLayer` contributing it, recorded where contributed.
+    - ``bare_contributions``: selected imports snapshotted for this region.
+      Each entry carries every :class:`ContributionLayer` contributing it,
+      recorded where contributed.
     - ``uses``: the ``use`` declarations written in this region, in order.
       What one exposes is read where it is written whenever it is used.
 
@@ -796,9 +797,6 @@ class ScopeNode:
     scope_path: ScopePath = ()
     members: dict[str, BindingRef] = field(default_factory=dict)
     bare_contributions: dict[BareAtom, dict[BindingRef, Layers]] = field(default_factory=dict)
-    bare_constructor_contributions: dict[BareAtom, dict[ConstructorRef, Layers]] = field(
-        default_factory=dict
-    )
     uses: list[UseDecl] = field(default_factory=list)
 
     def lookup(self, name: str) -> BindingRef | None:
@@ -815,7 +813,7 @@ class ScopeNode:
         """Copy this layer into a REPL entry's own image.
 
         ``bindings`` are shared by reference, since they are read-only during
-        resolve, while the bare tables and uses are copied so the entry's own
+        resolve, while the bare table and uses are copied so the entry's own
         contributions never mutate the session's record. ``members`` starts
         shared too, but ``_build_scope_nodes`` immediately replaces it with a
         fresh dict, re-registering each retained member one at a time, so
@@ -830,21 +828,12 @@ class ScopeNode:
             bare_contributions={
                 atom: dict(sources) for atom, sources in self.bare_contributions.items()
             },
-            bare_constructor_contributions={
-                atom: dict(refs) for atom, refs in self.bare_constructor_contributions.items()
-            },
             uses=list(self.uses),
         )
 
     def contribute_bare(self, name: BareAtom, ref: BindingRef, layer: ContributionLayer) -> None:
         """Add one use-site-resolved bare contribution to this region, tagged with its *layer*."""
         add_layers(self.bare_contributions.setdefault(name, {}), ref, (layer,))
-
-    def contribute_bare_constructor(
-        self, name: BareAtom, ref: ConstructorRef, layer: ContributionLayer
-    ) -> None:
-        """Add one constructor candidate contributed bare to this region, from *layer*."""
-        add_layers(self.bare_constructor_contributions.setdefault(name, {}), ref, (layer,))
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -882,6 +871,34 @@ def anchored_layers(
 def binding_qname(ref: BindingRef) -> QName:
     """Return the declaring module and atom that *ref* names."""
     return ref.module_id, to_bare_atom((*ref.scope_path, ref.name))
+
+
+def declaration_qname(key: DeclarationKey) -> QName:
+    """Return the full path declaration *key* names."""
+    module_id, scope_path, name = key
+    return module_id, to_bare_atom((*scope_path, name))
+
+
+def qname_declaration(qname: QName) -> DeclarationKey:
+    """Return the declaration identity a full path *qname* names directly."""
+    module_id, atom = qname
+    path = to_bare_path(atom)
+    return (module_id, path[:-1], path[-1])
+
+
+def relative_under(atom: BareAtom, target: ScopePath) -> ScopePath | None:
+    """Return *atom*'s path relative to *target*, or ``None`` if it is not under it.
+
+    The one definition of the prefix test every reading of a contributed
+    surface performs when it re-spells it relative to a path.
+    """
+    path = to_bare_path(atom)
+    return path[len(target) :] if path[: len(target)] == target else None
+
+
+def atom_under_prefix(atom: BareAtom, prefix: ScopePath) -> bool:
+    """Whether *atom* falls under a selection *prefix* (a use tail or hiding item)."""
+    return relative_under(atom, prefix) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1068,10 @@ class ModuleResolution:
         own and the retained ones it reads -- to the scopes and types its
         target reaches where it is written. A REPL entry replaces a retained
         use at the same scope path whose target reaches the same.
+    ``declared_segments``
+        The segments of every path the module declares -- a REPL session's
+        retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
+        data a diagnostic spelling another module's declaration anchors by.
     """
 
     program: Program
@@ -1080,6 +1101,7 @@ class ModuleResolution:
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
     use_targets: dict[int, frozenset[QName]] = field(default_factory=dict)
+    declared_segments: frozenset[str] = frozenset()
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.
@@ -1166,10 +1188,10 @@ _ORIGIN_KIND_LABELS: tuple[tuple[type, str], ...] = (
 )
 
 
-def _origin_spelling(origin: QualificationOrigin, *, local_to: ModuleId) -> str:
-    """Spell *origin*'s declaration the way a reader in *local_to* would type it."""
+def _origin_spelling(origin: QualificationOrigin, *, reader: Reader) -> str:
+    """Spell *origin*'s declaration the way *reader* would type it."""
     module, path = origin.declaration
-    return spell_declaration(module, to_bare_path(path), local_to=local_to)
+    return spell_declaration(module, to_bare_path(path), reader=reader)
 
 
 def _join_list(items: Sequence[str], *, comma_pair: bool) -> str:
@@ -1186,14 +1208,14 @@ def _join_list(items: Sequence[str], *, comma_pair: bool) -> str:
 
 
 def _render_ambiguity(
-    spelling: str, origins: Iterable[QualificationOrigin], *, local_to: ModuleId
+    spelling: str, origins: Iterable[QualificationOrigin], *, reader: Reader
 ) -> tuple[tuple[QualificationOrigin, ...], str]:
     """Order *origins* and state which declarations *spelling* selects.
 
     Deduplicates *origins* and orders them by kind, then spelling, so the
-    result is deterministic regardless of hash seed. *local_to* is the
-    reading module: each declaration is spelled the way its reader would
-    type it (:func:`~agm.agl.modules.ids.spell_declaration`).
+    result is deterministic regardless of hash seed. Each declaration is
+    spelled the way *reader* would type it
+    (:func:`~agm.agl.modules.ids.spell_declaration`).
     """
 
     def sort_key(origin: QualificationOrigin) -> tuple[int, str]:
@@ -1202,14 +1224,14 @@ def _render_ambiguity(
             for index, (kind, _label) in enumerate(_ORIGIN_KIND_LABELS)
             if isinstance(origin, kind)
         )
-        return (rank, _origin_spelling(origin, local_to=local_to))
+        return (rank, _origin_spelling(origin, reader=reader))
 
     ordered = tuple(sorted(set(origins), key=sort_key))
     clauses = [
         f"{label} "
         + _join_list(
             [
-                _origin_spelling(origin, local_to=local_to)
+                _origin_spelling(origin, reader=reader)
                 for origin in ordered
                 if isinstance(origin, kind)
             ],
@@ -1252,7 +1274,7 @@ class AmbiguousQualificationError(AglScopeError):
         *,
         anchored: bool = False,
         span: SourceSpan,
-        local_to: ModuleId,
+        reader: Reader,
     ) -> AmbiguousQualificationError:
         """Build from *origins*, ending with the source-level repairs.
 
@@ -1266,7 +1288,7 @@ class AmbiguousQualificationError(AglScopeError):
             if route
             else spell_scope_path(member_path)
         )
-        ordered, statement = _render_ambiguity(spelling, origins, local_to=local_to)
+        ordered, statement = _render_ambiguity(spelling, origins, reader=reader)
         return AmbiguousQualificationError(
             f"{statement} {qualification_repair_guidance()}",
             spelling=spelling,
@@ -1305,10 +1327,10 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         *,
         repair: str,
         span: SourceSpan,
-        local_to: ModuleId,
+        reader: Reader,
     ) -> AmbiguousConstructorError:
         """Build from *origins*, ending with *repair*, a spelling that selects one candidate."""
-        ordered, statement = _render_ambiguity(spelling, origins, local_to=local_to)
+        ordered, statement = _render_ambiguity(spelling, origins, reader=reader)
         return AmbiguousConstructorError(
             f"{statement} Qualify the reference, e.g. '{repair}'.",
             spelling=spelling,

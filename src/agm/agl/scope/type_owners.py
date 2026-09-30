@@ -462,6 +462,11 @@ class TypeOwnerIndex:
             self._owners[qname] = owner
         return owner
 
+    @property
+    def resolving(self) -> bool:
+        """Whether an alias is being resolved; reads made meanwhile presume it (:meth:`settled`)."""
+        return bool(self._resolving)
+
     def settled(self, qname: QName) -> bool:
         """Whether reading *qname* now gives what it finally selects.
 

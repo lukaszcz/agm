@@ -176,6 +176,20 @@ class TestFrontendNestingDegradesToDiagnostic:
         assert all(isinstance(d, Diagnostic) for d in result.diagnostics)
 
 
+def _sibling_scopes(count: int) -> str:
+    members = "".join(
+        f"  scope B{index}\n    def f() -> int = {index}\n  end B{index}\n"
+        for index in range(count)
+    )
+    return f"scope A\n{members}end A\nprint(A::B7::f())\n"
+
+
+def test_many_sibling_scopes_check_without_nesting_deeper() -> None:
+    """Breadth is not nesting: scope paths are declared without a stack frame each."""
+    result = _check_source(_sibling_scopes(400))
+    assert result.ok, result.diagnostics
+
+
 class TestEveryGuardedPassReportsStackExhaustion:
     """Each static pass the pipeline drives converts stack exhaustion on its own.
 

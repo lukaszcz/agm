@@ -31,6 +31,7 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     DeclarationSelection,
     DuplicateDeclarationError,
+    NoVisibleConstructorError,
     OwnerMemberSelection,
     TypeArgumentsError,
     UnknownMemberError,
@@ -513,6 +514,20 @@ _SCENARIOS = {
                 "Some(1)", "record std/option::Option::Some[int]\n  value: int"
             ),
             "referenced-member": accepted("R(x = 1)", "record a::R\n  x: int"),
+        },
+    ),
+    "a-region-import-makes-a-record-a-bare-pattern-there": Scenario(
+        modules={"lib": "record Point\n  x: int\n"},
+        header=("import lib", "let p = lib::Point(x = 1)"),
+        probes={
+            "tail": accepted(
+                _in_region("import lib::{Point}\n", "case p of\n    | Point(x) => x"), "int"
+            ),
+            "hidden": rejected(
+                _in_region("import lib::* hiding Point\n", "case p of\n    | Point(x) => x"),
+                NoVisibleConstructorError,
+                "Point(x)",
+            ),
         },
     ),
     "a-use-reads-own-scopes-by-whole-path": Scenario(
@@ -1470,6 +1485,77 @@ _SCENARIOS = {
             "own-record-at-its-step": accepted(
                 "scope S\n  record Red\n    q: int\n  let v = Red(q = 1)\nend S\n\nS::v",
                 "record S::Red\n  q: int",
+            ),
+        },
+    ),
+    "an-imported-enum-injects-its-members-at-its-own-step": Scenario(
+        modules={"lib": _SCOPED_COLOR + "\n"},
+        header=("import lib::*",),
+        probes={
+            "in-its-scope": accepted(
+                "scope S\n  let v = Red\nend S\n\nS::v", "record lib::S::Color::Red"
+            ),
+            "in-a-nested-scope": accepted(
+                "scope S::T\n  let v = Blue\nend S::T\n\nS::T::v", "record lib::S::Color::Blue"
+            ),
+            "pattern-in-its-scope": accepted(
+                "scope S\n  def f(c: Color) -> int =\n    case c of\n      | Red => 1\n"
+                "      | Blue => 2\nend S\n\nS::f(S::Color::Red)",
+                "int",
+            ),
+            "is-in-its-scope": accepted(
+                "scope S\n  def f(c: Color) -> bool = c is Red\nend S\n\nS::f(S::Color::Blue)",
+                "bool",
+            ),
+            "outside-its-scope": rejected("Red", AglScopeError, "Red"),
+            "no-member-path": rejected(
+                "scope S\n  let v = 1\nend S\n\nS::Red", UnknownMemberError, "S::Red"
+            ),
+            "own-member-wins": accepted(
+                "scope S\n  enum Shade\n    | Red\n  let v = Red\nend S\n\nS::v",
+                "record S::Shade::Red",
+            ),
+            "own-record-wins": accepted(
+                "scope S\n  record Red\n    q: int\n  let v = Red(q = 1)\nend S\n\nS::v",
+                "record S::Red\n  q: int",
+            ),
+        },
+    ),
+    "a-region-import-injects-an-enum-at-its-own-step": Scenario(
+        modules={"lib": _SCOPED_COLOR + "\n"},
+        header=("scope R\n  import lib::*\nend R",),
+        probes={
+            "in-its-scope": accepted(
+                "scope R::S\n  let v = Red\nend R::S\n\nR::S::v", "record lib::S::Color::Red"
+            ),
+            "above-its-scope": rejected(
+                "scope R\n  let v = Red\nend R\n\nR::v", AglScopeError, "Red"
+            ),
+        },
+    ),
+    "a-region-import-injects-an-enum-in-the-region": Scenario(
+        modules={"lib": "enum Color\n  | Red\n  | Blue\nrecord Blue\n  q: int\n"},
+        header=(),
+        probes={
+            "member": accepted(
+                "scope R\n  import lib::*\n  let v = Red\nend R\n\nR::v", "record lib::Color::Red"
+            ),
+            "pattern": accepted(
+                "scope R\n  import lib::*\n  def f(c: Color) -> int =\n    case c of\n"
+                "      | Red => 1\n      | lib::Color::Blue => 2\nend R\n\nR::f(lib::Color::Red)",
+                "int",
+            ),
+            "a-record-owns-its-name": accepted(
+                "scope R\n  import lib::*\n  let v = Blue(q = 1)\nend R\n\nR::v",
+                "record lib::Blue\n  q: int",
+            ),
+            "hidden-member": rejected(
+                "scope R\n  import lib::* hiding Color::Red\n  let v = Red\nend R\n\nR::v",
+                AglScopeError,
+                "Red",
+            ),
+            "outside-the-region": rejected(
+                "scope R\n  import lib::*\nend R\n\nRed", AglScopeError, "Red"
             ),
         },
     ),

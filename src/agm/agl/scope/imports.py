@@ -461,11 +461,9 @@ def _tail_beneath_exposures(
 
 
 def _tail_exposures(
-    decl: ImportDecl,
-    hidden: set[NameAtom],
-    selected: tuple[NameAtom, ...],
+    decl: ImportDecl, selected: tuple[NameAtom, ...]
 ) -> tuple[tuple[NameAtom, NameAtom], ...]:
-    """Return the bare spellings a tailed import exposes, paired with their source paths.
+    """Return the bare spellings a tailed import exposes of *selected*, paired with their sources.
 
     Serves both namespaces: declarations look their ``QName`` up from the
     module's export map, named scopes carry only the surface path.
@@ -474,8 +472,6 @@ def _tail_exposures(
         return ()
     result: dict[tuple[NameAtom, NameAtom], None] = {}
     for source in selected:
-        if source in hidden:
-            continue
         result[(source, source)] = None
         source_path = _path(source)
         for item in decl.tail:
@@ -598,13 +594,13 @@ def build_import_env(
             route_scope_paths.update(visible_scope_paths)
             for source in visible_scope_paths:
                 scope_origins_by_route[(module, _path(source))] = module_scopes[source]
-            exposures = _tail_exposures(decl, hidden, selected_exports)
-            removed = set(_tail_exposures(decl, set(), selected_exports)) - set(exposures)
+            exposures = _tail_exposures(decl, selected_exports)
+            removed = [exposed for exposed, source in exposures if source in hidden]
             if removed:
-                decl_hidden.setdefault(decl.node_id, set()).update(
-                    exposed for exposed, _source in removed
-                )
+                decl_hidden.setdefault(decl.node_id, set()).update(removed)
             for exposed, source in exposures:
+                if source in hidden:
+                    continue
                 qname = module_exports[source]
                 route = (module, _path(source))
                 if decl.scope_path:
@@ -615,7 +611,9 @@ def build_import_env(
                 else:
                     root_bare.setdefault(exposed, {}).setdefault(qname, set()).add(decl.node_id)
                     root_bare_routes.setdefault(exposed, set()).add(route)
-            for exposed, source in _tail_exposures(decl, hidden_scope_paths, selected_scopes):
+            for exposed, source in _tail_exposures(decl, selected_scopes):
+                if source in hidden_scope_paths:
+                    continue
                 route = (module, _path(source))
                 destination = (
                     decl_scope_routes.setdefault(decl.node_id, {})

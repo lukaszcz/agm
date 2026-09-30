@@ -75,7 +75,7 @@ import pytest
 
 from agm.agl.diagnostics import AglError
 from agm.agl.matchcompile import compile_program_matches, match_issue_error
-from agm.agl.modules.ids import ENTRY_ID, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, Reader, spell_declaration
 from agm.agl.modules.loader import parse_entry_module
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.repl.type_display import format_type_for_repl
@@ -241,7 +241,7 @@ def origin_kinds(error: AglError | None) -> Origins:
         (
             type(origin),
             spell_declaration(
-                origin.declaration[0], to_bare_path(origin.declaration[1]), local_to=ENTRY_ID
+                origin.declaration[0], to_bare_path(origin.declaration[1]), reader=Reader(ENTRY_ID)
             ),
         )
         for origin in error.origins

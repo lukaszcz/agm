@@ -54,7 +54,7 @@ from agm.agl.diagnostics import (
     static_root_message,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, ModuleId, Reader, is_std_config_root, spell_declaration
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
@@ -328,25 +328,25 @@ def _type_argument_mismatch(
 
 
 def _enum_owner_mismatch(
-    owner: str, resolved: EnumType, actual: EnumType, span: SourceSpan, *, local_to: ModuleId
+    owner: str, resolved: EnumType, actual: EnumType, span: SourceSpan, *, reader: Reader
 ) -> AglTypeError:
     """Return the diagnostic for a qualifier naming an enum other than the matched one.
 
-    Both enums are spelled as a reader in *local_to* would write them.
+    Both enums are spelled as *reader* would write them.
     """
     if resolved.decl_id == actual.decl_id:
         return _type_argument_mismatch(owner, resolved, actual, span)
     return AglTypeError(
-        f"Qualifier '{owner}' resolves to enum '{_spell_enum(resolved, local_to)}', "
-        f"but the value has enum type '{_spell_enum(actual, local_to)}'.",
+        f"Qualifier '{owner}' resolves to enum '{_spell_enum(resolved, reader)}', "
+        f"but the value has enum type '{_spell_enum(actual, reader)}'.",
         span=span,
     )
 
 
-def _spell_enum(enum_type: EnumType, local_to: ModuleId) -> str:
-    """Spell *enum_type*'s declaration as a reader in *local_to* would write it."""
+def _spell_enum(enum_type: EnumType, reader: Reader) -> str:
+    """Spell *enum_type*'s declaration as *reader* would write it."""
     return spell_declaration(
-        enum_type.module_id, (*enum_type.scope_path, enum_type.name), local_to=local_to
+        enum_type.module_id, (*enum_type.scope_path, enum_type.name), reader=reader
     )
 
 
@@ -6439,7 +6439,7 @@ class _Checker:
                     owner,
                     enum_type,
                     span,
-                    local_to=self._module_id,
+                    reader=Reader(self._module_id, self._resolved.declared_segments),
                 )
         return self._constructor_outside_enum(variant, enum_type, candidates, span)
 

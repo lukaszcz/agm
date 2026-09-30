@@ -360,6 +360,24 @@ _SCENARIOS["declared-beneath-an-alias-of-a-builtin-type"] = Scenario(
 )
 
 
+_SCENARIOS |= {
+    f"declared-beneath-an-alias-declared-through-an-alias-spelled-{name}": Scenario(
+        modules={},
+        header=(
+            "record Base\n  x: int\nrecord Holder\n  h: int",
+            f"scope {owner}\n  type Y = Holder\nend {owner}",
+            f"type {owner}::Y::U = Base",
+            'def Holder::U::k() -> text = "k"',
+        ),
+        probes={
+            f"{spelling}-static": accepted(f"{spelling}::k()", "text")
+            for spelling in ("Base", "Holder::U", f"{owner}::Y::U")
+        },
+    )
+    for name, owner in (("before-the-path-beneath-it", "A"), ("after-the-path-beneath-it", "X"))
+}
+
+
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, file mode and every REPL grouping."""
 

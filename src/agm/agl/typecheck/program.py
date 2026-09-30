@@ -1072,6 +1072,7 @@ def _prepare_module_environment(
         type_table=type_table,
         declared_seed=declared_seed,
         owner_declarations=resolved.owner_declarations,
+        declared_segments=resolved.declared_segments,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL

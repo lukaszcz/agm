@@ -1564,6 +1564,51 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
     assert isinstance(issue.witness, EnumWitness)
 
 
+def test_imported_enum_witness_anchors_a_route_an_own_path_also_spells(tmp_path: Path) -> None:
+    """Own ``scope lib`` would win ``lib::Color::Red``, so the witness spells ``/lib``."""
+    compiled = _compile_graph_case(
+        tmp_path,
+        {
+            "lib": "enum Color\n  | Red\n  | Blue\n",
+            "entry": (
+                "import lib\n\n"
+                "scope lib\n  enum Color\n    | Red\n    | Green\nend lib\n\n"
+                "let value: /lib::Color = /lib::Color::Blue\n"
+                "case value of | /lib::Color::Blue => 0\n"
+            ),
+        },
+    )
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert witness.qualification == EnumWitnessQualification("Color", ("lib",), True)
+    assert render_witness(witness) == "/lib::Color::Red"
+
+
+def test_open_import_witness_owner_yields_to_the_route_when_an_own_path_spells_it(
+    tmp_path: Path,
+) -> None:
+    """Own ``S::Color`` would win ``Color::Red`` inside ``S``, so the witness spells the route."""
+    compiled = _compile_graph_case(
+        tmp_path,
+        {
+            "lib": "enum Color\n  | Red\n  | Blue\n",
+            "entry": (
+                "import lib::*\n\n"
+                "scope S\n  enum Color\n    | Green\nend S\n\n"
+                "let value: Color = Blue\n"
+                "case value of | Blue => 0\n"
+            ),
+        },
+    )
+    without_bare = replace(
+        compiled.normalized,
+        case_context=replace(compiled.normalized.case_context, bare_enum_constructors=frozenset()),
+    )
+    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
+
+    assert render_witness(issue.witness) == "lib::Color::Red"
+
+
 def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,

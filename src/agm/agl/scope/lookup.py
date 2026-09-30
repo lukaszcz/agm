@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from typing import Protocol, TypeAlias
 
 from agm.agl.diagnostics import AglError, HiddenMemberError
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import Reader
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
@@ -286,6 +286,10 @@ class PathSources(DeclarationNames, Protocol):
         """The scopes and types *chain*'s leading module route reaches as *path* beneath it."""
         ...
 
+    def reader(self) -> Reader:
+        """The module spellings are written in, as an ambiguity spells its declarations."""
+        ...
+
 
 def lookup_steps(scope_path: ScopePath) -> tuple[ScopePath, ...]:
     """Return the steps a spelling written in *scope_path* is tried at, nearest first."""
@@ -324,7 +328,6 @@ def lookup_bare(
     kind: LookupKind,
     *,
     span: SourceSpan,
-    local_to: ModuleId,
     contributions: bool = True,
     constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
 ) -> QualifiedTarget | AglError | None:
@@ -341,7 +344,7 @@ def lookup_bare(
         _step(sources, step, injects=kind is LookupKind.VALUE, contributions=contributions)
         for step in lookup_steps(scope_path)
     )
-    walk = _Walk(sources, steps, (), None, (name,), local_to, span, constructors=constructors)
+    walk = _Walk(sources, steps, (), None, (name,), span, constructors=constructors)
     return walk.find(kind)
 
 
@@ -352,7 +355,6 @@ def lookup_declared(
     kind: LookupKind,
     *,
     span: SourceSpan,
-    local_to: ModuleId,
 ) -> QualifiedTarget | AglError | None:
     """Return the declaration of *kind* at full *path*, read at its parent step alone.
 
@@ -369,7 +371,7 @@ def lookup_declared(
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
     parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
     step = replace(parent, path=path[: len(path) - len(names)])
-    walk = _Walk(sources, (step,), (), written, names, local_to, span)
+    walk = _Walk(sources, (step,), (), written, names, span)
     found = walk.find(kind)
     if found is not None or written is None:
         return found
@@ -391,7 +393,6 @@ def lookup_reached(
     scope_path: ScopePath,
     kind: LookupKind,
     *,
-    local_to: ModuleId,
     owners_within: int | None = None,
 ) -> tuple[Candidate, ...]:
     """Return the declarations of *kind* that *chain*, written in *scope_path*, reaches.
@@ -405,7 +406,7 @@ def lookup_reached(
     """
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, chain.span)
+    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, chain.span)
     return walk.reached(kind, len(names) if owners_within is None else owners_within)
 
 
@@ -429,7 +430,6 @@ def lookup_qualified(
     kind: LookupKind,
     *,
     span: SourceSpan,
-    local_to: ModuleId,
 ) -> QualifiedTarget | Misfit | AglError:
     """Return what *chain*``::``*member*, written in *scope_path*, selects, or why nothing.
 
@@ -438,7 +438,7 @@ def lookup_qualified(
     """
     names = (*(segment.name for segment in chain.segments), member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, span)
+    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, span)
     found = walk.find(kind)
     if found is not None:
         return found
@@ -446,9 +446,7 @@ def lookup_qualified(
     if refusal is not None:
         return refusal
     for other in _OTHER_KINDS[kind]:
-        misfit = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, span).find(
-            other
-        )
+        misfit = _Walk(sources, anchor.steps, anchor.route, chain, names, span).find(other)
         if isinstance(misfit, QualifiedTarget):
             return Misfit(misfit)
         if misfit is not None:
@@ -460,9 +458,7 @@ def lookup_qualified(
 
     def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
         written = names[: len(prefix.segments) + 1]
-        return _Walk(sources, anchor.steps, anchor.route, prefix, written, local_to, span).find(
-            kind
-        )
+        return _Walk(sources, anchor.steps, anchor.route, prefix, written, span).find(kind)
 
     return _unknown(chain, names, anchor.visible, selects)
 
@@ -549,7 +545,6 @@ class _Walk:
         route: tuple[str, ...],
         chain: QualifierChain | None,
         names: ScopePath,
-        local_to: ModuleId,
         span: SourceSpan,
         *,
         constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
@@ -560,7 +555,6 @@ class _Walk:
         self._route = route
         self._chain = chain
         self._names = names
-        self._local_to = local_to
         self._span = span
         self._refusals: list[AglError] = []
 
@@ -742,7 +736,7 @@ class _Walk:
             (candidate.origin for candidate in candidates),
             anchored=chain is not None and chain.anchored,
             span=span,
-            local_to=self._local_to,
+            reader=self._sources.reader(),
         )
 
 

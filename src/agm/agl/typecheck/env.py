@@ -1097,6 +1097,7 @@ class TypeEnvironment:
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
         owner_declarations: Mapping[int, TypeSelection] | None = None,
+        declared_segments: frozenset[str] = frozenset(),
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1163,6 +1164,9 @@ class TypeEnvironment:
         self._owner_declarations: Mapping[int, TypeSelection] = (
             {} if owner_declarations is None else owner_declarations
         )
+        # Segments of the paths this module declares: a route spelling whose
+        # head is one of them must be ``/``-anchored to select the import.
+        self._declared_segments = declared_segments
         self._sealed = False
         # Mutation journal, recording from begin_facts() until end_facts() takes
         # it; seal() leaves it in place, where no further mutator can reach it,
@@ -1175,16 +1179,12 @@ class TypeEnvironment:
         # once the body-check window opens.
         self._journal: list[EnvironmentFact] = []
         self._journaling = False
-        # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
-        # answer and is asked for repeatedly (once per owner-form resolution).  It
-        # is populated only once ``seal`` has frozen the declaration namespace, so
-        # a still-mutating environment never serves a stale answer.
-        self._sealed_own_source_type_names: frozenset[str] | None = None
         # Memos for the enum owner-form enumeration and its variant-level
         # counterpart.  Both rescan the whole type namespace (and, for imports,
         # every contribution route), and match compilation asks for them once
-        # per case.  Like the memo above, they are populated only once ``seal``
-        # has frozen the declaration namespace.
+        # per case.  They are populated only once ``seal`` has frozen the
+        # declaration namespace, so a still-mutating environment never serves
+        # a stale answer.
         self._sealed_enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None
         self._sealed_blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None
         # Built-in exception types are always available.
@@ -2260,9 +2260,6 @@ class TypeEnvironment:
         return TypeTemplate(template, type_params)
 
     def _own_source_type_names(self) -> frozenset[str]:
-        cached = self._sealed_own_source_type_names
-        if cached is not None:
-            return cached
         names = {name for name, _typ in self.non_builtin_type_items()}
         names.update(self._alias_targets, self._generic_types)
         names.update(
@@ -2278,10 +2275,7 @@ class TypeEnvironment:
             )
             if module_id == self._module_id
         )
-        own_names = frozenset(names)
-        if self._sealed:
-            self._sealed_own_source_type_names = own_names
-        return own_names
+        return frozenset(names)
 
     def _own_enum_owner_form(
         self, kind: Literal[EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF], owner_name: str
@@ -2346,10 +2340,9 @@ class TypeEnvironment:
         for owner_name in self._own_source_type_names():
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
-        own_names = self._own_source_type_names()
         for exposed_name, qnames in self._import_env.unqualified.items():
-            # A bare imported enum owner, unless this module declares the name.
-            if not isinstance(exposed_name, str) or exposed_name in own_names:
+            # A bare imported enum owner, unless this module declares a path the name heads.
+            if not isinstance(exposed_name, str) or exposed_name in self._declared_segments:
                 continue
             type_qnames = tuple(qname for qname in qnames if self._is_program_type_candidate(qname))
             if len(type_qnames) == 1:
@@ -2371,6 +2364,8 @@ class TypeEnvironment:
                     qname[0], source_name, scope_path=source_scope_path
                 )
                 for qualifier, anchored in routes:
+                    if not anchored and qualifier[0] in self._declared_segments:
+                        continue
                     resolved = resolve_qualified(
                         self._import_env, qualifier, exposed_name, anchored=anchored
                     )

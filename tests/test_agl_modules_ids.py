@@ -10,6 +10,7 @@ from agm.agl.modules.ids import (
     STD_CONFIG_ID,
     STD_PRELUDE_ID,
     ModuleId,
+    Reader,
     render_route_member,
     spell_declaration,
 )
@@ -241,5 +242,12 @@ class TestSpellings:
 
     def test_declaration_in_the_reading_module_is_spelled_by_its_path(self) -> None:
         alpha = ModuleId.from_path("alpha")
-        assert spell_declaration(alpha, ("S", "f"), local_to=alpha) == "S::f"
+        assert spell_declaration(alpha, ("S", "f"), reader=Reader(alpha)) == "S::f"
         assert spell_declaration(alpha, ("S", "f")) == "alpha::S::f"
+
+    def test_a_route_the_reader_also_declares_is_anchored(self) -> None:
+        lib = ModuleId.from_path("lib")
+        reader = Reader(ENTRY_ID, frozenset({"S", "lib"}))
+        assert spell_declaration(lib, ("Color", "Red"), reader=reader) == "/lib::Color::Red"
+        assert spell_declaration(lib, (), reader=reader) == "/lib"
+        assert spell_declaration(lib, ("f",), reader=Reader(ENTRY_ID, frozenset({"f"}))) == "lib::f"

@@ -129,6 +129,35 @@ def _report_undeclared_config_keys(
             )
 
 
+def _report_unused_manifest_leaves(
+    package_config: TomlDict,
+    command_paths: tuple[tuple[str, ...], ...],
+    consumed: frozenset[str],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> None:
+    """Warn for manifest leaves in the selected command's own tables that nothing consumes.
+
+    Engine settings are read by the host and *consumed* holds the program-route
+    spellings of the reachable module parameters. Inherited group and root
+    tables are skipped, since a sibling command may be the one that consumes
+    them, as are tables a registered descendant command inherits from.
+    """
+    exempt_tables = _tables_with_registered_descendants(command_paths, package_command_paths)
+    own_tables = {("config", *path) for path in command_paths} - {
+        ("config", *path) for path in exempt_tables
+    }
+    leaf_tables = manifest_leaf_tables(package_config, command_paths)
+    for leaf in sorted(leaf_tables):
+        table_path = leaf_tables[leaf]
+        if table_path not in own_tables or leaf in ENGINE_KEY_NAMES or leaf in consumed:
+            continue
+        print(
+            f"warning: config key '{leaf}' in the '{display_table_path(table_path)}' "
+            "configuration table is not a declared program argument and will be ignored",
+            file=sys.stderr,
+        )
+
+
 def resolve_param_values(
     config: GeneralConfig,
     program: ProgramDeclInfo,
@@ -183,6 +212,14 @@ def resolve_param_values(
             package_config, tuple(key for _entry, key in program_routes)
         )
         _merge_route_values(lower, frozenset(upper), program_routes, manifest_values)
+        _report_unused_manifest_leaves(
+            package_config,
+            command_paths,
+            frozenset(
+                spelling for _entry, key in program_routes for spelling in key.leaf_spellings()
+            ),
+            package_command_paths,
+        )
 
     _report_undeclared_config_keys(
         config,

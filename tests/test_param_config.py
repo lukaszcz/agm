@@ -970,3 +970,88 @@ class TestManifestConfigMergesBelowConfigFileRoutes:
                 surface=_surface(program, (first, second)),
                 package_config={"verbose": True},
             )
+
+
+class TestUnusedManifestLeafWarnings:
+    """A manifest command-table leaf the selected program does not consume is reported."""
+
+    @staticmethod
+    def _resolve(
+        package_config: Mapping[str, object],
+        *,
+        package_command_paths: frozenset[tuple[str, ...]] = frozenset(),
+        command_paths: tuple[tuple[str, ...], ...] = (("devel", "review"),),
+    ) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+        resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=command_paths,
+            surface=_surface(program, (binding,)),
+            package_command_paths=package_command_paths,
+            package_config=dict(package_config),
+        )
+
+    def test_warns_for_a_command_table_leaf_naming_no_reachable_parameter(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve({"devel": {"review": {"other.level": 1}}})
+
+        reported = capsys.readouterr().err
+        assert "other.level" in reported
+        assert "devel.review" in reported
+
+    def test_warns_for_a_command_table_leaf_the_program_signature_shadows(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+        resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, ()),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert "verbose" in capsys.readouterr().err
+
+    def test_a_consumed_leaf_draws_no_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._resolve({"devel": {"review": {"logging.verbose": True}}})
+
+        assert capsys.readouterr().err == ""
+
+    def test_an_engine_setting_leaf_draws_no_warning(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve({"devel": {"review": {"trace": True}}})
+
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.parametrize(
+        "package_config",
+        [{"devel": {"unrelated": True}}, {"unrelated": True}],
+        ids=["group", "root"],
+    )
+    def test_an_inherited_table_leaf_draws_no_warning(
+        self, package_config: Mapping[str, object], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A sibling command may be the one that consumes an inherited default."""
+        self._resolve(package_config)
+
+        assert capsys.readouterr().err == ""
+
+    def test_a_table_with_a_registered_descendant_draws_no_warning(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve(
+            {"devel": {"review": {"unrelated": True}}},
+            package_command_paths=frozenset({("devel", "review"), ("devel", "review", "deep")}),
+        )
+
+        assert capsys.readouterr().err == ""

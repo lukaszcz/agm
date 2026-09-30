@@ -243,7 +243,10 @@ registered command, an installed reference, or a file path), its command table b
 group table beats the root, ranking below config-file program, command, and group tables and
 `@config`, and above `[exec]` and a module's own module route (see the Configuration bullet
 below); a relative path-valued engine key such as `trace-file` resolves against the current
-working directory, like a CLI flag value, never against the package root.
+working directory, like a CLI flag value, never against the package root. Validation checks
+spellings against the whole closure; a leaf in a command's own table that the selected program
+does not consume (a parameter outside its import graph, or a bare name its signature shadows)
+is ignored with a run-time warning, like an unused config-file key.
 
 ## Registered commands
 

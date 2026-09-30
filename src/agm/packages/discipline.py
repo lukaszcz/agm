@@ -506,7 +506,8 @@ def _validate_manifest_config(manifest: PackageManifest, resolutions: _ModuleRes
     (*manifest*'s own, ``@command`` merged in); every other leaf spells an
     engine setting or a ``@param`` binding in the package's resolved
     dependency closure (*resolutions*: package, dependencies, and ``std``).
-    Per-program precedence and cross-route ambiguity are a run-time concern.
+    Per-program reachability, precedence and cross-route ambiguity are a run-time
+    concern: a leaf the selected program does not consume is warned about there.
     """
     if not manifest.config:
         return

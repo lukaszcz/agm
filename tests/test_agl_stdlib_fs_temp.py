@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.pipeline import RunResult
 from agm.agl.semantics.values import BoolValue, Value
+from agm.core import fs as core_fs
 from tests._agl_helpers import agl_roots
 
 
@@ -114,6 +116,29 @@ program def main() -> unit =
     assert result.ok
     assert _entries(os_temp) == []
     assert (os_temp.parent / "kept.txt").is_file()
+
+
+def test_temp_paths_that_cannot_be_removed_do_not_fail_the_run(
+    os_temp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(target: Path) -> None:
+        raise PermissionError(errno.EACCES, "Permission denied", str(target))
+
+    monkeypatch.setattr(core_fs, "rmtree", refuse)
+
+    result = _run(
+        """import std/fs
+import std/path
+program def main() -> unit =
+  let dir = fs::temp-dir()
+  let _ = fs::temp-file()
+  fs::write(path::join([dir, "sub/inner.txt"]), "x")
+""",
+        os_temp.parent / "main.agl",
+    )
+
+    assert result.ok
+    assert [entry.is_dir() for entry in _entries(os_temp)] == [True]
 
 
 def test_debug_setting_written_by_the_program_keeps_temp_paths(os_temp: Path) -> None:

@@ -160,11 +160,17 @@ def _checked_temp_root(operation: str) -> str:
     )
 
 
+def _remove_temp_path(path: Path) -> None:
+    """Remove *path*; skip it if already gone, and leave it if it cannot be removed."""
+    try:
+        _remove_entry(path, missing_ok=True)
+    except OSError:
+        pass
+
+
 def _remove_temp_paths(paths: list[Path]) -> None:
-    """Remove every temporary path, newest first; one the program already removed is skipped."""
-    run_cleanup_steps(
-        [functools.partial(_remove_entry, path, missing_ok=True) for path in reversed(paths)]
-    )
+    """Remove every temporary path, newest first, on a best-effort basis."""
+    run_cleanup_steps([functools.partial(_remove_temp_path, path) for path in reversed(paths)])
 
 
 def _no_temp_paths() -> list[Path]:

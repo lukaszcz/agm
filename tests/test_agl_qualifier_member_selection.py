@@ -7,9 +7,6 @@ test and an ``as?`` cast -- in file mode and every REPL grouping (see
 :mod:`tests.agl.qualifier_support`), asserting the phase, the class and the
 chain's own span, or the accepted identity:
 
-- a chain is looked up as its whole path: it never skips a segment no
-  source declares, whether or not its leading segment is also a module
-  route;
 - a scope region never hides a same-spelled imported type: the type's
   members stay reachable beside the region's own;
 - an orphan method on an imported or prelude type keeps that type's own
@@ -29,8 +26,10 @@ from agm.agl.diagnostics import AglTypeError, HiddenMemberError
 from agm.agl.scope.symbols import UnknownMemberError
 from tests.agl.qualifier_support import (
     FilePhase,
-    assert_verdicts_for_grouping,
-    grouping_params,
+    Groupings,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
 )
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
@@ -40,59 +39,6 @@ def _rejected(
     cls: type[BaseException],
 ) -> tuple[FilePhase, type[BaseException] | type[None]]:
     return ("scope", cls)
-
-
-# ---------------------------------------------------------------------------
-# The exact walk from a plain local scope.
-# ---------------------------------------------------------------------------
-
-_SKIP_ROUTE_LIB = {"pkg/Foo": "record Other\n  v: int\n"}
-_SKIP_LOCAL = "scope Foo\n  record Z\n    w: int\n  enum K\n    | Z\nend Foo"
-_SKIP_ROUTE_HEADER = ("import pkg/Foo", _SKIP_LOCAL)
-_SKIP_NO_ROUTE_HEADER = (_SKIP_LOCAL,)
-
-
-def _skip_probes(q: str) -> dict[str, str]:
-    return {
-        "value": f"{q}(w = 1)",
-        "pattern": f"let z = Foo::Z(w = 1)\ncase z of\n  | {q}(w) => w",
-        "is": f"let z = Foo::Z(w = 1)\nz is {q}",
-        "cast": f"let z = Foo::Z(w = 1)\nz as? {q}",
-    }
-
-
-class TestPlainScopeWalkNeverSkipsAMissingSegment:
-    """``Foo::E::Z`` is never read as ``Foo::Z``: no source declares ``Foo::E``.
-
-    The member ``Z``, which the plain scope ``Foo`` does declare, is never
-    selected past the missing segment, whether or not ``Foo`` also names the
-    ``pkg/Foo`` module route.
-    """
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_SKIP_ROUTE_HEADER) + 1))
-    def test_with_route_is_unknown_member(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        _assert_skip_is_unknown(tmp_path, _SKIP_ROUTE_LIB, _SKIP_ROUTE_HEADER, sizes)
-
-    @pytest.mark.parametrize("sizes", grouping_params(len(_SKIP_NO_ROUTE_HEADER) + 1))
-    def test_without_route_is_unknown_member(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        _assert_skip_is_unknown(tmp_path, {}, _SKIP_NO_ROUTE_HEADER, sizes)
-
-
-def _assert_skip_is_unknown(
-    tmp_path: Path, modules: dict[str, str], header: tuple[str, ...], sizes: tuple[int, ...]
-) -> None:
-    probes = {**_skip_probes("Foo::E::Z"), "value-length-four": "Foo::E::F::Z(w = 1)"}
-    spans = {key: "Foo::E::Z" for key in probes}
-    spans["value-length-four"] = "Foo::E::F::Z"
-    assert_verdicts_for_grouping(
-        tmp_path,
-        modules,
-        header,
-        sizes,
-        probes,
-        {key: _rejected(UnknownMemberError) for key in probes},
-        span_texts=spans,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,72 +83,76 @@ class TestUseRegionBesideImportedType:
     """
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
     def test_imported_nested_type_is_reached(
-        self, tmp_path: Path, sizes: tuple[int, ...], method: bool
+        self, tmp_path: Path, method: bool, groupings: Groupings
     ) -> None:
         probes = _nearest_inner_probes(method=method)
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            sizes,
-            probes,
-            {
-                "value": _ACCEPTED,
-                "pattern": _ACCEPTED,
-                "is": ("typecheck", AglTypeError),
-                "cast": ("typecheck", AglTypeError),
-            },
-            span_texts={"is": "1 is Geo::Inner", "cast": "1 as? Geo::Inner"},
-            expected_identities={
-                "value": "record tl::Geo::Inner\n  y: int",
-                "pattern": "tl::Geo::Inner -> int",
-            },
+            probe_table(
+                probes,
+                {
+                    "value": _ACCEPTED,
+                    "pattern": _ACCEPTED,
+                    "is": ("typecheck", AglTypeError),
+                    "cast": ("typecheck", AglTypeError),
+                },
+                span_texts={"is": "1 is Geo::Inner", "cast": "1 as? Geo::Inner"},
+                identities={
+                    "value": "record tl::Geo::Inner\n  y: int",
+                    "pattern": "tl::Geo::Inner -> int",
+                },
+            ),
+            groupings=groupings,
         )
 
     @pytest.mark.parametrize("method", [True, False], ids=["method", "no-method"])
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
     def test_region_member_is_accepted(
-        self, tmp_path: Path, sizes: tuple[int, ...], method: bool
+        self, tmp_path: Path, method: bool, groupings: Groupings
     ) -> None:
         probe = _region("let q = Geo::Point(x = 1)", method=method) + "\nr::q"
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            sizes,
-            {"value": probe},
-            {"value": _ACCEPTED},
-            expected_identities={"value": "record shapes::Geo::Point\n  x: int"},
+            probe_table(
+                {"value": probe},
+                {"value": _ACCEPTED},
+                identities={"value": "record shapes::Geo::Point\n  x: int"},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
-    def test_method_path_member_is_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_method_path_member_is_accepted(self, tmp_path: Path, groupings: Groupings) -> None:
         probe = _region("let q = Geo::f()", method=True) + "\nr::q"
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            sizes,
-            {"value": probe},
-            {"value": _ACCEPTED},
-            expected_identities={"value": "int"},
+            probe_table({"value": probe}, {"value": _ACCEPTED}, identities={"value": "int"}),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NEAREST_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
     def test_region_without_method_path_lacks_it(
-        self, tmp_path: Path, sizes: tuple[int, ...]
+        self, tmp_path: Path, groupings: Groupings
     ) -> None:
         probe = _region("let q = Geo::f()", method=False)
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _NEAREST_MODULES,
             _NEAREST_HEADER,
-            sizes,
-            {"value": probe},
-            {"value": _rejected(UnknownMemberError)},
-            span_texts={"value": "Geo::f"},
+            probe_table(
+                {"value": probe},
+                {"value": _rejected(UnknownMemberError)},
+                span_texts={"value": "Geo::f"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -218,49 +168,53 @@ _ORPHAN_SUBJECT = "let v: Shape = Shape::Square"
 class TestOrphanMethodKeepsImportedEnumMembers:
     """``def Shape::area`` on a wildcard-imported enum leaves ``Shape::Circle`` selectable."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ORPHAN_HEADER) + 1))
-    def test_member_is_selected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_member_is_selected(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "pattern": f"{_ORPHAN_SUBJECT}\ncase v of\n  | Shape::Circle => 1\n  | _ => 2",
             "is": f"{_ORPHAN_SUBJECT}\nv is Shape::Circle",
             "cast": f"{_ORPHAN_SUBJECT}\nv as? Shape::Circle",
             "value": "Shape::Circle",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _ORPHAN_LIB,
             _ORPHAN_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={
-                "pattern": "int",
-                "is": "bool",
-                "cast": (
-                    "enum std/option::Option[en::Shape::Circle]\n"
-                    "  | None\n"
-                    "  | Some(value: en::Shape::Circle)"
-                ),
-                "value": "record en::Shape::Circle",
-            },
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={
+                    "pattern": "int",
+                    "is": "bool",
+                    "cast": (
+                        "enum std/option::Option[en::Shape::Circle]\n"
+                        "  | None\n"
+                        "  | Some(value: en::Shape::Circle)"
+                    ),
+                    "value": "record en::Shape::Circle",
+                },
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ORPHAN_HEADER) + 1))
-    def test_missing_member_is_unknown(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_missing_member_is_unknown(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "pattern": f"{_ORPHAN_SUBJECT}\ncase v of\n  | Shape::Nope => 1\n  | _ => 2",
             "is": f"{_ORPHAN_SUBJECT}\nv is Shape::Nope",
             "cast": f"{_ORPHAN_SUBJECT}\nv as? Shape::Nope",
             "value": "Shape::Nope",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _ORPHAN_LIB,
             _ORPHAN_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "Shape::Nope" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(UnknownMemberError) for key in probes},
+                span_texts={key: "Shape::Nope" for key in probes},
+            ),
+            groupings=groupings,
         )
 
 
@@ -271,21 +225,21 @@ _PRELUDE_SUBJECT = "let o: Option[int] = None"
 class TestOrphanMethodKeepsPreludeEnumMembers:
     """``def Option::m`` leaves the prelude ``Option::Some`` selectable in a pattern."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_PRELUDE_ORPHAN_HEADER) + 1))
-    def test_member_is_selected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_member_is_selected(self, tmp_path: Path) -> None:
         probes = {
             "pattern": f"{_PRELUDE_SUBJECT}\n"
             "case o of\n  | Option::Some(value) => value\n  | _ => 0",
             "is": f"{_PRELUDE_SUBJECT}\no is Option::Some",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _PRELUDE_ORPHAN_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={"pattern": "int", "is": "bool"},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"pattern": "int", "is": "bool"},
+            ),
         )
 
 
@@ -323,40 +277,42 @@ class TestHiddenNestedRecordThroughItsOwner:
     for an enum owner's nested record as for a record owner's.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NESTED_HIDDEN_HEADER) + 1))
-    def test_record_owner(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_record_owner(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             _NESTED_LIB,
             _NESTED_HIDDEN_HEADER,
-            sizes,
-            _NESTED_HIDDEN_PROBES,
-            {key: _rejected(HiddenMemberError) for key in _NESTED_HIDDEN_PROBES},
-            span_texts={key: "Geo::Inner" for key in _NESTED_HIDDEN_PROBES},
+            probe_table(
+                _NESTED_HIDDEN_PROBES,
+                {key: _rejected(HiddenMemberError) for key in _NESTED_HIDDEN_PROBES},
+                span_texts={key: "Geo::Inner" for key in _NESTED_HIDDEN_PROBES},
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NESTED_HIDDEN_ORPHAN_HEADER) + 1))
-    def test_record_owner_with_orphan_method(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_record_owner_with_orphan_method(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _NESTED_LIB,
             _NESTED_HIDDEN_ORPHAN_HEADER,
-            sizes,
-            _NESTED_HIDDEN_PROBES,
-            {key: _rejected(HiddenMemberError) for key in _NESTED_HIDDEN_PROBES},
-            span_texts={key: "Geo::Inner" for key in _NESTED_HIDDEN_PROBES},
+            probe_table(
+                _NESTED_HIDDEN_PROBES,
+                {key: _rejected(HiddenMemberError) for key in _NESTED_HIDDEN_PROBES},
+                span_texts={key: "Geo::Inner" for key in _NESTED_HIDDEN_PROBES},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ENUM_NESTED_HIDDEN_HEADER) + 1))
-    def test_enum_owner(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_enum_owner(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             _ENUM_NESTED_LIB,
             _ENUM_NESTED_HIDDEN_HEADER,
-            sizes,
-            _ENUM_NESTED_HIDDEN_PROBES,
-            {key: _rejected(HiddenMemberError) for key in _ENUM_NESTED_HIDDEN_PROBES},
-            span_texts={key: "Color::Extra" for key in _ENUM_NESTED_HIDDEN_PROBES},
+            probe_table(
+                _ENUM_NESTED_HIDDEN_PROBES,
+                {key: _rejected(HiddenMemberError) for key in _ENUM_NESTED_HIDDEN_PROBES},
+                span_texts={key: "Color::Extra" for key in _ENUM_NESTED_HIDDEN_PROBES},
+            ),
         )
 
 
@@ -391,21 +347,23 @@ class TestSameLevelCandidatesSelectFullPathFirst:
     candidate hides and the other declares selects the other.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_HIDDEN_AND_MISSING_HEADER) + 1))
-    def test_hidden_on_one_missing_on_other(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_hidden_on_one_missing_on_other(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = _two_enum_probes("Red")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _TWO_ENUM_LIB,
             _HIDDEN_AND_MISSING_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(HiddenMemberError) for key in probes},
-            span_texts={key: "Color::Red" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(HiddenMemberError) for key in probes},
+                span_texts={key: "Color::Red" for key in probes},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_HIDDEN_AND_PRESENT_HEADER) + 1))
-    def test_hidden_on_one_present_on_other(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_hidden_on_one_present_on_other(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "value": "Color::Red",
             "pattern": (
@@ -413,14 +371,16 @@ class TestSameLevelCandidatesSelectFullPathFirst:
             ),
             "is": "let v: en3::Color = en3::Color::Green\nv is Color::Red",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _TWO_ENUM_LIB,
             _HIDDEN_AND_PRESENT_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={"value": "record en3::Color::Red", "pattern": "int", "is": "bool"},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"value": "record en3::Color::Red", "pattern": "int", "is": "bool"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -434,22 +394,24 @@ _NESTED_HIDDEN_AND_PRESENT_HEADER = ("import tl::* hiding Geo::Inner", "import t
 class TestSameLevelNestedRecordSelectsFullPathFirst:
     """A nested record one owner hides and the other declares selects the other."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_NESTED_HIDDEN_AND_PRESENT_HEADER) + 1))
-    def test_accepted(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_accepted(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "value": "Geo::Inner(w = 1)",
             "pattern": (
                 "let g: tl2::Geo::Inner = tl2::Geo::Inner(w = 1)\ncase g of\n  | Geo::Inner(w) => w"
             ),
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _TWO_NESTED_LIB,
             _NESTED_HIDDEN_AND_PRESENT_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={"value": "record tl2::Geo::Inner\n  w: int", "pattern": "int"},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"value": "record tl2::Geo::Inner\n  w: int", "pattern": "int"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -466,28 +428,30 @@ _REGION_OWNER_HEADER = ("import tl::*", "scope R\n  def Geo::f() -> int = 1\nend
 class TestPlainRegionBesideImportedTypeOwner:
     """A local ``scope R`` with a method path ``R::Geo`` never hides the imported ``R::Geo::X``."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_REGION_OWNER_HEADER) + 1))
-    def test_imported_member_is_reached(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_imported_member_is_reached(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "value": "R::Geo::X(z = 1)",
             "pattern": "case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z",
             "is": "1 is R::Geo::X",
             "cast": "1 as? R::Geo::X",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _REGION_OWNER_LIB,
             _REGION_OWNER_HEADER,
-            sizes,
-            probes,
-            {
-                "value": _ACCEPTED,
-                "pattern": _ACCEPTED,
-                "is": ("typecheck", AglTypeError),
-                "cast": ("typecheck", AglTypeError),
-            },
-            span_texts={"is": "1 is R::Geo::X", "cast": "1 as? R::Geo::X"},
-            expected_identities={"value": "record tl::R::Geo::X\n  z: int", "pattern": "int"},
+            probe_table(
+                probes,
+                {
+                    "value": _ACCEPTED,
+                    "pattern": _ACCEPTED,
+                    "is": ("typecheck", AglTypeError),
+                    "cast": ("typecheck", AglTypeError),
+                },
+                span_texts={"is": "1 is R::Geo::X", "cast": "1 as? R::Geo::X"},
+                identities={"value": "record tl::R::Geo::X\n  z: int", "pattern": "int"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -502,8 +466,7 @@ _SCALAR_ALIAS_HEADER = ("import al::*",)
 class TestScalarAliasOwnerMissingMember:
     """``Geo::Nope`` through a wildcard-imported ``type Geo = int`` is an unknown member."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_SCALAR_ALIAS_HEADER) + 1))
-    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_rejected(self, tmp_path: Path) -> None:
         probes = {
             "value": "Geo::Nope",
             "call": "Geo::Nope(y = 1)",
@@ -511,14 +474,15 @@ class TestScalarAliasOwnerMissingMember:
             "is": "1 is Geo::Nope",
             "cast": "1 as? Geo::Nope",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _SCALAR_ALIAS_LIB,
             _SCALAR_ALIAS_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "Geo::Nope" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(UnknownMemberError) for key in probes},
+                span_texts={key: "Geo::Nope" for key in probes},
+            ),
         )
 
 
@@ -529,20 +493,22 @@ _RECORD_ALIAS_HEADER = ("import al::*", "def Geo::f() -> int = 1")
 class TestRecordAliasOwnerProjectsOnlyItsTargetMembers:
     """``Geo::Inner`` through ``type Geo = Base`` names no member: nested paths do not project."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_RECORD_ALIAS_HEADER) + 1))
-    def test_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "value": "Geo::Inner(y = 1)",
             "pattern": "case al::Base::Inner(y = 1) of\n  | Geo::Inner(y) => y",
             "is": "1 is Geo::Inner",
             "cast": "1 as? Geo::Inner",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _RECORD_ALIAS_LIB,
             _RECORD_ALIAS_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "Geo::Inner" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(UnknownMemberError) for key in probes},
+                span_texts={key: "Geo::Inner" for key in probes},
+            ),
+            groupings=groupings,
         )

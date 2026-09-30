@@ -7,7 +7,7 @@ from typing import TypeVar
 
 import pytest
 
-from agm.agl.diagnostics import AglTypeError, type_name_not_a_value
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.parser import parse_program
@@ -44,6 +44,7 @@ from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.visitor import walk
+from tests.agl.qualifier_support import span_text
 
 
 def _ref(source: str) -> VarRef:
@@ -239,12 +240,15 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
         "let value = 1\nvalue is First::Second::Third::member",
     ),
 )
-def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
-    """A chain's length is never itself a rejection reason: scope reaches
-    content resolution regardless of depth, and rejects an unknown route
-    exactly as it would a shorter one (``First`` never names a module)."""
-    with pytest.raises(UnknownQualifierError):
+def test_long_qualifier_chain_with_an_unknown_leading_segment_is_an_unknown_qualifier(
+    source: str,
+) -> None:
+    """A chain's length is never itself a rejection reason: ``First`` names
+    nothing, so the whole chain is an unknown qualifier at any depth."""
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_inline_entry(source)
+
+    assert span_text(source, exc_info.value.span) == "First::Second::Third::member"
 
 
 def test_long_qualifier_chain_with_a_resolved_owner_reports_unknown_member() -> None:
@@ -265,8 +269,11 @@ def test_long_qualifier_chain_with_a_resolved_owner_reports_unknown_member() -> 
     ),
 )
 def test_nonleading_anchor_and_route_segments_report_route_errors(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
+    with pytest.raises(AglScopeError) as exc_info:
         resolve_inline_entry(source)
+
+    assert type(exc_info.value) is AglScopeError
+    assert span_text(source, exc_info.value.span) == source
 
 
 def test_current_module_qualified_assignment_remains_an_assignment_target() -> None:
@@ -281,8 +288,12 @@ def test_current_module_qualified_assignment_remains_an_assignment_target() -> N
 
 
 def test_non_expression_chain_routes_reject_only_invalid_nonleading_routes() -> None:
-    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
-        resolve_inline_entry("let value = 1\ncase value of | module::owner/name::member => 1")
+    source = "let value = 1\ncase value of | module::owner/name::member => 1"
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_inline_entry(source)
+
+    assert type(exc_info.value) is AglScopeError
+    assert span_text(source, exc_info.value.span) == "module::owner/name::member"
 
 
 def test_long_qualified_expression_retains_all_segments() -> None:
@@ -376,20 +387,20 @@ def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() 
         resolve_inline_entry("::A::B::C")
 
 
-def test_bare_self_qualified_undefined_name_hints_a_dollar_suffixed_spelling() -> None:
-    """``::exec$`` (a zero-segment self-reference) hints the same fix."""
-    with pytest.raises(AglScopeError) as exc_info:
+def test_bare_self_qualified_dollar_suffixed_name_is_an_unknown_member() -> None:
+    """``::exec$`` (a zero-segment self-reference) names no member of the own module."""
+    with pytest.raises(UnknownMemberError) as exc_info:
         resolve_inline_entry("::exec$")
 
-    assert "exec $" in exc_info.value.to_diagnostic().message
+    assert span_text("::exec$", exc_info.value.span) == "::exec$"
 
 
-def test_current_module_unknown_constructor_owner_hints_a_dollar_suffixed_segment() -> None:
-    """``::exec$::bar`` names the '$'-suffixed segment; the message hints the fix."""
-    with pytest.raises(AglScopeError) as exc_info:
+def test_current_module_dollar_suffixed_owner_is_an_unknown_qualifier() -> None:
+    """``::exec$::bar`` names no own scope or type ``exec$``."""
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_inline_entry("::exec$::bar")
 
-    assert "exec $" in exc_info.value.to_diagnostic().message
+    assert span_text("::exec$::bar", exc_info.value.span) == "::exec$::bar"
 
 
 def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
@@ -397,7 +408,6 @@ def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() ->
         resolve_inline_entry("enum A | value\n/A::value")
 
 
-_ANY_SPAN = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
 _TYPE_NAMES = (
     "enum Root\n  | A\n\n"
     "type Count = int\n\n"
@@ -435,7 +445,8 @@ def test_type_name_without_a_constructor_is_not_a_value_at_any_scope_depth(
     with pytest.raises(AglTypeError) as exc_info:
         resolve_inline_entry(source)
 
-    assert str(exc_info.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
+    assert type(exc_info.value) is AglTypeError
+    assert span_text(source, exc_info.value.span) == spelling
 
 
 _TYPE_NAME_LIB = (
@@ -462,7 +473,8 @@ def test_imported_type_name_without_a_constructor_is_not_a_value(
     with pytest.raises(AglTypeError) as exc_info:
         _entry_resolution(tmp_path, modules)
 
-    assert str(exc_info.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
+    assert type(exc_info.value) is AglTypeError
+    assert span_text(modules["entry"], exc_info.value.span) == spelling
 
 
 def test_structural_alias_owner_has_no_member(tmp_path: Path) -> None:
@@ -783,7 +795,7 @@ def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: P
 
 
 def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _resolve_without_loader(
             {
                 "entry": (

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import HiddenMemberError
+from agm.agl.diagnostics import AglError, HiddenMemberError
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program_seeded
 from agm.agl.repl import ReplSession
@@ -38,6 +38,7 @@ from agm.agl.scope.symbols import (
     MissRepair,
     ReceiverOwner,
     UnknownMemberError,
+    UnknownQualifierError,
 )
 from agm.agl.semantics.values import BoolValue, IntValue
 from agm.agl.syntax.nodes import (
@@ -60,10 +61,20 @@ from tests.agl.ir_harness import (
     make_inline_graph_from_files as _make_graph_from_files,
 )
 from tests.agl.module_graph import resolve_repl_entry
+from tests.agl.qualifier_support import span_text
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _rejection(
+    tmp_path: Path, modules: dict[str, str], module: str
+) -> tuple[type[AglError], str | None]:
+    """Resolve *modules* inline; the rejection's class and the text of *module* its span covers."""
+    with pytest.raises(AglError) as exc_info:
+        resolve_program(_make_graph_from_files(tmp_path, modules))
+    return type(exc_info.value), span_text(modules[module], exc_info.value.span)
 
 
 def _find_varref(program: object, name: str) -> VarRef | None:
@@ -319,15 +330,11 @@ class TestGlobImport:
 
     def test_brace_tail_import_omits_unselected_bare_name(self, tmp_path: Path) -> None:
         """A brace-tail import does not inject unselected bare members."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::{bar}\nlet x = foo()",
-                "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError, match="foo"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib::{bar}\nlet x = foo()",
+            "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "foo")
 
     def test_hiding_import_excludes_hidden_name(self, tmp_path: Path) -> None:
         """'import mylib hiding foo' exposes 'bar' but not 'foo'."""
@@ -348,15 +355,11 @@ class TestGlobImport:
 
     def test_hiding_import_hides_named(self, tmp_path: Path) -> None:
         """'import mylib hiding foo' — bare 'foo' should error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::* hiding foo\nlet x = foo()",
-                "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError, match="foo"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib::* hiding foo\nlet x = foo()",
+            "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "foo")
 
     def test_brace_tail_rename(self, tmp_path: Path) -> None:
         """A brace-tail rename adds a bare spelling for its selected member.
@@ -428,15 +431,11 @@ class TestGlobImport:
 
     def test_qualified_import_prevents_bare_access(self, tmp_path: Path) -> None:
         """'import mylib qualified' — bare 'foo' should error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib\nlet x = foo()",
-                "mylib": "def foo() -> int = 42",
-            },
-        )
-        with pytest.raises(AglScopeError, match="foo"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib\nlet x = foo()",
+            "mylib": "def foo() -> int = 42",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "foo")
 
     def test_qualified_import_allows_qualified_access(self, tmp_path: Path) -> None:
         """'import mylib qualified' — 'mylib::foo' should resolve."""
@@ -478,16 +477,11 @@ class TestGlobImport:
 
     def test_alias_does_not_inject_bare_members(self, tmp_path: Path) -> None:
         """An import alias creates only its canonical qualified route."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib as M\nlet x = foo()",
-                "mylib": "def foo() -> int = 42",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="foo"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib as M\nlet x = foo()",
+            "mylib": "def foo() -> int = 42",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "foo")
 
 
 # ---------------------------------------------------------------------------
@@ -533,14 +527,10 @@ class TestQualifiedAccess:
 
     def test_unknown_qualifier_handle_errors(self, tmp_path: Path) -> None:
         """'nomodule::foo' when no such module is imported errors."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "let x = nomodule::foo()",
-            },
-        )
-        with pytest.raises(AglScopeError, match="nomodule"):
-            resolve_program(graph)
+        modules = {
+            "entry": "let x = nomodule::foo()",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (UnknownQualifierError, "nomodule::foo")
 
     def test_local_scope_beats_a_same_named_module_route(self, tmp_path: Path) -> None:
         """``mylib::foo`` is the own scope's; ``/mylib::foo`` reaches the module."""
@@ -980,14 +970,10 @@ class TestSelfReference:
 
     def test_self_ref_undefined_name_errors(self, tmp_path: Path) -> None:
         """'::nonexistent' in a module errors."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "let x = ::nonexistent()",
-            },
-        )
-        with pytest.raises(AglScopeError, match="nonexistent"):
-            resolve_program(graph)
+        modules = {
+            "entry": "let x = ::nonexistent()",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (UnknownMemberError, "::nonexistent")
 
     def test_self_ref_bypasses_param_shadow(self, tmp_path: Path) -> None:
         """'::foo' inside g(foo: int) resolves to the top-level def foo, not the param.
@@ -1119,11 +1105,9 @@ class TestQualifiedMemberDiagnostics:
                 "libB": "def other() -> int = 2\ndef secret() -> int = 99",
             },
         )
-        with pytest.raises(AglScopeError) as exc_info:
+        with pytest.raises(UnknownMemberError) as exc_info:
             resolve_program(graph)
-        msg = str(exc_info.value)
-        assert "libA" in msg, f"Expected 'libA' in error, got: {msg!r}"
-        assert "libB" not in msg, f"libB should NOT be named, got: {msg!r}"
+        assert exc_info.value.spelling == "libA::secret"
 
 
 # ---------------------------------------------------------------------------
@@ -1133,25 +1117,21 @@ class TestQualifiedMemberDiagnostics:
 
 class TestBuiltinVarPlacement:
     def test_entry_declaration_rejected(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {"entry": "builtin var strict-json: bool\n()"},
+        modules = {"entry": "builtin var strict-json: bool\n()"}
+        assert _rejection(tmp_path, modules, "entry") == (
+            AglScopeError,
+            "builtin var strict-json: bool",
         )
-
-        with pytest.raises(AglScopeError, match="std/config"):
-            resolve_program(graph)
 
     def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::*\n()",
-                "mylib": "builtin var strict-json: bool",
-            },
+        modules = {
+            "entry": "import mylib::*\n()",
+            "mylib": "builtin var strict-json: bool",
+        }
+        assert _rejection(tmp_path, modules, "mylib") == (
+            AglScopeError,
+            "builtin var strict-json: bool",
         )
-
-        with pytest.raises(AglScopeError, match="std/config"):
-            resolve_program(graph)
 
     def test_std_config_declarations_and_qualified_assignment_resolve(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
@@ -1308,16 +1288,12 @@ class TestHeaderOnlyImports:
             resolve_program(graph)
 
     def test_import_after_infix_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::*\n()",
-                "mylib": "infixl |> at 12\nimport libB::*\ndef |>(x: int, y: int) -> int = x",
-                "libB": "def bar() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError, match="Import and export"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib::*\n()",
+            "mylib": "infixl |> at 12\nimport libB::*\ndef |>(x: int, y: int) -> int = x",
+            "libB": "def bar() -> int = 2",
+        }
+        assert _rejection(tmp_path, modules, "mylib") == (AglScopeError, "import libB::*")
 
     def test_import_at_top_of_non_entry_allowed(self, tmp_path: Path) -> None:
         """Import declarations at the top of a non-entry module are allowed."""
@@ -1382,15 +1358,14 @@ class TestHeaderOnlyImports:
 
     def test_import_after_def_in_entry_errors(self, tmp_path: Path) -> None:
         """An import after a def at the entry module's root is also an error."""
+        entry = "def helper() -> int = 1\nimport mylib::*"
         graph = make_file_graph_from_files(
-            tmp_path,
-            {
-                "entry": "def helper() -> int = 1\nimport mylib::*",
-                "mylib": "def foo() -> int = 42",
-            },
+            tmp_path, {"entry": entry, "mylib": "def foo() -> int = 42"}
         )
-        with pytest.raises(AglScopeError, match="Import and export"):
+        with pytest.raises(AglScopeError) as exc_info:
             resolve_program(graph)
+        assert type(exc_info.value) is AglScopeError
+        assert span_text(entry, exc_info.value.span) == "import mylib::*"
 
 
 _TWO_GEOS = {
@@ -2335,16 +2310,13 @@ class TestTypeDeclarationsInModules:
         is a duplicate declaration exactly as it would be for a constructible
         alias.
         """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "def Palette() -> int = 1\nenum Color\n  | Red\ntype Palette = Color\n()"
-                ),
-            },
+        modules = {
+            "entry": ("def Palette() -> int = 1\nenum Color\n  | Red\ntype Palette = Color\n()"),
+        }
+        assert _rejection(tmp_path, modules, "entry") == (
+            DuplicateDeclarationError,
+            "type Palette = Color",
         )
-        with pytest.raises(AglScopeError, match="Palette.*already declared"):
-            resolve_program(graph)
 
     def test_nonconstructible_alias_yields_to_repl_session_binding(self, tmp_path: Path) -> None:
         """A prior REPL session binding keeps its value beside a same-named nonconstructible alias.
@@ -2438,15 +2410,11 @@ class TestMethodOrphanRule:
             (ENTRY_ID, ("Geo", "Point"), "tag"): ReceiverOwner(shapes_id, ("Geo", "Point")),
         }
 
-        invalid = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import shapes::*\n\ndef Point::tag(self) -> int = self.x",
-                "shapes": "scope Geo\n  record Point\n    x: int\nend Geo",
-            },
-        )
-        with pytest.raises(AglScopeError, match="enclosing type scope"):
-            resolve_program(invalid)
+        invalid = {
+            "entry": "import shapes::*\n\ndef Point::tag(self) -> int = self.x",
+            "shapes": "scope Geo\n  record Point\n    x: int\nend Geo",
+        }
+        assert _rejection(tmp_path, invalid, "entry") == (AglScopeError, "self")
 
     def test_self_on_a_region_scoped_glob_imported_type_resolves_its_owner(
         self, tmp_path: Path
@@ -2658,96 +2626,66 @@ class TestMethodOrphanRule:
         }
 
     def test_qualified_only_import_does_not_supply_an_orphan_receiver(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import shapes\ndef Point::tag(self) -> int = 1",
-                "shapes": "record Point",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="enclosing type scope"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import shapes\ndef Point::tag(self) -> int = 1",
+            "shapes": "record Point",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_ambiguous_bare_orphan_receiver_is_rejected(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import first::*\nimport second::*\ndef Point::tag(self) -> int = 1",
-                "first": "record Point",
-                "second": "record Point",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="ambiguous"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import first::*\nimport second::*\ndef Point::tag(self) -> int = 1",
+            "first": "record Point",
+            "second": "record Point",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "self")
 
     def test_renamed_orphan_receiver_collision_is_ambiguous(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "import first::{Original as Point}\n"
-                    "import second::{Point}\n"
-                    "def Point::tag(self) -> int = 1"
-                ),
-                "first": "record Original",
-                "second": "record Point",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="ambiguous"):
-            resolve_program(graph)
+        modules = {
+            "entry": (
+                "import first::{Original as Point}\n"
+                "import second::{Point}\n"
+                "def Point::tag(self) -> int = 1"
+            ),
+            "first": "record Original",
+            "second": "record Point",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "self")
 
     def test_foreign_alias_is_rejected_as_a_receiver(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
-                "shapes": "record Actual\ntype Point = Actual",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="alias"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
+            "shapes": "record Actual\ntype Point = Actual",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_local_nested_alias_is_rejected_as_a_multi_segment_receiver(
         self, tmp_path: Path
     ) -> None:
         """A type alias reopened under its own type's scope still rejects a receiver."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "record Outer\n"
-                    "  x: int\n"
-                    "\n"
-                    "scope Outer\n"
-                    "  type Inner = int\n"
-                    "end Outer\n"
-                    "\n"
-                    "def Outer::Inner::bad(self) -> int = 1"
-                ),
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="alias"):
-            resolve_program(graph)
+        modules = {
+            "entry": (
+                "record Outer\n"
+                "  x: int\n"
+                "\n"
+                "scope Outer\n"
+                "  type Inner = int\n"
+                "end Outer\n"
+                "\n"
+                "def Outer::Inner::bad(self) -> int = 1"
+            ),
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_foreign_nested_alias_is_rejected_as_a_multi_segment_receiver(
         self, tmp_path: Path
     ) -> None:
         """A used nested type alias, reached without a local declaration, still rejects."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import shapes\nuse shapes::*\ndef Outer::Inner::bad(self) -> int = 1",
-                "shapes": ("record Outer\n  x: int\n\nscope Outer\n  type Inner = int\nend Outer"),
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="alias"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import shapes\nuse shapes::*\ndef Outer::Inner::bad(self) -> int = 1",
+            "shapes": ("record Outer\n  x: int\n\nscope Outer\n  type Inner = int\nend Outer"),
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     @pytest.mark.parametrize(
         ("module_source", "receiver"),
@@ -2778,26 +2716,21 @@ class TestMethodOrphanRule:
         self, tmp_path: Path
     ) -> None:
         """A root function with a `self` parameter reports the generic scope rule."""
-        graph = _make_graph_from_files(tmp_path, {"entry": "def helper(self) -> int = 1"})
-        with pytest.raises(AglScopeError, match="enclosing type scope"):
-            resolve_program(graph)
+        modules = {"entry": "def helper(self) -> int = 1"}
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_orphan_check_ignores_a_scoped_import_from_an_unrelated_region(
         self, tmp_path: Path
     ) -> None:
         """A scoped import supplies receiver types only in its region and descendants."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": (
-                    "scope A\n  import shapes::*\nend A\n\n"
-                    "scope B\n  def Point::tag(self) -> int = self.x\nend B"
-                ),
-                "shapes": "record Point\n  x: int",
-            },
-        )
-        with pytest.raises(AglScopeError, match="enclosing type scope"):
-            resolve_program(graph)
+        modules = {
+            "entry": (
+                "scope A\n  import shapes::*\nend A\n\n"
+                "scope B\n  def Point::tag(self) -> int = self.x\nend B"
+            ),
+            "shapes": "record Point\n  x: int",
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
 
 # ---------------------------------------------------------------------------
@@ -2808,15 +2741,11 @@ class TestMethodOrphanRule:
 class TestSelfReferenceInNonEntryModule:
     def test_self_ref_to_nonexistent_name_errors(self, tmp_path: Path) -> None:
         """'::nonexistent' in a non-entry module errors."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::*\n()",
-                "mylib": "def foo() -> int = ::noname()",
-            },
-        )
-        with pytest.raises(AglScopeError, match="noname"):
-            resolve_program(graph)
+        modules = {
+            "entry": "import mylib::*\n()",
+            "mylib": "def foo() -> int = ::noname()",
+        }
+        assert _rejection(tmp_path, modules, "mylib") == (UnknownMemberError, "::noname")
 
 
 # ---------------------------------------------------------------------------
@@ -2891,18 +2820,6 @@ class TestQualifiedConstructorReferences:
             },
         )
         with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_is_test_through_an_imported_function_selects_no_member(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import library\nlet value = 1\nvalue is library::owner::Variant",
-                "library": "def owner() -> int = 1",
-            },
-        )
-
-        with pytest.raises(UnknownMemberError):
             resolve_program(graph)
 
     def test_non_constructible_qualified_type_owns_no_member(self, tmp_path: Path) -> None:
@@ -3281,15 +3198,12 @@ class TestResolveGraphReplSeams:
         session_scope = prior_resolved.root_scope
 
         # mylib references "helper", which exists ONLY in the entry's parent scope.
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::*\n()",
-                "mylib": "def foo() -> int = helper",
-            },
-        )
-        with pytest.raises(AglScopeError, match="helper"):
+        library = "def foo() -> int = helper"
+        graph = _make_graph_from_files(tmp_path, {"entry": "import mylib::*\n()", "mylib": library})
+        with pytest.raises(AglScopeError) as exc_info:
             resolve_program(graph, entry_repl_session_scope=session_scope)
+        assert type(exc_info.value) is AglScopeError
+        assert span_text(library, exc_info.value.span) == "helper"
 
 
 # ---------------------------------------------------------------------------
@@ -4360,7 +4274,7 @@ class TestAppliedBuiltinReceiverScopes:
             method,
         )
 
-    def test_ambiguity_diagnostic_renders_an_applied_receiver_declaration_path(
+    def test_ambiguity_origins_name_an_applied_receiver_declaration_by_its_path(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(
@@ -4380,7 +4294,10 @@ class TestAppliedBuiltinReceiverScopes:
             default_stdlib=False,
         )
 
-        with pytest.raises(AglScopeError) as exc_info:
+        with pytest.raises(AmbiguousQualificationError) as exc_info:
             resolve_program(graph)
 
-        assert "lib::array::first" in str(exc_info.value)
+        assert [origin.declaration for origin in exc_info.value.origins] == [
+            (ModuleId.from_path("lib"), ("array", "first")),
+            (ModuleId.from_path("other"), ("array", "first")),
+        ]

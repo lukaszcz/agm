@@ -27,9 +27,13 @@ from agm.agl.scope.symbols import (
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
+    type_positions_rejected,
 )
 
 _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
@@ -95,13 +99,19 @@ _SCENARIOS = {
             ),
             "fresh-annot": accepted("fn(p: Stored::Fresh) => 1", "Stored::Fresh -> int"),
             "fresh-is": accepted("let v: Stored = Fresh\nv is Stored::Fresh", "bool"),
-            "len3-annot": rejected(
+            "fresh-narrow": accepted(
+                "let v: Stored = Fresh\nv as? Stored::Fresh",
+                option_identity("Stored::Fresh"),
+            ),
+            "length-three-annot": rejected(
                 "fn(p: Stored::Saved::X) => 1", ReferencedMemberError, "Stored::Saved::X"
             ),
-            "len3-fresh-annot": rejected(
+            "length-three-fresh-annot": rejected(
                 "fn(p: Stored::Fresh::X) => 1", UnknownMemberError, "Stored::Fresh::X"
             ),
-            "len3-fresh-val": rejected("Stored::Fresh::X", UnknownMemberError, "Stored::Fresh::X"),
+            "length-three-fresh-val": rejected(
+                "Stored::Fresh::X", UnknownMemberError, "Stored::Fresh::X"
+            ),
         },
     ),
     "local-record-beside-two-imports": Scenario(
@@ -142,19 +152,17 @@ _SCENARIOS = {
             "import n::*",
         ),
         probes={
-            "twoimp-bare-annot": rejected(
-                "fn(p: Point) => 1", AmbiguousQualificationError, "Point"
-            ),
-            "twoimp-bare-reptype": rejected("Point", AmbiguousConstructorError, "Point"),
-            "twoimp-bare-value": rejected("Point(x = 1)", AmbiguousConstructorError, "Point"),
-            "twoimp-shape-circle-val": rejected(
+            "bare-annot": rejected("fn(p: Point) => 1", AmbiguousQualificationError, "Point"),
+            "bare-reptype": rejected("Point", AmbiguousConstructorError, "Point"),
+            "bare-value": rejected("Point(x = 1)", AmbiguousConstructorError, "Point"),
+            "shape-circle-val": rejected(
                 "Shape::Circle", AmbiguousQualificationError, "Shape::Circle"
             ),
-            "twoimp-shape-circle-annot": rejected(
+            "shape-circle-annot": rejected(
                 "fn(p: Shape::Circle) => 1", AmbiguousQualificationError, "Shape::Circle"
             ),
-            "twoimp-shape-tri-annot": accepted("fn(p: Shape::Tri) => 1", "n::Shape::Tri -> int"),
-            "twoimp-shape-tri-val": accepted("Shape::Tri", "record n::Shape::Tri"),
+            "shape-tri-annot": accepted("fn(p: Shape::Tri) => 1", "n::Shape::Tri -> int"),
+            "shape-tri-val": accepted("Shape::Tri", "record n::Shape::Tri"),
         },
     ),
     "two-routes-sharing-a-suffix": Scenario(
@@ -226,10 +234,17 @@ _SCENARIOS = {
                 "case v of\n  | types::Color::Green => 1\n  | _ => 2", "int"
             ),
             "route-Green-is": accepted("v is types::Color::Green", "bool"),
+            "route-Green-narrow": accepted(
+                "v as? types::Color::Green",
+                option_identity("one/types::Color::Green"),
+            ),
             "route-Green-annot": accepted(
                 "fn(x: types::Color::Green) => 1", "one/types::Color::Green -> int"
             ),
-            "route-Green-alias": accepted("type CC = types::Color::Green\n1", "int"),
+            "route-Green-alias": accepted(
+                "type CC = types::Color::Green\nfn(p: CC) => p",
+                "one/types::Color::Green -> one/types::Color::Green",
+            ),
             "route-Green-tyarg": accepted(
                 "fn(x: array[types::Color::Green]) => 1", "array[one/types::Color::Green] -> int"
             ),
@@ -253,15 +268,7 @@ _SCENARIOS = {
                 "case v of\n  | Color::NoSuch => 1\n  | _ => 2", UnknownMemberError, "Color::NoSuch"
             ),
             "bare-NoSuch-is": rejected("v is Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "bare-NoSuch-annot": rejected(
-                "fn(x: Color::NoSuch) => 1", UnknownMemberError, "Color::NoSuch"
-            ),
-            "bare-NoSuch-alias": rejected(
-                "type CC = Color::NoSuch\n1", UnknownMemberError, "Color::NoSuch"
-            ),
-            "bare-NoSuch-tyarg": rejected(
-                "fn(x: array[Color::NoSuch]) => 1", UnknownMemberError, "Color::NoSuch"
-            ),
+            **type_positions_rejected("bare-NoSuch", "Color::NoSuch", UnknownMemberError),
             "bare-NoSuch-reptype": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
             "bare-NoSuch-call": rejected("Color::NoSuch()", UnknownMemberError, "Color::NoSuch"),
             "bare-Red-value": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
@@ -271,22 +278,20 @@ _SCENARIOS = {
                 "Color::Red",
             ),
             "bare-Red-is": rejected("v is Color::Red", AmbiguousQualificationError, "Color::Red"),
-            "bare-Red-annot": rejected(
-                "fn(x: Color::Red) => 1", AmbiguousQualificationError, "Color::Red"
-            ),
-            "bare-Red-alias": rejected(
-                "type CC = Color::Red\n1", AmbiguousQualificationError, "Color::Red"
-            ),
-            "bare-Red-tyarg": rejected(
-                "fn(x: array[Color::Red]) => 1", AmbiguousQualificationError, "Color::Red"
-            ),
+            **type_positions_rejected("bare-Red", "Color::Red", AmbiguousQualificationError),
             "bare-Red-reptype": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
             "bare-Red-call": rejected("Color::Red()", AmbiguousQualificationError, "Color::Red"),
             "bare-Green-value": accepted("Color::Green", "record m::Color::Green"),
             "bare-Green-pattern": accepted("case v of\n  | Color::Green => 1\n  | _ => 2", "int"),
             "bare-Green-is": accepted("v is Color::Green", "bool"),
+            "bare-Green-narrow": accepted(
+                "v as? Color::Green",
+                option_identity("m::Color::Green"),
+            ),
             "bare-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Color::Green -> int"),
-            "bare-Green-alias": accepted("type CC = Color::Green\n1", "int"),
+            "bare-Green-alias": accepted(
+                "type CC = Color::Green\nfn(p: CC) => p", "m::Color::Green -> m::Color::Green"
+            ),
             "bare-Green-tyarg": accepted(
                 "fn(x: array[Color::Green]) => 1", "array[m::Color::Green] -> int"
             ),
@@ -411,8 +416,14 @@ _SCENARIOS = {
             "moduse-Green-value": accepted("Color::Green", "record m::Color::Green"),
             "moduse-Green-pattern": accepted("case v of\n  | Color::Green => 1\n  | _ => 2", "int"),
             "moduse-Green-is": accepted("v is Color::Green", "bool"),
+            "moduse-Green-narrow": accepted(
+                "v as? Color::Green",
+                option_identity("m::Color::Green"),
+            ),
             "moduse-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Color::Green -> int"),
-            "moduse-Green-alias": accepted("type CC = Color::Green\n1", "int"),
+            "moduse-Green-alias": accepted(
+                "type CC = Color::Green\nfn(p: CC) => p", "m::Color::Green -> m::Color::Green"
+            ),
             "moduse-Green-tyarg": accepted(
                 "fn(x: array[Color::Green]) => 1", "array[m::Color::Green] -> int"
             ),
@@ -567,8 +578,12 @@ _SCENARIOS = {
 class TestAmbiguousMemberSelection:
     """Full-path selection among imports, uses, routes and local declarations."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)

@@ -280,7 +280,15 @@ def lookup_qualified(
         return UnknownMemberError(render_qualified_name(chain, member), span=span)
     if anchor.hidden(names):
         return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
-    return _unknown(chain, names, anchor.visible)
+
+    def names_value(prefix: QualifierChain) -> bool:
+        written = names[: len(prefix.segments) + 1]
+        return (
+            _Walk(sources, anchor, prefix, written, local_to, span).find(LookupKind.VALUE)
+            is not None
+        )
+
+    return _unknown(chain, names, anchor.visible, names_value)
 
 
 def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
@@ -461,15 +469,24 @@ class _Walk:
 
 
 def _unknown(
-    chain: QualifierChain, names: ScopePath, visible: Callable[[ScopePath], bool]
+    chain: QualifierChain,
+    names: ScopePath,
+    visible: Callable[[ScopePath], bool],
+    names_value: Callable[[QualifierChain], bool],
 ) -> AglScopeError:
-    """An unknown member of the longest *visible* qualifier prefix, else an unknown qualifier."""
+    """An unknown member of the longest *visible* qualifier prefix, else an unknown qualifier.
+
+    A prefix naming a value but no qualifier ends the search: a function,
+    binding or injected enum member is never a qualifier.
+    """
     for length in range(len(chain.segments), 0, -1):
         if visible(names[:length]):
             written = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
                 render_qualified_name(written, names[length]), span=chain.span
             )
+        if names_value(replace(chain, segments=chain.segments[: length - 1])):
+            break
     return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 
 

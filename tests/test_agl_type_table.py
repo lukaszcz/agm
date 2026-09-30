@@ -23,8 +23,8 @@ from agm.agl.ir.reserved_nominals import (
 )
 from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.repl import ReplSession
-from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import UnknownQualifierError
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
     compute_uninhabited,
@@ -87,6 +87,7 @@ from agm.agl.zones import ParamZone
 from tests._agl_helpers import enum_typedef, register_typedef, strip_decl_ids
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_inline_entry
+from tests.agl.qualifier_support import span_text
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -431,8 +432,10 @@ def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
 
 
 def test_current_module_generic_type_anchor_rejects_unknown_root_type() -> None:
-    with pytest.raises(AglScopeError):
-        _check("def f(value: ::A::Missing[int]) -> int = 0\nf(1)")
+    source = "def f(value: ::A::Missing[int]) -> int = 0\nf(1)"
+    with pytest.raises(UnknownQualifierError) as exc_info:
+        _check(source)
+    assert span_text(source, exc_info.value.span) == "::A::Missing"
 
 
 def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path: Path) -> None:

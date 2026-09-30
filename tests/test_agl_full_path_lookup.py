@@ -25,7 +25,6 @@ import pytest
 
 from agm.agl.diagnostics import AglTypeError, HiddenMemberError, ReferencedMemberError
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.repl import meta
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
@@ -40,16 +39,19 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.types import NameT
 from agm.agl.syntax.visitor import walk
-from tests._agl_helpers import repl_session_with_root
 from tests.agl.module_graph import resolve_inline_entry
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
     assert_file_resolves_like_inline_entry,
-    assert_scenario_for_grouping,
+    assert_scenario,
     file_params,
+    info,
+    info_rejected,
     rejected,
     scenario_params,
+    type_positions,
+    type_positions_rejected,
 )
 
 _M = (
@@ -432,9 +434,15 @@ _SCENARIOS = {
                 type_entry="enum M::Agent::Mood\n  | Up\n  | Down",
             ),
             "own-member-of-imported-type-path": accepted("Geo::make()", "int"),
-            "imported-type-annotation": accepted("fn(p: Geo) => p.x", "M::Geo -> int"),
-            "imported-type-alias": accepted("type G = Geo\nfn(p: G) => p.x", "M::Geo -> int"),
-            "imported-type-argument": accepted("fn(p: array[Geo]) => 1", "array[M::Geo] -> int"),
+            "info-imported-generic-type": info(
+                "Box", "Box is a generic record type.\nType:\n  record Box[T]\n    v: T"
+            ),
+            "info-imported-scoped-enum": info(
+                "Agent::Mood",
+                "Agent::Mood is an enum type.\nType:\n  enum M::Agent::Mood\n    | Up\n    | Down",
+            ),
+            **type_positions("imported-geo", "Geo", "M::Geo"),
+            **type_positions("imported-scoped", "Agent::Mood", "M::Agent::Mood"),
             "imported-type-cast": accepted("fn(p: Geo) => p as Geo", "M::Geo -> M::Geo"),
             "imported-type-value": accepted("Geo(x = 1)", "record M::Geo\n  x: int"),
             "imported-type-pattern": accepted("case Geo(x = 1) of\n  | Geo(x) => x", "int"),
@@ -478,6 +486,28 @@ _SCENARIOS = {
             "type-annotation": rejected("fn(p: Geo) => 1", AmbiguousQualificationError, "Geo"),
             "constructor": rejected("Geo(x = 1)", AmbiguousConstructorError, "Geo"),
             "routed-value": accepted("M::Agent::f()", "int"),
+            "info-scoped-value": info_rejected("Agent::f", AmbiguousQualificationError, "Agent::f"),
+            "info-type": info_rejected("Geo", AmbiguousConstructorError, "Geo"),
+            "info-routed-value": info(
+                "M::Agent::f", "M::Agent::f is a function.\nSignature:\n  def M::Agent::f() -> int"
+            ),
+            "info-unique-scoped-enum": info(
+                "Agent::Mood",
+                "Agent::Mood is an enum type.\nType:\n  enum M::Agent::Mood\n    | Up\n    | Down",
+            ),
+        },
+    ),
+    "two-uses-clash": Scenario(
+        modules={"M": _M, "N": _N},
+        header=("import M", "import N", "use M::*", "use N::*"),
+        probes={
+            "scoped-value": rejected("Agent::f()", AmbiguousQualificationError, "Agent::f"),
+            "type-annotation": rejected("fn(p: Geo) => p", AmbiguousQualificationError, "Geo"),
+            "info-scoped-value": info_rejected("Agent::f", AmbiguousQualificationError, "Agent::f"),
+            "info-type": info_rejected("Geo", AmbiguousConstructorError, "Geo"),
+            "info-unique-type": info(
+                "Box", "Box is a generic record type.\nType:\n  record Box[T]\n    v: T"
+            ),
         },
     ),
     "scoped-use-beats-root-own-declaration": Scenario(
@@ -529,8 +559,10 @@ _SCENARIOS = {
             "route-takes-no-type-arguments": rejected(
                 "lib[int]::Y(b = 1)", TypeArgumentsError, "lib[int]"
             ),
-            "route-type-annotation": accepted("fn(p: lib::Y) => p.b", "lib::Y -> int"),
-            "own-path-type-annotation": accepted("fn(p: lib::X) => p.c", "lib::X -> text"),
+            **type_positions("route-type", "lib::Y", "lib::Y"),
+            **type_positions("own-path-type", "lib::X", "lib::X"),
+            **type_positions("own-root-type", "::lib::X", "lib::X"),
+            **type_positions_rejected("own-root-ignores-route", "::lib::Y", UnknownMemberError),
         },
     ),
     "alias-segments": Scenario(
@@ -538,7 +570,8 @@ _SCENARIOS = {
         header=("import e", "import f", "use e::Color as C"),
         probes={
             "use-alias-member": accepted("C::Red", "record e::Color::Red"),
-            "use-alias-annotation": accepted("fn(p: C::Green) => 1", "e::Color::Green -> int"),
+            **type_positions("use-alias", "C::Green", "e::Color::Green"),
+            **type_positions_rejected("unknown-alias-member", "C::Blue", UnknownMemberError),
             "use-alias-pattern": accepted(
                 "fn(p: e::Color) => case p of\n  | C::Red => 1\n  | _ => 2", "e::Color -> int"
             ),
@@ -552,6 +585,14 @@ _SCENARIOS = {
                 "record e::Color::Red",
             ),
             "unknown-alias-member": rejected("C::Blue", UnknownMemberError, "C::Blue"),
+            "info-routed-enum": info(
+                "e::Color",
+                "e::Color is an enum type.\nType:\n  enum e::Color\n    | Red\n    | Green",
+            ),
+            "info-use-alias-member": info(
+                "C::Red", "C::Red is a constructor.\nSignature:\n  C::Red() -> e::Color::Red"
+            ),
+            "info-unknown-alias-member": info_rejected("C::Blue", UnknownMemberError, "C::Blue"),
         },
     ),
     "generic-use-alias-segments": Scenario(
@@ -561,9 +602,7 @@ _SCENARIOS = {
             "applied-alias-value": accepted(
                 "B[int]::Som(v = 1)", "record lib::Opt::Som[int]\n  v: int"
             ),
-            "applied-alias-annotation": accepted(
-                "fn(p: B[int]::Som) => p.v", "lib::Opt::Som[int] -> int"
-            ),
+            **type_positions("applied-alias", "B[int]::Som", "lib::Opt::Som[int]"),
             "applied-scoped-alias": accepted(
                 'scope q\n  use lib::Opt as K\n  let v = K[text]::Som(v = "x")\nend q\n\nq::v',
                 "record lib::Opt::Som[text]\n  v: text",
@@ -577,15 +616,26 @@ _SCENARIOS = {
         header=("import tl\nimport tl::* hiding Geo::Inner",),
         probes={
             "hidden-value": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
-            "hidden-annotation": rejected(
-                "fn(p: Geo::Inner) => 1", HiddenMemberError, "Geo::Inner"
-            ),
+            **type_positions_rejected("hidden", "Geo::Inner", HiddenMemberError),
+            **type_positions("route-not-hidden", "tl::Geo::Inner", "tl::Geo::Inner"),
+            **type_positions_rejected("unknown-member", "Geo::Nope", UnknownMemberError),
+            **type_positions_rejected("unknown-qualifier", "Nope::Inner", UnknownQualifierError),
             "route-not-hidden": accepted(
                 "tl::Geo::Inner(y = 1)", "record tl::Geo::Inner\n  y: int"
             ),
             "unknown-member": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
             "unknown-qualifier": rejected(
                 "Nope::Inner(y = 1)", UnknownQualifierError, "Nope::Inner"
+            ),
+            "info-hidden": info_rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
+            "info-route-not-hidden": info(
+                "tl::Geo::Inner",
+                "tl::Geo::Inner is a constructor.\nSignature:\n"
+                "  tl::Geo::Inner(y: int) -> tl::Geo::Inner",
+            ),
+            "info-unknown-member": info_rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
+            "info-unknown-qualifier": info_rejected(
+                "Nope::Inner", UnknownQualifierError, "Nope::Inner"
             ),
         },
     ),
@@ -800,31 +850,15 @@ _SCENARIOS = {
 class TestFullPathLookup:
     """Own-first full-path lookup in every position, file mode and every REPL grouping."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
-    ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
 
     @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
     def test_a_file_resolves_like_the_inline_entry(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_file_resolves_like_inline_entry(tmp_path, scenario)
-
-
-def test_info_reads_an_imported_type_beside_an_own_scope_of_its_name(tmp_path: Path) -> None:
-    """``:info`` selects an imported generic type beside an own scope region of its name."""
-    (tmp_path / "M.agl").write_text(_M, encoding="utf-8")
-    session = repl_session_with_root(tmp_path)
-    session.open()
-    assert session.eval_entry("import M::*").ok
-    assert session.eval_entry(_OWN_GEO).ok
-
-    outcome = meta.dispatch_meta(":info Box", meta.MetaContext(session=session))
-
-    assert outcome.text is not None
-    assert "record Box[T]\n    v: T" in outcome.text
 
 
 def test_scope_records_whether_a_spelling_selects_an_inline_member_or_a_declaration() -> None:

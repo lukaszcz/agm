@@ -26,7 +26,7 @@ from tests.agl.qualifier_support import (
     Scenario,
     accepted,
     assert_file_resolves_like_inline_entry,
-    assert_scenario_for_grouping,
+    assert_scenario,
     file_params,
     rejected,
     scenario_params,
@@ -116,11 +116,9 @@ _SCENARIOS = {
 class TestInjectedMemberQualifiers:
     """An injected member leading a chain, in every position and over every surface."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
-    ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
 
     @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
     def test_a_file_resolves_like_the_inline_entry(

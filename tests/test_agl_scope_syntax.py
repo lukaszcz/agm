@@ -30,6 +30,7 @@ from agm.agl.syntax import (
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
+from tests.agl.qualifier_support import span_text
 
 
 def _declaration(source: str) -> Item:
@@ -206,8 +207,11 @@ def test_let_binder_path_shorthand_combines_with_enclosing_region_path() -> None
 
 
 def test_var_binder_path_rejects_a_module_route_segment() -> None:
-    with pytest.raises(AglSyntaxError, match="'::'"):
-        parse_program("var std/config::retries = 0")
+    source = "var std/config::retries = 0"
+    with pytest.raises(AglSyntaxError) as exc_info:
+        parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == "std/config::"
 
 
 def test_var_binder_path_rejects_a_type_applied_segment() -> None:
@@ -373,8 +377,10 @@ def test_use_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
     ),
 )
 def test_use_declarations_are_rejected_outside_module_and_scope_regions(source: str) -> None:
-    with pytest.raises(AglSyntaxError, match="only allowed at module root or in scope regions"):
+    with pytest.raises(AglSyntaxError) as exc_info:
         parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == "use Point::*"
 
 
 @pytest.mark.parametrize(
@@ -424,19 +430,21 @@ def test_use_rejects_operator_alias_for_scope_route() -> None:
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "route"),
     (
-        "use foo::bar/baz::x",
-        "use foo::/bar::x",
-        "use ::foo/bar::x",
+        ("use foo::bar/baz::x", "bar/baz::"),
+        ("use foo::/bar::x", "/bar::"),
+        ("use ::foo/bar::x", "foo/bar::"),
     ),
     ids=("route-segment", "anchored-segment", "current-module-route"),
 )
-def test_use_rejects_a_module_route_after_the_target_head(source: str) -> None:
+def test_use_rejects_a_module_route_after_the_target_head(source: str, route: str) -> None:
     """Only a use target's head is a module route; every segment after it
     names a scope, so a separator there is a syntax error wherever it sits."""
-    with pytest.raises(AglSyntaxError, match="'::'"):
+    with pytest.raises(AglSyntaxError) as exc_info:
         parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == route
 
 
 def test_use_contributes_local_scope_members() -> None:
@@ -586,16 +594,21 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("entry", "library"),
+    ("entry", "library", "rejected"),
     (
-        ("import library::Point::distance\n()", "record Point"),
-        ("export library hiding Point::distance\n()", "record Point"),
-        ("import library\n()", "import dependency::Point::distance\ndef value() -> int = 0"),
+        ("import library::Point::distance\n()", "record Point", "entry"),
+        ("export library hiding Point::distance\n()", "record Point", "entry"),
+        (
+            "import library\n()",
+            "import dependency::Point::distance\ndef value() -> int = 0",
+            "library",
+        ),
     ),
 )
 def test_production_pipeline_validates_path_atoms_against_public_content(
-    tmp_path: Path, entry: str, library: str
+    tmp_path: Path, entry: str, library: str, rejected: str
 ) -> None:
+    """The one diagnostic spans the whole item naming the missing path."""
     root = tmp_path / "modules"
     root.mkdir()
     write_module_file(root, "library", library)
@@ -610,8 +623,13 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     )
 
     assert not result.ok
-    assert len(result.diagnostics) == 1
-    assert "Point::distance" in result.diagnostics[0].message
+    (diagnostic,) = result.diagnostics
+    source, label = (
+        (entry, "<command>") if rejected == "entry" else (library, str(root / "library.agl"))
+    )
+    item = source.splitlines()[0]
+    assert diagnostic.source_label == label
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 1, len(item) + 1)
 
 
 # ---------------------------------------------------------------------------

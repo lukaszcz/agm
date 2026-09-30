@@ -160,6 +160,7 @@ from tests.agl.module_graph import (
     resolve_entry,
     resolve_inline_entry,
 )
+from tests.agl.qualifier_support import span_text
 
 # ---------------------------------------------------------------------------
 # Shared standard-library checking
@@ -8172,8 +8173,10 @@ class TestBareConstructorTypeApply:
         assert isinstance(error, TypeArgumentsError)
 
     def test_applied_unknown_owner_member_is_rejected(self) -> None:
-        error = reject_type("let v: Missing[int]::Bar = 1\nv")
-        assert isinstance(error, UnknownQualifierError)
+        source = "let v: Missing[int]::Bar = 1\nv"
+        error = reject_type(source)
+        assert type(error) is UnknownQualifierError
+        assert span_text(source, error.span) == "Missing[int]::Bar"
 
     def test_owner_apply_substitutes_only_the_selected_member_parameters(self) -> None:
         checked = accept_type(

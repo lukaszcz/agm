@@ -15,6 +15,7 @@ the same verdict, error span and message, or accepted identity.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,14 @@ from agm.agl.scope.symbols import AglScopeError, TypeArgumentsError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
+    type_positions,
+    type_positions_rejected,
 )
 
 _GM = (
@@ -62,7 +68,8 @@ _SCENARIOS = {
                 "let i = Box::Inner(x = 1)\ncase i of\n  | Box::Inner(x) => x", "int"
             ),
             "rec-val": rejected("Box[int]::Inner(x = 1)", TypeArgumentsError, "Box[int]"),
-            "rec-annot": rejected("fn(p: Box[int]::Inner) => 1", TypeArgumentsError, "Box[int]"),
+            **type_positions_rejected("rec", "Box[int]::Inner", TypeArgumentsError, "Box[int]"),
+            **type_positions("rec-plain", "Box::Inner", "Box::Inner"),
         },
     ),
     "generic-enum-with-nested-record": Scenario(
@@ -95,7 +102,7 @@ _SCENARIOS = {
         modules={"gm": _GM},
         header=("import gm",),
         probes={
-            "x-rows-pat": accepted(
+            "routed-rows-pat": accepted(
                 (
                     "let row: gm::Slot[array[int]] = gm::Slot::Filled(value = [1])\n"
                     "case row of\n"
@@ -104,7 +111,7 @@ _SCENARIOS = {
                 ),
                 "int",
             ),
-            "x-rows-pat-bad": rejected(
+            "routed-rows-pat-bad": rejected(
                 (
                     "let row: gm::Slot[int] = gm::Slot::Filled(value = 1)\n"
                     "case row of\n"
@@ -121,7 +128,7 @@ _SCENARIOS = {
         modules={"gm": _GM},
         header=("import gm::*",),
         probes={
-            "x-r2-pat-bad": rejected(
+            "wildcard-rows-pat-bad": rejected(
                 (
                     "let row: Slot[array[int]] = Slot::Empty\n"
                     "case row of\n"
@@ -132,7 +139,7 @@ _SCENARIOS = {
                 "R2[int]::Filled(value)",
                 phase="typecheck",
             ),
-            "x-r2-pat": accepted(
+            "wildcard-rows-pat": accepted(
                 (
                     "let row: Slot[array[dict[text, int]]] = Slot::Empty\n"
                     "case row of\n"
@@ -141,14 +148,18 @@ _SCENARIOS = {
                 ),
                 "int",
             ),
-            "x-flip-is-bad": rejected(
+            "wildcard-flip-is-bad": rejected(
                 "let t: Two[int, text] = Two::L(l = 1)\nt is Flip[int, text]::L",
                 AglTypeError,
                 "t is Flip[int, text]::L",
                 phase="typecheck",
             ),
-            "x-flip-is": accepted(
+            "wildcard-flip-is": accepted(
                 'let t: Two[text, int] = Two::L(l = "a")\nt is Flip[int, text]::L', "bool"
+            ),
+            "wildcard-flip-narrow": accepted(
+                'let t: Two[text, int] = Two::L(l = "a")\nt as? Flip[int, text]::L',
+                option_identity("gm::Two::L[text]"),
             ),
         },
     ),
@@ -234,8 +245,16 @@ _SCENARIOS = {
             "rows-is": accepted(
                 "let row: Slot[array[int]] = Slot::Empty\nrow is Rows[int]::Empty", "bool"
             ),
+            "rows-narrow": accepted(
+                "let row: Slot[array[int]] = Slot::Empty\nrow as? Rows[int]::Empty",
+                option_identity("Slot::Empty"),
+            ),
             "rows-is-bad": accepted(
                 "let row: Slot[int] = Slot::Empty\nrow is Rows[int]::Empty", "bool"
+            ),
+            "rows-narrow-bad": accepted(
+                "let row: Slot[int] = Slot::Empty\nrow as? Rows[int]::Empty",
+                option_identity("Slot::Empty"),
             ),
             "rows-val": accepted(
                 "let r: Slot[array[int]] = Rows[int]::Filled(value = [1])\nr",
@@ -326,6 +345,10 @@ _SCENARIOS = {
             ),
             "flip-is": accepted(
                 'let t: Two[text, int] = Two::L(l = "a")\nt is Flip[int, text]::L', "bool"
+            ),
+            "flip-narrow": accepted(
+                'let t: Two[text, int] = Two::L(l = "a")\nt as? Flip[int, text]::L',
+                option_identity("Two::L[text]"),
             ),
             "flip-is-bad": rejected(
                 "let t: Two[int, text] = Two::L(l = 1)\nt is Flip[int, text]::L",
@@ -544,7 +567,7 @@ _SCENARIOS = {
             ),
             "cast-N": accepted(
                 "let j: json = null\nj as? lib::Point",
-                ("enum std/option::Option[lib::Point]\n  | None\n  | Some(value: lib::Point)"),
+                (option_identity("lib::Point")),
             ),
             "tyargs-N": rejected(
                 "def id[T](x: T) -> T = x\nid::[lib::Point](null)",
@@ -576,7 +599,7 @@ _SCENARIOS = {
             "dict-N": accepted("let d: dict[text, lib::Point] = {}\nd", "dict[text, lib::Point]"),
             "opt-N": accepted(
                 "let o: Option[lib::Point] = None\no",
-                ("enum std/option::Option[lib::Point]\n  | None\n  | Some(value: lib::Point)"),
+                (option_identity("lib::Point")),
             ),
             "aliasgen-N": accepted("type AA[T] = dict[T, lib::Point]\n1", "int"),
             "scoped-def-N": accepted(
@@ -605,11 +628,25 @@ _SCENARIOS = {
 }
 
 
+_FILE_SCENARIOS = {
+    name: replace(
+        scenario,
+        probes={key: p for key, p in scenario.probes.items() if not key.startswith("extern-")},
+    )
+    for name, scenario in _SCENARIOS.items()
+}
+"""The scenarios a file can hold: a file's ``extern def`` loads its Python companion."""
+
+
 class TestGenericOwnerInstantiation:
     """Instantiation through applied owners and aliases, in every type position."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_FILE_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)

@@ -28,8 +28,10 @@ from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberErro
 from agm.agl.typecheck import AglTypeError
 from tests.agl.qualifier_support import (
     FilePhase,
-    assert_verdicts_for_grouping,
-    grouping_params,
+    Groupings,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
 )
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
@@ -63,35 +65,35 @@ _ROOT_HEADER = ("record R\n  x: int",)
 class TestAnchoredTypeNameReadsTheModuleRoot:
     """``::Missing`` names no member of this module's root in any position."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ROOT_HEADER) + 1))
-    def test_missing_name_is_unknown_member(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_missing_name_is_unknown_member(self, tmp_path: Path) -> None:
         probes = {**_type_probes("::Missing", "::Missing[int]"), "value": "::Missing"}
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _ROOT_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(UnknownMemberError) for key in probes},
-            span_texts={key: "::Missing" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(UnknownMemberError) for key in probes},
+                span_texts={key: "::Missing" for key in probes},
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ROOT_HEADER) + 1))
-    def test_root_type_is_selected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_root_type_is_selected(self, tmp_path: Path) -> None:
         probes = {
             "annotation": "let v: ::R = R(x = 1)\nv",
             "alias": "type A = ::R\nlet v: A = R(x = 1)\nv",
             "type-argument": "let v: array[::R] = [R(x = 1)]\nv[0]",
             "value": "::R(x = 1)",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _ROOT_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={key: "record R\n  x: int" for key in probes},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record R\n  x: int" for key in probes},
+            ),
         )
 
 
@@ -115,20 +117,22 @@ class TestAmbiguousBareTypeNameInEveryPosition:
     as an annotation, however REPL entries group the ``use`` declarations.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_BOOM_HEADER) + 1))
-    def test_every_position_is_ambiguous(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_every_position_is_ambiguous(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {**_type_probes("Boom"), "catch": _CATCH_BOOM, "extends": _EXTENDS_BOOM}
         spans = {key: "Boom" for key in probes}
         spans["catch"] = "catch Boom as e =>\n  ()"
         spans["extends"] = _EXTENDS_BOOM
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _BOOM_MODULES,
             _BOOM_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(AmbiguousQualificationError) for key in probes},
-            span_texts=spans,
+            probe_table(
+                probes,
+                {key: _rejected(AmbiguousQualificationError) for key in probes},
+                span_texts=spans,
+            ),
+            groupings=groupings,
         )
 
 
@@ -169,25 +173,26 @@ class TestScopeRegionNeverStopsABareTypeName:
     extended; a region alone names no type.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_GEO_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
     def test_use_opened_region_beside_import_tails(
-        self, tmp_path: Path, sizes: tuple[int, ...]
+        self, tmp_path: Path, groupings: Groupings
     ) -> None:
         probes = {
             key: _in_region("use shapes::*", probe) for key, probe in _type_probes("Geo").items()
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _GEO_MODULES,
             _GEO_HEADER,
-            sizes,
-            probes,
-            {key: _rejected(AmbiguousQualificationError) for key in probes},
-            span_texts={key: "Geo" for key in probes},
+            probe_table(
+                probes,
+                {key: _rejected(AmbiguousQualificationError) for key in probes},
+                span_texts={key: "Geo" for key in probes},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_OWN_POINT_HEADER) + 1))
-    def test_own_region_beside_own_root_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_own_region_beside_own_root_type(self, tmp_path: Path) -> None:
         probes = {
             "annotation": _in_region(_OWN_POINT_REGION, "let v: Point = Point(y = 1)") + "\nr::v",
             "alias": _in_region(_OWN_POINT_REGION, "type A = Point\nlet v: A = Point(y = 1)")
@@ -195,19 +200,20 @@ class TestScopeRegionNeverStopsABareTypeName:
             "type-argument": _in_region(_OWN_POINT_REGION, "let v: array[Point] = [Point(y = 1)]")
             + "\nr::v[0]",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _OWN_POINT_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={key: "record Point\n  y: int" for key in probes},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record Point\n  y: int" for key in probes},
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_BOOM_REGION_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
     def test_use_opened_region_beside_caught_and_base_exception(
-        self, tmp_path: Path, sizes: tuple[int, ...]
+        self, tmp_path: Path, groupings: Groupings
     ) -> None:
         probes = {
             "annotation": _in_region("use b::*", "let v = fn(x: Boom) => 1") + "\nr::v",
@@ -217,32 +223,34 @@ class TestScopeRegionNeverStopsABareTypeName:
             )
             + "\nr::v",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _BOOM_REGION_MODULES,
             _BOOM_REGION_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_REGION_HEADER) + 1))
-    def test_region_alone_is_no_type(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_region_alone_is_no_type(self, tmp_path: Path) -> None:
         probes = _type_probes("Geo", "Geo[int]")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _LOCAL_REGION_HEADER,
-            sizes,
-            probes,
-            {key: ("typecheck", AglTypeError) for key in probes},
-            span_texts={
-                "annotation": "x: Geo",
-                "alias": "type A = Geo",
-                "type-argument": "Geo",
-                "applied": "x: Geo[int]",
-            },
+            probe_table(
+                probes,
+                {key: ("typecheck", AglTypeError) for key in probes},
+                span_texts={
+                    "annotation": "x: Geo",
+                    "alias": "type A = Geo",
+                    "type-argument": "Geo",
+                    "applied": "x: Geo[int]",
+                },
+            ),
         )
 
 
@@ -254,8 +262,8 @@ class TestScopeRegionNeverStopsABareTypeName:
 class TestNearestTypeDeclarationIsSelected:
     """A type declared in the enclosing region wins over farther same-spelled types."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_GEO_HEADER) + 1))
-    def test_region_type_over_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_region_type_over_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
         region_geo = "record Geo\n  w: int"
         probes = {
             "annotation": _in_region(region_geo, "let v: Geo = Geo(w = 1)") + "\nr::v",
@@ -263,32 +271,36 @@ class TestNearestTypeDeclarationIsSelected:
             "type-argument": _in_region(region_geo, "let v: array[Geo] = [Geo(w = 1)]")
             + "\nr::v[0]",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _GEO_MODULES,
             _GEO_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={key: "record r::Geo\n  w: int" for key in probes},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record r::Geo\n  w: int" for key in probes},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_BOOM_REGION_HEADER) + 1))
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
     def test_imported_exception_is_caught_and_extended(
-        self, tmp_path: Path, sizes: tuple[int, ...]
+        self, tmp_path: Path, groupings: Groupings
     ) -> None:
         probes = {
             "catch": "let v = try\n  1\ncatch Boom as e =>\n  2\nv",
             "extends": 'exception Local extends Boom\nLocal(message = "m") is Boom',
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _BOOM_REGION_MODULES,
             _BOOM_REGION_HEADER,
-            sizes,
-            probes,
-            {key: _ACCEPTED for key in probes},
-            expected_identities={"catch": "int", "extends": "bool"},
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"catch": "int", "extends": "bool"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -311,8 +323,8 @@ class TestSelectedTypeIsAppliedByItsDeclaration:
     declaration is in the same REPL entry or an earlier one.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ARITY_HEADER) + 1))
-    def test_misapplied_selection_is_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_misapplied_selection_is_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "bare-alias": "def g(x: Wrapper) -> int = 1",
             "alias-arity": "def g(x: Wrapper[int, int]) -> int = 1",
@@ -327,12 +339,12 @@ class TestSelectedTypeIsAppliedByItsDeclaration:
             "plain-applied": "x: Plain[int]",
             "caught-record": "catch Plain as e =>\n  ()",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _ARITY_HEADER,
-            sizes,
-            probes,
-            {key: ("typecheck", AglTypeError) for key in probes},
-            span_texts=spans,
+            probe_table(
+                probes, {key: ("typecheck", AglTypeError) for key in probes}, span_texts=spans
+            ),
+            groupings=groupings,
         )

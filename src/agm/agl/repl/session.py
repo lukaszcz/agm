@@ -216,6 +216,11 @@ def _format_repl_signature(signature: "FunctionSignature") -> str:
     return f"{generic}({', '.join(params)}) -> {signature.result!r}"
 
 
+def _indefinite(kind: str) -> str:
+    """Prefix a type *kind* (``record``, ``enum``, ``exception``) with its indefinite article."""
+    return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}"
+
+
 def _format_info_section(label: str, code: str, location: str | None = None) -> str:
     """Format one labelled ``:info`` code section and an optional location."""
     indented_code = "\n".join(f"  {line}" for line in code.splitlines())
@@ -1806,9 +1811,10 @@ class ReplSession:
         """Describe the type declaration NAME selects as a type, if it reads as one.
 
         An alias reads as its declaration wherever it is declared; a type this
-        session declares, and a generic type from anywhere, as its definition.
-        Any other selection -- an imported plain type -- reads as its value
-        instead. An owner's inline member selects no type declaration here, so
+        session declares, a generic type from anywhere, and an imported plain
+        type without a constructor (an enum), as its definition. Any other
+        selection -- an imported plain type with a constructor -- reads as its
+        value instead. An owner's inline member selects no type declaration here, so
         one reached through an applied owner reads as its instantiated
         constructor; type arguments never instantiate a declaration nested
         beneath that member, which reads as its definition.
@@ -1838,11 +1844,12 @@ class ReplSession:
         )
         type_env = self._info_type_env(module_id)
         local_name = "::".join((*scope_path, decl_name))
-        typ = type_env.get_type(local_name) if module_id.is_entry else None
+        described = module_id.is_entry or reference.constructor is None
+        typ = type_env.get_type(local_name) if described else None
         if typ is not None:
             definition = format_type_for_repl(typ, self._type_env.type_table)
             display = _format_info_section("Type", definition, location)
-            return f"{name} is a {typ.kind} type.\n{display}"
+            return f"{name} is {_indefinite(typ.kind)} type.\n{display}"
         generic = type_env.get_generic_type(local_name)
         if generic is None:
             return None

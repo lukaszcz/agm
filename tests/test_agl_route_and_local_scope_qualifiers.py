@@ -27,9 +27,13 @@ from agm.agl.scope.symbols import (
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
+    type_positions_rejected,
 )
 
 _ALPHA_BETA = "record X\n  v: int\n"
@@ -61,16 +65,32 @@ _SHAPES_2 = (
 )
 _PALETTE_2 = "enum Color\n  | Red\n  | Blue\nrecord Other\n  x: int\n"
 
+# ``Foo::E::Z`` beside a plain scope ``Foo`` declaring ``Z`` but no ``E``: the
+# chain never skips the missing segment to reach ``Foo::Z``.
+_MISSING_SEGMENT_PROBES = {
+    "value": rejected("Foo::E::Z(w = 1)", UnknownMemberError, "Foo::E::Z"),
+    **type_positions_rejected("type", "Foo::E::Z", UnknownMemberError),
+    "pattern": rejected(
+        "let z = Foo::Z(w = 1)\ncase z of\n  | Foo::E::Z(w) => w", UnknownMemberError, "Foo::E::Z"
+    ),
+    "is": rejected("let z = Foo::Z(w = 1)\nz is Foo::E::Z", UnknownMemberError, "Foo::E::Z"),
+    "narrow": rejected("let z = Foo::Z(w = 1)\nz as? Foo::E::Z", UnknownMemberError, "Foo::E::Z"),
+    "type-entry": rejected("Foo::E::Z", UnknownMemberError, "Foo::E::Z"),
+    "length-four-value": rejected("Foo::E::F::Z(w = 1)", UnknownMemberError, "Foo::E::F::Z"),
+}
+
 _SCENARIOS = {
     "module-route-spelled-with-scope-separators": Scenario(
         modules={"alpha/beta": _ALPHA_BETA},
         header=("import alpha/beta",),
         probes={
-            "ab-val": rejected("alpha::beta::X(v = 1)", UnknownQualifierError, "alpha::beta::X"),
-            "ab-annot": rejected(
+            "separators-val": rejected(
+                "alpha::beta::X(v = 1)", UnknownQualifierError, "alpha::beta::X"
+            ),
+            "separators-annot": rejected(
                 "fn(p: alpha::beta::X) => 1", UnknownQualifierError, "alpha::beta::X"
             ),
-            "slash-val": accepted("alpha/beta::X(v = 1)", "record alpha/beta::X\n  v: int"),
+            "slash-route-val": accepted("alpha/beta::X(v = 1)", "record alpha/beta::X\n  v: int"),
         },
     ),
     "local-scopes-spelling-a-module-route": Scenario(
@@ -80,12 +100,12 @@ _SCENARIOS = {
             ("scope alpha\n\n  scope beta\n    record Y\n      w: int\n  end beta\nend alpha"),
         ),
         probes={
-            "abloc-val": rejected("alpha::beta::X(v = 1)", UnknownMemberError, "alpha::beta::X"),
-            "abloc-annot": rejected(
+            "absent-val": rejected("alpha::beta::X(v = 1)", UnknownMemberError, "alpha::beta::X"),
+            "absent-annot": rejected(
                 "fn(p: alpha::beta::X) => 1", UnknownMemberError, "alpha::beta::X"
             ),
-            "abloc-Y-val": accepted("alpha::beta::Y(w = 1)", "record alpha::beta::Y\n  w: int"),
-            "abloc-Y-annot": accepted("fn(p: alpha::beta::Y) => 1", "alpha::beta::Y -> int"),
+            "present-val": accepted("alpha::beta::Y(w = 1)", "record alpha::beta::Y\n  w: int"),
+            "present-annot": accepted("fn(p: alpha::beta::Y) => 1", "alpha::beta::Y -> int"),
         },
     ),
     "local-scope-named-like-an-imported-module": Scenario(
@@ -95,15 +115,17 @@ _SCENARIOS = {
             "scope palette\n  record Local\nend palette",
         ),
         probes={
-            "rc3-val": accepted("palette::Color::Red", "record palette::Color::Red"),
-            "rc3-annot": accepted("fn(p: palette::Color::Red) => 1", "palette::Color::Red -> int"),
-            "rc3-pat": rejected(
+            "route-val": accepted("palette::Color::Red", "record palette::Color::Red"),
+            "route-annot": accepted(
+                "fn(p: palette::Color::Red) => 1", "palette::Color::Red -> int"
+            ),
+            "route-pat": rejected(
                 "case 1 of\n  | palette::Color::Red => 1\n  | _ => 2",
                 AglTypeError,
                 "palette::Color::Red",
                 phase="typecheck",
             ),
-            "rc3-is": rejected(
+            "route-is": rejected(
                 "1 is palette::Color::Red",
                 AglTypeError,
                 "1 is palette::Color::Red",
@@ -129,8 +151,8 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "len4-val": accepted("Foo::E::A::Z(w = 1)", "record Foo::E::A::Z\n  w: int"),
-            "len4-annot": accepted("fn(p: Foo::E::A::Z) => 1", "Foo::E::A::Z -> int"),
+            "length-four-val": accepted("Foo::E::A::Z(w = 1)", "record Foo::E::A::Z\n  w: int"),
+            "length-four-annot": accepted("fn(p: Foo::E::A::Z) => 1", "Foo::E::A::Z -> int"),
         },
     ),
     "local-scope-missing-a-route-member-at-length-four": Scenario(
@@ -151,10 +173,10 @@ _SCENARIOS = {
             ),
         ),
         probes={
-            "len4miss-val": rejected(
+            "missing-val": rejected(
                 "Foo::E::A::Z(w = 1)", AglTypeError, "w = 1", phase="typecheck"
             ),
-            "len4miss-annot": accepted("fn(p: Foo::E::A::Z) => 1", "pkg/Foo::E::A::Z -> int"),
+            "missing-annot": accepted("fn(p: Foo::E::A::Z) => 1", "pkg/Foo::E::A::Z -> int"),
         },
     ),
     "local-scope-and-route-both-lacking-the-member": Scenario(
@@ -163,34 +185,11 @@ _SCENARIOS = {
             "import pkg/Foo",
             "scope Foo\n  record Z\n    w: int\n  enum K\n    | Z\nend Foo",
         ),
-        probes={
-            "skip-val": rejected("Foo::E::Z(w = 1)", UnknownMemberError, "Foo::E::Z"),
-            "skip-annot": rejected("fn(p: Foo::E::Z) => 1", UnknownMemberError, "Foo::E::Z"),
-            "skip-alias": rejected("type AA = Foo::E::Z\n1", UnknownMemberError, "Foo::E::Z"),
-            "skip-tyarg": rejected("fn(p: array[Foo::E::Z]) => 1", UnknownMemberError, "Foo::E::Z"),
-            "skip-pat": rejected(
-                "let z = Foo::Z(w = 1)\ncase z of\n  | Foo::E::Z(w) => w",
-                UnknownMemberError,
-                "Foo::E::Z",
-            ),
-            "skip-is": rejected(
-                "let z = Foo::Z(w = 1)\nz is Foo::E::Z", UnknownMemberError, "Foo::E::Z"
-            ),
-            "skip-reptype": rejected("Foo::E::Z", UnknownMemberError, "Foo::E::Z"),
-            "skip3-val": rejected("Foo::E::F::Z(w = 1)", UnknownMemberError, "Foo::E::F::Z"),
-        },
+        probes=_MISSING_SEGMENT_PROBES,
     ),
     "local-scope-without-a-route": Scenario(
         header=("scope Foo\n  record Z\n    w: int\nend Foo",),
-        probes={
-            "noroute-val": rejected("Foo::E::Z(w = 1)", UnknownMemberError, "Foo::E::Z"),
-            "noroute-annot": rejected("fn(p: Foo::E::Z) => 1", UnknownMemberError, "Foo::E::Z"),
-            "noroute-pat": rejected(
-                "let z = Foo::Z(w = 1)\ncase z of\n  | Foo::E::Z(w) => w",
-                UnknownMemberError,
-                "Foo::E::Z",
-            ),
-        },
+        probes=_MISSING_SEGMENT_PROBES,
     ),
     "populated-local-scope-named-like-a-route": Scenario(
         modules={"pkg/Foo": _PKG_FOO_3},
@@ -211,7 +210,7 @@ _SCENARIOS = {
         probes={
             "full-R-value": rejected("Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"),
             "full-R-annot": accepted("fn(p: Foo::R) => 1", "Foo::R -> int"),
-            "full-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "full-R-alias": accepted("type AA = Foo::R\nfn(p: AA) => p", "Foo::R -> Foo::R"),
             "full-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[Foo::R] -> int"),
             "full-R-reptype": accepted("Foo::R", "int -> Foo::R"),
             "full-EA-value": accepted("Foo::E::A", "record Foo::E::A"),
@@ -228,14 +227,16 @@ _SCENARIOS = {
                 phase="typecheck",
             ),
             "full-EA-annot": accepted("fn(p: Foo::E::A) => 1", "Foo::E::A -> int"),
-            "full-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "full-EA-alias": accepted(
+                "type AA = Foo::E::A\nfn(p: AA) => p", "Foo::E::A -> Foo::E::A"
+            ),
             "full-EA-tyarg": accepted("fn(p: array[Foo::E::A]) => 1", "array[Foo::E::A] -> int"),
             "full-EA-reptype": accepted("Foo::E::A", "record Foo::E::A"),
             "full-E-value": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
             ),
             "full-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
-            "full-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "full-E-alias": accepted("type AA = Foo::E\nfn(p: AA) => p", "Foo::E -> Foo::E"),
             "full-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
             "full-E-reptype": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
@@ -244,7 +245,9 @@ _SCENARIOS = {
                 "Foo::G[int]", AglScopeError, "int", type_entry="record Foo::G[int]\n  w: int"
             ),
             "full-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "Foo::G[int] -> int"),
-            "full-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "full-Gi-alias": accepted(
+                "type AA = Foo::G[int]\nfn(p: AA) => p", "Foo::G[int] -> Foo::G[int]"
+            ),
             "full-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[Foo::G[int]] -> int"
             ),
@@ -253,7 +256,9 @@ _SCENARIOS = {
             ),
             "full-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "full-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
-            "full-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
+            "full-slashR-alias": accepted(
+                "type AA = /pkg/Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "full-slashR-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::R]) => 1", "array[pkg/Foo::R] -> int"
             ),
@@ -262,7 +267,7 @@ _SCENARIOS = {
                 "::Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"
             ),
             "full-anchR-annot": accepted("fn(p: ::Foo::R) => 1", "Foo::R -> int"),
-            "full-anchR-alias": accepted("type AA = ::Foo::R\n1", "int"),
+            "full-anchR-alias": accepted("type AA = ::Foo::R\nfn(p: AA) => p", "Foo::R -> Foo::R"),
             "full-anchR-tyarg": accepted("fn(p: array[::Foo::R]) => 1", "array[Foo::R] -> int"),
             "full-anchR-reptype": accepted("::Foo::R", "int -> Foo::R"),
             "full-slashEA-value": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
@@ -278,8 +283,14 @@ _SCENARIOS = {
             "full-slashEA-is": accepted(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is /pkg/Foo::E::A", "bool"
             ),
+            "full-slashEA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? /pkg/Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "full-slashEA-annot": accepted("fn(p: /pkg/Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "full-slashEA-alias": accepted("type AA = /pkg/Foo::E::A\n1", "int"),
+            "full-slashEA-alias": accepted(
+                "type AA = /pkg/Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "full-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -298,7 +309,9 @@ _SCENARIOS = {
                 phase="typecheck",
             ),
             "full-anchEA-annot": accepted("fn(p: ::Foo::E::A) => 1", "Foo::E::A -> int"),
-            "full-anchEA-alias": accepted("type AA = ::Foo::E::A\n1", "int"),
+            "full-anchEA-alias": accepted(
+                "type AA = ::Foo::E::A\nfn(p: AA) => p", "Foo::E::A -> Foo::E::A"
+            ),
             "full-anchEA-tyarg": accepted(
                 "fn(p: array[::Foo::E::A]) => 1", "array[Foo::E::A] -> int"
             ),
@@ -314,7 +327,9 @@ _SCENARIOS = {
         probes={
             "empty-R-value": accepted("Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "empty-R-annot": accepted("fn(p: Foo::R) => 1", "pkg/Foo::R -> int"),
-            "empty-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "empty-R-alias": accepted(
+                "type AA = Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "empty-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[pkg/Foo::R] -> int"),
             "empty-R-reptype": accepted("Foo::R", "int -> pkg/Foo::R"),
             "empty-EA-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
@@ -323,8 +338,14 @@ _SCENARIOS = {
                 "int",
             ),
             "empty-EA-is": accepted("let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", "bool"),
+            "empty-EA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "empty-EA-annot": accepted("fn(p: Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "empty-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "empty-EA-alias": accepted(
+                "type AA = Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "empty-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -333,7 +354,9 @@ _SCENARIOS = {
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
             ),
             "empty-E-annot": accepted("fn(p: Foo::E) => 1", "pkg/Foo::E -> int"),
-            "empty-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "empty-E-alias": accepted(
+                "type AA = Foo::E\nfn(p: AA) => p", "pkg/Foo::E -> pkg/Foo::E"
+            ),
             "empty-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[pkg/Foo::E] -> int"),
             "empty-E-reptype": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
@@ -342,7 +365,9 @@ _SCENARIOS = {
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "empty-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "pkg/Foo::G[int] -> int"),
-            "empty-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "empty-Gi-alias": accepted(
+                "type AA = Foo::G[int]\nfn(p: AA) => p", "pkg/Foo::G[int] -> pkg/Foo::G[int]"
+            ),
             "empty-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
             ),
@@ -351,7 +376,9 @@ _SCENARIOS = {
             ),
             "empty-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "empty-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
-            "empty-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
+            "empty-slashR-alias": accepted(
+                "type AA = /pkg/Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "empty-slashR-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::R]) => 1", "array[pkg/Foo::R] -> int"
             ),
@@ -376,8 +403,14 @@ _SCENARIOS = {
             "empty-slashEA-is": accepted(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is /pkg/Foo::E::A", "bool"
             ),
+            "empty-slashEA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? /pkg/Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "empty-slashEA-annot": accepted("fn(p: /pkg/Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "empty-slashEA-alias": accepted("type AA = /pkg/Foo::E::A\n1", "int"),
+            "empty-slashEA-alias": accepted(
+                "type AA = /pkg/Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "empty-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -414,7 +447,7 @@ _SCENARIOS = {
         probes={
             "enum-R-value": rejected("Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"),
             "enum-R-annot": accepted("fn(p: Foo::R) => 1", "Foo::R -> int"),
-            "enum-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "enum-R-alias": accepted("type AA = Foo::R\nfn(p: AA) => p", "Foo::R -> Foo::R"),
             "enum-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[Foo::R] -> int"),
             "enum-R-reptype": accepted("Foo::R", "int -> Foo::R"),
             "enum-EA-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
@@ -423,22 +456,30 @@ _SCENARIOS = {
                 "int",
             ),
             "enum-EA-is": accepted("let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", "bool"),
+            "enum-EA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "enum-EA-annot": accepted("fn(p: Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "enum-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "enum-EA-alias": accepted(
+                "type AA = Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "enum-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
             "enum-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
             "enum-E-value": accepted("Foo::E", "record Foo::E"),
             "enum-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
-            "enum-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "enum-E-alias": accepted("type AA = Foo::E\nfn(p: AA) => p", "Foo::E -> Foo::E"),
             "enum-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
             "enum-E-reptype": accepted("Foo::E", "record Foo::E"),
             "enum-Gi-value": rejected(
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "enum-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "pkg/Foo::G[int] -> int"),
-            "enum-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "enum-Gi-alias": accepted(
+                "type AA = Foo::G[int]\nfn(p: AA) => p", "pkg/Foo::G[int] -> pkg/Foo::G[int]"
+            ),
             "enum-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
             ),
@@ -447,7 +488,9 @@ _SCENARIOS = {
             ),
             "enum-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "enum-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
-            "enum-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
+            "enum-slashR-alias": accepted(
+                "type AA = /pkg/Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "enum-slashR-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::R]) => 1", "array[pkg/Foo::R] -> int"
             ),
@@ -456,7 +499,7 @@ _SCENARIOS = {
                 "::Foo::R(x = 1)", AglTypeError, "x = 1", phase="typecheck"
             ),
             "enum-anchR-annot": accepted("fn(p: ::Foo::R) => 1", "Foo::R -> int"),
-            "enum-anchR-alias": accepted("type AA = ::Foo::R\n1", "int"),
+            "enum-anchR-alias": accepted("type AA = ::Foo::R\nfn(p: AA) => p", "Foo::R -> Foo::R"),
             "enum-anchR-tyarg": accepted("fn(p: array[::Foo::R]) => 1", "array[Foo::R] -> int"),
             "enum-anchR-reptype": accepted("::Foo::R", "int -> Foo::R"),
             "enum-slashEA-value": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
@@ -472,8 +515,14 @@ _SCENARIOS = {
             "enum-slashEA-is": accepted(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is /pkg/Foo::E::A", "bool"
             ),
+            "enum-slashEA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? /pkg/Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "enum-slashEA-annot": accepted("fn(p: /pkg/Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "enum-slashEA-alias": accepted("type AA = /pkg/Foo::E::A\n1", "int"),
+            "enum-slashEA-alias": accepted(
+                "type AA = /pkg/Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "enum-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -507,7 +556,9 @@ _SCENARIOS = {
         probes={
             "none-R-value": accepted("Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "none-R-annot": accepted("fn(p: Foo::R) => 1", "pkg/Foo::R -> int"),
-            "none-R-alias": accepted("type AA = Foo::R\n1", "int"),
+            "none-R-alias": accepted(
+                "type AA = Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "none-R-tyarg": accepted("fn(p: array[Foo::R]) => 1", "array[pkg/Foo::R] -> int"),
             "none-R-reptype": accepted("Foo::R", "int -> pkg/Foo::R"),
             "none-EA-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
@@ -516,8 +567,14 @@ _SCENARIOS = {
                 "int",
             ),
             "none-EA-is": accepted("let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A", "bool"),
+            "none-EA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "none-EA-annot": accepted("fn(p: Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "none-EA-alias": accepted("type AA = Foo::E::A\n1", "int"),
+            "none-EA-alias": accepted(
+                "type AA = Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "none-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -526,7 +583,9 @@ _SCENARIOS = {
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
             ),
             "none-E-annot": accepted("fn(p: Foo::E) => 1", "pkg/Foo::E -> int"),
-            "none-E-alias": accepted("type AA = Foo::E\n1", "int"),
+            "none-E-alias": accepted(
+                "type AA = Foo::E\nfn(p: AA) => p", "pkg/Foo::E -> pkg/Foo::E"
+            ),
             "none-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[pkg/Foo::E] -> int"),
             "none-E-reptype": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
@@ -535,7 +594,9 @@ _SCENARIOS = {
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "none-Gi-annot": accepted("fn(p: Foo::G[int]) => 1", "pkg/Foo::G[int] -> int"),
-            "none-Gi-alias": accepted("type AA = Foo::G[int]\n1", "int"),
+            "none-Gi-alias": accepted(
+                "type AA = Foo::G[int]\nfn(p: AA) => p", "pkg/Foo::G[int] -> pkg/Foo::G[int]"
+            ),
             "none-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
             ),
@@ -544,7 +605,9 @@ _SCENARIOS = {
             ),
             "none-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "none-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
-            "none-slashR-alias": accepted("type AA = /pkg/Foo::R\n1", "int"),
+            "none-slashR-alias": accepted(
+                "type AA = /pkg/Foo::R\nfn(p: AA) => p", "pkg/Foo::R -> pkg/Foo::R"
+            ),
             "none-slashR-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::R]) => 1", "array[pkg/Foo::R] -> int"
             ),
@@ -571,8 +634,14 @@ _SCENARIOS = {
             "none-slashEA-is": accepted(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is /pkg/Foo::E::A", "bool"
             ),
+            "none-slashEA-narrow": accepted(
+                "let v: pkg/Foo::E = pkg/Foo::E::A\nv as? /pkg/Foo::E::A",
+                option_identity("pkg/Foo::E::A"),
+            ),
             "none-slashEA-annot": accepted("fn(p: /pkg/Foo::E::A) => 1", "pkg/Foo::E::A -> int"),
-            "none-slashEA-alias": accepted("type AA = /pkg/Foo::E::A\n1", "int"),
+            "none-slashEA-alias": accepted(
+                "type AA = /pkg/Foo::E::A\nfn(p: AA) => p", "pkg/Foo::E::A -> pkg/Foo::E::A"
+            ),
             "none-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
@@ -707,41 +776,47 @@ _SCENARIOS = {
         modules={"shapes": _SHAPES_2},
         header=("import shapes::*",),
         probes={
-            "noloc-value": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
-            "noloc-value-enum": accepted("Geo::Shape::Circle", "record shapes::Geo::Shape::Circle"),
-            "noloc-pattern": rejected(
+            "imported-value": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
+            "imported-value-enum": accepted(
+                "Geo::Shape::Circle", "record shapes::Geo::Shape::Circle"
+            ),
+            "imported-pattern": rejected(
                 "case 1 of\n  | Geo::Point(x) => x\n  | _ => 2",
                 AglTypeError,
                 "Geo::Point(x)",
                 phase="typecheck",
             ),
-            "noloc-pattern-enum": rejected(
+            "imported-pattern-enum": rejected(
                 "case 1 of\n  | Geo::Shape::Circle => 1\n  | _ => 2",
                 AglTypeError,
                 "Geo::Shape::Circle",
                 phase="typecheck",
             ),
-            "noloc-is-enum": rejected(
+            "imported-is-enum": rejected(
                 "1 is Geo::Shape::Circle",
                 AglTypeError,
                 "1 is Geo::Shape::Circle",
                 phase="typecheck",
             ),
-            "noloc-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
-            "noloc-annot-enum": accepted("fn(p: Geo::Shape) => 1", "shapes::Geo::Shape -> int"),
-            "noloc-annot-member": accepted(
+            "imported-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
+            "imported-annot-enum": accepted("fn(p: Geo::Shape) => 1", "shapes::Geo::Shape -> int"),
+            "imported-annot-member": accepted(
                 "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
-            "noloc-alias": accepted("type A = Geo::Point\n1", "int"),
-            "noloc-tyarg": accepted(
+            "imported-alias": accepted(
+                "type A = Geo::Point\nfn(p: A) => p", "shapes::Geo::Point -> shapes::Geo::Point"
+            ),
+            "imported-tyarg": accepted(
                 "fn(p: array[Geo::Point]) => 1", "array[shapes::Geo::Point] -> int"
             ),
-            "noloc-applied": accepted("fn(p: Geo::Box[int]) => 1", "shapes::Geo::Box[int] -> int"),
-            "noloc-applied-value": accepted(
+            "imported-applied": accepted(
+                "fn(p: Geo::Box[int]) => 1", "shapes::Geo::Box[int] -> int"
+            ),
+            "imported-applied-value": accepted(
                 "Geo::Box(v = 1)", "record shapes::Geo::Box[int]\n  v: int"
             ),
-            "noloc-reptype": accepted("Geo::Point", "int -> shapes::Geo::Point"),
-            "noloc-reptype-applied": rejected(
+            "imported-reptype": accepted("Geo::Point", "int -> shapes::Geo::Point"),
+            "imported-reptype-applied": rejected(
                 "Geo::Box[int]",
                 AglScopeError,
                 "int",
@@ -783,7 +858,9 @@ _SCENARIOS = {
             "locnoP-annot-member": accepted(
                 "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
-            "locnoP-alias": accepted("type A = Geo::Point\n1", "int"),
+            "locnoP-alias": accepted(
+                "type A = Geo::Point\nfn(p: A) => p", "shapes::Geo::Point -> shapes::Geo::Point"
+            ),
             "locnoP-tyarg": accepted(
                 "fn(p: array[Geo::Point]) => 1", "array[shapes::Geo::Point] -> int"
             ),
@@ -832,7 +909,9 @@ _SCENARIOS = {
             "locP-annot-member": accepted(
                 "fn(p: Geo::Shape::Circle) => 1", "shapes::Geo::Shape::Circle -> int"
             ),
-            "locP-alias": accepted("type A = Geo::Point\n1", "int"),
+            "locP-alias": accepted(
+                "type A = Geo::Point\nfn(p: A) => p", "Geo::Point -> Geo::Point"
+            ),
             "locP-tyarg": accepted("fn(p: array[Geo::Point]) => 1", "array[Geo::Point] -> int"),
             "locP-applied": accepted("fn(p: Geo::Box[int]) => 1", "shapes::Geo::Box[int] -> int"),
             "locP-applied-value": accepted(
@@ -911,6 +990,10 @@ _SCENARIOS = {
             "member-is": accepted(
                 "let v: palette::Color = palette::Color::Red\nv is palette::Color::Red", "bool"
             ),
+            "member-narrow": accepted(
+                "let v: palette::Color = palette::Color::Red\nv as? palette::Color::Red",
+                option_identity("palette::Color::Red"),
+            ),
             "member-pat": accepted(
                 "let v: palette::Color = palette::Color::Red\n"
                 "case v of\n  | palette::Color::Red => 1\n  | _ => 2",
@@ -946,6 +1029,10 @@ _SCENARIOS = {
             "annot-enum-member": accepted("fn(p: Geo::K::A) => 1", "S::K::A -> int"),
             "pat": accepted("let t = S::T(x = 1)\ncase t of\n  | Geo::T(x) => x", "int"),
             "is-enum": accepted("let k: S::K = S::K::A\nk is Geo::K::A", "bool"),
+            "narrow-enum": accepted(
+                "let k: S::K = S::K::A\nk as? Geo::K::A",
+                option_identity("S::K::A"),
+            ),
             "val-other": accepted("Geo::Other(y = 1)", "record Geo::Other\n  y: int"),
             "annot-other": accepted("fn(p: Geo::Other) => 1", "Geo::Other -> int"),
         },
@@ -957,8 +1044,12 @@ _SCENARIOS = {
 class TestRouteAndLocalScopeQualifiers:
     """Own paths beside module routes, anchors, and local scopes beside imported ones."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)

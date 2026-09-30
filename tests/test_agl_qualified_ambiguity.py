@@ -27,8 +27,10 @@ from agm.agl.scope.symbols import (
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.qualifier_support import (
     FilePhase,
-    assert_verdicts_for_grouping,
-    grouping_params,
+    Groupings,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
 )
 
 _CONSTRUCTOR: tuple[FilePhase, type[BaseException] | type[None]] = (
@@ -62,32 +64,32 @@ class TestAmbiguousModuleMember:
         "anchored-in-scope": "/x/lib::Red",
     }
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_every_route_form(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_every_route_form(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             {"x/lib": _TWO_REDS},
             ("import x/lib",),
-            sizes,
-            self._PROBES,
-            dict.fromkeys(self._PROBES, _CONSTRUCTOR),
-            span_texts=self._SPELLINGS,
-            expected_origins=dict.fromkeys(self._PROBES, self._ORIGINS),
-            expected_spellings=self._SPELLINGS,
+            probe_table(
+                self._PROBES,
+                dict.fromkeys(self._PROBES, _CONSTRUCTOR),
+                span_texts=self._SPELLINGS,
+                origins=dict.fromkeys(self._PROBES, self._ORIGINS),
+                spellings=self._SPELLINGS,
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_import_alias(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_import_alias(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             {"x/lib": _TWO_REDS},
             ("import x/lib as L",),
-            sizes,
-            {"alias": "L::Red"},
-            {"alias": _CONSTRUCTOR},
-            span_texts={"alias": "L::Red"},
-            expected_origins={"alias": self._ORIGINS},
-            expected_spellings={"alias": "L::Red"},
+            probe_table(
+                {"alias": "L::Red"},
+                {"alias": _CONSTRUCTOR},
+                span_texts={"alias": "L::Red"},
+                origins={"alias": self._ORIGINS},
+                spellings={"alias": "L::Red"},
+            ),
         )
 
 
@@ -96,18 +98,20 @@ class TestAmbiguousCurrentModuleMember:
 
     _HEADER = ("enum A\n  | Red", "enum B\n  | Red")
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_HEADER) + 1))
-    def test_value(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_value(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             self._HEADER,
-            sizes,
-            {"value": "::Red"},
-            {"value": _CONSTRUCTOR},
-            span_texts={"value": "::Red"},
-            expected_origins={"value": _origins(DeclaredOrigin, "A::Red", "B::Red")},
-            expected_spellings={"value": "::Red"},
+            probe_table(
+                {"value": "::Red"},
+                {"value": _CONSTRUCTOR},
+                span_texts={"value": "::Red"},
+                origins={"value": _origins(DeclaredOrigin, "A::Red", "B::Red")},
+                spellings={"value": "::Red"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -135,19 +139,21 @@ class TestAmbiguousModuleRoute:
     _HEADER = ("import p/x/lib", "import q/x/lib")
     _PROBES = {"short": "lib::f()", "long": "x/lib::f()"}
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_HEADER) + 1))
-    def test_every_suffix(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_every_suffix(self, tmp_path: Path, groupings: Groupings) -> None:
         origins = _origins(ImportedModuleOrigin, "p/x/lib::f", "q/x/lib::f")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {"p/x/lib": "def f() -> int = 1\n", "q/x/lib": "def f() -> int = 2\n"},
             self._HEADER,
-            sizes,
-            self._PROBES,
-            dict.fromkeys(self._PROBES, _QUALIFICATION),
-            span_texts={"short": "lib::f", "long": "x/lib::f"},
-            expected_origins=dict.fromkeys(self._PROBES, origins),
-            expected_spellings={"short": "lib::f", "long": "x/lib::f"},
+            probe_table(
+                self._PROBES,
+                dict.fromkeys(self._PROBES, _QUALIFICATION),
+                span_texts={"short": "lib::f", "long": "x/lib::f"},
+                origins=dict.fromkeys(self._PROBES, origins),
+                spellings={"short": "lib::f", "long": "x/lib::f"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -192,41 +198,55 @@ class TestAmbiguousOwnerProjection:
         self,
         tmp_path: Path,
         header: tuple[str, ...],
-        sizes: tuple[int, ...],
         origins: frozenset[tuple[type, str]],
+        groupings: Groupings | None = None,
     ) -> None:
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             self._POINTS,
             header,
-            sizes,
-            self._PROBES,
-            dict.fromkeys(self._PROBES, _QUALIFICATION),
-            span_texts=dict.fromkeys(self._PROBES, "Point::Point"),
-            expected_origins=dict.fromkeys(self._PROBES, origins),
-            expected_spellings=dict.fromkeys(self._PROBES, "Point::Point"),
+            probe_table(
+                self._PROBES,
+                dict.fromkeys(self._PROBES, _QUALIFICATION),
+                span_texts=dict.fromkeys(self._PROBES, "Point::Point"),
+                origins=dict.fromkeys(self._PROBES, origins),
+                spellings=dict.fromkeys(self._PROBES, "Point::Point"),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_two_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point", "b/lib::Point::Point")
-        self._assert(tmp_path, ("import a/lib::*", "import b/lib::*"), sizes, origins)
+        self._assert(
+            tmp_path,
+            ("import a/lib::*", "import b/lib::*"),
+            origins,
+            groupings=groupings,
+        )
 
-    @pytest.mark.parametrize("sizes", grouping_params(4))
-    def test_import_tail_and_use(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point") | _origins(
             UseDeclarationOrigin, "b/lib::Point::Point"
         )
-        self._assert(tmp_path, ("import a/lib::*", "import b/lib", "use b/lib::*"), sizes, origins)
+        self._assert(
+            tmp_path,
+            ("import a/lib::*", "import b/lib", "use b/lib::*"),
+            origins,
+            groupings=groupings,
+        )
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_own_owner_wins(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_own_owner_wins(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             self._POINTS,
             ("import a/lib::*", "record Point\n  x: int"),
-            sizes,
-            {"call": self._PROBES["call"]},
-            {"call": ("accepted", type(None))},
-            expected_identities={"call": "record Point\n  x: int"},
+            probe_table(
+                {"call": self._PROBES["call"]},
+                {"call": ("accepted", type(None))},
+                identities={"call": "record Point\n  x: int"},
+            ),
+            groupings=groupings,
         )

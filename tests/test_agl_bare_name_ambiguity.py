@@ -30,9 +30,11 @@ from agm.agl.scope.symbols import (
 )
 from tests.agl.qualifier_support import (
     FilePhase,
+    Groupings,
     all_groupings,
-    assert_verdicts_for_grouping,
-    grouping_params,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
 )
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
@@ -86,46 +88,52 @@ def _point_origins(a_kind: type, b_kind: type) -> dict[str, frozenset[tuple[type
 class TestAmbiguousBareRecordName:
     """``Point`` from two modules: one class per position, origins from each layer."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TWO_TAILS) + 1))
-    def test_two_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _POINTS,
             _TWO_TAILS,
-            sizes,
-            _POINT_PROBES,
-            _POINT_EXPECTED,
-            span_texts=_POINT_SPANS,
-            expected_identities={"pattern": "int"},
-            expected_origins=_point_origins(ImportedModuleOrigin, ImportedModuleOrigin),
+            probe_table(
+                _POINT_PROBES,
+                _POINT_EXPECTED,
+                span_texts=_POINT_SPANS,
+                identities={"pattern": "int"},
+                origins=_point_origins(ImportedModuleOrigin, ImportedModuleOrigin),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TWO_USES) + 1))
-    def test_two_uses(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_two_uses(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _POINTS,
             _TWO_USES,
-            sizes,
-            _POINT_PROBES,
-            _POINT_EXPECTED,
-            span_texts=_POINT_SPANS,
-            expected_identities={"pattern": "int"},
-            expected_origins=_point_origins(UseDeclarationOrigin, UseDeclarationOrigin),
+            probe_table(
+                _POINT_PROBES,
+                _POINT_EXPECTED,
+                span_texts=_POINT_SPANS,
+                identities={"pattern": "int"},
+                origins=_point_origins(UseDeclarationOrigin, UseDeclarationOrigin),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TAIL_AND_USE) + 1))
-    def test_import_tail_and_use(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _POINTS,
             _TAIL_AND_USE,
-            sizes,
-            _POINT_PROBES,
-            _POINT_EXPECTED,
-            span_texts=_POINT_SPANS,
-            expected_identities={"pattern": "int"},
-            expected_origins=_point_origins(ImportedModuleOrigin, UseDeclarationOrigin),
+            probe_table(
+                _POINT_PROBES,
+                _POINT_EXPECTED,
+                span_texts=_POINT_SPANS,
+                identities={"pattern": "int"},
+                origins=_point_origins(ImportedModuleOrigin, UseDeclarationOrigin),
+            ),
+            groupings=groupings,
         )
 
 
@@ -142,47 +150,53 @@ def _red_origins(kind: type) -> dict[str, frozenset[tuple[type, str]]]:
 class TestAmbiguousBareEnumMember:
     """Two enums injecting ``Red``: the members are the origins, of the contributing layer."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TWO_TAILS) + 1))
-    def test_two_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _COLORS,
             _TWO_TAILS,
-            sizes,
-            _RED_PROBES,
-            _RED_EXPECTED,
-            span_texts=_RED_SPANS,
-            expected_origins=_red_origins(ImportedModuleOrigin),
+            probe_table(
+                _RED_PROBES,
+                _RED_EXPECTED,
+                span_texts=_RED_SPANS,
+                origins=_red_origins(ImportedModuleOrigin),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TWO_USES) + 1))
-    def test_two_uses(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_two_uses(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _COLORS,
             _TWO_USES,
-            sizes,
-            _RED_PROBES,
-            _RED_EXPECTED,
-            span_texts=_RED_SPANS,
-            expected_origins=_red_origins(UseDeclarationOrigin),
+            probe_table(
+                _RED_PROBES,
+                _RED_EXPECTED,
+                span_texts=_RED_SPANS,
+                origins=_red_origins(UseDeclarationOrigin),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(4))
-    def test_alias_use_and_import_tail(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_alias_use_and_import_tail(self, tmp_path: Path, groupings: Groupings) -> None:
         """A ``use`` of an enum alias contributes its target's members, as that target."""
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {"one": "enum E\n  | Red\ntype C = E\n", "two": "enum F\n  | Red\n"},
             ("import one::{C}", "import two::*", "use C::*"),
-            sizes,
-            {"value": "[Red]"},
-            {"value": _CONSTRUCTOR},
-            span_texts={"value": "Red"},
-            expected_origins={
-                "value": _origins(ImportedModuleOrigin, "two::F::Red")
-                | _origins(UseDeclarationOrigin, "one::E::Red")
-            },
+            probe_table(
+                {"value": "[Red]"},
+                {"value": _CONSTRUCTOR},
+                span_texts={"value": "Red"},
+                origins={
+                    "value": _origins(ImportedModuleOrigin, "two::F::Red")
+                    | _origins(UseDeclarationOrigin, "one::E::Red")
+                },
+            ),
+            groupings=groupings,
         )
 
 
@@ -206,8 +220,8 @@ class TestAmbiguousNamesLocalUsesContribute:
     it asks the type question and gets the annotation's verdict.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_USES_HEADER) + 1))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             "call": "P(x = 1)",
             "annotation": "fn(p: P) => 1",
@@ -217,34 +231,36 @@ class TestAmbiguousNamesLocalUsesContribute:
         }
         point = _origins(UseDeclarationOrigin, "s::P", "t::P")
         generic = _origins(UseDeclarationOrigin, "s::G", "t::G")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             _LOCAL_USES_HEADER,
-            sizes,
-            probes,
-            {
-                "call": _CONSTRUCTOR,
-                "annotation": _QUALIFICATION,
-                "generic-value": _QUALIFICATION,
-                "generic-applied-value": _QUALIFICATION,
-                "generic-annotation": _QUALIFICATION,
-            },
-            span_texts={
-                "call": "P",
-                "annotation": "P",
-                "generic-value": "G",
-                "generic-applied-value": "G",
-                "generic-annotation": "G[int]",
-            },
-            expected_origins={
-                "call": point,
-                "annotation": point,
-                "generic-value": generic,
-                "generic-applied-value": generic,
-                "generic-annotation": generic,
-            },
-            expected_legal_groupings=_LOCAL_USES_LEGAL,
+            probe_table(
+                probes,
+                {
+                    "call": _CONSTRUCTOR,
+                    "annotation": _QUALIFICATION,
+                    "generic-value": _QUALIFICATION,
+                    "generic-applied-value": _QUALIFICATION,
+                    "generic-annotation": _QUALIFICATION,
+                },
+                span_texts={
+                    "call": "P",
+                    "annotation": "P",
+                    "generic-value": "G",
+                    "generic-applied-value": "G",
+                    "generic-annotation": "G[int]",
+                },
+                origins={
+                    "call": point,
+                    "annotation": point,
+                    "generic-value": generic,
+                    "generic-applied-value": generic,
+                    "generic-annotation": generic,
+                },
+            ),
+            legal=_LOCAL_USES_LEGAL,
+            groupings=groupings,
         )
 
 
@@ -254,19 +270,19 @@ _LOCAL_ENUMS_HEADER = ("enum A = Some | Other", "enum B = Some | Third")
 class TestAmbiguousLocalMembers:
     """Two local enums injecting ``Some``: declared origins, however entries group them."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_LOCAL_ENUMS_HEADER) + 1))
-    def test_value_is_an_ambiguous_constructor(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_value_is_an_ambiguous_constructor(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             _LOCAL_ENUMS_HEADER,
-            sizes,
-            {"value": "Some"},
-            {"value": _CONSTRUCTOR},
-            span_texts={"value": "Some"},
-            expected_origins={"value": _origins(DeclaredOrigin, "A::Some", "B::Some")},
+            probe_table(
+                {"value": "Some"},
+                {"value": _CONSTRUCTOR},
+                span_texts={"value": "Some"},
+                origins={"value": _origins(DeclaredOrigin, "A::Some", "B::Some")},
+            ),
+            groupings=groupings,
         )
 
 
@@ -279,8 +295,8 @@ _BOOM_EXTENDS = "exception Local extends Boom"
 class TestAmbiguousBareExceptionName:
     """``Boom`` from two ``use``s: a call asks for the constructor, the rest for the type."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_BOOM_USES) + 1))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
         origins = _origins(UseDeclarationOrigin, "m/a::Boom", "m/b::Boom")
         probes = {
             "call": 'Boom(message = "m")',
@@ -288,45 +304,47 @@ class TestAmbiguousBareExceptionName:
             "catch": _BOOM_CATCH,
             "extends": _BOOM_EXTENDS,
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _BOOMS,
             _BOOM_USES,
-            sizes,
-            probes,
-            {
-                "call": _CONSTRUCTOR,
-                "annotation": _QUALIFICATION,
-                "catch": _QUALIFICATION,
-                "extends": _QUALIFICATION,
-            },
-            span_texts={
-                "call": "Boom",
-                "annotation": "Boom",
-                "catch": _BOOM_CATCH.split("\n", 2)[2],
-                "extends": _BOOM_EXTENDS,
-            },
-            expected_origins=dict.fromkeys(probes, origins),
+            probe_table(
+                probes,
+                {
+                    "call": _CONSTRUCTOR,
+                    "annotation": _QUALIFICATION,
+                    "catch": _QUALIFICATION,
+                    "extends": _QUALIFICATION,
+                },
+                span_texts={
+                    "call": "Boom",
+                    "annotation": "Boom",
+                    "catch": _BOOM_CATCH.split("\n", 2)[2],
+                    "extends": _BOOM_EXTENDS,
+                },
+                origins=dict.fromkeys(probes, origins),
+            ),
+            groupings=groupings,
         )
 
 
 class TestOwnScopeWinsOnlyInsideTheUse:
     """A ``use`` of an own scope and a module picks the own member; an import tail adds its."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_beside_a_region_import_tail(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_beside_a_region_import_tail(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             {"lib": "def both() -> int = 10\n"},
             ("scope lib\n  def both() -> bool = true\nend lib",),
-            sizes,
-            {"value": "scope r\n  import lib::*\n  use lib::*\n  let v = both()\nend r"},
-            {"value": _QUALIFICATION},
-            span_texts={"value": "both"},
-            expected_origins={
-                "value": _origins(ImportedModuleOrigin, "lib::both")
-                | _origins(UseDeclarationOrigin, "lib::both")
-            },
+            probe_table(
+                {"value": "scope r\n  import lib::*\n  use lib::*\n  let v = both()\nend r"},
+                {"value": _QUALIFICATION},
+                span_texts={"value": "both"},
+                origins={
+                    "value": _origins(ImportedModuleOrigin, "lib::both")
+                    | _origins(UseDeclarationOrigin, "lib::both")
+                },
+            ),
         )
 
 
@@ -343,28 +361,32 @@ class TestLocalMemberWinsItsLevel:
     other ``Red`` is not a second candidate, for a value and a receiver alike.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_over_an_import_tail(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_over_an_import_tail(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _COLORS,
             ("import a/lib::*", "enum A = Red | Blue"),
-            sizes,
-            _LOCAL_RED_PROBES,
-            dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
-            expected_identities={"value": "record A::Red", "receiver": "int"},
+            probe_table(
+                _LOCAL_RED_PROBES,
+                dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
+                identities={"value": "record A::Red", "receiver": "int"},
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(4))
-    def test_over_a_use(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_over_a_use(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _COLORS,
             ("import b/lib", "use b/lib::*", "enum A = Red | Blue"),
-            sizes,
-            _LOCAL_RED_PROBES,
-            dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
-            expected_identities={"value": "record A::Red", "receiver": "int"},
+            probe_table(
+                _LOCAL_RED_PROBES,
+                dict.fromkeys(_LOCAL_RED_PROBES, _ACCEPTED),
+                identities={"value": "record A::Red", "receiver": "int"},
+            ),
+            groupings=groupings,
         )
 
 
@@ -394,39 +416,40 @@ class TestDeclarationReachedSeveralWays:
     In an ambiguity it takes part in, its origins name both ways it was reached.
     """
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_TAIL_USE_AND_TAIL) + 1))
-    def test_at_the_module_root(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_at_the_module_root(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _EVERYTHING,
             _TAIL_USE_AND_TAIL,
-            sizes,
-            _REACHED_TWICE_PROBES,
-            {
-                "call": _CONSTRUCTOR,
-                "annotation": _QUALIFICATION,
-                "receiver": _QUALIFICATION,
-                "member": _CONSTRUCTOR,
-                "function": _QUALIFICATION,
-            },
-            span_texts={
-                "call": "Point",
-                "annotation": "Point",
-                "receiver": "self",
-                "member": "Red",
-                "function": "f",
-            },
-            expected_origins={
-                "call": _reached_twice("Point"),
-                "annotation": _reached_twice("Point"),
-                "receiver": _reached_twice("Point"),
-                "member": _reached_twice("Color::Red"),
-                "function": _reached_twice("f"),
-            },
+            probe_table(
+                _REACHED_TWICE_PROBES,
+                {
+                    "call": _CONSTRUCTOR,
+                    "annotation": _QUALIFICATION,
+                    "receiver": _QUALIFICATION,
+                    "member": _CONSTRUCTOR,
+                    "function": _QUALIFICATION,
+                },
+                span_texts={
+                    "call": "Point",
+                    "annotation": "Point",
+                    "receiver": "self",
+                    "member": "Red",
+                    "function": "f",
+                },
+                origins={
+                    "call": _reached_twice("Point"),
+                    "annotation": _reached_twice("Point"),
+                    "receiver": _reached_twice("Point"),
+                    "member": _reached_twice("Color::Red"),
+                    "function": _reached_twice("f"),
+                },
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(1))
-    def test_in_a_scope_region(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_in_a_scope_region(self, tmp_path: Path) -> None:
         region = (
             "scope S\n  import a/lib::*\n  import b/lib::*\n  use a/lib::*\n  let y = {}\nend S"
         )
@@ -435,19 +458,20 @@ class TestDeclarationReachedSeveralWays:
             "member": region.format("Red"),
             "function": region.format("f()"),
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _EVERYTHING,
             (),
-            sizes,
-            probes,
-            {"call": _CONSTRUCTOR, "member": _CONSTRUCTOR, "function": _QUALIFICATION},
-            span_texts={"call": "Point", "member": "Red", "function": "f"},
-            expected_origins={
-                "call": _reached_twice("Point"),
-                "member": _reached_twice("Color::Red"),
-                "function": _reached_twice("f"),
-            },
+            probe_table(
+                probes,
+                {"call": _CONSTRUCTOR, "member": _CONSTRUCTOR, "function": _QUALIFICATION},
+                span_texts={"call": "Point", "member": "Red", "function": "f"},
+                origins={
+                    "call": _reached_twice("Point"),
+                    "member": _reached_twice("Color::Red"),
+                    "function": _reached_twice("f"),
+                },
+            ),
         )
 
 
@@ -456,25 +480,25 @@ _STATUSES = dict.fromkeys(
 )
 
 
-@pytest.mark.parametrize("sizes", grouping_params(1))
-def test_a_region_import_of_an_enum_contributes_its_members_as_imported(
-    tmp_path: Path, sizes: tuple[int, ...]
-) -> None:
+def test_a_region_import_of_an_enum_contributes_its_members_as_imported(tmp_path: Path) -> None:
     """A defined member and a referenced record both keep the import's kind."""
     region = "scope S\n  import a/lib::{{Status}}\n  import b/lib::{{Status}}\n  let y = {}\nend S"
     probes = {"defined": region.format("Idle"), "referenced": region.format("Saved(x = 1)")}
-    assert_verdicts_for_grouping(
+    assert_verdicts(
         tmp_path,
         _STATUSES,
         (),
-        sizes,
-        probes,
-        dict.fromkeys(probes, _CONSTRUCTOR),
-        span_texts={"defined": "Idle", "referenced": "Saved"},
-        expected_origins={
-            "defined": _origins(ImportedModuleOrigin, "a/lib::Status::Idle", "b/lib::Status::Idle"),
-            "referenced": _origins(ImportedModuleOrigin, "a/lib::Saved", "b/lib::Saved"),
-        },
+        probe_table(
+            probes,
+            dict.fromkeys(probes, _CONSTRUCTOR),
+            span_texts={"defined": "Idle", "referenced": "Saved"},
+            origins={
+                "defined": _origins(
+                    ImportedModuleOrigin, "a/lib::Status::Idle", "b/lib::Status::Idle"
+                ),
+                "referenced": _origins(ImportedModuleOrigin, "a/lib::Saved", "b/lib::Saved"),
+            },
+        ),
     )
 
 
@@ -492,68 +516,86 @@ class TestEnumMemberBesideAContributedFunction:
         self,
         tmp_path: Path,
         header: tuple[str, ...],
-        sizes: tuple[int, ...],
         function_kind: type,
         *,
         member_use: bool = False,
+        groupings: Groupings | None = None,
     ) -> None:
         origins = _origins(ImportedModuleOrigin, "a/lib::Color::Red") | _origins(
             function_kind, "b/lib::Red"
         )
         if member_use:
             origins |= _origins(UseDeclarationOrigin, "a/lib::Color::Red")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _MEMBER_AND_FUNCTION,
             header,
-            sizes,
-            _MEMBER_AND_FUNCTION_PROBES,
-            dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, _QUALIFICATION),
-            span_texts=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, "Red"),
-            expected_origins=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, origins),
+            probe_table(
+                _MEMBER_AND_FUNCTION_PROBES,
+                dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, _QUALIFICATION),
+                span_texts=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, "Red"),
+                origins=dict.fromkeys(_MEMBER_AND_FUNCTION_PROBES, origins),
+            ),
+            groupings=groupings,
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_two_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        self._assert(tmp_path, ("import a/lib::*", "import b/lib::*"), sizes, ImportedModuleOrigin)
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_two_import_tails(self, tmp_path: Path, groupings: Groupings) -> None:
+        self._assert(
+            tmp_path,
+            ("import a/lib::*", "import b/lib::*"),
+            ImportedModuleOrigin,
+            groupings=groupings,
+        )
 
-    @pytest.mark.parametrize("sizes", grouping_params(4))
-    def test_import_tail_and_use(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_import_tail_and_use(self, tmp_path: Path, groupings: Groupings) -> None:
         header = ("import a/lib::*", "import b/lib", "use b/lib::*")
-        self._assert(tmp_path, header, sizes, UseDeclarationOrigin)
+        self._assert(
+            tmp_path,
+            header,
+            UseDeclarationOrigin,
+            groupings=groupings,
+        )
 
-    @pytest.mark.parametrize("sizes", grouping_params(4))
-    def test_member_reached_twice(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(4))
+    def test_member_reached_twice(self, tmp_path: Path, groupings: Groupings) -> None:
         header = ("import a/lib::*", "import b/lib::*", "use a/lib::*")
-        self._assert(tmp_path, header, sizes, ImportedModuleOrigin, member_use=True)
+        self._assert(
+            tmp_path,
+            header,
+            ImportedModuleOrigin,
+            member_use=True,
+            groupings=groupings,
+        )
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_beside_the_prelude(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_beside_the_prelude(self, tmp_path: Path) -> None:
         probes = {"value": "Some", "call": "Some()"}
         origins = _origins(ImportedModuleOrigin, "lib::Some", "std/option::Option::Some")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {"lib": "def Some() -> int = 1\n"},
             ("import lib::*",),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _QUALIFICATION),
-            span_texts=dict.fromkeys(probes, "Some"),
-            expected_origins=dict.fromkeys(probes, origins),
+            probe_table(
+                probes,
+                dict.fromkeys(probes, _QUALIFICATION),
+                span_texts=dict.fromkeys(probes, "Some"),
+                origins=dict.fromkeys(probes, origins),
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(1))
-    def test_in_a_scope_region(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    def test_in_a_scope_region(self, tmp_path: Path) -> None:
         region = "scope S\n  import a/lib::*\n  import b/lib::*\n  let y = {}\nend S"
         probes = {key: region.format(probe) for key, probe in _MEMBER_AND_FUNCTION_PROBES.items()}
         origins = _origins(ImportedModuleOrigin, "a/lib::Color::Red", "b/lib::Red")
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _MEMBER_AND_FUNCTION,
             (),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _QUALIFICATION),
-            span_texts=dict.fromkeys(probes, "Red"),
-            expected_origins=dict.fromkeys(probes, origins),
+            probe_table(
+                probes,
+                dict.fromkeys(probes, _QUALIFICATION),
+                span_texts=dict.fromkeys(probes, "Red"),
+                origins=dict.fromkeys(probes, origins),
+            ),
         )

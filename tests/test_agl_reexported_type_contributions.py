@@ -22,7 +22,10 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
 )
@@ -37,9 +40,7 @@ _REEXPORTER = "export tl::{Color, Point, Geo}\n"
 _SCOPED_REEXPORTER = "scope Shapes\n  export tl::{Color, Point, Geo}\nend Shapes\n"
 _REEXPORTS = {"tl": _TL, "mid": _SCOPED_REEXPORTER, "mid2": _REEXPORTER}
 
-_OPTION_OF_RED = (
-    "enum std/option::Option[tl::Color::Red]\n  | None\n  | Some(value: tl::Color::Red)"
-)
+_OPTION_OF_RED = option_identity("tl::Color::Red")
 _COLOR = "enum tl::Color\n  | Red\n  | Blue"
 
 
@@ -168,8 +169,12 @@ _SCENARIOS = {
 class TestReexportedTypes:
     """Re-exported types, used or imported, in every position."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)

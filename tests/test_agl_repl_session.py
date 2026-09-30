@@ -39,7 +39,6 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     NoVisibleConstructorError,
     UnknownMemberError,
-    UnknownQualifierError,
     UseDeclarationOrigin,
 )
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
@@ -77,10 +76,12 @@ from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_
 from tests._process_helpers import FakeShell
 from tests.agl.qualifier_support import (
     all_groupings,
+    assert_repl_verdicts,
     eval_grouped_final,
     eval_setup_entries,
     legal_groupings,
     origin_kinds,
+    rejected,
 )
 
 # ---------------------------------------------------------------------------
@@ -2235,45 +2236,37 @@ def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_p
     _assert_alias_fails_in_its_declaring_entry("fn(x: C::A) => 1")
 
 
-@pytest.mark.parametrize("sizes", _grouping_params_for(3))
+_RETIRING_DECLS = ("enum Foo | Old", "enum Foo::Old::E = A | B", "enum Foo | New")
+
+
 @pytest.mark.parametrize(
-    ("probe", "expected_error"),
+    "history",
     (
-        # The live ``Foo`` (or a leftover ``Old``) lacks the next segment: the
-        # unknown-member verdict a live owner missing a member gives anywhere.
-        # One setup entry holding all three declarations fails outright
-        # (``Foo`` twice), leaving no ``Foo`` at all: an unknown qualifier.
-        ("Foo::Old::E::A", (UnknownQualifierError, UnknownMemberError)),
-        ("fn(x: Foo::Old::E::A) => 1", (UnknownQualifierError, UnknownMemberError)),
-        # A grouping whose combined setup entry fails to redeclare ``Foo``
-        # (name-clash inside one entry) leaves ``Old`` declared but never
-        # nested with ``E`` at all, rather than genuinely retired: scope
-        # itself then reports the same unknown-member verdict
-        # (``UnknownMemberError``) it reports for a live owner missing a
-        # member anywhere else, alongside the genuinely-retired groupings'
-        # ``UnknownQualifierError``.
-        ("fn(x: Foo::Old::E) => 1", (UnknownQualifierError, UnknownMemberError)),
+        _RETIRING_DECLS,
+        ("\n".join(_RETIRING_DECLS[:2]), _RETIRING_DECLS[2]),
     ),
-    ids=("value", "type-member", "type-owner"),
+    ids=("separate", "declared-together"),
 )
 def test_retired_member_scope_is_rejected_at_every_type_and_value_spelling(
-    probe: str, expected_error: tuple[type[AglError], ...], sizes: tuple[int, ...]
+    tmp_path: Path, history: tuple[str, ...]
 ) -> None:
     """Once a redeclaration retires ``Foo::Old``'s member scope, every
     spelling of what it used to hold -- the qualified value, the member's
-    own type, and the retired enum's own type -- is rejected, regardless of
-    how the declarations are split into entries."""
-    s = ReplSession()
-    _eval_grouped(s, ("enum Foo | Old", "enum Foo::Old::E = A | B", "enum Foo | New"), sizes)
-
-    result = s.eval_entry(probe)
-
-    assert not result.ok
-    assert result.diagnostics
-    assert result.error is None
-    with pytest.raises(expected_error) as excinfo:
-        s.type_of(probe)
-    assert not isinstance(excinfo.value, (HiddenMemberError, ReferencedMemberError))
+    own type, and the retired enum's own type -- names no member of the live
+    ``Foo``. Only these histories are legal: an entry declaring ``Foo`` twice
+    fails."""
+    assert_repl_verdicts(
+        tmp_path,
+        {},
+        history,
+        {
+            "value": rejected("Foo::Old::E::A", UnknownMemberError, "Foo::Old::E::A"),
+            "type-member": rejected(
+                "fn(x: Foo::Old::E::A) => 1", UnknownMemberError, "Foo::Old::E::A"
+            ),
+            "type-owner": rejected("fn(x: Foo::Old::E) => 1", UnknownMemberError, "Foo::Old::E"),
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -9831,36 +9824,6 @@ class TestAmbiguousQualifierClassAgreement:
         )
         assert setup.ok, setup.diagnostics
         return session
-
-    @pytest.mark.parametrize(
-        "expr",
-        [
-            pytest.param("fn(x: Facade::Thing) => 1", id="type-annotation"),
-            pytest.param("case v of | Facade::Thing::Red => 1 | _ => 0", id="pattern"),
-            pytest.param("v is Facade::Thing::Red", id="is-test"),
-        ],
-    )
-    def test_ambiguous_qualifier_reports_scope_error_at_every_position(
-        self, tmp_path: Path, expr: str
-    ) -> None:
-        session = self._session(tmp_path)
-        with pytest.raises(AmbiguousQualificationError):
-            session.type_of(expr)
-
-    def test_ambiguous_qualifier_reports_scope_error_at_a_bare_type_entry(
-        self, tmp_path: Path
-    ) -> None:
-        """A bare ambiguous qualifier, entered alone, fails through the REPL's
-        own bare-entry path -- never echoed as a type, same as every other
-        position's scope rejection."""
-        session = self._session(tmp_path)
-        result = session.eval_entry("Facade::Thing")
-        assert not result.ok
-        assert result.kind != "type"
-        assert isinstance(result.failure, AmbiguousQualificationError)
-        span = result.failure.span
-        assert span is not None
-        assert "Facade::Thing"[span.start_offset : span.end_offset] == "Facade::Thing"
 
     @pytest.mark.parametrize(
         "text",

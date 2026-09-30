@@ -26,9 +26,15 @@ from agm.agl.scope.symbols import (
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_repl_verdicts,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
+    type_positions,
+    type_positions_rejected,
 )
 
 _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
@@ -50,17 +56,15 @@ _SCENARIOS = {
             "def Geo::m(self) -> int = 1",
         ),
         probes={
-            "anch-m": accepted("::Geo::m(Geo(x = 1))", "int"),
-            "anch-nope": rejected("fn(p: ::Geo::Nope) => 1", UnknownMemberError, "::Geo::Nope"),
-            "anch-val": rejected("::Geo::Inner(y = 1)", UnknownMemberError, "::Geo::Inner"),
-            "anch-annot": rejected("fn(p: ::Geo::Inner) => 1", UnknownMemberError, "::Geo::Inner"),
-            "mref-val": accepted("Geo::m(Geo(x = 1))", "int"),
+            "anchored-m": accepted("::Geo::m(Geo(x = 1))", "int"),
+            **type_positions_rejected("anchored-nope", "::Geo::Nope", UnknownMemberError),
+            "anchored-val": rejected("::Geo::Inner(y = 1)", UnknownMemberError, "::Geo::Inner"),
+            **type_positions_rejected("anchored", "::Geo::Inner", UnknownMemberError),
+            "method-ref-val": accepted("Geo::m(Geo(x = 1))", "int"),
             "method-owner-val": accepted("Geo::Inner(y = 1)", "record tl::Geo::Inner\n  y: int"),
-            "method-owner-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
+            **type_positions("method-owner", "Geo::Inner", "tl::Geo::Inner"),
             "method-owner-miss-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
-            "method-owner-miss-annot": rejected(
-                "fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"
-            ),
+            **type_positions_rejected("method-owner-miss", "Geo::Nope", UnknownMemberError),
         },
     ),
     "method-on-imported-enum": Scenario(
@@ -70,30 +74,34 @@ _SCENARIOS = {
             "def Shape::area(self) -> int = 1",
         ),
         probes={
-            "orph-value": accepted("Shape::Circle", "record en::Shape::Circle"),
-            "orph-pattern": accepted(
+            "member-value": accepted("Shape::Circle", "record en::Shape::Circle"),
+            "member-pattern": accepted(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Circle => 1\n  | _ => 2"),
                 "int",
             ),
-            "orph-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
-            "orph-annot": accepted("fn(p: Shape::Circle) => 1", "en::Shape::Circle -> int"),
-            "orph-alias": accepted("type AA = Shape::Circle\n1", "int"),
-            "orph-tyarg": accepted(
+            "member-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
+            "member-narrow": accepted(
+                "let v: Shape = Shape::Square\nv as? Shape::Circle",
+                option_identity("en::Shape::Circle"),
+            ),
+            "member-annot": accepted("fn(p: Shape::Circle) => 1", "en::Shape::Circle -> int"),
+            "member-alias": accepted(
+                "type AA = Shape::Circle\nfn(p: AA) => p", "en::Shape::Circle -> en::Shape::Circle"
+            ),
+            "member-tyarg": accepted(
                 "fn(p: array[Shape::Circle]) => 1", "array[en::Shape::Circle] -> int"
             ),
-            "orph-reptype": accepted("Shape::Circle", "record en::Shape::Circle"),
-            "orph-call": accepted("Shape::Circle.area()", "int"),
-            "orph-mref": accepted("Shape::area(Shape::Circle)", "int"),
-            "orph-miss-value": rejected("Shape::Nope", UnknownMemberError, "Shape::Nope"),
-            "orph-miss-annot": rejected(
-                "fn(p: Shape::Nope) => 1", UnknownMemberError, "Shape::Nope"
-            ),
-            "orph-miss-pattern": rejected(
+            "member-reptype": accepted("Shape::Circle", "record en::Shape::Circle"),
+            "member-call": accepted("Shape::Circle.area()", "int"),
+            "member-mref": accepted("Shape::area(Shape::Circle)", "int"),
+            "missing-value": rejected("Shape::Nope", UnknownMemberError, "Shape::Nope"),
+            "missing-annot": rejected("fn(p: Shape::Nope) => 1", UnknownMemberError, "Shape::Nope"),
+            "missing-pattern": rejected(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
                 UnknownMemberError,
                 "Shape::Nope",
             ),
-            "orph-miss-is": rejected(
+            "missing-is": rejected(
                 "let v: Shape = Shape::Square\nv is Shape::Nope", UnknownMemberError, "Shape::Nope"
             ),
             "wild-pat": accepted(
@@ -101,6 +109,10 @@ _SCENARIOS = {
                 "int",
             ),
             "wild-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
+            "wild-narrow": accepted(
+                "let v: Shape = Shape::Square\nv as? Shape::Circle",
+                option_identity("en::Shape::Circle"),
+            ),
             "wild-pat-miss": rejected(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
                 UnknownMemberError,
@@ -120,11 +132,11 @@ _SCENARIOS = {
             "use-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
             "use-miss-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
             "use-miss-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
-            "muse-pat": accepted(
+            "use-pat": accepted(
                 "let v = tl::Geo::Inner(y = 1)\ncase v of\n  | Geo::Inner(y) => y", "int"
             ),
-            "muse-m": accepted("Geo::m(tl::Geo(x = 1))", "int"),
-            "muse-call": accepted("tl::Geo(x = 1).m()", "int"),
+            "use-m": accepted("Geo::m(tl::Geo(x = 1))", "int"),
+            "use-call": accepted("tl::Geo(x = 1).m()", "int"),
         },
     ),
     "method-on-region-record-opened-by-use": Scenario(
@@ -134,48 +146,52 @@ _SCENARIOS = {
             "def Geo::m(self) -> int = 1",
         ),
         probes={
-            "ruse-val": accepted("Geo::Inner(y = 1)", "record R::Geo::Inner\n  y: int"),
-            "ruse-annot": accepted("fn(p: Geo::Inner) => 1", "R::Geo::Inner -> int"),
-            "ruse-miss-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
-            "ruse-pat": accepted(
+            "region-use-val": accepted("Geo::Inner(y = 1)", "record R::Geo::Inner\n  y: int"),
+            "region-use-annot": accepted("fn(p: Geo::Inner) => 1", "R::Geo::Inner -> int"),
+            "region-use-miss-annot": rejected(
+                "fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"
+            ),
+            "region-use-pat": accepted(
                 "let v = R::Geo::Inner(y = 1)\ncase v of\n  | Geo::Inner(y) => y", "int"
             ),
-            "ruse-m": accepted("Geo::m(R::Geo(x = 1))", "int"),
+            "region-use-m": accepted("Geo::m(R::Geo(x = 1))", "int"),
         },
         legal=frozenset({(2, 1, 1), (2, 2), (3, 1), (4,)}),
     ),
     "method-on-imported-alias": Scenario(
         modules={"al": _AL},
-        header=(
-            "import al::*",
-            "def Geo::m(self) -> int = 1",
-        ),
+        header=("import al::*",),
         probes={
-            "alias-val": rejected("Geo::Inner(y = 1)", AglScopeError, "self"),
-            "alias-annot": rejected("fn(p: Geo::Inner) => 1", AglScopeError, "self"),
-            "alias-miss-annot": rejected("fn(p: Geo::Nope) => 1", AglScopeError, "self"),
+            # An alias cannot own a method.
+            "receiver": rejected("def Geo::m(self) -> int = 1", AglScopeError, "self"),
+            "nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
+            "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
         },
-        legal=frozenset({(1, 2), (3,)}),
     ),
     "method-on-ambiguous-imported-record": Scenario(
         modules={"tl": _TL, "tl2": _TL2},
-        header=(
-            "import tl::*",
-            "import tl2::*",
-            "def Geo::m(self) -> int = 1",
-        ),
+        header=("import tl::*", "import tl2::*"),
         probes={
-            "early-amb-annot": rejected(
-                "fn(p: Geo::Inner) => 1", AmbiguousQualificationError, "self"
+            "receiver": rejected(
+                "def Geo::m(self) -> int = 1", AmbiguousQualificationError, "self"
+            ),
+            "nested-receiver": rejected(
+                "def Geo::Inner::m(self) -> int = 1", AmbiguousQualificationError, "Geo::Inner"
+            ),
+            "annot": rejected("fn(p: Geo::Inner) => p", AmbiguousQualificationError, "Geo::Inner"),
+            # The first error in source order: the miss before the ambiguous receiver.
+            "miss-before-receiver": rejected(
+                "let f = fn(p: Geo::Inner::Nope) => 1\ndef Geo::Inner::m(self) -> int = 1\nf",
+                UnknownMemberError,
+                "Geo::Inner::Nope",
             ),
         },
-        legal=frozenset({(1, 1, 2), (1, 3), (2, 2), (4,)}),
     ),
     "scoped-method-on-imported-record": Scenario(
         modules={"tl": _TL},
         header=("import tl::*",),
         probes={
-            "nest-imp": accepted(
+            "nested-imported": accepted(
                 (
                     "scope r\n"
                     "  def Geo::m(self) -> int = 1\n"
@@ -195,7 +211,7 @@ _SCENARIOS = {
             "record Geo::Inner\n  y: int",
         ),
         probes={
-            "nest-loc": accepted(
+            "nested-local": accepted(
                 (
                     "scope r\n"
                     "  def Geo::m(self) -> int = 1\n"
@@ -216,9 +232,11 @@ _SCENARIOS = {
             "def Geo::In::f() -> int = 1",
         ),
         probes={
-            "eprefix-reg-val": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
-            "eprefix-reg-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
-            "eprefix-reg-pat": accepted(
+            "region-prefix-val": accepted(
+                "Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"
+            ),
+            "region-prefix-annot": accepted("fn(p: Geo::Point) => 1", "shapes::Geo::Point -> int"),
+            "region-prefix-pat": accepted(
                 "let p = shapes::Geo::Point(x = 1)\ncase p of\n  | Geo::Point(x) => x", "int"
             ),
         },
@@ -230,12 +248,12 @@ _SCENARIOS = {
             "def Geo::Inner::m(self) -> int = 1",
         ),
         probes={
-            "eprefix-ty-val": accepted("Geo::Inner(y = 1)", "record tl::Geo::Inner\n  y: int"),
-            "eprefix-ty-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
-            "eprefix-ty-miss-annot": rejected(
+            "type-prefix-val": accepted("Geo::Inner(y = 1)", "record tl::Geo::Inner\n  y: int"),
+            "type-prefix-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
+            "type-prefix-miss-annot": rejected(
                 "fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"
             ),
-            "eprefix-ty-miss-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
+            "type-prefix-miss-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
         },
     ),
     "method-on-used-enum": Scenario(
@@ -246,19 +264,27 @@ _SCENARIOS = {
             "def Shape::area(self) -> int = 1",
         ),
         probes={
-            "euse-val": accepted("Shape::Circle", "record en::Shape::Circle"),
-            "euse-annot": accepted("fn(p: Shape::Circle) => 1", "en::Shape::Circle -> int"),
-            "euse-pat": accepted(
+            "enum-use-val": accepted("Shape::Circle", "record en::Shape::Circle"),
+            "enum-use-annot": accepted("fn(p: Shape::Circle) => 1", "en::Shape::Circle -> int"),
+            "enum-use-pat": accepted(
                 ("let v: Shape = en::Shape::Circle\ncase v of\n  | Shape::Circle => 1\n  | _ => 2"),
                 "int",
             ),
-            "euse-is": accepted("let v: Shape = en::Shape::Circle\nv is Shape::Circle", "bool"),
-            "euse-call": accepted("en::Shape::Circle.area()", "int"),
+            "enum-use-is": accepted("let v: Shape = en::Shape::Circle\nv is Shape::Circle", "bool"),
+            "enum-use-narrow": accepted(
+                "let v: Shape = en::Shape::Circle\nv as? Shape::Circle",
+                option_identity("en::Shape::Circle"),
+            ),
+            "enum-use-call": accepted("en::Shape::Circle.area()", "int"),
             "use-pat": accepted(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Circle => 1\n  | _ => 2"),
                 "int",
             ),
             "use-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
+            "use-narrow": accepted(
+                "let v: Shape = Shape::Square\nv as? Shape::Circle",
+                option_identity("en::Shape::Circle"),
+            ),
             "use-pat-miss": rejected(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
                 UnknownMemberError,
@@ -274,7 +300,7 @@ _SCENARIOS = {
             ),
             "opt-none-val": accepted(
                 "let o: Option[int] = Option::None\no",
-                "enum std/option::Option[int]\n  | None\n  | Some(value: int)",
+                option_identity("int"),
             ),
             "opt-annot": accepted(
                 "fn(p: Option::Some[int]) => 1", "std/option::Option::Some[int] -> int"
@@ -311,7 +337,7 @@ _SCENARIOS = {
             ("scope R\n  record Geo\n    x: int\n  record Geo::Inner\n    y: int\nend R"),
         ),
         probes={
-            "ruse-nodef-annot": accepted("fn(p: Geo::Inner) => 1", "R::Geo::Inner -> int"),
+            "region-use-nodef-annot": accepted("fn(p: Geo::Inner) => 1", "R::Geo::Inner -> int"),
         },
         legal=frozenset({(2, 1), (3,)}),
     ),
@@ -322,7 +348,7 @@ _SCENARIOS = {
             "use tl::*",
         ),
         probes={
-            "muse-nodef-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
+            "use-nodef-annot": accepted("fn(p: Geo::Inner) => 1", "tl::Geo::Inner -> int"),
         },
     ),
     "function-in-imported-alias-namespace": Scenario(
@@ -332,11 +358,13 @@ _SCENARIOS = {
             "def Geo::f() -> int = 1",
         ),
         probes={
-            "al-inner-val": rejected("Geo::Inner(y = 1)", UnknownMemberError, "Geo::Inner"),
-            "al-inner-annot": rejected("fn(p: Geo::Inner) => 1", UnknownMemberError, "Geo::Inner"),
-            "al-nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
-            "al-nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
-            "al-f": accepted("Geo::f()", "int"),
+            "alias-inner-val": rejected("Geo::Inner(y = 1)", UnknownMemberError, "Geo::Inner"),
+            "alias-inner-annot": rejected(
+                "fn(p: Geo::Inner) => 1", UnknownMemberError, "Geo::Inner"
+            ),
+            "alias-nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
+            "alias-nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
+            "alias-f": accepted("Geo::f()", "int"),
         },
     ),
     "function-in-imported-scalar-alias-namespace": Scenario(
@@ -346,12 +374,12 @@ _SCENARIOS = {
             "def Geo::f() -> int = 1",
         ),
         probes={
-            "sc-nope-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
-            "sc-nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
-            "sc-nope-pat": rejected(
+            "scalar-nope-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
+            "scalar-nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
+            "scalar-nope-pat": rejected(
                 "case 1 of\n  | Geo::Nope => 1\n  | _ => 2", UnknownMemberError, "Geo::Nope"
             ),
-            "sc-f": accepted("Geo::f()", "int"),
+            "scalar-f": accepted("Geo::f()", "int"),
         },
     ),
     "function-in-fresh-namespace": Scenario(
@@ -368,16 +396,13 @@ _SCENARIOS = {
     ),
     "method-on-imported-scalar-alias": Scenario(
         modules={"al": _AL_2},
-        header=(
-            "import al::*",
-            "def Geo::m(self) -> int = 1",
-        ),
+        header=("import al::*",),
         probes={
-            "scaldef-val": rejected("Geo::Nope", AglScopeError, "self"),
-            "scaldef-annot": rejected("fn(p: Geo::Nope) => 1", AglScopeError, "self"),
-            "scaldef-m": rejected("Geo::m(1)", AglScopeError, "self"),
+            "receiver": rejected("def Geo::m(self) -> int = 1", AglScopeError, "self"),
+            "nope-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
+            "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
+            "method-val": rejected("Geo::m(1)", UnknownMemberError, "Geo::m"),
         },
-        legal=frozenset({(1, 2), (3,)}),
     ),
     "use-region-beside-imported-record": Scenario(
         modules={"shapes": _SHAPES, "tl": _TL},
@@ -468,6 +493,10 @@ _SCENARIOS = {
                 "int",
             ),
             "nodef-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
+            "nodef-narrow": accepted(
+                "let v: Shape = Shape::Square\nv as? Shape::Circle",
+                option_identity("en::Shape::Circle"),
+            ),
             "nodef-pat-miss": rejected(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
                 UnknownMemberError,
@@ -482,12 +511,16 @@ _SCENARIOS = {
             "def Shape::area(self) -> int = 1",
         ),
         probes={
-            "loc-pat": accepted(
+            "local-pat": accepted(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Circle => 1\n  | _ => 2"),
                 "int",
             ),
-            "loc-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
-            "loc-pat-miss": rejected(
+            "local-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
+            "local-narrow": accepted(
+                "let v: Shape = Shape::Square\nv as? Shape::Circle",
+                option_identity("Shape::Circle"),
+            ),
+            "local-pat-miss": rejected(
                 ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
                 UnknownMemberError,
                 "Shape::Nope",
@@ -506,7 +539,9 @@ _SCENARIOS = {
             "def-pat": accepted("case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z", "int"),
             "def-is": rejected("1 is R::Geo::X", AglTypeError, "1 is R::Geo::X", phase="typecheck"),
             "def-reptype": accepted("R::Geo::X", "int -> tl::R::Geo::X"),
-            "def-alias": accepted("type AA = R::Geo::X\n1", "int"),
+            "def-alias": accepted(
+                "type AA = R::Geo::X\nfn(p: AA) => p", "tl::R::Geo::X -> tl::R::Geo::X"
+            ),
         },
     ),
     "region-named-like-imported-record": Scenario(
@@ -523,7 +558,9 @@ _SCENARIOS = {
                 "1 is R::Geo::X", AglTypeError, "1 is R::Geo::X", phase="typecheck"
             ),
             "nodef-reptype": accepted("R::Geo::X", "int -> tl::R::Geo::X"),
-            "nodef-alias": accepted("type AA = R::Geo::X\n1", "int"),
+            "nodef-alias": accepted(
+                "type AA = R::Geo::X\nfn(p: AA) => p", "tl::R::Geo::X -> tl::R::Geo::X"
+            ),
         },
     ),
     "function-in-module-route-namespace": Scenario(
@@ -533,15 +570,15 @@ _SCENARIOS = {
             "def pal::f() -> int = 1",
         ),
         probes={
-            "defns-rc-val": accepted("pal::Color::Red", "record pal::Color::Red"),
-            "defns-rc-annot": accepted("fn(p: pal::Color::Red) => 1", "pal::Color::Red -> int"),
-            "defns-rc-pat": rejected(
+            "route-member-val": accepted("pal::Color::Red", "record pal::Color::Red"),
+            "route-member-annot": accepted("fn(p: pal::Color::Red) => 1", "pal::Color::Red -> int"),
+            "route-member-pat": rejected(
                 "case 1 of\n  | pal::Color::Red => 1\n  | _ => 2",
                 AglTypeError,
                 "pal::Color::Red",
                 phase="typecheck",
             ),
-            "defns-f": accepted("pal::f()", "int"),
+            "route-f": accepted("pal::f()", "int"),
         },
     ),
     "function-in-imported-scope-namespace": Scenario(
@@ -551,22 +588,16 @@ _SCENARIOS = {
             "def Geo::f() -> int = 1",
         ),
         probes={
-            "defpath3-val": accepted(
+            "length-three-val": accepted(
                 "Geo::In::Point(x = 1)", "record shapes::Geo::In::Point\n  x: int"
             ),
-            "defpath3-annot": accepted(
-                "fn(p: Geo::In::Point) => 1", "shapes::Geo::In::Point -> int"
-            ),
-            "defpath3-miss-val": rejected(
+            **type_positions("length-three", "Geo::In::Point", "shapes::Geo::In::Point"),
+            "length-three-miss-val": rejected(
                 "Geo::In::Nope(x = 1)", UnknownMemberError, "Geo::In::Nope"
             ),
-            "defpath3-miss-annot": rejected(
-                "fn(p: Geo::In::Nope) => 1", UnknownMemberError, "Geo::In::Nope"
-            ),
-            "defpath2-miss-val": rejected("Geo::Nope(x = 1)", UnknownMemberError, "Geo::Nope"),
-            "defpath2-miss-annot": rejected(
-                "fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"
-            ),
+            **type_positions_rejected("length-three-miss", "Geo::In::Nope", UnknownMemberError),
+            "length-two-miss-val": rejected("Geo::Nope(x = 1)", UnknownMemberError, "Geo::Nope"),
+            **type_positions_rejected("length-two-miss", "Geo::Nope", UnknownMemberError),
         },
     ),
     "function-in-imported-nested-scope-namespace": Scenario(
@@ -576,10 +607,8 @@ _SCENARIOS = {
             "def Geo::In::f() -> int = 1",
         ),
         probes={
-            "defnested-annot": accepted(
-                "fn(p: Geo::In::Point) => 1", "shapes::Geo::In::Point -> int"
-            ),
-            "defnested-val": accepted(
+            "nested-annot": accepted("fn(p: Geo::In::Point) => 1", "shapes::Geo::In::Point -> int"),
+            "nested-val": accepted(
                 "Geo::In::Point(x = 1)", "record shapes::Geo::In::Point\n  x: int"
             ),
         },
@@ -624,8 +653,65 @@ _SCENARIOS = {
 class TestDefCreatedNamespaces:
     """Owners' members through a method path; function paths beside imported types and scopes."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)
+
+
+class TestImportAfterAMethod:
+    """An import entered after a method leaves the method's decided receiver in place.
+
+    A file declares every import before other declarations, so only a REPL
+    history enters one later: the new import joins each later lookup, while
+    the method keeps the receiver its own entry selected.
+    """
+
+    _MODULES = {"tl": _TL, "tl2": _TL2}
+
+    def test_nested_receiver(self, tmp_path: Path) -> None:
+        assert_repl_verdicts(
+            tmp_path,
+            self._MODULES,
+            ("import tl::*", "def Geo::Inner::m(self) -> Geo::Inner = self", "import tl2::*"),
+            {
+                "method": accepted("Geo::Inner::m", "tl::Geo::Inner -> tl::Geo::Inner"),
+                "owner-annot": rejected(
+                    "fn(p: Geo::Inner) => p", AmbiguousQualificationError, "Geo::Inner"
+                ),
+                "miss-annot": rejected(
+                    "fn(p: Geo::Inner::Nope) => 1", UnknownMemberError, "Geo::Inner::Nope"
+                ),
+                "miss-pat": rejected(
+                    "case 1 of\n  | Geo::Inner::Nope => 1\n  | _ => 2",
+                    UnknownMemberError,
+                    "Geo::Inner::Nope",
+                ),
+                "miss-is": rejected(
+                    "1 is Geo::Inner::Nope", UnknownMemberError, "Geo::Inner::Nope"
+                ),
+                "miss-val": rejected("Geo::Inner::Nope", UnknownMemberError, "Geo::Inner::Nope"),
+            },
+        )
+
+    def test_owner_receiver(self, tmp_path: Path) -> None:
+        assert_repl_verdicts(
+            tmp_path,
+            self._MODULES,
+            ("import tl::*", "def Geo::m(self) -> Geo = self", "import tl2::*"),
+            {
+                "method": accepted("Geo::m", "tl::Geo -> tl::Geo"),
+                "member-val": rejected(
+                    "Geo::Inner(y = 1)", AmbiguousQualificationError, "Geo::Inner"
+                ),
+                "member-annot": rejected(
+                    "fn(p: Geo::Inner) => p", AmbiguousQualificationError, "Geo::Inner"
+                ),
+                "miss-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
+            },
+        )

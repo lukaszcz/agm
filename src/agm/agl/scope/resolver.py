@@ -445,6 +445,11 @@ def _unknown_qualifier(chain: QualifierChain) -> UnknownQualifierError:
     return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 
 
+def _type_qnames(refs: Iterable[BindingRef]) -> Iterator[QName]:
+    """The full paths of *refs* that may name a type; an injected enum member never does."""
+    return (_ref_qname(ref) for ref in refs if ref.contributes_a_type)
+
+
 def _key_qname(key: DeclarationKey) -> QName:
     """Return the full path declaration *key* names."""
     module_id, scope_path, name = key
@@ -4030,60 +4035,82 @@ class _Resolver:
         )
 
     def names_contributed(self, step: ScopePath, path: ScopePath) -> bool:
-        """Whether a contribution anchored at or above *step* reaches *path* or beneath it.
+        """Whether a contribution anchored at or above *step* reaches *path* as a qualifier.
 
-        An injected enum member is a constructor value only, never a name a
-        qualifier reaches.
+        A contributed function, binding or injected enum member is none.
         """
         for layer in self._layer_chain(self._scope_nodes[step]):
             relative = path[len(layer.scope_path) :]
-            atoms = (
-                *(
-                    atom
+            if (
+                any(
+                    self._reaches_qualifier(atom, relative, _type_qnames(refs))
                     for atom, refs in layer.bare_contributions.items()
-                    if any(ref.contributes_a_type for ref in refs)
-                ),
-                *(
-                    atom
+                )
+                or any(
+                    _relative_under(atom, relative) is not None
                     for contribution in layer.imported_use_contributions
                     for atom in contribution.scope_routes
-                ),
-                *(
-                    exposed
+                )
+                or any(
+                    self._reaches_qualifier(
+                        exposed,
+                        relative,
+                        _type_qnames((source,)) if isinstance(source, BindingRef) else None,
+                    )
                     for contribution in layer.local_use_contributions
-                    for exposed, _source in self._local_use_exposures(contribution)
-                ),
-            )
-            if any(_atom_under_prefix(atom, relative) for atom in atoms):
+                    for exposed, source in self._local_use_exposures(contribution)
+                )
+            ):
                 return True
         env = self._import_env
-        return any(
-            _atom_under_prefix(atom, path)
-            for atom in (*env.unqualified, *env.unqualified_scope_routes)
-        ) or self._routed_names((path[0],), path[1:], anchored=False)
+        return (
+            any(
+                self._reaches_qualifier(atom, path, qnames)
+                for atom, qnames in env.unqualified.items()
+            )
+            or any(_relative_under(atom, path) is not None for atom in env.unqualified_scope_routes)
+            or self._routed_names((path[0],), path[1:], anchored=False)
+        )
 
     def names_routed(self, chain: QualifierChain, path: ScopePath) -> bool:
-        """Whether *chain*'s leading module route reaches *path* or beneath it."""
+        """Whether *chain*'s leading module route reaches *path* as a qualifier."""
         return self._routed_names(chain.leading_route, path, anchored=chain.anchored)
 
     def _routed_names(self, route: tuple[str, ...], path: ScopePath, *, anchored: bool) -> bool:
-        """Whether module *route* is imported and reaches *path* or beneath it."""
+        """Whether module *route* is imported and reaches *path* as a qualifier."""
         env = self._import_env
         if not qualifier_candidates(env, route, anchored=anchored):
             return False
-        atoms = (
-            *(
-                atom
+        return (
+            not path
+            or any(
+                self._reaches_qualifier(atom, path, (qname,))
                 for _module, members in qualifier_members(env, route, anchored=anchored)
-                for atom in members
-            ),
-            *(
-                atom
+                for atom, qname in members.items()
+            )
+            or any(
+                _relative_under(atom, path) is not None
                 for _module, routes in qualifier_scope_paths(env, route, anchored=anchored)
                 for atom in routes
-            ),
+            )
         )
-        return not path or any(_atom_under_prefix(atom, path) for atom in atoms)
+
+    def _reaches_qualifier(
+        self,
+        atom: NameAtom,
+        path: ScopePath,
+        declarations: Iterable[QName] | None,
+    ) -> bool:
+        """Whether contributed *atom* makes *path* a qualifier: a scope above it, or its type.
+
+        *declarations* are what *atom* names; ``None`` when it is a scope.
+        """
+        rest = _relative_under(atom, path)
+        if rest is None:
+            return False
+        if rest or declarations is None:
+            return True
+        return any(self._type_owners.is_declared(qname) for qname in declarations)
 
     def _routed_qnames(
         self, route: tuple[str, ...], path: ScopePath, *, anchored: bool

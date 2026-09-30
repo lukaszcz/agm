@@ -756,48 +756,6 @@ def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path
         resolve_program(graph)
 
 
-def test_applied_ambiguous_owner_missing_variant_in_is_test_is_rejected(tmp_path: Path) -> None:
-    """An owner ambiguous by its bare, applied spelling still resolves by its full
-    ``owner::variant`` path; neither module declares this variant, so no
-    candidate could ever supply it -- scope's unified unknown-member verdict,
-    regardless of the ``is`` subject's own type."""
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": "import one/owner::*\nimport two/owner::*\n1 is Owner[int]::NoSuch\n",
-            "one/owner": "enum Owner = A | B\n",
-            "two/owner": "enum Owner = A | B\n",
-        },
-    )
-
-    with pytest.raises(UnknownMemberError):
-        check_program(resolve_program(graph), base_caps())
-
-
-def test_applied_ambiguous_owner_missing_variant_in_expression_is_rejected(
-    tmp_path: Path,
-) -> None:
-    """The same construction in value position raises the identical verdict.
-
-    A bare value reference resolves an ambiguous, applied owner through a
-    different walk than ``is``/pattern positions do; both must still raise
-    the same unified unknown-member verdict, never a bogus module-route
-    diagnostic from treating the owner's type arguments as belonging to an
-    import route.
-    """
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": "import one/owner::*\nimport two/owner::*\nOwner[int]::NoSuch\n",
-            "one/owner": "enum Owner = A | B\n",
-            "two/owner": "enum Owner = A | B\n",
-        },
-    )
-
-    with pytest.raises(UnknownMemberError):
-        check_program(resolve_program(graph), base_caps())
-
-
 def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -1930,27 +1888,6 @@ def test_anchored_qualified_enum_variant_typechecks(tmp_path: Path) -> None:
     )
 
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
-
-
-def test_qualified_pattern_owner_naming_a_non_type_is_rejected(tmp_path: Path) -> None:
-    """A pattern qualifier routed through a function, not a type, selects no member."""
-    graph = make_graph_from_files(
-        tmp_path,
-        {
-            "entry": (
-                "import remote/config\n"
-                "enum Color = Red | Blue\n"
-                "let c: Color = Color::Red\n"
-                "case c of\n"
-                "  | remote/config::Flag::Red => 1\n"
-                "  | _ => 2"
-            ),
-            "remote/config": "def Flag() -> int = 1",
-        },
-    )
-
-    with pytest.raises(UnknownMemberError):
-        check_program(resolve_program(graph), base_caps())
 
 
 def test_qualified_pattern_owner_naming_a_non_enum_type_is_rejected(tmp_path: Path) -> None:

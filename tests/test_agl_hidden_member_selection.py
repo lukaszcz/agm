@@ -21,9 +21,14 @@ from agm.agl.scope.symbols import UnknownMemberError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
-    assert_scenario_for_grouping,
+    assert_file_resolves_like_inline_entry,
+    assert_scenario,
+    file_params,
+    option_identity,
     rejected,
     scenario_params,
+    type_positions,
+    type_positions_rejected,
 )
 
 _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
@@ -43,21 +48,14 @@ _SCENARIOS = {
         modules={"tl": _TL},
         header=("import tl::* hiding Geo::Inner",),
         probes={
-            "hid-val": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
-            "hid-annot": rejected("fn(p: Geo::Inner) => 1", HiddenMemberError, "Geo::Inner"),
-            "hid-reptype": rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
-            "hidnest-val": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
-            "hidnest-annot": rejected("fn(p: Geo::Inner) => 1", HiddenMemberError, "Geo::Inner"),
-            "hidnest-pat": rejected(
+            "hidden-val": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
+            **type_positions_rejected("hidden", "Geo::Inner", HiddenMemberError),
+            "hidden-reptype": rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
+            "hidden-pat": rejected(
                 "case tl::Geo::Inner(y = 1) of\n  | Geo::Inner(y) => y",
                 HiddenMemberError,
                 "tl::Geo::Inner",
             ),
-            "hidnest-alias": rejected("type AA = Geo::Inner\n1", HiddenMemberError, "Geo::Inner"),
-            "hidnest-tyarg": rejected(
-                "fn(p: array[Geo::Inner]) => 1", HiddenMemberError, "Geo::Inner"
-            ),
-            "hidnest-reptype": rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
         },
     ),
     "hidden-nested-record-under-method": Scenario(
@@ -67,42 +65,48 @@ _SCENARIOS = {
             "def Geo::m(self) -> int = 1",
         ),
         probes={
-            "hiddef-val": rejected("Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"),
-            "hiddef-annot": rejected("fn(p: Geo::Inner) => 1", HiddenMemberError, "Geo::Inner"),
-            "hiddef-reptype": rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
+            "hidden-under-method-val": rejected(
+                "Geo::Inner(y = 1)", HiddenMemberError, "Geo::Inner"
+            ),
+            "hidden-under-method-annot": rejected(
+                "fn(p: Geo::Inner) => 1", HiddenMemberError, "Geo::Inner"
+            ),
+            "hidden-under-method-reptype": rejected("Geo::Inner", HiddenMemberError, "Geo::Inner"),
         },
     ),
     "hidden-nested-record-of-enum": Scenario(
         modules={"en": _EN},
         header=("import en::* hiding Color::Extra",),
         probes={
-            "ehid-extra-val": rejected("Color::Extra(z = 1)", HiddenMemberError, "Color::Extra"),
-            "ehid-extra-annot": rejected(
-                "fn(p: Color::Extra) => 1", HiddenMemberError, "Color::Extra"
+            "enum-nested-extra-val": rejected(
+                "Color::Extra(z = 1)", HiddenMemberError, "Color::Extra"
             ),
-            "ehid-red-val": accepted("Color::Red", "record en::Color::Red"),
-            "ehid-red-pat": rejected(
+            **type_positions_rejected("enum-nested-extra", "Color::Extra", HiddenMemberError),
+            "enum-nested-red-val": accepted("Color::Red", "record en::Color::Red"),
+            "enum-nested-red-pat": rejected(
                 "case Color::Blue of\n  | Color::Red => 1\n  | _ => 2",
                 AglTypeError,
                 "Color::Red",
                 phase="typecheck",
             ),
-            "ehid-red-annot": accepted("fn(p: Color::Red) => 1", "en::Color::Red -> int"),
+            **type_positions("enum-nested-red", "Color::Red", "en::Color::Red"),
         },
     ),
     "hidden-enum-member": Scenario(
         modules={"en": _EN},
         header=("import en::* hiding Color::Red",),
         probes={
-            "ehidm-extra-val": accepted("Color::Extra(z = 1)", "record en::Color::Extra\n  z: int"),
-            "ehidm-extra-annot": accepted("fn(p: Color::Extra) => 1", "en::Color::Extra -> int"),
-            "ehidm-red-val": rejected("Color::Red", HiddenMemberError, "Color::Red"),
-            "ehidm-red-pat": rejected(
+            "enum-member-extra-val": accepted(
+                "Color::Extra(z = 1)", "record en::Color::Extra\n  z: int"
+            ),
+            **type_positions("enum-member-extra", "Color::Extra", "en::Color::Extra"),
+            "enum-member-red-val": rejected("Color::Red", HiddenMemberError, "Color::Red"),
+            "enum-member-red-pat": rejected(
                 "case Color::Blue of\n  | Color::Red => 1\n  | _ => 2",
                 HiddenMemberError,
                 "Color::Red",
             ),
-            "ehidm-red-annot": rejected("fn(p: Color::Red) => 1", HiddenMemberError, "Color::Red"),
+            **type_positions_rejected("enum-member-red", "Color::Red", HiddenMemberError),
         },
     ),
     "hidden-nested-record-of-enum-under-method": Scenario(
@@ -112,18 +116,22 @@ _SCENARIOS = {
             "def Color::m(self) -> int = 1",
         ),
         probes={
-            "ehiddef-extra-val": rejected("Color::Extra(z = 1)", HiddenMemberError, "Color::Extra"),
-            "ehiddef-extra-annot": rejected(
+            "enum-under-method-extra-val": rejected(
+                "Color::Extra(z = 1)", HiddenMemberError, "Color::Extra"
+            ),
+            "enum-under-method-extra-annot": rejected(
                 "fn(p: Color::Extra) => 1", HiddenMemberError, "Color::Extra"
             ),
-            "ehiddef-red-val": accepted("Color::Red", "record en::Color::Red"),
-            "ehiddef-red-pat": rejected(
+            "enum-under-method-red-val": accepted("Color::Red", "record en::Color::Red"),
+            "enum-under-method-red-pat": rejected(
                 "case Color::Blue of\n  | Color::Red => 1\n  | _ => 2",
                 AglTypeError,
                 "Color::Red",
                 phase="typecheck",
             ),
-            "ehiddef-red-annot": accepted("fn(p: Color::Red) => 1", "en::Color::Red -> int"),
+            "enum-under-method-red-annot": accepted(
+                "fn(p: Color::Red) => 1", "en::Color::Red -> int"
+            ),
         },
     ),
     "hidden-member-beside-other-enum": Scenario(
@@ -133,9 +141,9 @@ _SCENARIOS = {
             "import en2::*",
         ),
         probes={
-            "d2-val": rejected("Color::Red", HiddenMemberError, "Color::Red"),
-            "d2-annot": rejected("fn(p: Color::Red) => 1", HiddenMemberError, "Color::Red"),
-            "d2-pat": rejected(
+            "other-enum-val": rejected("Color::Red", HiddenMemberError, "Color::Red"),
+            "other-enum-annot": rejected("fn(p: Color::Red) => 1", HiddenMemberError, "Color::Red"),
+            "other-enum-pat": rejected(
                 "case 1 of\n  | Color::Red => 1\n  | _ => 2", HiddenMemberError, "Color::Red"
             ),
         },
@@ -147,23 +155,25 @@ _SCENARIOS = {
             "import en2::*",
         ),
         probes={
-            "d2b-val": accepted("Color::Red", "record en2::Color::Red"),
-            "d2b-annot": accepted("fn(p: Color::Red) => 1", "en2::Color::Red -> int"),
-            "d2b-pat": rejected(
+            "other-import-val": accepted("Color::Red", "record en2::Color::Red"),
+            "other-import-annot": accepted("fn(p: Color::Red) => 1", "en2::Color::Red -> int"),
+            "other-import-pat": rejected(
                 "case en2::Color::Green of\n  | Color::Red => 1\n  | _ => 2",
                 AglTypeError,
                 "Color::Red",
                 phase="typecheck",
             ),
-            "d2b-is": rejected(
+            "other-import-is": rejected(
                 "en2::Color::Green is Color::Red",
                 AglTypeError,
                 "en2::Color::Green is Color::Red",
                 phase="typecheck",
             ),
-            "d2b-alias": accepted("type AA = Color::Red\n1", "int"),
-            "d2b-reptype": accepted("Color::Red", "record en2::Color::Red"),
-            "d2b-pat2": accepted(
+            "other-import-alias": accepted(
+                "type AA = Color::Red\nfn(p: AA) => p", "en2::Color::Red -> en2::Color::Red"
+            ),
+            "other-import-reptype": accepted("Color::Red", "record en2::Color::Red"),
+            "other-import-pat2": accepted(
                 (
                     "let v: en2::Color = en2::Color::Green\n"
                     "case v of\n"
@@ -172,7 +182,13 @@ _SCENARIOS = {
                 ),
                 "int",
             ),
-            "d2b-is2": accepted("let v: en2::Color = en2::Color::Green\nv is Color::Red", "bool"),
+            "other-import-is2": accepted(
+                "let v: en2::Color = en2::Color::Green\nv is Color::Red", "bool"
+            ),
+            "other-import-narrow2": accepted(
+                "let v: en2::Color = en2::Color::Green\nv as? Color::Red",
+                option_identity("en2::Color::Red"),
+            ),
         },
     ),
     "hidden-nested-record-supplied-by-other-import": Scenario(
@@ -192,7 +208,9 @@ _SCENARIOS = {
                 ),
                 "int",
             ),
-            "amb-hid-alias": accepted("type AA = Geo::Inner\n1", "int"),
+            "amb-hid-alias": accepted(
+                "type AA = Geo::Inner\nfn(p: AA) => p", "tl2::Geo::Inner -> tl2::Geo::Inner"
+            ),
             "amb-hid-reptype": accepted("Geo::Inner", "int -> tl2::Geo::Inner"),
         },
     ),
@@ -348,8 +366,12 @@ _SCENARIOS = {
 class TestHiddenMemberSelection:
     """Hidden members across imports, uses, routes and method paths."""
 
-    @pytest.mark.parametrize(("scenario", "sizes"), scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(
-        self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
     ) -> None:
-        assert_scenario_for_grouping(tmp_path, scenario, sizes)
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)

@@ -20,9 +20,11 @@ import pytest
 
 from tests.agl.qualifier_support import (
     FilePhase,
+    Groupings,
     all_groupings,
-    assert_verdicts_for_grouping,
-    grouping_params,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
 )
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
@@ -125,31 +127,43 @@ class TestNearerUseBeatsAnEnclosingDeclaration:
     """A ``use`` in region ``r`` beats an own declaration of an enclosing scope."""
 
     @pytest.mark.parametrize("placement", _ENCLOSING)
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_constructors(self, tmp_path: Path, placement: str, sizes: tuple[int, ...]) -> None:
-        self._assert_accepted(tmp_path, placement, sizes, _NEARER_CONSTRUCTOR_PROBES)
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_constructors(self, tmp_path: Path, placement: str, groupings: Groupings) -> None:
+        self._assert_accepted(
+            tmp_path,
+            placement,
+            _NEARER_CONSTRUCTOR_PROBES,
+            groupings=groupings,
+        )
 
     @pytest.mark.parametrize("placement", _ENCLOSING)
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_other_positions(self, tmp_path: Path, placement: str, sizes: tuple[int, ...]) -> None:
-        self._assert_accepted(tmp_path, placement, sizes, _NEARER_OTHER_PROBES)
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_other_positions(self, tmp_path: Path, placement: str, groupings: Groupings) -> None:
+        self._assert_accepted(
+            tmp_path,
+            placement,
+            _NEARER_OTHER_PROBES,
+            groupings=groupings,
+        )
 
     @staticmethod
     def _assert_accepted(
         tmp_path: Path,
         placement: str,
-        sizes: tuple[int, ...],
         written: dict[str, tuple[str, str]],
+        groupings: Groupings,
     ) -> None:
         probes = _nearer_probes(written, placement)
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             (_CONTRIBUTING_SCOPE, _ENCLOSING[placement][0]),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _ACCEPTED),
-            expected_identities={key: _NEARER_IDENTITIES[key] for key in probes},
+            probe_table(
+                probes,
+                dict.fromkeys(probes, _ACCEPTED),
+                identities={key: _NEARER_IDENTITIES[key] for key in probes},
+            ),
+            groupings=groupings,
         )
 
 
@@ -205,20 +219,22 @@ _SAME_REGION_IDENTITIES = {
 class TestOwnDeclarationBeatsAUseOfItsStep:
     """In region ``r``, an own declaration of ``r`` beats the region's ``use``."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             key: f"{_in_region(use, body)}\nr::v"
             for key, (use, body) in _SAME_REGION_PROBES.items()
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             (_CONTRIBUTING_SCOPE, f"scope r\n{_indented(_OWN, 2)}\nend r"),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _ACCEPTED),
-            expected_identities={key: _SAME_REGION_IDENTITIES[key] for key in probes},
+            probe_table(
+                probes,
+                dict.fromkeys(probes, _ACCEPTED),
+                identities={key: _SAME_REGION_IDENTITIES[key] for key in probes},
+            ),
+            groupings=groupings,
         )
 
 
@@ -253,17 +269,17 @@ _ROOT_PROBES = {
 class TestRootDeclarationBeatsARootUse:
     """At the module root, an own declaration beats a ``use`` of the same step."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(len(_ROOT_USES_HEADER) + 1))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(5))
+    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             _ROOT_USES_HEADER,
-            sizes,
-            _ROOT_PROBES,
-            dict.fromkeys(_ROOT_PROBES, _ACCEPTED),
-            expected_identities=_own_identities(""),
-            expected_legal_groupings=_ROOT_USES_LEGAL,
+            probe_table(
+                _ROOT_PROBES, dict.fromkeys(_ROOT_PROBES, _ACCEPTED), identities=_own_identities("")
+            ),
+            legal=_ROOT_USES_LEGAL,
+            groupings=groupings,
         )
 
 
@@ -279,23 +295,25 @@ _NEAREST_PROBES = {
 class TestNearestContributionDecides:
     """With no own declaration, a region's ``use`` beats a farther root import tail."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_every_position(self, tmp_path: Path, groupings: Groupings) -> None:
         probes = {
             key: f"scope r\n  use s::*\n{_indented(body, 2)}\nend r\nr::v"
             for key, body in _NEAREST_PROBES.items()
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             _TAIL_LIB,
             ("import lib::*", _CONTRIBUTING_SCOPE),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _ACCEPTED),
-            expected_identities={
-                "call": "record s::R\n  y: text",
-                "annotation": "s::R -> text",
-                "pattern": "text",
-                "qualifier-head": "record s::E::A\n  y: text",
-            },
+            probe_table(
+                probes,
+                dict.fromkeys(probes, _ACCEPTED),
+                identities={
+                    "call": "record s::R\n  y: text",
+                    "annotation": "s::R -> text",
+                    "pattern": "text",
+                    "qualifier-head": "record s::E::A\n  y: text",
+                },
+            ),
+            groupings=groupings,
         )

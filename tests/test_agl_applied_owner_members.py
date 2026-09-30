@@ -19,7 +19,13 @@ import pytest
 
 from agm.agl.diagnostics import AglTypeError
 from agm.agl.scope.symbols import TypeArgumentsError
-from tests.agl.qualifier_support import FilePhase, assert_verdicts_for_grouping, grouping_params
+from tests.agl.qualifier_support import (
+    FilePhase,
+    Groupings,
+    assert_verdicts,
+    grouping_batches,
+    probe_table,
+)
 
 _ACCEPTED: tuple[FilePhase, type[BaseException] | type[None]] = ("accepted", type(None))
 _REJECTED: tuple[FilePhase, type[BaseException] | type[None]] = ("scope", TypeArgumentsError)
@@ -56,51 +62,46 @@ class TestNestedDeclarationBeneathAnAppliedOwner:
     """``E[A]::Inner`` never reaches a declaration merely nested beneath ``E``."""
 
     @pytest.mark.parametrize("owner", _OWNERS)
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_applied_owner_is_rejected(
-        self, tmp_path: Path, owner: str, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdicts_for_grouping(
+    def test_applied_owner_is_rejected(self, tmp_path: Path, owner: str) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             (_OWNERS[owner],),
-            sizes,
-            _APPLIED_PROBES,
-            dict.fromkeys(_APPLIED_PROBES, _REJECTED),
-            span_texts=_APPLIED_SPANS,
+            probe_table(
+                _APPLIED_PROBES,
+                dict.fromkeys(_APPLIED_PROBES, _REJECTED),
+                span_texts=_APPLIED_SPANS,
+            ),
         )
 
     @pytest.mark.parametrize("owner", _OWNERS)
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_bare_owner_path_is_accepted(
-        self, tmp_path: Path, owner: str, sizes: tuple[int, ...]
-    ) -> None:
-        assert_verdicts_for_grouping(
+    def test_bare_owner_path_is_accepted(self, tmp_path: Path, owner: str) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             (_OWNERS[owner],),
-            sizes,
-            _PLAIN_PROBES,
-            dict.fromkeys(_PLAIN_PROBES, _ACCEPTED),
-            expected_identities=_PLAIN_IDENTITIES,
+            probe_table(
+                _PLAIN_PROBES, dict.fromkeys(_PLAIN_PROBES, _ACCEPTED), identities=_PLAIN_IDENTITIES
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_nested_record_and_member_patterns_never_match_each_other(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
+    def test_nested_record_and_member_patterns_never_match_each_other(self, tmp_path: Path) -> None:
         probes = {
             "nested-against-member": "let i = E::A(a = 1)\ncase i of\n  | E::Inner(x) => x",
             "member-against-nested": "let i = E::Inner(x = 1)\ncase i of\n  | E::A(a) => 1",
         }
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             (_OWNERS["enum"],),
-            sizes,
-            probes,
-            dict.fromkeys(probes, ("typecheck", AglTypeError)),
-            span_texts={"nested-against-member": "E::Inner(x)", "member-against-nested": "E::A(a)"},
+            probe_table(
+                probes,
+                dict.fromkeys(probes, ("typecheck", AglTypeError)),
+                span_texts={
+                    "nested-against-member": "E::Inner(x)",
+                    "member-against-nested": "E::A(a)",
+                },
+            ),
         )
 
 
@@ -120,38 +121,34 @@ _MEMBER_PROBES = {
 class TestAppliedOwnerSelectsItsOwnMembers:
     """An inline member, through the enum or its alias."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_every_position(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    def test_every_position(self, tmp_path: Path) -> None:
+        assert_verdicts(
             tmp_path,
             {},
             (_MEMBER_OWNERS,),
-            sizes,
-            _MEMBER_PROBES,
-            dict.fromkeys(_MEMBER_PROBES, _ACCEPTED),
-            expected_identities={
-                "inline-call": "record E::A[int]\n  a: int",
-                "inline-pattern": "int",
-                "inline-is": "bool",
-                "inline-annotation": "E::A[int] -> int",
-                "alias-call": "record E::A[int]\n  a: int",
-                "alias-annotation": "E::A[int] -> int",
-            },
+            probe_table(
+                _MEMBER_PROBES,
+                dict.fromkeys(_MEMBER_PROBES, _ACCEPTED),
+                identities={
+                    "inline-call": "record E::A[int]\n  a: int",
+                    "inline-pattern": "int",
+                    "inline-is": "bool",
+                    "inline-annotation": "E::A[int] -> int",
+                    "alias-call": "record E::A[int]\n  a: int",
+                    "alias-annotation": "E::A[int] -> int",
+                },
+            ),
         )
 
-    @pytest.mark.parametrize("sizes", grouping_params(2))
-    def test_a_member_referenced_from_the_owner_path_is_not_inline(
-        self, tmp_path: Path, sizes: tuple[int, ...]
-    ) -> None:
+    def test_a_member_referenced_from_the_owner_path_is_not_inline(self, tmp_path: Path) -> None:
         probes = {"call": "E[int]::Item(y = 1)", "annotation": "fn(p: E[int]::Item) => p.y"}
-        assert_verdicts_for_grouping(
+        assert_verdicts(
             tmp_path,
             {},
             (_MEMBER_OWNERS,),
-            sizes,
-            probes,
-            dict.fromkeys(probes, _REJECTED),
-            span_texts=dict.fromkeys(probes, "E[int]"),
+            probe_table(
+                probes, dict.fromkeys(probes, _REJECTED), span_texts=dict.fromkeys(probes, "E[int]")
+            ),
         )
 
 
@@ -167,14 +164,16 @@ _ROUTED_PROBES = {
 class TestImportedAppliedOwner:
     """An imported owner, spelled through its route or a ``use``, selects alike."""
 
-    @pytest.mark.parametrize("sizes", grouping_params(3))
-    def test_nested_declaration_is_rejected(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
-        assert_verdicts_for_grouping(
+    @pytest.mark.parametrize("groupings", grouping_batches(3))
+    def test_nested_declaration_is_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
+        assert_verdicts(
             tmp_path,
             _LIBRARY,
             ("import lib", "use lib::*"),
-            sizes,
-            _ROUTED_PROBES,
-            dict.fromkeys(_ROUTED_PROBES, _REJECTED),
-            span_texts=dict.fromkeys(_ROUTED_PROBES, "E[int]"),
+            probe_table(
+                _ROUTED_PROBES,
+                dict.fromkeys(_ROUTED_PROBES, _REJECTED),
+                span_texts=dict.fromkeys(_ROUTED_PROBES, "E[int]"),
+            ),
+            groupings=groupings,
         )

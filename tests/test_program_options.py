@@ -90,6 +90,7 @@ def _param(
     hidden: bool = False,
     doc: str | None = None,
     is_path: bool = False,
+    cli_positional: bool = False,
 ) -> ProgramParamInfo:
     return ProgramParamInfo(
         name=name,
@@ -104,6 +105,7 @@ def _param(
             metavar=metavar,
             hidden=hidden,
             doc=doc,
+            cli_positional=cli_positional,
         ),
         is_path=is_path,
     )
@@ -861,6 +863,62 @@ class TestParsePositional:
     def test_a_leading_dash_positional_is_spelled_after_the_end_of_options_marker(self) -> None:
         args = _command(_param("first", IntType(), ParamZone.POSITIONAL_ONLY)).parse(["--", "-5"])
         assert args.positional == ("-5",)
+
+    def test_a_token_skips_a_standard_slot_filled_by_name_to_reach_a_cli_positional_slot(
+        self,
+    ) -> None:
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--n", "2", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"n": "2", "name": "Bob"}
+
+    def test_tokens_fill_every_slot_in_order_when_none_is_filled_by_name(self) -> None:
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["3", "Bob"])
+        assert args.positional == ("3",)
+        assert args.named == {"name": "Bob"}
+
+    def test_a_standard_slot_after_a_skipped_one_is_still_filled_by_the_next_token(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("b", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--a", "1", "x", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"a": "1", "b": "x", "name": "Bob"}
+
+    def test_a_standard_slot_filled_by_name_is_not_skipped_without_a_cli_positional_slot(
+        self,
+    ) -> None:
+        """The skip exists only so a slot reachable by position alone is
+        reachable; otherwise a positional token for a named slot stays a
+        duplicate for the binder to reject."""
+        command = _command(
+            _param("first", TextType(), ParamZone.POSITIONAL_ONLY),
+            _param("tag", TextType(), ParamZone.STANDARD, has_default=True),
+        )
+        args = command.parse(["a", "x", "--tag", "y"])
+        assert args.positional == ("a", "x")
+        assert args.named == {"tag": "y"}
+
+    def test_an_environment_value_does_not_make_a_slot_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("P_N", "5")
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True, env="P_N"),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["7", "Bob"])
+        assert args.positional == ("7",)
+        assert args.named == {"name": "Bob"}
 
     def test_a_leading_dash_option_value_is_spelled_inline_or_as_the_next_token(self) -> None:
         param = _param("n", IntType())

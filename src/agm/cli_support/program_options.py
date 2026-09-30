@@ -1430,8 +1430,15 @@ class ProgramCommand:
         except click.UsageError as exc:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
-        cli_positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
-        positional_names = self.positionally_filled_names(len(cli_positional))
+        cli_tokens = cast(tuple[str, ...], values[_POSITIONAL_DEST])
+        flagged = frozenset(
+            param.name
+            for index, (param, _projected) in enumerate(self.options)
+            if _from_commandline(ctx, _positive_dest(index))
+            or _from_commandline(ctx, _negative_dest(index))
+        )
+        slots = self._token_slots(len(cli_tokens), flagged)
+        positional_names = frozenset(slot.name for slot, _by_name in slots if slot is not None)
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
@@ -1453,9 +1460,9 @@ class ProgramCommand:
             if value is not _NOT_SUPPLIED:
                 named[param.name] = value
         positional: list[str] = []
-        for index, value in enumerate(cli_positional):
-            if index < len(self.positional) and self.positional[index].cli.cli_positional:
-                named[self.positional[index].name] = value
+        for value, (slot, by_name) in zip(cli_tokens, slots, strict=True):
+            if slot is not None and by_name:
+                named[slot.name] = value
             else:
                 positional.append(value)
         module_params: dict[StaticBindingKey, object] = {}
@@ -1653,15 +1660,45 @@ class ProgramCommand:
         spellings.extend(HELP_FLAGS)
         return tuple(spellings)
 
+    def _token_slots(
+        self, count: int, flagged: frozenset[str]
+    ) -> "list[tuple[ProgramParamInfo | None, bool]]":
+        """Pair each of *count* positional tokens with the slot it fills.
+
+        Tokens fill :attr:`positional` left to right. A slot whose parameter
+        the command line already supplied by name (*flagged*) is passed over
+        when a CLI-positional slot follows, since that slot is reachable by
+        position alone; otherwise the token lands on it and the shared binder
+        reports the duplicate. Each pair's flag says whether the token must
+        travel by name: it fills a CLI-positional slot, or a slot after a
+        passed-over one, which the binder's left-to-right pairing would
+        misplace. A token past the last slot pairs with ``None``.
+        """
+        slots = self.positional
+        result: list[tuple[ProgramParamInfo | None, bool]] = []
+        position = 0
+        passed_over = False
+        for _ in range(count):
+            while (
+                position < len(slots)
+                and slots[position].name in flagged
+                and any(slot.cli.cli_positional for slot in slots[position + 1 :])
+            ):
+                position += 1
+                passed_over = True
+            slot = slots[position] if position < len(slots) else None
+            result.append((slot, slot is not None and (slot.cli.cli_positional or passed_over)))
+            position += 1
+        return result
+
     def positionally_filled_names(self, count: int) -> frozenset[str]:
         """Return the declared names *count* positional tokens fill.
 
         The CLI pairs positional values with its slots left to right, so the
         first *count* of them are the ones a token supplied. Held here so
         every surface deciding whether a positional
-        token outranks a lower-precedence layer — an ``@opt-env`` fallback in
-        :meth:`parse`, a configured value in ``commands.exec_program`` — reads
-        the CLI pairing rule from one place.
+        token outranks a lower-precedence layer — a configured value in
+        ``commands.exec_program`` — reads the CLI pairing rule from one place.
         """
         return frozenset(param.name for param in self.positional[:count])
 

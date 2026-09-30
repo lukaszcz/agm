@@ -119,7 +119,8 @@ The selected `program def`'s value parameters project onto the CLI through AgL's
 positional/standard/named-only zones. Without zone attributes, a required `x: T` fills a
 positional CLI slot and a defaulted `x: T = VALUE` becomes `--x`. An `@arg-pos` parameter is
 never addressable by name; `@arg-std` accepts a positional token or `--x`, and `@arg-named`
-requires `--x`. AgL calls retain their declared parameter zones.
+requires `--x`. A positional token skips an `@arg-std` slot already given as `--x` when a later
+required slot can be reached only by position. AgL calls retain their declared parameter zones.
 
 A name-addressable parameter's type selects its flag form; every value-taking flag also accepts
 `--x=VALUE`:

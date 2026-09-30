@@ -3322,6 +3322,21 @@ class TestProgramValueArguments:
         )
         assert capsys.readouterr().out == "alice:x\n"
 
+    def test_unzoned_required_argument_follows_a_standard_argument_given_by_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-std n: int = 1, name: text) -> unit =\n  print $ %{name}:%{n}\n",
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--n", "2", "Bob"]))
+            is None
+        )
+        assert capsys.readouterr().out == "Bob:2\n"
+
     def test_name_equals_value_inline_form(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

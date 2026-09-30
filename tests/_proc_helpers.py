@@ -17,8 +17,10 @@ def wait_for_path(path: Path, *, timeout: float = 30.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
-def wait_for_signal_ignored_script(pid: int | str, signum: int) -> str:
+def wait_for_signal_ignored_script(pid: int | str, signum: int, *, timeout: int = 30) -> str:
     """Shell snippet: block until *pid* has *signum* set in its `/proc` `SigIgn` mask.
+
+    Exits 1 after *timeout* seconds if the ignore never appears.
 
     *pid* is a literal pid or a shell expression (e.g. ``'"$TARGET"'``) that
     evaluates to one. For a test child that signals *pid* right after
@@ -30,8 +32,11 @@ def wait_for_signal_ignored_script(pid: int | str, signum: int) -> str:
     bit = 1 << (signum - 1)
     return (
         f"t={pid}\n"
+        f"d=$(( $(date +%s) + {timeout} ))\n"
         "while :; do\n"
+        '  [ "$(date +%s)" -lt "$d" ] || exit 1\n'
         '  m=$(sed -n "s/^SigIgn:[[:space:]]*//p" /proc/$t/status)\n'
         f"  [ $(( 0x$m & {bit} )) -ne 0 ] && break\n"
+        "  sleep 0.02\n"
         "done\n"
     )

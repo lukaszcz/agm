@@ -1207,6 +1207,15 @@ class TestPathCandidates:
         monkeypatch.chdir(tmp_path)
         assert completion._path_candidates("sub/") == ["sub/file.txt"]
 
+    def test_parent_relative_prefix_is_kept_as_typed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        (tmp_path / "cur").mkdir()
+        (tmp_path / "sibling").mkdir()
+        monkeypatch.chdir(tmp_path / "cur")
+        assert completion._path_candidates("../s") == ["../sibling/"]
+        assert completion._path_candidates("../") == ["../cur/", "../sibling/"]
+
 
 class TestCompleteOpenTarget:
     def test_returns_empty_when_resolve_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1889,28 +1898,18 @@ class TestCompleteWorktreeBranchExceptionHandler:
 
 
 class TestPathCandidatesValueError:
-    def test_symlink_base_dir_outside_cwd_triggers_value_error(
+    def test_symlinked_directory_prefix_is_kept_as_typed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When the resolved base_dir is outside cwd, paths found by iterdir
-        raise ValueError in relative_to, causing absolute path display."""
         work = tmp_path / "work"
         work.mkdir()
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "target.txt").write_text("x")
-
-        # Create a symlink inside work pointing outside
-        link = work / "ext"
-        link.symlink_to(outside)
+        (work / "ext").symlink_to(outside)
         monkeypatch.chdir(work)
 
-        # incomplete="ext/t" => parent="ext" => base_dir = resolve_module(work/ext) = outside
-        # Iterating outside/ finds target.txt which is not relative to work
-        result = completion._path_candidates("ext/t")
-        # Should use absolute path for display
-        assert len(result) == 1
-        assert result[0] == str(outside / "target.txt")
+        assert completion._path_candidates("ext/t") == ["ext/target.txt"]
 
 
 class TestCompleteAglFile:

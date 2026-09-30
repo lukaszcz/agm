@@ -200,34 +200,22 @@ def _resolve_dep_repo(dep_name: str) -> Path | None:
 
 
 def _path_candidates(incomplete: str) -> list[str]:
+    """Return entries completing *incomplete*, spelled with the directory prefix as typed."""
     current = Path.cwd()
     base_dir = current
-    prefix = incomplete
-    if incomplete.endswith(os.sep):
-        base_dir = (current / incomplete).resolve(strict=False)
-        prefix = ""
-    elif incomplete:
-        incomplete_path = Path(incomplete)
-        if incomplete_path.parent != Path("."):
-            base_dir = (current / incomplete_path.parent).resolve(strict=False)
-            prefix = incomplete_path.name
+    typed_dir = incomplete[: incomplete.rfind(os.sep) + 1]
+    prefix = incomplete[len(typed_dir) :]
+    if typed_dir:
+        base_dir = (current / typed_dir).resolve(strict=False)
 
     if not base_dir.is_dir():
         return []
 
-    candidates: set[str] = set()
-    for path in base_dir.iterdir():
-        if not path.name.startswith(prefix):
-            continue
-        try:
-            relative = path.relative_to(current)
-            display = str(relative)
-        except ValueError:
-            display = str(path)
-        if path.is_dir():
-            display = f"{display}/"
-        candidates.add(display)
-    return sorted(candidates)
+    return sorted(
+        f"{typed_dir}{path.name}{'/' if path.is_dir() else ''}"
+        for path in base_dir.iterdir()
+        if path.name.startswith(prefix)
+    )
 
 
 @_completes_quietly

@@ -27,9 +27,9 @@ class AgentShorthandError(ValueError):
 
 
 def _split_effort(text: str) -> tuple[str, str | None]:
-    """Split ``NAMES[:EFFORT]`` at the final colon; the effort is ``None`` when omitted."""
+    """Split ``NAMES[:EFFORT]`` at the final colon; the effort is ``None`` when omitted or empty."""
     names, colon, effort = text.rpartition(":")
-    return (names, effort) if colon else (text, None)
+    return (names, effort or None) if colon else (text, None)
 
 
 def _shorthand_reader(
@@ -86,11 +86,11 @@ def parse_agent_shorthand(text: str) -> AgentSpec | None:
     Forms: ``claude[/MODEL][:EFFORT]``, ``codex[/MODEL][:EFFORT]``,
     ``pi[/PROVIDER[/MODEL]][:EFFORT]``, and any other ``PROVIDER/MODEL[:EFFORT]``
     (Pi). Omitted native names and effort are ``""``. The effort follows the final
-    colon and is opaque to AGM. Provider and effort are ``[A-Za-z0-9][A-Za-z0-9._@+-]*``; the
-    model also admits ``:``, ``[`` and ``]``. Native text is stripped text starting
-    with a native name (ASCII, any case) followed by its end, ``/`` or ``:``; native
-    text breaking its form -- surrounding whitespace included -- raises
-    :class:`AgentShorthandError`.
+    colon and is opaque to AGM; a trailing colon leaves it empty. Provider and effort are
+    ``[A-Za-z0-9][A-Za-z0-9._@+-]*``; the model also admits ``:``, ``[`` and ``]``.
+    Native text is stripped text starting with a native name (ASCII, any case) followed by
+    its end, ``/`` or ``:``; native text breaking its form -- surrounding whitespace
+    included -- raises :class:`AgentShorthandError`.
     """
     stripped = text.strip()
     native = _NATIVE_NAME.match(stripped)

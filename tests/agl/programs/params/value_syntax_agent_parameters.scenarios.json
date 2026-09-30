@@ -109,7 +109,7 @@
     {
       "name": "malformed_native_shorthand_is_a_host_error_not_a_command",
       "params": {
-        "worker": "claude/opus:"
+        "worker": "claude/opus:hi gh"
       },
       "expect": {
         "host_error": {

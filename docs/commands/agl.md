@@ -267,13 +267,12 @@ In shorthand the effort follows the last `:`. An omitted name or effort is `""`,
 dispatch from the [agent defaults](#agent-defaults): bare `claude` is `AgentClaude()`,
 `claude:high` sets only the effort, and `pi/anthropic` only the provider. Provider and effort start with a letter or
 digit and continue with `[A-Za-z0-9._@+-]`, so `./agent` stays a command; a model may also contain `:`, `[`, and `]` (`claude/opus[1m]:high`), so a
-model with a colon needs an explicit effort (`ollama/llama3:8b:high`) or the constructor form.
+model with a colon takes a trailing colon for no effort (`ollama/llama3:8b:`) or an explicit effort (`ollama/llama3:8b:high`).
 Examples: `claude`, `codex:high`, `claude/sonnet:medium`, `pi/anthropic`, `pi/openai/gpt-5:low`,
 `openrouter/qwen3`.
 
 Native text, ignoring surrounding whitespace, starts with `claude`, `codex`, or `pi` in any case,
-followed by the end of the text, `/`, or `:`. Native text that breaks its form (`claude:`,
-`claude/`, `claude/opus:`, `pi/`, `pi/anthropic/`, surrounding whitespace as in ` claude` or
+followed by the end of the text, `/`, or `:`. Native text that breaks its form (`claude/`, `pi/`, `pi/anthropic/`, surrounding whitespace as in ` claude` or
 `claude `) is a host error, never a verbatim command. A name followed by anything else is not
 native: `claude -p` and `claudex` are commands. Other two-segment text
 such as `bin/agent` reads as Pi shorthand, so write a relative command path as `./bin/agent`.

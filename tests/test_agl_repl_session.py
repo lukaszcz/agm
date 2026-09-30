@@ -2858,6 +2858,34 @@ class TestUseThenRedeclare:
         with pytest.raises(HiddenMemberError):
             s.type_of("E::A")
 
+    @pytest.mark.parametrize(
+        ("scope", "use", "probe", "value"),
+        (
+            ("scope s\n  def f() -> int = {}\nend s", "use s::*", "f()", IntValue(2)),
+            ("scope s\n  record P\n    x: int\nend s", "use s::*", "P(x = 2).x", IntValue(2)),
+            ("scope s\n  enum E = Red | Green\nend s", "use s::E::*", "[Green]", None),
+        ),
+    )
+    @pytest.mark.parametrize("region", (False, True))
+    def test_repeating_a_use_after_a_redeclaration_leaves_only_the_new_member(
+        self, scope: str, use: str, probe: str, value: IntValue | None, region: bool
+    ) -> None:
+        def at(entry: str) -> str:
+            return f"scope r\n  let v = {entry}\nend r" if region else entry
+
+        s = ReplSession()
+        for decl in (
+            scope.format(1),
+            f"scope r\n  {use}\nend r" if region else use,
+            scope.format(2),
+            f"scope r\n  {use}\nend r" if region else use,
+        ):
+            assert s.eval_entry(decl).ok
+        result = s.eval_entry(at(probe))
+        assert result.failure is None
+        if value is not None and not region:
+            assert result.value == value
+
 
 def test_a_new_type_declared_in_a_used_scope_is_reachable_bare() -> None:
     """A type a ``use``-opened scope gains after the ``use`` must be reachable

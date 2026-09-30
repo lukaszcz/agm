@@ -1412,7 +1412,7 @@ def test_use_rejects_an_ordinary_member_exposed_by_an_earlier_use(tmp_path: Path
         resolve_program(graph)
 
 
-def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) -> None:
+def test_use_combines_scopes_exposed_by_earlier_uses(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -1434,18 +1434,13 @@ def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) ->
                 "    def second() -> int = 2\n"
                 "  end Shared\n"
                 "end Second\n"
+                "\n"
+                "first() + second()\n"
             ),
         },
     )
 
-    with pytest.raises(AmbiguousQualificationError) as excinfo:
-        resolve_program(graph)
-
-    entry_id = graph.entry_id
-    assert set(excinfo.value.origins) == {
-        UseDeclarationOrigin((entry_id, ("First", "Shared"))),
-        UseDeclarationOrigin((entry_id, ("Second", "Shared"))),
-    }
+    check_program(resolve_program(graph), base_caps())
 
 
 def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
@@ -1620,12 +1615,13 @@ def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> No
     with pytest.raises(AmbiguousQualificationError) as exc_info:
         resolve_program(graph)
 
-    modules = {
-        origin.declaration[0]
-        for origin in exc_info.value.origins
-        if isinstance(origin, ImportedModuleOrigin)
+    error = exc_info.value
+    assert type(error) is AmbiguousQualificationError
+    assert error.spelling == "config::shared"
+    assert set(error.origins) == {
+        ImportedModuleOrigin((ModuleId.from_path("one/config"), "shared")),
+        ImportedModuleOrigin((ModuleId.from_path("two/config"), "shared")),
     }
-    assert modules == {ModuleId.from_path("one/config"), ModuleId.from_path("two/config")}
 
 
 def test_typecheck_routes_qualified_types_patterns_and_is_tests(tmp_path: Path) -> None:

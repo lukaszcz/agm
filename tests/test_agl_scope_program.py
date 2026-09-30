@@ -33,12 +33,22 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
     BinderKind,
+    DuplicateDeclarationError,
     ImmutableAssignmentError,
+    MissRepair,
     ReceiverOwner,
     UnknownMemberError,
 )
 from agm.agl.semantics.values import BoolValue, IntValue
-from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
+from agm.agl.syntax.nodes import (
+    AssignStmt,
+    Block,
+    Case,
+    ConstructorPattern,
+    FuncDef,
+    VarPattern,
+    VarRef,
+)
 from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
@@ -910,6 +920,23 @@ class TestStaticImportErrors:
         )
         assert resolve_program(graph).entry_id == graph.entry_id
 
+    def test_selecting_a_declaration_its_module_lacks_suggests_it_is_not_exported(
+        self, tmp_path: Path
+    ) -> None:
+        source = "import lib::{present, missing}\n()"
+        graph = _make_graph_from_files(
+            tmp_path, {"entry": source, "lib": "def present() -> int = 1"}
+        )
+        with pytest.raises(UnknownMemberError) as caught:
+            resolve_program(graph)
+
+        error = caught.value
+        assert (type(error), error.spelling, error.repair) == (
+            UnknownMemberError,
+            "lib::missing",
+            MissRepair.NOT_EXPORTED,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test: ::name self-reference
@@ -1021,6 +1048,48 @@ class TestSelfReference:
             f"::foo should resolve to function_binding, got {ref.kind}"
         )
         assert ref.module_id == ENTRY_ID
+
+    @pytest.mark.parametrize(
+        ("binding", "statement", "error"),
+        [
+            pytest.param("var x = 1", "let _ = ::x", None, id="read-var"),
+            pytest.param("var x = 1", "::x := 2", None, id="assign-var"),
+            pytest.param("let x = 1", "let _ = ::x", None, id="read-let"),
+            pytest.param("let x = 1", "::x := 2", ImmutableAssignmentError, id="assign-let"),
+            pytest.param("var y = 1", "let _ = ::x", UnknownMemberError, id="read-missing"),
+            pytest.param("var y = 1", "::x := 2", UnknownMemberError, id="assign-missing"),
+        ],
+    )
+    def test_anchored_root_binding_is_read_and_assigned_through_one_selection(
+        self, tmp_path: Path, binding: str, statement: str, error: type[AglScopeError] | None
+    ) -> None:
+        """``::x := e`` selects its target exactly as the read ``::x`` does, past a local ``x``."""
+        library = f"{binding}\ndef touch() -> unit =\n  let x = 5\n  {statement}\n  ()\n"
+        graph = _make_graph_from_files(
+            tmp_path, {"entry": "import lib\nlib::touch()", "lib": library}
+        )
+        if error is not None:
+            with pytest.raises(error) as caught:
+                resolve_program(graph)
+            assert type(caught.value) is error
+            return
+        result = resolve_program(graph)
+        lib = graph.modules[ModuleId.from_path("lib")].program
+        touch = lib.body.items[-1]
+        assert isinstance(touch, FuncDef) and isinstance(touch.body, Block)
+        target = touch.body.items[1]
+        node = target if isinstance(target, AssignStmt) else _find_varref(target, "x")
+        assert node is not None
+        ref = result.modules[ModuleId.from_path("lib")].resolved.resolution[node.node_id]
+        assert (ref.module_id, ref.scope_path, ref.name) == (ModuleId.from_path("lib"), (), "x")
+
+    def test_anchored_root_var_assignment_updates_the_module_binding(self, tmp_path: Path) -> None:
+        """``::x := e`` in a library function writes the library's root ``var``."""
+        library = "var x = 1\ndef bump() -> int =\n  let x = 40\n  ::x := x + 2\n  ::x\n"
+        result = evaluate_ir_graph(
+            "import lib\nlet first = lib::bump()\nlet seen = lib::x", {"lib": library}, tmp_path
+        )
+        assert (result["first"], result["seen"]) == (IntValue(42), IntValue(42))
 
 
 # ---------------------------------------------------------------------------
@@ -1315,6 +1384,72 @@ class TestHeaderOnlyImports:
         )
         with pytest.raises(AglScopeError, match="Import and export"):
             resolve_program(graph)
+
+
+_TWO_GEOS = {
+    "tl": "record Geo\nrecord Geo::Inner\n  y: int\n",
+    "tl2": "record Geo\nrecord Geo::Inner\n  z: int\n",
+}
+
+
+def _placement_failure(tmp_path: Path, graph_kind: str, source: str) -> BaseException:
+    """The error resolving *source* as an inline entry, a file entry, or one REPL entry."""
+    modules = {"entry": source, **_TWO_GEOS}
+    if graph_kind == "repl":
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        session.open()
+        for name, text in _TWO_GEOS.items():
+            (tmp_path / f"{name}.agl").write_text(text)
+        failure = session.eval_entry(source).failure
+        assert failure is not None
+        return failure
+    make = make_file_graph_from_files if graph_kind == "file" else _make_graph_from_files
+    with pytest.raises(AglScopeError) as caught:
+        resolve_program(make(tmp_path, modules, default_stdlib=False))
+    return caught.value
+
+
+class TestPlacementIsCheckedBeforeNames:
+    """A misplaced header or root statement is reported before any name it precedes or follows."""
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file"))
+    def test_a_late_root_import(self, tmp_path: Path, graph_kind: str) -> None:
+        """The REPL hoists an entry's imports, so only a module root rejects the late one."""
+        source = "import tl::*\ndef Geo::Inner::m(self) -> int = 1\nimport tl2::*"
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is AglScopeError
+        assert (failure.span.start_line, failure.span.start_col) == (3, 1)
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file", "repl"))
+    def test_a_late_region_import(self, tmp_path: Path, graph_kind: str) -> None:
+        source = (
+            "import tl::*\nimport tl2::*\n\n"
+            "scope A\n  let v = Geo::Inner(y = 1)\n  import tl\nend A"
+        )
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is AglScopeError
+        assert (failure.span.start_line, failure.span.start_col) == (6, 3)
+
+    def test_an_import_after_an_inline_statement(self, tmp_path: Path) -> None:
+        failure = _placement_failure(
+            tmp_path, "inline", "print(1)\nimport tl\ndef f() -> int = missing"
+        )
+        assert type(failure) is AglScopeError
+        assert (failure.span.start_line, failure.span.start_col) == (2, 1)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import tl::*\nimport tl2::*\nfn(p: Geo::Inner::Nope) => 1",
+            "import tl::*\nimport tl2::*\nvar x = 1\nx := Geo::Inner::Nope",
+        ),
+        ids=("bare-expression", "assignment"),
+    )
+    def test_a_statement_at_a_static_root(self, tmp_path: Path, source: str) -> None:
+        failure = _placement_failure(tmp_path, "file", source)
+        assert type(failure) is AglScopeError
+        assert failure.span.start_col == 1
+        assert failure.span.start_line == source.count("\n") + 1
 
 
 # ---------------------------------------------------------------------------
@@ -3090,6 +3225,74 @@ class TestResolveGraphReplSeams:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate declarations
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateDeclarations:
+    """A module declaring one name twice at one path is rejected where the second one is."""
+
+    @pytest.mark.parametrize(
+        ("modules", "duplicate"),
+        [
+            pytest.param({"entry": "def S() -> int = 1\n\nscope S\nend S\n\n()"}, "S", id="scope"),
+            pytest.param({"entry": "record P\n  n: int\nrecord P\n  t: text\n()"}, "P", id="type"),
+            pytest.param(
+                {"entry": "def f() -> int = 1\ndef f() -> int = 2\n()"}, "f", id="function"
+            ),
+            pytest.param(
+                {"entry": "def Signal::ready() -> int = 1\nenum Signal\n  | ready\n()"},
+                "ready",
+                id="enum-member",
+            ),
+            pytest.param(
+                {"entry": "scope S\n  def x() -> int = 1\n  let x = 2\nend S\n\n()"},
+                "x",
+                id="scoped-binding",
+            ),
+            pytest.param(
+                {
+                    "entry": "import mylib::*\n()",
+                    "mylib": "def x() -> int = 1\nbuiltin var x: bool",
+                },
+                "x",
+                id="builtin-var",
+            ),
+            pytest.param({"entry": "let a = 1\nlet a = 2\n()"}, "a", id="binder"),
+            pytest.param({"entry": "let g = fn(x: int, x: int) => x\n()"}, "x", id="parameter"),
+        ],
+    )
+    def test_second_declaration_is_a_duplicate(
+        self, tmp_path: Path, modules: dict[str, str], duplicate: str
+    ) -> None:
+        with pytest.raises(DuplicateDeclarationError) as caught:
+            resolve_program(_make_graph_from_files(tmp_path, modules))
+
+        assert type(caught.value) is DuplicateDeclarationError
+        assert caught.value.name == duplicate
+
+    @pytest.mark.parametrize(
+        ("entries", "duplicate"),
+        [
+            pytest.param(("let P = 1", "record P\n  n: int"), "P", id="type-after-binding"),
+            pytest.param(("record P\n  n: int", "let P = 1"), "P", id="binding-after-type"),
+            pytest.param(("def S() -> int = 1", "scope S\nend S"), "S", id="scope-after-def"),
+        ],
+    )
+    def test_later_repl_entry_redeclaring_a_name_as_another_kind_is_a_duplicate(
+        self, tmp_path: Path, entries: tuple[str, str], duplicate: str
+    ) -> None:
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        session.open()
+        assert session.eval_entry(entries[0]).ok
+
+        failure = session.eval_entry(entries[1]).failure
+
+        assert type(failure) is DuplicateDeclarationError
+        assert failure.name == duplicate
+
+
+# ---------------------------------------------------------------------------
 # Re-export behaviour
 # ---------------------------------------------------------------------------
 
@@ -3557,8 +3760,10 @@ class TestExportDecl:
             default_stdlib=False,
         )
 
-        with pytest.raises(AglScopeError, match="missing"):
+        with pytest.raises(UnknownMemberError) as excinfo:
             resolve_program(graph)
+        assert type(excinfo.value) is UnknownMemberError
+        assert excinfo.value.repair is MissRepair.NOT_EXPORTED
 
     def test_importing_consumer_resolves_a_brace_renamed_export(self, tmp_path: Path) -> None:
         """An importer's bare alias resolves to the brace export's original declaration."""
@@ -3597,19 +3802,32 @@ class TestExportDecl:
         assert "add" in facade_exports
         assert facade_exports["add"] == (lib_ops_id, "add")
 
-    def test_reexport_conflict_raises(self, tmp_path: Path) -> None:
-        """Re-exporting the same name from two different origins raises AglScopeError."""
+    @pytest.mark.parametrize(
+        ("exports", "duplicate"),
+        [
+            pytest.param("export a\nexport b", "foo", id="root"),
+            pytest.param("export a::{S}\nexport b::{S}", "S::foo", id="scoped"),
+        ],
+    )
+    def test_reexport_conflict_raises(self, tmp_path: Path, exports: str, duplicate: str) -> None:
+        """Re-exporting one name from two different origins declares it twice."""
+        scoped = duplicate != "foo"
+        library = "scope S\n  def foo() -> int = {}\nend S" if scoped else "def foo() -> int = {}"
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": "import facade::*\n()",
-                "facade": "export a\nexport b",
-                "a": "def foo() -> int = 1",
-                "b": "def foo() -> int = 2",
+                "facade": exports,
+                "a": library.format(1),
+                "b": library.format(2),
             },
         )
-        with pytest.raises(AglScopeError):
+        with pytest.raises(DuplicateDeclarationError) as caught:
             resolve_program(graph)
+
+        assert type(caught.value) is DuplicateDeclarationError
+        assert caught.value.name == duplicate
+        assert caught.value.reexports == (f"a::{duplicate}", f"b::{duplicate}")
 
     def test_reexported_ordinary_name_cannot_replace_a_local_scope_identity(
         self, tmp_path: Path
@@ -3624,8 +3842,10 @@ class TestExportDecl:
             default_stdlib=False,
         )
 
-        with pytest.raises(AglScopeError):
+        with pytest.raises(DuplicateDeclarationError) as caught:
             resolve_program(graph)
+
+        assert (type(caught.value), caught.value.name) == (DuplicateDeclarationError, "Public")
 
     def test_reexported_scope_identity_cannot_replace_a_local_ordinary_name(
         self, tmp_path: Path
@@ -3640,8 +3860,10 @@ class TestExportDecl:
             default_stdlib=False,
         )
 
-        with pytest.raises(AglScopeError):
+        with pytest.raises(DuplicateDeclarationError) as caught:
             resolve_program(graph)
+
+        assert (type(caught.value), caught.value.name) == (DuplicateDeclarationError, "Public")
 
     def test_reexported_type_can_own_a_local_scope_namespace(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(

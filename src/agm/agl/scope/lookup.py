@@ -476,16 +476,21 @@ def _unknown(
 def _decided(
     candidates: Iterable[Candidate],
 ) -> Candidate | tuple[QualificationOrigin, ...] | None:
-    """The one candidate selected, own first; the origins when several distinct ones compete."""
+    """The one candidate selected, own first; the origins when several distinct ones compete.
+
+    A declaration reached several ways is one candidate, yet an ambiguity it
+    takes part in names every way it was reached.
+    """
     pool = list(candidates)
     own = [candidate for candidate in pool if candidate.layer is ContributionLayer.DECLARED]
-    distinct: dict[object, Candidate] = {}
+    distinct: dict[object, list[Candidate]] = {}
     for candidate in own or pool:
         target = candidate.target
-        distinct.setdefault(target.key if target.key is not None else target.constructor, candidate)
+        key = target.key if target.key is not None else target.constructor
+        distinct.setdefault(key, []).append(candidate)
     if len(distinct) > 1:
-        return tuple(candidate.origin for candidate in distinct.values())
-    return next(iter(distinct.values()), None)
+        return tuple(candidate.origin for reached in distinct.values() for candidate in reached)
+    return next((reached[0] for reached in distinct.values()), None)
 
 
 def _is_beneath(

@@ -18,7 +18,7 @@ Data model
 - ``AglScopeError`` — fatal scope error raised by the resolver; structured
   subclasses distinguish an ambiguous spelling (``AmbiguousQualificationError``,
   ``AmbiguousConstructorError``) from an unresolved one (``UnknownQualifierError``,
-  ``UnknownMemberError``).
+  ``UnknownMemberError``) and a name declared twice (``DuplicateDeclarationError``).
 """
 
 from __future__ import annotations
@@ -31,7 +31,13 @@ from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, render_qualifier, spell_declaration
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    ModuleId,
+    render_route_member,
+    spell_declaration,
+    spell_scope_path,
+)
 from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
@@ -754,6 +760,29 @@ class ContributionLayer(enum.Enum):
     IMPORTED = enum.auto()
 
 
+Layers: TypingTypeAlias = frozenset[ContributionLayer]
+"""Every layer contributing one candidate: one declaration reached several ways is one."""
+
+
+def add_layers[K](table: dict[K, Layers], key: K, layers: Iterable[ContributionLayer]) -> None:
+    """Record that *layers* also contribute *key* to *table*."""
+    table[key] = table.get(key, frozenset()).union(layers)
+
+
+def drop_layer[K](table: dict[K, Layers], key: K, layer: ContributionLayer) -> None:
+    """Record that *layer* no longer contributes *key*; drop *key* when no layer does."""
+    remaining = table.get(key, frozenset()) - {layer}
+    if remaining:
+        table[key] = remaining
+    else:
+        table.pop(key, None)
+
+
+def layered(layers: Layers) -> tuple[ContributionLayer, ...]:
+    """Return *layers* in declaration order, for a deterministic walk."""
+    return tuple(layer for layer in ContributionLayer if layer in layers)
+
+
 @dataclass(slots=True)
 class ScopeNode:
     """A lexical scope in the scope tree.
@@ -764,8 +793,8 @@ class ScopeNode:
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
     - ``bare_contributions``/``bare_constructor_contributions``: selected
-      imports snapshotted for this region. Each entry carries its
-      :class:`ContributionLayer`, recorded at the point it was contributed.
+      imports snapshotted for this region. Each entry carries every
+      :class:`ContributionLayer` contributing it, recorded where contributed.
 
     ``members`` is read freely but written only through the member mutation
     methods on this class.
@@ -779,10 +808,8 @@ class ScopeNode:
     bindings: dict[str, BindingRef] = field(default_factory=dict)
     scope_path: ScopePath = ()
     members: dict[str, BindingRef] = field(default_factory=dict)
-    bare_contributions: dict[BareAtom, dict[BindingRef, ContributionLayer]] = field(
-        default_factory=dict
-    )
-    bare_constructor_contributions: dict[BareAtom, dict[ConstructorRef, ContributionLayer]] = field(
+    bare_contributions: dict[BareAtom, dict[BindingRef, Layers]] = field(default_factory=dict)
+    bare_constructor_contributions: dict[BareAtom, dict[ConstructorRef, Layers]] = field(
         default_factory=dict
     )
     local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
@@ -824,8 +851,8 @@ class ScopeNode:
         Mirrors how a retained named-scope layer is copied into a fresh entry
         node: ``bindings`` are shared by reference, since they are read-only
         during resolve, while the bare tables and use contributions are
-        copied so the entry's own re-derivation (see
-        ``_Resolver._refresh_layer_contributions``) never mutates the
+        copied so the entry's own contributions and use re-snapshots (see
+        ``_Resolver._refresh_layer_contributions``) never mutate the
         session's own record. ``members`` starts shared too, but
         ``_build_scope_nodes`` immediately replaces it with a fresh dict,
         re-registering each retained member one at a time, so this entry's
@@ -849,13 +876,13 @@ class ScopeNode:
 
     def contribute_bare(self, name: BareAtom, ref: BindingRef, layer: ContributionLayer) -> None:
         """Add one use-site-resolved bare contribution to this region, tagged with its *layer*."""
-        self.bare_contributions.setdefault(name, {})[ref] = layer
+        add_layers(self.bare_contributions.setdefault(name, {}), ref, (layer,))
 
     def contribute_bare_constructor(
         self, name: BareAtom, ref: ConstructorRef, layer: ContributionLayer
     ) -> None:
         """Add one constructor candidate contributed bare to this region, from *layer*."""
-        self.bare_constructor_contributions.setdefault(name, {})[ref] = layer
+        add_layers(self.bare_constructor_contributions.setdefault(name, {}), ref, (layer,))
 
     def contribute_local_use(self, contribution: LocalUseContribution) -> None:
         """Add a local scope use whose source members remain live."""
@@ -866,13 +893,16 @@ class ScopeNode:
         bindings: Mapping[BareAtom, Iterable[BindingRef]],
         constructors: Mapping[BareAtom, Iterable[ConstructorRef]],
     ) -> None:
-        """Subtract one contribution's snapshot, promoted into a wider entry's own layer."""
+        """Subtract one ``use`` contribution's snapshot, promoted into a wider entry's own layer.
+
+        Another layer contributing the same candidate keeps contributing it.
+        """
         for atom, refs in bindings.items():
             remaining = self.bare_contributions.get(atom)
             if remaining is None:
                 continue
             for ref in refs:
-                remaining.pop(ref, None)
+                drop_layer(remaining, ref, ContributionLayer.USE)
             if not remaining:
                 del self.bare_contributions[atom]
         for atom, constructor_refs in constructors.items():
@@ -880,7 +910,7 @@ class ScopeNode:
             if remaining_constructors is None:
                 continue
             for constructor_ref in constructor_refs:
-                remaining_constructors.pop(constructor_ref, None)
+                drop_layer(remaining_constructors, constructor_ref, ContributionLayer.USE)
             if not remaining_constructors:
                 del self.bare_constructor_contributions[atom]
 
@@ -895,13 +925,11 @@ class ScopeNode:
         ``retract_bare``/``readd_bare`` ever retire and restore.
         """
         for atom, refs in bindings.items():
-            layer = self.bare_contributions.setdefault(atom, {})
             for ref in refs:
-                layer[ref] = ContributionLayer.USE
+                self.contribute_bare(atom, ref, ContributionLayer.USE)
         for atom, constructor_refs in constructors.items():
-            self.bare_constructor_contributions.setdefault(atom, {}).update(
-                dict.fromkeys(constructor_refs, ContributionLayer.USE)
-            )
+            for constructor_ref in constructor_refs:
+                self.contribute_bare_constructor(atom, constructor_ref, ContributionLayer.USE)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -956,8 +984,9 @@ class ResolvedUseTarget:
     same alias.
     """
 
-    local_path: ScopePath | None = None
+    local_paths: tuple[ScopePath, ...] = ()
     imported_routes: tuple[tuple[ModuleId, ScopePath], ...] = ()
+    aliases: tuple[QName, ...] = ()
     wildcard_facade_origin_node_id: int | None = field(default=None, compare=False)
 
 
@@ -1220,10 +1249,15 @@ def contribution_origin(declaration: QName, layer: ContributionLayer) -> Qualifi
     return _LAYER_ORIGINS[layer](declaration)
 
 
+def contribution_origins(declaration: QName, layers: Layers) -> tuple[QualificationOrigin, ...]:
+    """Return one origin of *declaration* per layer in *layers*, in layer order."""
+    return tuple(contribution_origin(declaration, layer) for layer in layered(layers))
+
+
 _ORIGIN_KIND_LABELS: tuple[tuple[type, str], ...] = (
     (ImportedModuleOrigin, "imported"),
     (UseDeclarationOrigin, "use-contributed"),
-    (DeclaredOrigin, "declared"),
+    (DeclaredOrigin, "locally declared"),
 )
 
 
@@ -1246,14 +1280,51 @@ def _join_list(items: Sequence[str], *, comma_pair: bool) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
+def _render_ambiguity(
+    spelling: str, origins: Iterable[QualificationOrigin], *, local_to: ModuleId
+) -> tuple[tuple[QualificationOrigin, ...], str]:
+    """Order *origins* and state which declarations *spelling* selects.
+
+    Deduplicates *origins* and orders them by kind, then spelling, so the
+    result is deterministic regardless of hash seed. *local_to* is the
+    reading module: each declaration is spelled the way its reader would
+    type it (:func:`~agm.agl.modules.ids.spell_declaration`).
+    """
+
+    def sort_key(origin: QualificationOrigin) -> tuple[int, str]:
+        rank = next(
+            index
+            for index, (kind, _label) in enumerate(_ORIGIN_KIND_LABELS)
+            if isinstance(origin, kind)
+        )
+        return (rank, _origin_spelling(origin, local_to=local_to))
+
+    ordered = tuple(sorted(set(origins), key=sort_key))
+    clauses = [
+        f"{label} "
+        + _join_list(
+            [
+                _origin_spelling(origin, local_to=local_to)
+                for origin in ordered
+                if isinstance(origin, kind)
+            ],
+            comma_pair=False,
+        )
+        for kind, label in _ORIGIN_KIND_LABELS
+        if any(isinstance(origin, kind) for origin in ordered)
+    ]
+    return ordered, f"'{spelling}' is ambiguous: it selects {_join_list(clauses, comma_pair=True)}."
+
+
 class AmbiguousQualificationError(AglScopeError):
     """A qualified or bare spelling that selects more than one declaration.
 
     ``origins`` are the contributing declarations -- imported, ``use``
     -contributed, or directly declared -- kept as structured data -- never as
     message text -- so a caller can tell one kind of collision from another.
-    Built only through :meth:`for_origins`, the one place in scope that
-    renders this verdict, origin-accurately, for every ambiguity site.
+    Built through :meth:`for_origins`, which renders the verdict with
+    :func:`_render_ambiguity`, as :class:`AmbiguousConstructorError`'s
+    builder does.
     """
 
     def __init__(
@@ -1268,9 +1339,8 @@ class AmbiguousQualificationError(AglScopeError):
         self.spelling = spelling
         self.origins = origins
 
-    @classmethod
+    @staticmethod
     def for_origins(
-        cls,
         route: tuple[str, ...],
         member_path: tuple[str, ...],
         origins: Iterable[QualificationOrigin],
@@ -1278,69 +1348,37 @@ class AmbiguousQualificationError(AglScopeError):
         anchored: bool = False,
         span: SourceSpan,
         local_to: ModuleId,
-    ) -> "AmbiguousQualificationError":
-        """Build from *origins*, rendering one message naming their actual kind(s).
+    ) -> AmbiguousQualificationError:
+        """Build from *origins*, ending with the source-level repairs.
 
         *route* and *member_path* spell the ambiguous reference structurally
         instead of as a pre-rendered string: an empty *route* is a bare name,
         spelled by *member_path* alone; a non-empty *route* is a module route
-        (:func:`~agm.agl.modules.ids.render_qualifier`) followed by
-        *member_path*. *local_to* is the reading module, used to spell each
-        origin's own declaration the way that module's reader would type it
-        (see :func:`~agm.agl.modules.ids.spell_declaration`) -- a concrete,
-        pastable repair, not just the module it names.
-
-        Deduplicates *origins* and orders them by kind, then spelling, so
-        ``.origins`` is deterministic regardless of hash seed.
+        (:func:`~agm.agl.modules.ids.render_route_member`).
         """
         spelling = (
-            f"{render_qualifier(route, anchored=anchored)}::{'::'.join(member_path)}"
+            render_route_member(route, member_path, anchored=anchored)
             if route
-            else "::".join(member_path)
+            else spell_scope_path(member_path)
         )
-
-        def kind_rank(origin: QualificationOrigin) -> int:
-            return next(
-                index
-                for index, (kind, _label) in enumerate(_ORIGIN_KIND_LABELS)
-                if isinstance(origin, kind)
-            )
-
-        def sort_key(origin: QualificationOrigin) -> tuple[int, str]:
-            return (kind_rank(origin), _origin_spelling(origin, local_to=local_to))
-
-        ordered = tuple(sorted(set(origins), key=sort_key))
-        clauses = [
-            f"{label} "
-            + _join_list(
-                [
-                    _origin_spelling(origin, local_to=local_to)
-                    for origin in ordered
-                    if isinstance(origin, kind)
-                ],
-                comma_pair=False,
-            )
-            for kind, label in _ORIGIN_KIND_LABELS
-            if any(isinstance(origin, kind) for origin in ordered)
-        ]
-        message = (
-            f"'{spelling}' is ambiguous: it selects {_join_list(clauses, comma_pair=True)}. "
-            f"{qualification_repair_guidance()}"
+        ordered, statement = _render_ambiguity(spelling, origins, local_to=local_to)
+        return AmbiguousQualificationError(
+            f"{statement} {qualification_repair_guidance()}",
+            spelling=spelling,
+            origins=ordered,
+            span=span,
         )
-        return cls(message, spelling=spelling, origins=ordered, span=span)
 
 
 class AmbiguousConstructorError(AmbiguousQualificationError):
     """A constructor spelling several distinct types declare or contribute.
 
     Denotes the same verdict as :class:`AmbiguousQualificationError` -- one
-    spelling selects more than one declaration -- found by ``TypeOwnerIndex``
-    matching a bare or module-surface constructor spelling against every
-    visible type, rather than by a qualified route. Built through
-    :meth:`for_constructor_origins`, the same origin-rendering builder every
-    other ambiguity site uses. ``repair`` is one qualified spelling that
-    selects a single candidate, written through the same module qualifier
-    when the ambiguous spelling has one.
+    spelling selects more than one declaration -- found by matching a bare
+    or module-surface constructor spelling against every visible type,
+    rather than by a qualified route. ``repair`` is one qualified spelling
+    that selects a single candidate, written through the same module
+    qualifier when the ambiguous spelling has one.
     """
 
     def __init__(
@@ -1355,24 +1393,41 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         super().__init__(message, spelling=spelling, origins=origins, span=span)
         self.repair = repair
 
-    @classmethod
+    @staticmethod
     def for_constructor_origins(
-        cls,
         spelling: str,
         origins: Iterable[QualificationOrigin],
         *,
         repair: str,
         span: SourceSpan,
         local_to: ModuleId,
-    ) -> "AmbiguousConstructorError":
-        """Build from *origins*; *repair* is a spelling that selects one candidate."""
-        built = AmbiguousQualificationError.for_origins(
-            (), (spelling,), origins, span=span, local_to=local_to
+    ) -> AmbiguousConstructorError:
+        """Build from *origins*, ending with *repair*, a spelling that selects one candidate."""
+        ordered, statement = _render_ambiguity(spelling, origins, local_to=local_to)
+        return AmbiguousConstructorError(
+            f"{statement} Qualify the reference, e.g. '{repair}'.",
+            spelling=spelling,
+            origins=ordered,
+            repair=repair,
+            span=span,
         )
-        message = f"{built} Qualify the reference, e.g. '{repair}'."
-        return cls(
-            message, spelling=built.spelling, origins=built.origins, repair=repair, span=span
-        )
+
+
+class DuplicateDeclarationError(AglScopeError):
+    """A module declaring, or re-exporting, one name twice at one path.
+
+    *name* spells the path as written. *reexports* spells each distinct
+    declaration a re-export forwards under that name, when a re-export
+    conflict is the duplicate.
+    """
+
+    def __init__(
+        self, name: str, *, reexports: tuple[str, ...] = (), span: SourceSpan | None
+    ) -> None:
+        detail = f": it re-exports {_join_list(reexports, comma_pair=False)}" if reexports else ""
+        super().__init__(f"Name '{name}' is already declared in this scope{detail}.", span=span)
+        self.name = name
+        self.reexports = reexports
 
 
 def _spelling_hint(spelling: str) -> str:
@@ -1380,34 +1435,55 @@ def _spelling_hint(spelling: str) -> str:
     return dollar_spacing_hint(spelling.rsplit("::", 1)[-1]) or ""
 
 
+class MissRepair(enum.Enum):
+    """The concrete repair a miss verdict suggests, chosen where the miss is decided."""
+
+    NOT_EXPORTED = "Its module exports no declaration of that name."
+    IMPORT_MODULE = "Import its module before using it."
+
+
+def _repair_text(repair: MissRepair | None) -> str:
+    """Return *repair*'s sentence, space-led, or nothing."""
+    return "" if repair is None else f" {repair.value}"
+
+
 class UnknownQualifierError(AglScopeError):
     """A qualifier naming no module route, scope region, or type owner.
 
     *qualifier* is spelled as written; every miss shares this one message,
-    with :func:`_spelling_hint`.
+    with *repair* when the decision knows one, and :func:`_spelling_hint`.
     """
 
-    def __init__(self, qualifier: str, *, span: SourceSpan | None) -> None:
+    def __init__(
+        self, qualifier: str, *, span: SourceSpan | None, repair: MissRepair | None = None
+    ) -> None:
         super().__init__(
             f"Unknown qualifier '{qualifier}': no imported module route, scope, or type "
-            f"is named so here.{_spelling_hint(qualifier)}",
+            f"is named so here.{_repair_text(repair)}{_spelling_hint(qualifier)}",
             span=span,
         )
         self.qualifier = qualifier
+        self.repair = repair
 
 
 class UnknownMemberError(AglScopeError):
     """A qualifier that resolves, but whose full spelling selects no member.
 
     *spelling* is the qualified name as written; every miss shares this one
-    message, with :func:`_spelling_hint`.
+    message, with *repair* when the decision knows one, and
+    :func:`_spelling_hint`.
     """
 
-    def __init__(self, spelling: str, *, span: SourceSpan | None) -> None:
+    def __init__(
+        self, spelling: str, *, span: SourceSpan | None, repair: MissRepair | None = None
+    ) -> None:
         super().__init__(
-            f"'{spelling}' names no visible member.{_spelling_hint(spelling)}", span=span
+            f"'{spelling}' names no visible member.{_repair_text(repair)}"
+            f"{_spelling_hint(spelling)}",
+            span=span,
         )
         self.spelling = spelling
+        self.repair = repair
 
 
 class TypeArgumentsError(AglScopeError):

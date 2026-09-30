@@ -160,6 +160,18 @@ def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> s
     return ("/" if anchored else "") + "/".join(qualifier)
 
 
+def render_route_member(
+    route: tuple[str, ...], member_path: Sequence[str], *, anchored: bool = False
+) -> str:
+    """Render ``route::member_path`` as written: *route* by :func:`render_qualifier`.
+
+    An empty *member_path* spells the route alone; an empty *route* spells the
+    current-module anchor ``::member_path``.
+    """
+    qualifier = render_qualifier(route, anchored=anchored)
+    return f"{qualifier}::{spell_scope_path(member_path)}" if member_path else qualifier
+
+
 def spell_declaration(
     module_id: ModuleId, path: Sequence[str], *, local_to: ModuleId | None = None
 ) -> str:
@@ -168,8 +180,9 @@ def spell_declaration(
     A declaration in the reading module needs no module qualifier, so it is
     spelled by its path alone, as does a reserved host identity, which has no
     module a reader could name; anything else is prefixed with the owning
-    module's user-facing label.  Diagnostics that suggest a disambiguating
-    spelling use this so the suggestion is one the reader can actually type.
+    module's user-facing label, and an empty *path* -- the module itself --
+    is that label alone.  Diagnostics that suggest a disambiguating spelling
+    use this so the suggestion is one the reader can actually type.
     """
     scoped = spell_scope_path(path)
     if module_id.is_reserved or (local_to is not None and module_id == local_to):

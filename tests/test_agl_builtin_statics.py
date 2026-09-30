@@ -98,11 +98,10 @@ def test_session_unknown_static_raises_unknown_member() -> None:
 
 
 def test_ambiguous_static_owner_call_raises_ambiguity_not_unknown_static() -> None:
-    """A call whose owner route is genuinely ambiguous -- not merely
-    unknown -- raises the ambiguity itself rather than being reinterpreted
-    as an unrecognized built-in static (regression: `_resolve_call`'s catch
-    around the callee's own resolution no longer swallows ambiguity)."""
-    with pytest.raises(AmbiguousQualificationError):
+    """A call whose path two declarations share -- not merely unknown --
+    raises the ambiguity itself rather than being reinterpreted as an
+    unrecognized built-in static."""
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
         _check(
             "use A::*\n"
             "use B::*\n"
@@ -113,6 +112,8 @@ def test_ambiguous_static_owner_call_raises_ambiguity_not_unknown_static() -> No
             "\n"
             "Session::open()"
         )
+    assert type(excinfo.value) is AmbiguousQualificationError
+    assert excinfo.value.spelling == "Session::open"
 
 
 @pytest.mark.parametrize("call", ["Session::ping()", "::Session::ping()"])

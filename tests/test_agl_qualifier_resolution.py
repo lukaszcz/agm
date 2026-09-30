@@ -20,6 +20,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
+    TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -326,52 +327,35 @@ _NESTED_SCOPE_MODULE = (
 )
 
 
+_REGION_PREFIX = "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n\n"
+
+
+@pytest.mark.parametrize("binder", ("let", "var"))
 @pytest.mark.parametrize(
-    ("shorthand", "region", "error", "needle"),
+    ("annotation", "value", "error", "needle"),
     (
-        (
-            _NESTED_SCOPE_MODULE + "let S::x: P[int]::Q = P::Q\n",
-            (
-                "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n"
-                "\n"
-                "  let x: P[int]::Q = P::Q\nend S\n"
-            ),
-            AglScopeError,
-            "P[int]",
-        ),
-        (
-            _NESTED_SCOPE_MODULE + "let S::x: Color::Nope = Color::Blue\n",
-            (
-                "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n"
-                "\n"
-                "  let x: Color::Nope = Color::Blue\nend S\n"
-            ),
-            UnknownMemberError,
-            "Color::Nope",
-        ),
+        ("P[int]::Q", "P::Q", TypeArgumentsError, "P[int]"),
+        ("Color::Nope", "Color::Blue", UnknownMemberError, "Color::Nope"),
     ),
     ids=("type-args-on-scope-segment", "unknown-enum-member"),
 )
 def test_scoped_binder_shorthand_matches_its_region_form(
-    shorthand: str, region: str, error: type[AglScopeError], needle: str
+    binder: str, annotation: str, value: str, error: type[AglScopeError], needle: str
 ) -> None:
-    """A root ``let S::x`` binder validates its annotation inside ``S``, exactly as
-    ``scope S ... let x ... end S`` does: same phase, same precise class, and a span
-    over the same rejected sub-expression -- not the whole annotation or binder.
+    """A root ``let S::x`` or ``var S::x`` binder validates its annotation inside ``S``,
+    exactly as ``scope S ... let x ... end S`` does: same phase, same precise class, and
+    a span over the same rejected sub-expression -- not the whole annotation or binder.
     """
+    shorthand = f"{_NESTED_SCOPE_MODULE}{binder} S::x: {annotation} = {value}\n"
+    region = f"{_REGION_PREFIX}  {binder} x: {annotation} = {value}\nend S\n"
     for source in (shorthand, region):
-        with pytest.raises(error) as excinfo:
+        with pytest.raises(AglScopeError) as excinfo:
             resolve_inline_entry(source)
+        assert type(excinfo.value) is error
         span = excinfo.value.span
         assert span is not None
-        offset = source.index(needle)
-        prefix = source[:offset]
-        expected_line = prefix.count("\n") + 1
-        expected_start_col = offset - prefix.rfind("\n")
-        assert (span.start_line, span.start_col, span.end_col) == (
-            expected_line,
-            expected_start_col,
-            expected_start_col + len(needle),
+        assert (span.start_line, span.start_col, span.end_col) == _needle_span(
+            source, needle, len(needle)
         )
 
 

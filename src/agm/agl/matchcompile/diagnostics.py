@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TypeAlias, cast
 
 from agm.agl.diagnostics import AglError
-from agm.agl.scope.imports import render_qualifier
+from agm.agl.modules.ids import render_route_member
 from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.value_syntax.lexical import quote_text
@@ -56,7 +56,7 @@ def qualified_owner_name(
     """
     if module_qualifier is None:
         return owner_name
-    return f"{render_qualifier(module_qualifier, anchored=anchored)}::{owner_name}"
+    return render_route_member(module_qualifier, (owner_name,), anchored=anchored)
 
 
 @dataclass(frozen=True, slots=True)

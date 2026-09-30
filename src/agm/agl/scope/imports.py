@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agl.modules.ids import ModuleId, render_qualifier
-from agm.agl.scope.symbols import UnknownMemberError
+from agm.agl.modules.ids import ModuleId, render_route_member, spell_declaration
+from agm.agl.scope.symbols import MissRepair, UnknownMemberError
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
@@ -47,7 +47,6 @@ __all__ = [
     "qualifier_hides",
     "qualifier_members",
     "qualifier_scope_paths",
-    "render_qualifier",
     "resolve_qualified",
     "route_spelling",
     "declares_bare_constructor",
@@ -348,7 +347,9 @@ def _selected_public_atoms(
         declarations = matching_atoms(exports, prefix)
         scopes = matching_atoms(scope_exports, prefix)
         if not declarations and not scopes:
-            raise UnknownMemberError(f"{module.display()}::{'::'.join(prefix)}", span=span)
+            raise UnknownMemberError(
+                spell_declaration(module, prefix), span=span, repair=MissRepair.NOT_EXPORTED
+            )
         for atom in declarations:
             matched_exports[atom] = None
         for atom in scopes:
@@ -707,7 +708,7 @@ def route_spelling(env: ImportEnv, origin: QName) -> str | None:
     it uniquely.
     """
     spellings = (
-        f"{render_qualifier(qualifier, anchored=anchored)}::{'::'.join(_path(atom))}"
+        render_route_member(qualifier, _path(atom), anchored=anchored)
         for contribution in env.contributions.values()
         for atom, qname in contribution.members.items()
         if qname == origin

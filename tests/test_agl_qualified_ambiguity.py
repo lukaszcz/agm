@@ -1,0 +1,232 @@
+"""One verdict for an ambiguous qualified spelling: class, origins, and the spelling as written.
+
+The route of a qualified spelling -- a slash path, a ``/``-anchored path, an
+import alias, or the ``::`` current-module anchor -- is part of the spelling
+the error reports. Origins are listed in one order: imported, then
+``use``-contributed, then locally declared, each by declaration spelling; a
+declaration reached twice the same way is listed once.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from agm.agl.modules.ids import ModuleId
+from agm.agl.repl import ReplSession
+from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import (
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    DeclaredOrigin,
+    ImportedModuleOrigin,
+    UseDeclarationOrigin,
+    to_bare_atom,
+)
+from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.qualifier_support import (
+    FilePhase,
+    assert_verdicts_for_grouping,
+    grouping_params,
+)
+
+_CONSTRUCTOR: tuple[FilePhase, type[BaseException] | type[None]] = (
+    "scope",
+    AmbiguousConstructorError,
+)
+_QUALIFICATION: tuple[FilePhase, type[BaseException] | type[None]] = (
+    "scope",
+    AmbiguousQualificationError,
+)
+
+_TWO_REDS = "enum A\n  | Red\nenum B\n  | Red\n"
+
+
+def _origins(kind: type, *spellings: str) -> frozenset[tuple[type, str]]:
+    return frozenset((kind, spelling) for spelling in spellings)
+
+
+class TestAmbiguousModuleMember:
+    """A module surface injecting ``Red`` from two of its enums, read through every route form."""
+
+    _ORIGINS = _origins(ImportedModuleOrigin, "x/lib::A::Red", "x/lib::B::Red")
+    _PROBES = {
+        "slash": "x/lib::Red",
+        "anchored": "/x/lib::Red",
+        "anchored-in-scope": "scope S\n  let y = /x/lib::Red\nend S",
+    }
+    _SPELLINGS = {
+        "slash": "x/lib::Red",
+        "anchored": "/x/lib::Red",
+        "anchored-in-scope": "/x/lib::Red",
+    }
+
+    @pytest.mark.parametrize("sizes", grouping_params(2))
+    def test_every_route_form(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {"x/lib": _TWO_REDS},
+            ("import x/lib",),
+            sizes,
+            self._PROBES,
+            dict.fromkeys(self._PROBES, _CONSTRUCTOR),
+            span_texts=self._SPELLINGS,
+            expected_origins=dict.fromkeys(self._PROBES, self._ORIGINS),
+            expected_spellings=self._SPELLINGS,
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(2))
+    def test_import_alias(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {"x/lib": _TWO_REDS},
+            ("import x/lib as L",),
+            sizes,
+            {"alias": "L::Red"},
+            {"alias": _CONSTRUCTOR},
+            span_texts={"alias": "L::Red"},
+            expected_origins={"alias": self._ORIGINS},
+            expected_spellings={"alias": "L::Red"},
+        )
+
+
+class TestAmbiguousCurrentModuleMember:
+    """``::Red`` over two of this module's own enums: declared origins, spelled anchored."""
+
+    _HEADER = ("enum A\n  | Red", "enum B\n  | Red")
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_HEADER) + 1))
+    def test_value(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {},
+            self._HEADER,
+            sizes,
+            {"value": "::Red"},
+            {"value": _CONSTRUCTOR},
+            span_texts={"value": "::Red"},
+            expected_origins={"value": _origins(DeclaredOrigin, "A::Red", "B::Red")},
+            expected_spellings={"value": "::Red"},
+        )
+
+
+_MANY_REDS = "\n".join(f"enum {owner}\n  | Red" for owner in "LKJIHGFEDCBA")
+
+
+@pytest.mark.parametrize("entries", [(_MANY_REDS, "::Red"), (f"{_MANY_REDS}\n::Red",)])
+def test_current_module_member_repair_is_one_spelling_however_entries_group(
+    tmp_path: Path, entries: tuple[str, ...]
+) -> None:
+    """The repair names the candidate first by declaration identity, never by set order."""
+    session = ReplSession(cwd=tmp_path, default_stdlib=False)
+    session.open()
+    *setup, probe = entries
+    for entry in setup:
+        assert session.eval_entry(entry).ok
+    failure = session.eval_entry(probe).failure
+    assert type(failure) is AmbiguousConstructorError
+    assert failure.repair == "::A::Red"
+
+
+class TestAmbiguousModuleRoute:
+    """A route suffix two imported modules share: the spelling keeps the written suffix."""
+
+    _HEADER = ("import p/x/lib", "import q/x/lib")
+    _PROBES = {"short": "lib::f()", "long": "x/lib::f()"}
+
+    @pytest.mark.parametrize("sizes", grouping_params(len(_HEADER) + 1))
+    def test_every_suffix(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        origins = _origins(ImportedModuleOrigin, "p/x/lib::f", "q/x/lib::f")
+        assert_verdicts_for_grouping(
+            tmp_path,
+            {"p/x/lib": "def f() -> int = 1\n", "q/x/lib": "def f() -> int = 2\n"},
+            self._HEADER,
+            sizes,
+            self._PROBES,
+            dict.fromkeys(self._PROBES, _QUALIFICATION),
+            span_texts={"short": "lib::f", "long": "x/lib::f"},
+            expected_origins=dict.fromkeys(self._PROBES, origins),
+            expected_spellings={"short": "lib::f", "long": "x/lib::f"},
+        )
+
+
+def test_origins_are_ordered_by_kind_then_spelling_and_listed_once(tmp_path: Path) -> None:
+    entry = (
+        "import lib::*\n"
+        "import lib::{shared}\n"
+        "use T::*\n"
+        "use S::*\n"
+        "\n"
+        "scope T\n"
+        "  def shared() -> int = 3\n"
+        "end T\n"
+        "\n"
+        "scope S\n"
+        "  def shared() -> int = 2\n"
+        "end S\n"
+        "\n"
+        "shared()\n"
+    )
+    graph = make_graph_from_files(tmp_path, {"entry": entry, "lib": "def shared() -> int = 1\n"})
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        resolve_program(graph)
+    error = excinfo.value
+    assert type(error) is AmbiguousQualificationError
+    assert error.spelling == "shared"
+    entry_id = graph.entry_id
+    assert error.origins == (
+        ImportedModuleOrigin((ModuleId.from_path("lib"), "shared")),
+        UseDeclarationOrigin((entry_id, to_bare_atom(("S", "shared")))),
+        UseDeclarationOrigin((entry_id, to_bare_atom(("T", "shared")))),
+    )
+
+
+class TestAmbiguousOwnerProjection:
+    """``Point::Point`` through a bare owner: each origin keeps the kind that reached its owner."""
+
+    _POINTS = {"a/lib": "record Point\n  x: int\n", "b/lib": "record Point\n  x: int\n"}
+    _PROBES = {"call": "Point::Point(x = 1)", "annotation": "fn(p: Point::Point) => 1"}
+
+    def _assert(
+        self,
+        tmp_path: Path,
+        header: tuple[str, ...],
+        sizes: tuple[int, ...],
+        origins: frozenset[tuple[type, str]],
+    ) -> None:
+        assert_verdicts_for_grouping(
+            tmp_path,
+            self._POINTS,
+            header,
+            sizes,
+            self._PROBES,
+            dict.fromkeys(self._PROBES, _QUALIFICATION),
+            span_texts=dict.fromkeys(self._PROBES, "Point::Point"),
+            expected_origins=dict.fromkeys(self._PROBES, origins),
+            expected_spellings=dict.fromkeys(self._PROBES, "Point::Point"),
+        )
+
+    @pytest.mark.parametrize("sizes", grouping_params(3))
+    def test_two_import_tails(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point", "b/lib::Point::Point")
+        self._assert(tmp_path, ("import a/lib::*", "import b/lib::*"), sizes, origins)
+
+    @pytest.mark.parametrize("sizes", grouping_params(4))
+    def test_import_tail_and_use(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        origins = _origins(ImportedModuleOrigin, "a/lib::Point::Point") | _origins(
+            UseDeclarationOrigin, "b/lib::Point::Point"
+        )
+        self._assert(tmp_path, ("import a/lib::*", "import b/lib", "use b/lib::*"), sizes, origins)
+
+    @pytest.mark.parametrize("sizes", grouping_params(3))
+    def test_own_owner_wins(self, tmp_path: Path, sizes: tuple[int, ...]) -> None:
+        assert_verdicts_for_grouping(
+            tmp_path,
+            self._POINTS,
+            ("import a/lib::*", "record Point\n  x: int"),
+            sizes,
+            {"call": self._PROBES["call"]},
+            {"call": ("accepted", type(None))},
+            expected_identities={"call": "record Point\n  x: int"},
+        )

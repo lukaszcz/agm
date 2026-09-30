@@ -63,6 +63,30 @@ def test_anchored_use_targets_pick_the_module_route_or_the_own_scope(tmp_path: P
     assert resolve_repl_graph(local_scope).entry_id == local_scope.entry_id
 
 
+@pytest.mark.parametrize(
+    ("use", "spelling"),
+    (
+        ("use ::X::{Nope}", "::X::Nope"),
+        ("use ::X::* hiding Nope", "::X::Nope"),
+        ("use X::{Nope}", "X::Nope"),
+        ("use a/lib::{Nope}", "a/lib::Nope"),
+        ("use /a/lib::* hiding Nope", "/a/lib::Nope"),
+    ),
+)
+def test_a_use_tail_miss_spells_the_target_as_written(
+    tmp_path: Path, use: str, spelling: str
+) -> None:
+    graph = _graph(
+        tmp_path,
+        f"import a/lib\n{use}\n\nscope X\n  def f() -> int = 1\nend X\n\n()",
+        {"a/lib": "def f() -> int = 1"},
+    )
+    with pytest.raises(UnknownMemberError) as raised:
+        resolve_repl_graph(graph)
+    assert type(raised.value) is UnknownMemberError
+    assert raised.value.spelling == spelling
+
+
 def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -> None:
     graph = _graph(
         tmp_path,

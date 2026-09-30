@@ -36,7 +36,13 @@ from agm.agl.artifact_cache import (
     retained_resolved_modules,
 )
 from agm.agl.attributes import is_param_declaration
-from agm.agl.modules.ids import ModuleId, expand_module_wildcard
+from agm.agl.modules.ids import (
+    ModuleId,
+    expand_module_wildcard,
+    render_route_member,
+    spell_declaration,
+    spell_scope_path,
+)
 
 if TYPE_CHECKING:
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
@@ -59,6 +65,8 @@ from agm.agl.scope.symbols import (
     BinderKind,
     ConstructorRef,
     DeclInfo,
+    DuplicateDeclarationError,
+    MissRepair,
     ModuleResolution,
     ReceiverOwner,
     ScopeNode,
@@ -445,19 +453,17 @@ def _builtin_static_decl_node_ids(
 def _raise_reexport_conflict(
     exposed: NameAtom, existing: QName, origin: QName, decl: ExportDecl
 ) -> None:
-    raise AglScopeError(
-        f"re-export name {exposed!r} has conflicting origins:"
-        f" {existing[0].display()!r}::{existing[1]!r}"
-        f" and {origin[0].display()!r}::{origin[1]!r}",
+    raise DuplicateDeclarationError(
+        spell_scope_path(_path(exposed)),
+        reexports=tuple(
+            spell_declaration(module_id, _path(atom)) for module_id, atom in (existing, origin)
+        ),
         span=decl.span,
     )
 
 
 def _raise_reexport_scope_conflict(exposed: NameAtom, decl: ExportDecl) -> None:
-    raise AglScopeError(
-        f"Name {exposed!r} cannot be both an ordinary declaration and a scope.",
-        span=decl.span,
-    )
+    raise DuplicateDeclarationError(spell_scope_path(_path(exposed)), span=decl.span)
 
 
 def _resolve_reexports(
@@ -573,7 +579,9 @@ def _compute_reexport_additions(
         scopes = matching_atoms(target_scopes, prefix)
         if not declarations and not scopes and not allow_missing:
             raise UnknownMemberError(
-                f"{'/'.join(decl.module_path)}::{'::'.join(prefix)}", span=decl.span
+                render_route_member(decl.module_path, prefix),
+                span=decl.span,
+                repair=MissRepair.NOT_EXPORTED,
             )
         return declarations, scopes
 

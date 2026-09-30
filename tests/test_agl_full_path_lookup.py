@@ -103,6 +103,17 @@ _USE_LIB = "def f() -> int = 1\ndef both() -> int = 10\nrecord P\n  x: int"
 _USE_OWN_LIB = "scope lib\n  def g() -> int = 2\n  def both() -> bool = true\nend lib"
 
 
+_EXPOSED_A = "scope A\n\n  scope X\n    def f() -> int = 1\n    def h() -> int = 1\n  end X\nend A"
+_EXPOSED_B = "scope B\n\n  scope X\n    def g() -> int = 2\n    def h() -> int = 2\n  end X\nend B"
+_ALIASED_ENUM = "enum E\n  | Red\n  | Blue(v: int)\ntype C = E\n"
+_ONE_RED = "record one::E::Red"
+_ONE_BLUE = "record one::E::Blue\n  v: int"
+_OTHER_RED = "enum F\n  | Red\n"
+_OUTSIDE_THE_REGION = "scope r\n  use C::*\n  let v = Red\nend r\n\nRed"
+_OWN_ALIASED_ENUM = ("scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S", "type C = S::E")
+_USES_X = "use A::*\n  use B::*\n  use X::*"
+
+
 def _in_region(use: str, value: str) -> str:
     """A region whose ``use`` exposes names that its ``let v`` reads, then ``r::v``."""
     return f"scope r\n  {use}\n  let v = {value}\nend r\n\nr::v"
@@ -175,6 +186,91 @@ _SCENARIOS = {
             "own-member-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
             "routed-type-value": accepted(
                 _in_region("use lib::*", "P(x = 1)"), "record lib::P\n  x: int"
+            ),
+        },
+    ),
+    "a-use-of-an-imported-alias-reaches-its-target-members": Scenario(
+        modules={"one": _ALIASED_ENUM},
+        header=("import one::{C}",),
+        probes={
+            "member": accepted(_in_region("use C::*", "Red"), _ONE_RED),
+            "member-with-fields": accepted(_in_region("use C::*", "Blue(v = 1)"), _ONE_BLUE),
+            "member-pattern": accepted(
+                _in_region(
+                    "use C::*", "case Blue(v = 2) as C of\n    | Red => 1\n    | Blue(v) => v"
+                ),
+                "int",
+            ),
+            "selected-member": accepted(_in_region("use C::{Red}", "Red"), _ONE_RED),
+            "routed-alias": accepted(_in_region("use one::C::*", "Red"), _ONE_RED),
+            "hidden-member": rejected(
+                _in_region("use C::* hiding Red", "Red"), AglScopeError, "Red"
+            ),
+            "outside-the-region": rejected(_OUTSIDE_THE_REGION, AglScopeError, "Red"),
+        },
+    ),
+    "a-use-of-an-alias-chain-reaches-its-last-target": Scenario(
+        modules={"one": f"{_ALIASED_ENUM}type D = C\ntype N = int\n"},
+        header=("import one::{D, N}",),
+        probes={
+            "member": accepted(_in_region("use D::*", "Red"), _ONE_RED),
+            "alias-of-a-builtin-type": accepted(_in_region("use N::*", "1"), "int"),
+        },
+    ),
+    "an-alias-member-clashes-with-an-imported-one": Scenario(
+        modules={"one": _ALIASED_ENUM, "two": _OTHER_RED},
+        header=("import one::{C}", "import two::*", "use C::*"),
+        probes={
+            "same-name": rejected("[Red]", AmbiguousConstructorError, "Red"),
+            "other-member": accepted("Blue(v = 1)", _ONE_BLUE),
+        },
+    ),
+    "a-region-alias-use-is-read-before-the-root": Scenario(
+        modules={"one": _ALIASED_ENUM, "two": _OTHER_RED},
+        header=("import one::{C}", "import two::*"),
+        probes={
+            "alias-member": accepted(_in_region("use C::*", "Red"), _ONE_RED),
+            "enum-member": accepted(_in_region("use one::E::*", "Red"), _ONE_RED),
+        },
+    ),
+    "a-use-of-an-own-alias-reaches-its-target-members": Scenario(
+        header=_OWN_ALIASED_ENUM,
+        probes={
+            "member": accepted(_in_region("use C::*", "Red"), "record S::E::Red"),
+            "module-root-alias": accepted(_in_region("use ::C::*", "Red"), "record S::E::Red"),
+            "unselected-member": rejected(
+                _in_region("use C::{Red}", "Blue(v = 1)"), AglScopeError, "Blue"
+            ),
+            "outside-the-region": rejected(_OUTSIDE_THE_REGION, AglScopeError, "Red"),
+        },
+    ),
+    "an-own-alias-wins-its-path-over-an-imported-one": Scenario(
+        modules={"one": _ALIASED_ENUM},
+        header=("import one::{C}", *_OWN_ALIASED_ENUM),
+        probes={"member": accepted(_in_region("use C::*", "Red"), "record S::E::Red")},
+    ),
+    "a-use-combines-the-scopes-earlier-uses-expose": Scenario(
+        header=(_EXPOSED_A, _EXPOSED_B),
+        probes={
+            "one-exposure-each": accepted(_in_region(_USES_X, "f() + g()"), "int"),
+            "two-exposed-members-clash-where-used": rejected(
+                _in_region(_USES_X, "h()"), AmbiguousQualificationError, "h"
+            ),
+            "selected-from-both": accepted(
+                _in_region("use A::*\n  use B::*\n  use X::{f, g}", "f() + g()"), "int"
+            ),
+            "selecting-a-member-neither-declares": rejected(
+                _in_region("use A::*\n  use B::*\n  use X::{k}", "1"),
+                UnknownMemberError,
+                "use X::{k}",
+            ),
+            "hiding-a-member-both-declare": rejected(
+                _in_region("use A::*\n  use B::*\n  use X::* hiding h", "h()"), AglScopeError, "h"
+            ),
+            "exposed-by-enclosing-and-own-region": accepted(
+                "scope r\n  use A::*\n\n  scope q\n    use B::*\n    use X::*\n"
+                "    let v = f() + g()\n  end q\nend r\n\nr::q::v",
+                "int",
             ),
         },
     ),

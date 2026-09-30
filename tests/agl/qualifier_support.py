@@ -65,7 +65,7 @@ grouping's own REPL verdict, against the caller's expected ``(phase, cls)``
 *identity* are equal (and, when the caller supplies one, equal to an
 expected literal too) and, when the caller supplies expected origins, that
 file mode's and this grouping's own ambiguity origins (:func:`origin_kinds`)
-equal them. :func:`assert_verdict_for_grouping` is its
+equal them, each listed once. :func:`assert_verdict_for_grouping` is its
 single-probe special case, kept for callers with only one probe to check
 against a header. :func:`grouping_params` builds one ``pytest.param(sizes)``
 per candidate grouping over a header, so a caller parametrizes rather than
@@ -342,6 +342,18 @@ def origin_kinds(error: AglError | None) -> frozenset[tuple[type, str]]:
     )
 
 
+def origins_listed_once(error: AglError | None) -> bool:
+    """Whether *error* lists each of its ambiguity origins once."""
+    return not isinstance(error, AmbiguousQualificationError) or len(set(error.origins)) == len(
+        error.origins
+    )
+
+
+def ambiguity_spelling(error: AglError | None) -> str | None:
+    """*error*'s ambiguous spelling as written, or ``None`` for any other error."""
+    return error.spelling if isinstance(error, AmbiguousQualificationError) else None
+
+
 def grouping_cases(n: int) -> tuple[tuple[str, tuple[int, ...]], ...]:
     """Every grouping over *n* items, paired with a dotted id, for pytest parametrization."""
     return tuple((".".join(map(str, sizes)), sizes) for sizes in all_groupings(n))
@@ -363,6 +375,7 @@ def assert_verdicts_for_grouping(
     span_texts: Mapping[K, str] | None = None,
     expected_identities: Mapping[K, str] | None = None,
     expected_origins: Mapping[K, frozenset[tuple[type, str]]] | None = None,
+    expected_spellings: Mapping[K, str] | None = None,
     type_entries: Mapping[K, str] | None = None,
     stdlib: bool = True,
     expected_legal_groupings: LegalGroupings = "ALL",
@@ -381,7 +394,8 @@ def assert_verdicts_for_grouping(
     otherwise *span_texts[key]* is the exact text the raised error's span
     must slice out, in both modes, both modes raise the same message, and,
     when *expected_origins* has an entry for *key*, both modes' ambiguity
-    origins (:func:`origin_kinds`) equal it. *type_entries* maps a probe file
+    origins (:func:`origin_kinds`) equal it, each listed once, and when *expected_spellings*
+    has one, both modes' ambiguity ``spelling`` equals it. *type_entries* maps a probe file
     mode rejects as a value to the type its spelling names: alone in this
     grouping's final entry, it is instead a REPL ``"type-entry"`` of that
     rendered *identity*.
@@ -389,6 +403,7 @@ def assert_verdicts_for_grouping(
     span_texts = span_texts or {}
     expected_identities = expected_identities or {}
     expected_origins = expected_origins or {}
+    expected_spellings = expected_spellings or {}
     type_entries = type_entries or {}
     expected_legal = (
         frozenset(all_groupings(len(header) + 1))
@@ -438,8 +453,12 @@ def assert_verdicts_for_grouping(
             assert sliced == span_texts[key], key
             assert str(repl_failure) == str(file_failure), key
             if key in expected_origins:
-                assert origin_kinds(file_failure) == expected_origins[key], key
-                assert origin_kinds(repl_failure) == expected_origins[key], key
+                for failure in (file_failure, repl_failure):
+                    assert origin_kinds(failure) == expected_origins[key], key
+                    assert origins_listed_once(failure), key
+            if key in expected_spellings:
+                assert ambiguity_spelling(file_failure) == expected_spellings[key], key
+                assert ambiguity_spelling(repl_failure) == expected_spellings[key], key
 
 
 def assert_verdict_for_grouping(

@@ -21,6 +21,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
+    MissRepair,
     TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
@@ -949,8 +950,11 @@ def test_use_accepts_nameable_targets_with_no_visible_members(
 
 
 def test_unnameable_use_target_is_an_unknown_qualifier() -> None:
-    with pytest.raises(UnknownQualifierError):
+    with pytest.raises(UnknownQualifierError) as caught:
         _resolve_without_loader({"entry": "use Missing::*\n"})
+
+    assert type(caught.value) is UnknownQualifierError
+    assert caught.value.repair is MissRepair.IMPORT_MODULE
 
 
 def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path) -> None:

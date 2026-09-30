@@ -813,6 +813,29 @@ def _ask_program(prompt: str, *, catching: str = "") -> str:
     )
 
 
+def test_session_ask_request_carries_the_sessions_fixed_environment() -> None:
+    class EnvelopeHost(_Host):
+        requests: list[AgentRequest]
+
+        def ask_request(self, handle: str, request: AgentRequest) -> AgentResponse:
+            self.requests.append(request)
+            return AgentResponse(content=self.ask(handle, request.prompt))
+
+    host = EnvelopeHost()
+    host.requests = []
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        '  let _: text = session.ask("hi")\n'
+        "  session.close()\n",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert [request.env for request in host.requests] == [{"AMBIENT": "present"}]
+
+
 def test_session_ask_retries_with_corrective_follow_ups() -> None:
     class RetryingHost(_Host):
         def ask(self, handle: str, prompt: str) -> str:

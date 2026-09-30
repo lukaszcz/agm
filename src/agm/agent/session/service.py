@@ -45,7 +45,7 @@ class _HostSession:
     ephemeral: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
-    env: dict[str, str] = field(default_factory=dict, repr=False)
+    env: dict[str, str] = field(kw_only=True, repr=False)
 
 
 class AglSessionHost:

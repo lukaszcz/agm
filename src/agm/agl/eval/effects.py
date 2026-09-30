@@ -733,6 +733,7 @@ class EffectHandlers:
         output_contract, json_schema = self._contract_carriers(node.contract_id)
         try:
             spec = self._decode_agent_spec(agent)
+            env = self._ctx._session_host.snapshot(handle).env
         except SessionHostError as error:
             self._session_error(error)
         return self._eval_session_ask_attempts(
@@ -743,15 +744,11 @@ class EffectHandlers:
             max_attempts=node.max_attempts,
             node=node,
             output_contract=output_contract,
-            # A session's sandbox mode and environment, fixed at open, are
-            # never per-ask: every session-routed request carries neither
-            # here. The session host owns the session's real environment
-            # (fixed at open) and applies it itself when dispatching, so this
-            # placeholder is never read; it only satisfies AgentRequest.env
-            # being required.
+            # A session's sandbox mode, fixed at open, is never per-ask; the
+            # request carries the environment the session was opened under.
             permission_mode=PermissionMode.NONE,
             sandbox=None,
-            env={},
+            env=env,
             dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,

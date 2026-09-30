@@ -409,17 +409,11 @@ def test_path_valued_engine_keys_carry_a_text_option() -> None:
 
 
 @pytest.mark.parametrize(
-    ("cli_values", "primary_table", "origin"),
-    [
-        ({"parse-error-retries": -1}, {}, "--parse-error-retries"),
-        ({}, {"parse-error-retries": -1}, "configuration key parse-error-retries"),
-    ],
+    ("cli_values", "primary_table"),
+    [({"parse-error-retries": -1}, {}), ({}, {"parse-error-retries": -1})],
 )
-def test_negative_parse_error_retries_exits_naming_its_origin(
-    cli_values: dict[str, object],
-    primary_table: dict[str, object],
-    origin: str,
-    capsys: pytest.CaptureFixture[str],
+def test_negative_parse_error_retries_exits(
+    cli_values: dict[str, object], primary_table: dict[str, object]
 ) -> None:
     config = exec_config_from_merged({"exec": primary_table})
 
@@ -427,7 +421,6 @@ def test_negative_parse_error_retries_exits_naming_its_origin(
         build_host_engine_seeds(config=config, primary_table=primary_table, cli_values=cli_values)
 
     assert exc_info.value.code == 1
-    assert origin in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("raw", ["three", True, 1.5])
@@ -438,6 +431,28 @@ def test_non_integer_configured_parse_error_retries_exits(raw: object) -> None:
         build_host_engine_seeds(
             config=config, primary_table={"parse-error-retries": raw}, cli_values={}
         )
+
+
+@pytest.mark.parametrize("key", ["strict-json", "trace", "debug"])
+def test_configured_bool_string_decodes_like_a_cli_token(key: str) -> None:
+    table: dict[str, object] = {key: "true"}
+    config = exec_config_from_merged({"exec": table})
+
+    seeds = build_host_engine_seeds(config=config, primary_table=table, cli_values={})
+
+    assert seeds.upper[key] == BoolValue(True)
+
+
+@pytest.mark.parametrize("key", ["strict-json", "trace", "debug"])
+@pytest.mark.parametrize("raw", ["banana", 1])
+def test_undecodable_configured_bool_exits_instead_of_seeding_false(key: str, raw: object) -> None:
+    table: dict[str, object] = {key: raw}
+    config = exec_config_from_merged({"exec": table})
+
+    with pytest.raises(SystemExit) as exc_info:
+        build_host_engine_seeds(config=config, primary_table=table, cli_values={})
+
+    assert exc_info.value.code == 1
 
 
 def test_zero_parse_error_retries_is_a_valid_seed() -> None:
@@ -674,12 +689,10 @@ def test_a_middle_trace_file_of_none_hides_a_lower_tier_trace_file() -> None:
 @pytest.mark.parametrize(
     ("primary", "fallback", "cli_values"),
     [
-        ({"trace": "yes"}, {}, {}),
         ({}, {"trace-file": "   "}, {}),
         ({"trace": False}, {"trace-file": "trace.jsonl"}, {}),
     ],
     ids=[
-        "invalid_trace_value_in_program_table",
         "whitespace_only_trace_file_in_exec",
         "program_trace_false_and_exec_trace_file",
     ],

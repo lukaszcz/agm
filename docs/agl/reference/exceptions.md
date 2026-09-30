@@ -482,7 +482,7 @@ operation: text    # the operator, e.g. "/"
 ### `TypeError`
 
 Raised by an engine-setting write the host cannot accept — a `timeout` whose
-text is not a duration, or a negative `parse-error-retries`
+text is not a duration, or a blank `trace-file`
 ([Host environment](host-environment.md#engine-settings)).
 
 ```text
@@ -609,8 +609,10 @@ pattern: text   # the pattern that failed to compile
 
 Raised when `int.pow` receives a negative exponent, `decimal.sqrt` receives a
 negative receiver, `decimal.pow` receives a negative exponent on a zero base,
-or a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
-loop entry. Carries only the base fields. It is catchable.
+a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
+loop entry, or a negative `parse-error-retries` is written
+([Host environment](host-environment.md#engine-settings)). Carries only the
+base fields. It is catchable.
 
 ```text
 (base fields only)
@@ -654,11 +656,11 @@ how equality and tracing treat one.
 | Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
+| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, non-positive range `for` step (`by k` with `k ≤ 0`), or negative `parse-error-retries` write | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
-| Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
+| Engine-setting write the host rejects (unparseable `timeout`, blank `trace-file`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
 | `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |

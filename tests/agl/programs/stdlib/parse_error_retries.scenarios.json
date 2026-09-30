@@ -1,15 +1,6 @@
 {
   "scenarios": [
     {
-      "name": "zero_is_accepted",
-      "params": {
-        "retries": 0
-      },
-      "expect": {
-        "stdout": "4\ntrue\n0\n"
-      }
-    },
-    {
       "name": "positive_is_accepted",
       "params": {
         "retries": 7

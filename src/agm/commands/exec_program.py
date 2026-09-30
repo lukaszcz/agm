@@ -68,18 +68,19 @@ from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments
-from agm.agl.runtime.engine_config import engine_value_range_error, restamp_engine_setting
+from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
-from agm.agl.semantics.values import BoolValue
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import (
     build_host_engine_seeds,
     execution_cli_values,
     host_agent_spec_resolver,
+    resolve_strict_json,
     resolve_timeout,
+    validate_config_engine_values,
 )
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
@@ -715,17 +716,12 @@ def run(
             for key, value in argument_preflight.program_config.items()
             if is_engine_builtin_var_key(key)
         }
-    for key_name, value in config_engine_values.items():
-        range_error = engine_value_range_error(key_name, value)
-        if range_error is not None:
-            print(f"Error: invalid @config {key_name} value: {range_error}", file=sys.stderr)
-            raise SystemExit(1)
+    validate_config_engine_values(config_engine_values)
     engine_seeds = engine_tiers.merged(middle=config_engine_values)
 
-    strict_seed = engine_seeds.get("strict-json")
-    resolved_strict_json = isinstance(strict_seed, BoolValue) and strict_seed.value
+    resolved_strict_json = resolve_strict_json(engine_seeds)
 
-    resolved_timeout = resolve_timeout(engine_seeds, cli_values)
+    resolved_timeout = resolve_timeout(engine_seeds)
 
     # One resolution for both the readable ``trace`` seed above and the trace
     # file opened below.

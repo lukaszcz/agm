@@ -5295,14 +5295,6 @@ class TestExecParseErrorRetriesSetting:
                 "program def main() -> unit = ()\n",
                 1,
             ),
-            (
-                "",
-                [],
-                "import std/config\n"
-                "program def main() -> unit =\n"
-                "  config::parse-error-retries := -1\n",
-                2,
-            ),
         ],
     )
     def test_negative_values_are_rejected(
@@ -5322,3 +5314,34 @@ class TestExecParseErrorRetriesSetting:
         result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
 
         assert result.exit_code == exit_code, result.output
+
+
+class TestExecConfigAttributeValidation:
+    """Every ``@config`` engine value is validated, even one a higher tier overrides."""
+
+    @pytest.mark.parametrize(
+        ("entry", "flags"),
+        [
+            ("parse-error-retries = -3", ["--parse-error-retries", "2"]),
+            ('timeout = Some("bogus")', ["--timeout", "3s"]),
+            ('trace-file = Some("")', ["--no-trace"]),
+            ('timeout = Some("bogus")', []),
+        ],
+    )
+    def test_invalid_value_exits_even_when_overridden(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        entry: str,
+        flags: list[str],
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, "")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            f"import std/config\n\n@config(config::{entry})\nprogram def main() -> unit = ()\n"
+        )
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 1, result.output

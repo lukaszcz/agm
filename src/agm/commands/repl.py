@@ -40,6 +40,7 @@ from agm.cli_support.engine_seeds import (
     build_host_engine_seeds,
     execution_cli_values,
     host_agent_spec_resolver,
+    resolve_strict_json,
     resolve_timeout,
 )
 from agm.cli_support.param_config import resolve_module_param_values
@@ -79,7 +80,6 @@ def run(args: ReplArgs) -> None:
     resolve_agent_spec = host_agent_spec_resolver(merged_config)
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
-    strict_json = args.strict_json if args.strict_json is not None else config.strict_json
     # Resolve max call depth: CLI > [exec] config (config pragmas are not applied
     # in the REPL).  ``None`` lets the session apply the canonical default.
     call_depth_limit = (
@@ -96,7 +96,8 @@ def run(args: ReplArgs) -> None:
         cli_values=cli_values,
     )
     engine_seeds = engine_tiers.merged()
-    timeout = resolve_timeout(engine_seeds, cli_values)
+    timeout = resolve_timeout(engine_seeds)
+    strict_json = resolve_strict_json(engine_seeds)
 
     # One resolution for both the readable ``trace`` seed and the trace file
     # prepared below, exactly as ``agm exec`` does.

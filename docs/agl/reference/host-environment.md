@@ -447,9 +447,10 @@ Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
 (the run, or the REPL session): if it is `true` then, the temporary files and
 directories `std/fs` created are kept rather than removed. `parse-error-retries` is the
 corrective retry count used by `ask`'s default parse policy. A write the engine cannot
-accept — a `timeout` whose text is not a duration, or a negative `parse-error-retries` —
-raises the catchable `TypeError`
-([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
+accept raises a catchable exception and leaves the setting unchanged: `RangeError`
+([Exceptions](exceptions.md#rangeerror)) for a negative `parse-error-retries`, `TypeError`
+([Exceptions](exceptions.md#typeerror)) for a `timeout` whose text is not a duration or a
+blank `trace-file`.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
 of the run without rolling back the assigned `trace` or `trace-file` value.
 

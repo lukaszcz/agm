@@ -515,8 +515,11 @@ later `trace := false` disables it without clearing the path. `strict-json` and 
 writes affect subsequent agent-output parsing and `exec` calls. `debug` matters only when the
 run ends: its final value decides whether `std/fs` temporary paths are kept.
 `parse-error-retries` must not be negative: a negative source write raises the catchable
-`TypeError` (exit 2 when uncaught) and leaves the setting unchanged; a negative CLI, config,
+`RangeError` (exit 2 when uncaught) and leaves the setting unchanged; a negative CLI, config,
 `@config`, or manifest value exits 1 before execution.
+An invalid engine value in any config tier exits 1 before execution, as an undecodable bool
+(`strict-json = "maybe"`) does; every `@config` value is checked even when a higher tier
+overrides it.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
 source `timeout` write changes only the **shell-exec** timeout; agent idle timeout cannot change

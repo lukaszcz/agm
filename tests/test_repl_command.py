@@ -969,7 +969,8 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(parse_error_retries=5))
         session: ReplSession = fake_plain_console[0]["session"]
-        assert session._current["parse-error-retries"] == IntValue(5)
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry("config::parse-error-retries").value == IntValue(5)
 
     def test_negative_parse_error_retries_exits_1(
         self,

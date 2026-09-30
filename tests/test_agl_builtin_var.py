@@ -461,7 +461,7 @@ class TestStdConfigQualified:
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(9)
 
-    def test_negative_parse_error_retries_raises_catchable_type_error(self) -> None:
+    def test_negative_parse_error_retries_raises_catchable_range_error(self) -> None:
         """A rejected write leaves the setting unchanged."""
         result = _run_program(
             "import std/config::*\n"
@@ -469,7 +469,7 @@ class TestStdConfigQualified:
             "let caught = try\n"
             "    std/config::parse-error-retries := -1\n"
             "    false\n"
-            "  catch TypeError as e =>\n"
+            "  catch RangeError as e =>\n"
             "    true\n"
             "let n = std/config::parse-error-retries\n"
         )

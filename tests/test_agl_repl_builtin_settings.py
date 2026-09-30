@@ -133,6 +133,8 @@ _PERSISTED_WRITES = [
         ("AgentCommand", "command", TextValue("scripted")),
         id="default-agent",
     ),
+    pytest.param("debug", "true", BoolValue(True), id="debug"),
+    pytest.param("parse-error-retries", "7", IntValue(7), id="parse-error-retries"),
 ]
 
 
@@ -263,6 +265,8 @@ def _host_seeded_session(
     trace: bool | None = None,
     trace_file: str | None = None,
     default_agent: str | None = None,
+    debug: bool | None = None,
+    parse_error_retries: int | None = None,
 ) -> ReplSession:
     """Build a session with explicit host seeds ONLY for the given keys.
 
@@ -279,6 +283,10 @@ def _host_seeded_session(
         raw["trace"] = trace
     if trace_file is not None:
         raw["trace-file"] = trace_file
+    if debug is not None:
+        raw["debug"] = debug
+    if parse_error_retries is not None:
+        raw["parse-error-retries"] = parse_error_retries
     engine_base = build_engine_config_seeds(raw)
     if default_agent is not None:
         engine_base["default-agent"] = agent_value("AgentCommand", command=default_agent)
@@ -307,7 +315,9 @@ def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "builtin var strict-json: bool = true\n"
         'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
         "builtin var trace: bool = true\n"
-        'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+        'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n'
+        "builtin var debug: bool = true\n"
+        "builtin var parse-error-retries: int = 9\n",
         encoding="utf-8",
     )
     _copy_core_and_option(config_path.parent)
@@ -337,6 +347,14 @@ _HOST_SEED_PRECEDENCE = [
         ("AgentCommand", "command", TextValue("host")),
         id="default-agent",
     ),
+    pytest.param({"debug": True}, "debug", "false", BoolValue(True), id="debug"),
+    pytest.param(
+        {"parse_error_retries": 3},
+        "parse-error-retries",
+        "8",
+        IntValue(3),
+        id="parse-error-retries",
+    ),
 ]
 
 
@@ -345,7 +363,7 @@ class TestResetHostSeedPrecedence:
 
     ``strict-json`` (including a falsy ``False`` host seed) is pinned in
     :class:`TestDefaultsAndSeeding` above; this class covers the remaining
-    four keys.  The ``timeout`` case seeds through ``engine_base`` (e.g.
+    other keys.  The ``timeout`` case seeds through ``engine_base`` (e.g.
     CLI/config); the driver-argument channel gets its own test below.
     """
 
@@ -452,6 +470,8 @@ _DECLARED_DEFAULT_PRECEDENCE = [
         ("AgentCommand", "command", TextValue("declared")),
         id="default-agent",
     ),
+    pytest.param("debug", "false", BoolValue(True), id="debug"),
+    pytest.param("parse-error-retries", "8", IntValue(9), id="parse-error-retries"),
 ]
 
 
@@ -564,7 +584,9 @@ class TestResetRestoresMixedSeedOrigins:
             "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
-            'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+            'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n'
+            "builtin var debug: bool = true\n"
+            "builtin var parse-error-retries: int = 9\n",
             encoding="utf-8",
         )
         _copy_core_and_option(config_path.parent)

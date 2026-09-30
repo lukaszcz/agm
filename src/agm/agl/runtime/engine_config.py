@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.reserved_nominals import AGENT_SANDBOX_MEMBERS
 from agm.agl.semantics.values import IntValue, RecordValue
 from agm.config.engine_keys import ENGINE_KEYS, NON_NEGATIVE_ENGINE_KEYS, EngineKeyKind
@@ -12,7 +13,6 @@ from agm.config.engine_keys import ENGINE_KEYS, NON_NEGATIVE_ENGINE_KEYS, Engine
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from agm.agl.ir.builtin_nominals import BuiltinNominals
     from agm.agl.ir.ids import NominalId
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
@@ -23,10 +23,11 @@ __all__ = [
     "convert_config_value",
     "convert_host_value",
     "engine_default_settings",
-    "engine_value_range_error",
+    "EngineRangeError",
     "raw_option_str",
     "restamp_engine_setting",
     "validate_engine_leaf_value",
+    "validate_engine_value",
     "validate_manifest_leaf_value",
 ]
 
@@ -318,45 +319,50 @@ def convert_config_value(
     return convert_host_value(name, raw, key_type, table)
 
 
-def engine_value_range_error(name: str, value: "Value") -> str | None:
-    """Return why *value* is outside engine key *name*'s accepted range, or ``None``.
+class EngineRangeError(ValueError):
+    """A decoded engine value outside its key's accepted range."""
 
-    The one range rule shared by host decoding and a runtime source write.
+
+def validate_engine_value(
+    name: str, value: "Value", *, nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
+) -> None:
+    """Check one decoded engine setting *value*, raising ``ValueError`` when it is invalid.
+
+    The one post-decode rule shared by host decoding (CLI, config tables,
+    manifest, ``@config``) and a runtime source write: a present
+    ``Option[text]`` must not be blank, ``timeout`` must parse as a duration
+    (:func:`~agm.core.parse.parse_timeout`), and a non-negative key must not be
+    negative (:class:`EngineRangeError`). *nominals* is the table that stamped
+    *value*'s ``Option`` identity.
     """
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT and isinstance(
+        value, RecordValue
+    ):
+        from agm.agl.runtime.option import option_text
+        from agm.core.parse import parse_timeout
+
+        text = option_text(value, nominals=nominals)
+        if text is not None and not text.strip():
+            raise ValueError(f"Setting {name!r}: value must not be blank.")
+        if text is not None and name == "timeout":
+            parse_timeout(text)
     if name in NON_NEGATIVE_ENGINE_KEYS and isinstance(value, IntValue) and value.value < 0:
-        return f"setting {name!r} must not be negative, got {value.value}"
-    return None
+        raise EngineRangeError(f"setting {name!r} must not be negative, got {value.value}")
 
 
 def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
     """Decode one named engine setting's raw value, raising ``ValueError`` on any failure.
 
-    Looks up *name*'s type in ``ENGINE_KEY_TYPES`` and decodes through
-    :func:`convert_config_value`; ``timeout`` additionally must parse as a
-    duration (:func:`~agm.core.parse.parse_timeout`), a present ``Option[text]``
-    value must not be blank, and the value must pass
-    :func:`engine_value_range_error`. *raw* is decoded as given (a blank ``timeout`` or
-    ``trace-file`` fails): callers holding a config-file or manifest
-    spelling normalize it first.
+    Looks up *name*'s type in ``ENGINE_KEY_TYPES``, decodes through
+    :func:`convert_config_value`, and checks the result with
+    :func:`validate_engine_value`. *raw* is decoded as given (a blank ``timeout``
+    or ``trace-file`` fails): callers holding a config-file or manifest spelling
+    normalize it first.
     """
     from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 
     value = convert_config_value(name, raw, ENGINE_KEY_TYPES[name], type_table)
-    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT and isinstance(
-        value, RecordValue
-    ):
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-        from agm.agl.runtime.option import option_text
-        from agm.core.parse import parse_timeout
-
-        text = option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
-        if text is not None and not text.strip():
-            raise ValueError(f"Setting {name!r}: value must not be blank.")
-        if text is not None and name == "timeout":
-            parse_timeout(text)
-    range_error = engine_value_range_error(name, value)
-    if range_error is not None:
-        raise ValueError(range_error)
+    validate_engine_value(name, value)
     return value
 
 

@@ -146,9 +146,10 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import DefaultResolver
 from agm.agl.runtime.engine_config import (
+    EngineRangeError,
     engine_default_settings,
-    engine_value_range_error,
     restamp_engine_setting,
+    validate_engine_value,
 )
 from agm.agl.runtime.externs import (
     AglCallableProxy,
@@ -2265,18 +2266,18 @@ class IrInterpreter:
         Writes to the ``trace``/``trace-file`` register pair additionally
         reconfigure the live trace service when a host reconfigurer is present;
         ``default-agent`` remains a register-only value. A value outside the
-        key's range raises the catchable ``TypeError`` and leaves it unchanged.
+        key's range raises the catchable ``RangeError``, an otherwise invalid one
+        (blank path, bad duration) ``TypeError``; either leaves it unchanged.
         """
         key = self._builtin_var_key(key)
         _, _, name = key
         if not is_engine_builtin_var_key(key):
             self._builtin_vars[key] = value
             return
-        range_error = engine_value_range_error(name, value)
-        if range_error is not None:
-            raise AglRaise(
-                _make_exc_value("TypeError", range_error, nominals=self._program.builtin_nominals)
-            )
+        try:
+            validate_engine_value(name, value, nominals=self._program.builtin_nominals)
+        except ValueError as exc:
+            raise self._engine_setting_raise(exc) from exc
         if name in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(name, value)
             if name == "timeout":
@@ -2320,6 +2321,16 @@ class IrInterpreter:
     # Engine-setting effect
     # ------------------------------------------------------------------
 
+    def _engine_setting_raise(self, exc: ValueError) -> AglRaise:
+        """Map an engine-value validation failure to its catchable AgL exception."""
+        return AglRaise(
+            _make_exc_value(
+                "RangeError" if isinstance(exc, EngineRangeError) else "TypeError",
+                str(exc),
+                nominals=self._program.builtin_nominals,
+            )
+        )
+
     def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
         """Apply the live engine-setting effect for a runtime-live engine key.
 
@@ -2333,19 +2344,10 @@ class IrInterpreter:
             assert public_name == "timeout"
             assert isinstance(config_value, RecordValue)
             raw = option_text(config_value, nominals=self._program.builtin_nominals)
-            if raw is None:
-                self._shell_exec_timeout = None
-            else:
-                try:
-                    self._shell_exec_timeout = _parse_timeout(raw)
-                except ValueError as exc:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "TypeError",
-                            f"invalid timeout: {exc}",
-                            nominals=self._program.builtin_nominals,
-                        )
-                    ) from exc
+            try:
+                self._shell_exec_timeout = None if raw is None else _parse_timeout(raw)
+            except ValueError as exc:
+                raise self._engine_setting_raise(exc) from exc
 
     # ------------------------------------------------------------------
     # Result collection

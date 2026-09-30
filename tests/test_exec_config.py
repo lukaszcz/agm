@@ -52,9 +52,9 @@ class TestExecConfigFromConfigFiles:
         home = tmp_path / "home"
         home.mkdir()
         cfg = self._config(home, tmp_path)
-        assert cfg.strict_json is False
+        assert cfg.strict_json is None
         assert cfg.timeout is None
-        assert cfg.trace is False
+        assert cfg.trace is None
         assert cfg.trace_file is None
 
     def test_exec_settings_load_from_toml(self, tmp_path: Path) -> None:

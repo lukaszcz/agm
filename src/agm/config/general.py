@@ -690,9 +690,11 @@ def load_revise_config(
 class ExecConfig:
     """Resolved exec-command configuration."""
 
-    strict_json: bool
+    # Raw TOML values (``None`` = unset): exec/repl decode the bool and
+    # ``parse_error_retries`` engine keys through the shared host-value decoder.
+    strict_json: object | None
     timeout: float | None
-    trace: bool
+    trace: object | None
     trace_file: str | None
     # Raw TOML value (a string or a native table): exec/repl decode it as a
     # host Agent value through the shared host-value decoder.
@@ -703,8 +705,7 @@ class ExecConfig:
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
     # Keep debugging artifacts (``std/fs`` temporary paths) past the host session.
-    debug: bool = False
-    # Raw TOML value: exec/repl decode it as a non-negative host int.
+    debug: object | None = None
     parse_error_retries: object | None = None
 
 
@@ -740,19 +741,18 @@ def exec_config_from_merged(
             if key in table:
                 effective[key] = table[key]
 
-    resolved_strict_json = _optional_bool(effective, "strict-json")
+    resolved_strict_json = effective.get("strict-json")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
 
-    resolved_trace = _optional_bool(effective, "trace")
+    resolved_trace = effective.get("trace")
     resolved_trace_file = _optional_str(effective, "trace-file")
-    resolved_debug = _optional_bool(effective, "debug")
-    # Keep every explicitly supplied Agent/AgentSandbox/parse-error-retries
-    # value raw (for the first two, a string or a native TOML table) so
-    # exec/repl can decode and validate it through the shared host-value
-    # decoder at their AgL host boundary; other commands stay free of AgL
-    # imports.
+    resolved_debug = effective.get("debug")
+    # Keep every explicitly supplied engine value raw (``default-agent`` and
+    # ``default-sandbox`` may be a native TOML table) so exec/repl decode and
+    # validate it through the shared host-value decoder at their AgL host
+    # boundary; other commands stay free of AgL imports.
     resolved_default_agent = effective.get("default-agent")
     resolved_default_sandbox = effective.get("default-sandbox")
     resolved_parse_error_retries = effective.get("parse-error-retries")

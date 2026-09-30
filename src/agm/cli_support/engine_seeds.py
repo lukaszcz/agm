@@ -16,13 +16,18 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from agm.agent.spec_defaults import AgentSpecResolver, configured_defaults_resolver
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-from agm.agl.runtime.engine_config import raw_option_str, validate_engine_leaf_value
+from agm.agl.runtime.engine_config import (
+    raw_option_str,
+    validate_engine_leaf_value,
+    validate_engine_value,
+)
 from agm.agl.runtime.option import option_text
-from agm.agl.semantics.values import RecordValue
+from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.config.engine_keys import (
     ENGINE_KEYS,
     EngineKeyKind,
@@ -32,7 +37,7 @@ from agm.config.engine_keys import (
 from agm.core.log import TraceDecision
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import Value
@@ -78,12 +83,10 @@ def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | No
     return values
 
 
-def resolve_timeout(
-    engine_seeds: "Mapping[str, Value]", cli_values: "Mapping[str, object | None]"
-) -> float | None:
+def resolve_timeout(engine_seeds: "Mapping[str, Value]") -> float | None:
     """Parse the merged ``timeout`` seed into seconds; ``None`` when unset or cleared.
 
-    Exits 1 naming the value's origin when it is not a duration.
+    Every tier's value is validated when decoded, so it always parses.
     """
     from agm.core.parse import parse_timeout
 
@@ -91,14 +94,13 @@ def resolve_timeout(
     if not isinstance(seed, RecordValue):
         return None
     text = option_text(seed, nominals=NO_BUILTIN_DECLARATIONS)
-    if text is None:
-        return None
-    try:
-        return parse_timeout(text)
-    except ValueError as exc:
-        origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
-        print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    return None if text is None else parse_timeout(text)
+
+
+def resolve_strict_json(engine_seeds: "Mapping[str, Value]") -> bool:
+    """Return the merged ``strict-json`` seed; ``False`` when unset."""
+    seed = engine_seeds.get("strict-json")
+    return isinstance(seed, BoolValue) and seed.value
 
 
 def host_agent_spec_resolver(merged_config: "TomlDict") -> AgentSpecResolver:
@@ -126,6 +128,15 @@ def _configured_value(
     return configured_value
 
 
+def _exit_on_invalid[T](key_name: str, origin: str, check: "Callable[[], T]") -> T:
+    """Run *check*; on ``ValueError`` print an origin-tagged error and exit 1."""
+    try:
+        return check()
+    except ValueError as exc:
+        print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def _decode_engine_value(
     key_name: str, raw: object, origin: str, type_table: "TypeTable"
 ) -> "Value":
@@ -138,11 +149,20 @@ def _decode_engine_value(
     so a CLI flag, a config-file entry, and a package manifest leaf fail
     identically.
     """
-    try:
-        return validate_engine_leaf_value(key_name, raw, type_table)
-    except ValueError as exc:
-        print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    return _exit_on_invalid(
+        key_name, origin, partial(validate_engine_leaf_value, key_name, raw, type_table)
+    )
+
+
+def validate_config_engine_values(values: "Mapping[str, Value]") -> None:
+    """Validate every decoded ``@config`` engine value, exiting 1 naming the first invalid key.
+
+    Applies :func:`~agm.agl.runtime.engine_config.validate_engine_value`
+    whether or not a higher tier overrides the value, like a CLI or
+    config-table value.
+    """
+    for name, value in values.items():
+        _exit_on_invalid(name, "@config", partial(validate_engine_value, name, value))
 
 
 @dataclass(frozen=True)

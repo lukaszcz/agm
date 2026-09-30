@@ -1969,6 +1969,16 @@ class TestExecCommandShellComplete:
         assert self._complete(["exec", str(agl_file)], "") == ["fast", "slow"]
         assert self._complete(["exec", str(agl_file)], "f") == ["fast"]
 
+    def test_enum_completion_omits_members_requiring_arguments(self, tmp_path: Path) -> None:
+        """Only members a bare name can construct are offered as values."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Mode\n  | Fast\n  | Tuned(level: int)\n  | Custom(level: int = 1)\n\n"
+            "program def main(mode: Mode) -> unit = ()\n"
+        )
+
+        assert self._complete(["exec", str(agl_file)], "") == ["Fast", "Custom"]
+
     def test_file_program_omits_implicit_positional_flag(self, tmp_path: Path) -> None:
         """``agm exec FILE --<TAB>`` offers flags only for named CLI parameters."""
         agl_file = tmp_path / "prog.agl"

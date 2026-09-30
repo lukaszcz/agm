@@ -1800,7 +1800,10 @@ def _program_param_infos(
 
 
 def _enum_completion_values(type_: "Type", type_table: "TypeTable") -> tuple[str, ...]:
-    """Return the value-syntax names for a parameter's enum, if it has one."""
+    """Return the value-syntax names a bare word can construct for a parameter's enum.
+
+    Members with a required field are omitted: they need an argument list.
+    """
     from agm.agl.semantics.types import (
         EnumType,
         is_standard_option_enum,
@@ -1816,6 +1819,7 @@ def _enum_completion_values(type_: "Type", type_table: "TypeTable") -> tuple[str
     return tuple(
         type_table.external_name(member).name or member.name
         for member in type_table.enum_members(type_)
+        if all(has_default for _, has_default in type_table.field_has_default(member))
     )
 
 

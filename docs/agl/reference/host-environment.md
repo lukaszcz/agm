@@ -81,7 +81,8 @@ one-letter spelling by `@opt-short` also accepts `-n value` and `-nvalue`, and
 groups with other one-letter flags — `-abc` — where only the last letter of a
 group may take a value. A `program def`'s
 parameter list defaults to the **named-only** AgL zone. On the CLI, an unzoned
-required parameter such as `name: text` is positional-only; an unzoned defaulted
+required parameter such as `name: text` is positional-only unless it carries
+`@opt-name` or `@opt-short`, which keep it flag-addressed; an unzoned defaulted
 parameter such as `name: text = "value"` remains named-only. An explicit
 `@arg-pos`, `@arg-std`, or `@arg-named` sets both the AgL and CLI zones.
 A bare `--` ends option parsing, so a later `--`-prefixed token is collected

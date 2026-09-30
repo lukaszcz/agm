@@ -255,8 +255,9 @@ class ProgramOptionSpec:
     ``hidden`` whether the parameter's own name entry is kept out of help and
     completion, and ``doc`` its help prose. Presentation fields are absent
     unless an attribute supplies them. ``cli_positional`` marks an unzoned,
-    required program parameter, whose CLI default is positional-only even
-    though its AgL call zone remains named-only.
+    required program parameter without ``@opt-name`` or ``@opt-short``, whose
+    CLI default is positional-only even though its AgL call zone remains
+    named-only.
     """
 
     name: str

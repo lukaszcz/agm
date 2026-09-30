@@ -483,7 +483,11 @@ class _Recognizer:
                     recognized,
                     zone,
                     cli_positional=(
-                        declared is None and owner_zone is None and entry.default is None
+                        declared is None
+                        and owner_zone is None
+                        and entry.default is None
+                        and OPTION_NAME_ATTRIBUTE not in recognized.nodes
+                        and OPTION_SHORT_ATTRIBUTE not in recognized.nodes
                     ),
                 )
 

@@ -3921,6 +3921,21 @@ class TestProgramOptionAttributesCLI:
         assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--", "-5"])) is None
         assert capsys.readouterr().out == "-5\n"
 
+    @pytest.mark.parametrize("flag", ["-m", "--mode", "--kind"])
+    def test_a_required_unzoned_parameter_with_a_name_attribute_stays_flag_addressed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        source = (
+            'program def main(@opt-short("m") mode: text) -> unit = print mode\n'
+            if flag != "--kind"
+            else 'program def main(@opt-name("kind") mode: text) -> unit = print mode\n'
+        )
+        write_file_program(agl_file, source)
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=[flag, "x"])) is None
+        assert capsys.readouterr().out == "x\n"
+
     def test_a_short_option_colliding_with_a_host_flag_is_a_host_diagnostic(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -267,6 +267,7 @@ class ExecutionOptionValues(Protocol):
     no_trace: bool
     trace_file: str | None
     debug: bool | None
+    parse_error_retries: int | None
 
 
 @dataclass(slots=True)
@@ -291,6 +292,8 @@ class ExecArgs:
     default_sandbox: str | None = None
     # Seeds std/config::debug (None = no override).
     debug: bool | None = None
+    # Seeds std/config::parse-error-retries (None = no override).
+    parse_error_retries: int | None = None
     # Static artifacts produced only when CLI ambiguity required early discovery.
     pipeline_cache: object | None = field(default=None, repr=False, compare=False)
 
@@ -313,6 +316,8 @@ class ReplArgs:
     default_sandbox: str | None = None
     # Seeds std/config::debug (None = no override).
     debug: bool | None = None
+    # Seeds std/config::parse-error-retries (None = no override).
+    parse_error_retries: int | None = None
     # Force the plain, non-interactive line front end even on a tty; the
     # auto-detected default (non-tty stdin/stdout, or TERM=dumb) needs no flag.
     plain: bool = False

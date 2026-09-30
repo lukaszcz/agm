@@ -286,6 +286,7 @@ def _args(
     default_agent: str | None = None,
     default_sandbox: str | None = None,
     no_stdlib: bool = False,
+    parse_error_retries: int | None = None,
     plain: bool = True,
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields.
@@ -306,6 +307,7 @@ def _args(
         default_agent=default_agent,
         default_sandbox=default_sandbox,
         no_stdlib=no_stdlib,
+        parse_error_retries=parse_error_retries,
         plain=plain,
     )
 
@@ -955,6 +957,33 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(quiet=True))
         assert fake_plain_console[0]["echo"] is False
+
+    def test_cli_parse_error_retries_seeds_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(parse_error_retries=5))
+        session: ReplSession = fake_plain_console[0]["session"]
+        assert session._current["parse-error-retries"] == IntValue(5)
+
+    def test_negative_parse_error_retries_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(parse_error_retries=-1))
+
+        assert exc_info.value.code == 1
+        assert fake_plain_console == []
 
     def test_blank_agent_literal_exits_1(
         self,

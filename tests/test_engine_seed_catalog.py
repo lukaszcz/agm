@@ -14,7 +14,7 @@ from agm.agl.runtime.engine_config import (
     engine_default_settings,
     raw_option_str,
 )
-from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
+from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import (
     ENGINE_KEY_NAMES,
@@ -36,6 +36,7 @@ _CONFIG_RAW_VALUES: dict[str, object] = {
     "trace-file": "configured.jsonl",
     "timeout": "12s",
     "debug": True,
+    "parse-error-retries": 7,
 }
 
 _CLI_VALUES: dict[str, object] = {
@@ -46,6 +47,7 @@ _CLI_VALUES: dict[str, object] = {
     "trace-file": "cli.jsonl",
     "timeout": "3s",
     "debug": False,
+    "parse-error-retries": 0,
 }
 
 
@@ -60,6 +62,7 @@ def _config_for(key: str, configured: bool) -> ExecConfig:
         else None,
         default_sandbox="Native" if configured and key == "default-sandbox" else None,
         debug=configured if key == "debug" else False,
+        parse_error_retries=7 if configured and key == "parse-error-retries" else None,
     )
 
 
@@ -76,6 +79,7 @@ _RAW_AND_EXPECTED_BY_KEY: dict[str, tuple[object, object]] = {
     "trace-file": ("raw.jsonl", "raw.jsonl"),
     "timeout": ("5s", 5.0),
     "debug": (True, True),
+    "parse-error-retries": (2, 2),
 }
 
 
@@ -402,6 +406,48 @@ def test_path_valued_engine_keys_carry_a_text_option() -> None:
     paths = [spec for spec in ENGINE_KEYS if spec.is_path]
     assert paths
     assert all(spec.kind is EngineKeyKind.OPTION_TEXT for spec in paths)
+
+
+@pytest.mark.parametrize(
+    ("cli_values", "primary_table", "origin"),
+    [
+        ({"parse-error-retries": -1}, {}, "--parse-error-retries"),
+        ({}, {"parse-error-retries": -1}, "configuration key parse-error-retries"),
+    ],
+)
+def test_negative_parse_error_retries_exits_naming_its_origin(
+    cli_values: dict[str, object],
+    primary_table: dict[str, object],
+    origin: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = exec_config_from_merged({"exec": primary_table})
+
+    with pytest.raises(SystemExit) as exc_info:
+        build_host_engine_seeds(config=config, primary_table=primary_table, cli_values=cli_values)
+
+    assert exc_info.value.code == 1
+    assert origin in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("raw", ["three", True, 1.5])
+def test_non_integer_configured_parse_error_retries_exits(raw: object) -> None:
+    config = exec_config_from_merged({"exec": {"parse-error-retries": raw}})
+
+    with pytest.raises(SystemExit):
+        build_host_engine_seeds(
+            config=config, primary_table={"parse-error-retries": raw}, cli_values={}
+        )
+
+
+def test_zero_parse_error_retries_is_a_valid_seed() -> None:
+    seeds = build_host_engine_seeds(
+        config=_config_for("parse-error-retries", configured=False),
+        primary_table={},
+        cli_values={"parse-error-retries": 0},
+    ).merged()
+
+    assert seeds["parse-error-retries"] == IntValue(0)
 
 
 def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:

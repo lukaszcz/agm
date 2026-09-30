@@ -9597,6 +9597,30 @@ class TestExecCommand:
         # A cold process may also leave the parser's own cache file there.
         assert len(list(os_temp.glob("agm-*"))) == kept
 
+    @pytest.mark.parametrize(
+        ("flags", "returncode", "stdout"),
+        ((["--parse-error-retries", "2"], 0, "2"), (["--parse-error-retries", "-1"], 1, "")),
+    )
+    def test_exec_seeds_parse_error_retries_from_the_cli(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        flags: list[str],
+        returncode: int,
+        stdout: str,
+    ) -> None:
+        program = tmp_path / "main.agl"
+        program.write_text(
+            "import std/config\nprogram def main() -> unit = print(config::parse-error-retries)\n"
+        )
+
+        result = run_agm(
+            ["exec", "--no-trace", *flags, str(program)], env=env, cwd=tmp_path, check=False
+        )
+
+        assert result.returncode == returncode
+        assert result.stdout.strip() == stdout
+
     def test_exec_uses_checkout_with_ambient_python_package_and_stdlib(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

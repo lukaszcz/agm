@@ -73,6 +73,8 @@ def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | No
         values["default-sandbox"] = args.default_sandbox
     if args.debug is not None:
         values["debug"] = args.debug
+    if args.parse_error_retries is not None:
+        values["parse-error-retries"] = args.parse_error_retries
     return values
 
 

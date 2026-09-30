@@ -112,6 +112,9 @@ a direct `agm repl` entry is a static error.
     `std/fs::temp-dir` instead of removing them, when the run ends with `debug` set;
   - turns trace logging on unless `trace` or `trace-file` is given on the CLI or in
     configuration.
+- `--parse-error-retries N`: Seed `std/config::parse-error-retries`, the corrective retry count
+  used by `ask`'s default parse policy (overrides `[exec] parse-error-retries`; default 4). A
+  negative `N` exits 1 before execution.
 
 ### Program arguments
 
@@ -162,8 +165,8 @@ Also reported before any agent runs: a parameter supplied twice (two flags, or p
 
 **Reserved names.** Program arguments and engine settings share one flag and config namespace,
 so a name-addressable parameter named after an engine setting (`default-agent`, `default-sandbox`,
-`strict-json`, `timeout`, `trace`, `trace-file`) is a static error even if never supplied, also
-reported by `agm check`.
+`strict-json`, `timeout`, `trace`, `trace-file`, `debug`, `parse-error-retries`) is a static error
+even if never supplied, also reported by `agm check`.
 A projected flag that collides with a reserved flag has no static check, only a host one: selecting that
 program for execution fails, while `--help` and shell completion silently fall back to
 `agm exec`'s own help and no completions. `agm exec` reserves:
@@ -172,7 +175,8 @@ program for execution fails, while `--help` and shell completion silently fall b
   `--max-call-depth`, `--no-stdlib`;
 - every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
-  `--trace`/`--no-trace`, `--trace-file` (so `no-trace: text` collides);
+  `--trace`/`--no-trace`, `--trace-file`, `--debug`/`--no-debug`, `--parse-error-retries`
+  (so `no-trace: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
 A [registered package command](pkg.md#registered-commands) reserves `-h`/`--help`,
@@ -423,6 +427,7 @@ timeout = "30m"             # initial shell-exec and agent idle timeout
 trace = false               # trace logging off by default; set true to enable
 # trace-file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
 debug = false               # keep std/fs temporary paths after exit; trace unless configured
+parse-error-retries = 4     # corrective retry count used by ask's default parse policy
 
 ```
 
@@ -483,6 +488,7 @@ program def main(spec: text) -> unit =
   std/config::default-sandbox := AgentSandbox::Native
   std/config::timeout := Some("30s")  # shell-exec idle timeout
   std/config::debug := true           # keep std/fs temporary paths after the run
+  std/config::parse-error-retries := 2  # ask's default corrective retry count
 
   let result = ask "Process %{spec}"
   print result
@@ -493,7 +499,7 @@ bare `KEY := …`. `timeout` (`Option[text]`) and `trace-file` (`Option[path]`) 
 or `None`.
 
 Precedence for `default-agent`, `default-sandbox`, `strict-json`, `timeout`, `trace`,
-`trace-file`, and `debug` is
+`trace-file`, `debug`, and `parse-error-retries` is
 `source write > CLI > qualified program table > @config > a package-owned program's manifest
 [config] > [exec].X > engine default`, where `@config` is the selected program's own
 [`@config`](../agl/reference/attributes.md#config) entries and the
@@ -508,6 +514,9 @@ the trace destination for subsequent calls; `trace-file := Some(path)` enables t
 later `trace := false` disables it without clearing the path. `strict-json` and `timeout`
 writes affect subsequent agent-output parsing and `exec` calls. `debug` matters only when the
 run ends: its final value decides whether `std/fs` temporary paths are kept.
+`parse-error-retries` must not be negative: a negative source write raises the catchable
+`TypeError` (exit 2 when uncaught) and leaves the setting unchanged; a negative CLI, config,
+`@config`, or manifest value exits 1 before execution.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
 source `timeout` write changes only the **shell-exec** timeout; agent idle timeout cannot change
@@ -736,8 +745,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Options
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`, `--default-agent AGENT`,
-  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--debug` / `--no-debug`:
-  As for `agm exec`; `debug` is read when the session ends.
+  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--debug` / `--no-debug`,
+  `--parse-error-retries N`: As for `agm exec`; `debug` is read when the session ends.
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library

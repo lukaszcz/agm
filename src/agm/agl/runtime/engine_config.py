@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
 from agm.agl.ir.reserved_nominals import AGENT_SANDBOX_MEMBERS
-from agm.agl.semantics.values import RecordValue
-from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
+from agm.agl.semantics.values import IntValue, RecordValue
+from agm.config.engine_keys import ENGINE_KEYS, NON_NEGATIVE_ENGINE_KEYS, EngineKeyKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -23,6 +23,7 @@ __all__ = [
     "convert_config_value",
     "convert_host_value",
     "engine_default_settings",
+    "engine_value_range_error",
     "raw_option_str",
     "restamp_engine_setting",
     "validate_engine_leaf_value",
@@ -317,13 +318,24 @@ def convert_config_value(
     return convert_host_value(name, raw, key_type, table)
 
 
+def engine_value_range_error(name: str, value: "Value") -> str | None:
+    """Return why *value* is outside engine key *name*'s accepted range, or ``None``.
+
+    The one range rule shared by host decoding and a runtime source write.
+    """
+    if name in NON_NEGATIVE_ENGINE_KEYS and isinstance(value, IntValue) and value.value < 0:
+        return f"setting {name!r} must not be negative, got {value.value}"
+    return None
+
+
 def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
     """Decode one named engine setting's raw value, raising ``ValueError`` on any failure.
 
     Looks up *name*'s type in ``ENGINE_KEY_TYPES`` and decodes through
     :func:`convert_config_value`; ``timeout`` additionally must parse as a
-    duration (:func:`~agm.core.parse.parse_timeout`), and a present ``Option[text]``
-    value must not be blank. *raw* is decoded as given (a blank ``timeout`` or
+    duration (:func:`~agm.core.parse.parse_timeout`), a present ``Option[text]``
+    value must not be blank, and the value must pass
+    :func:`engine_value_range_error`. *raw* is decoded as given (a blank ``timeout`` or
     ``trace-file`` fails): callers holding a config-file or manifest
     spelling normalize it first.
     """
@@ -342,6 +354,9 @@ def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") 
             raise ValueError(f"Setting {name!r}: value must not be blank.")
         if text is not None and name == "timeout":
             parse_timeout(text)
+    range_error = engine_value_range_error(name, value)
+    if range_error is not None:
+        raise ValueError(range_error)
     return value
 
 

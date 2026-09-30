@@ -2639,6 +2639,42 @@ class TestMaxCallDepthOption:
         assert getattr(calls[0], "max_call_depth") == 7
 
 
+class TestParseErrorRetriesOption:
+    """``--parse-error-retries`` reaches exec and repl argument containers."""
+
+    @pytest.mark.parametrize(
+        ("command", "flags", "expected"),
+        [
+            ("exec", ["--parse-error-retries", "3"], 3),
+            ("exec", [], None),
+            ("repl", ["--parse-error-retries", "0"], 0),
+            ("repl", [], None),
+        ],
+    )
+    def test_flag_passed_to_args(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        command: str,
+        flags: list[str],
+        expected: int | None,
+    ) -> None:
+        import agm.commands.exec as exec_mod
+        import agm.commands.repl as repl_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod if command == "exec" else repl_mod, "run", calls.append)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        target = [str(agl_file)] if command == "exec" else []
+
+        result = invoke(runner, [command, *flags, *target])
+
+        assert result.exit_code == 0, result.output
+        assert getattr(calls[0], "parse_error_retries") == expected
+
+
 class TestParseLoopSelectArgsExtraPromptMutualExclusion:
     def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
         with pytest.raises(SystemExit):

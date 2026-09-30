@@ -441,6 +441,42 @@ class TestStdConfigQualified:
         assert caught.ok, caught.diagnostics
         assert caught.bindings["caught"] == BoolValue(True)
 
+    def test_parse_error_retries_defaults_to_four_and_accepts_zero(self) -> None:
+        result = _run_program(
+            "import std/config::*\n"
+            "let before = std/config::parse-error-retries\n"
+            "std/config::parse-error-retries := 0\n"
+            "let after = std/config::parse-error-retries\n"
+            "print after"
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["before"] == IntValue(4)
+        assert result.bindings["after"] == IntValue(0)
+
+    def test_parse_error_retries_host_seed_overrides_the_default(self) -> None:
+        result = _run_program(
+            "import std/config::*\nlet n = std/config::parse-error-retries\nprint n",
+            builtin_host_settings={"parse-error-retries": IntValue(9)},
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(9)
+
+    def test_negative_parse_error_retries_raises_catchable_type_error(self) -> None:
+        """A rejected write leaves the setting unchanged."""
+        result = _run_program(
+            "import std/config::*\n"
+            "std/config::parse-error-retries := 2\n"
+            "let caught = try\n"
+            "    std/config::parse-error-retries := -1\n"
+            "    false\n"
+            "  catch TypeError as e =>\n"
+            "    true\n"
+            "let n = std/config::parse-error-retries\n"
+        )
+        assert result.ok, result.diagnostics
+        assert result.bindings["caught"] == BoolValue(True)
+        assert result.bindings["n"] == IntValue(2)
+
     def test_trace_file_some_round_trips(self) -> None:
         result = _run_program(
             "import std/config::*\n"

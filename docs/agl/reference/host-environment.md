@@ -332,6 +332,7 @@ key:
 | `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 | `debug` | `bool` | `false` |
+| `parse-error-retries` | `int` | `4` |
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
@@ -444,8 +445,10 @@ enables tracing; a later `trace := false` disables it while retaining the path.
 Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
 `exec` calls, respectively. `debug` is read once, when the host session ends
 (the run, or the REPL session): if it is `true` then, the temporary files and
-directories `std/fs` created are kept rather than removed. A write the engine cannot accept — a `timeout`
-whose text is not a duration — raises the catchable `TypeError`
+directories `std/fs` created are kept rather than removed. `parse-error-retries` is the
+corrective retry count used by `ask`'s default parse policy. A write the engine cannot
+accept — a `timeout` whose text is not a duration, or a negative `parse-error-retries` —
+raises the catchable `TypeError`
 ([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
 of the run without rolling back the assigned `trace` or `trace-file` value.

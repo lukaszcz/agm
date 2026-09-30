@@ -45,11 +45,11 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``default-agent``, ``default-sandbox``, ``timeout``, ``trace``, ``trace-file``)
-      through the ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
-      from its program point onward and overrides the CLI flag, which overrides
-      the config-file layer.  ``--max-call-depth`` remains a host/runtime
-      recursion guard.
+      ``default-agent``, ``default-sandbox``, ``timeout``, ``trace``, ``trace-file``,
+      ``debug``, ``parse-error-retries``) through the ``std/config`` module; a
+      ``std/config::KEY := VALUE`` write takes effect from its program point onward
+      and overrides the CLI flag, which overrides the config-file layer.
+      ``--max-call-depth`` remains a host/runtime recursion guard.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments
-from agm.agl.runtime.engine_config import restamp_engine_setting
+from agm.agl.runtime.engine_config import engine_value_range_error, restamp_engine_setting
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
@@ -715,6 +715,11 @@ def run(
             for key, value in argument_preflight.program_config.items()
             if is_engine_builtin_var_key(key)
         }
+    for key_name, value in config_engine_values.items():
+        range_error = engine_value_range_error(key_name, value)
+        if range_error is not None:
+            print(f"Error: invalid @config {key_name} value: {range_error}", file=sys.stderr)
+            raise SystemExit(1)
     engine_seeds = engine_tiers.merged(middle=config_engine_values)
 
     strict_seed = engine_seeds.get("strict-json")

@@ -21,6 +21,7 @@ class EngineKeyKind(Enum):
     """
 
     BOOL = "bool"
+    INT = "int"
     TEXT = "text"
     OPTION_TEXT = "option_text"
     AGENT = "agent"
@@ -57,7 +58,8 @@ class EngineKeySpec:
     key whose ``name`` is that register. ``enables_register`` marks a key whose
     ``Some`` value implies the switch is on. ``is_path`` marks a key whose
     value is a filesystem path, so the config layer interpolates, expands and
-    anchors it like any other path-valued field.
+    anchors it like any other path-valued field. ``non_negative`` marks an
+    ``INT`` key whose negative value every surface rejects.
     """
 
     name: str
@@ -69,6 +71,7 @@ class EngineKeySpec:
     register: str | None = None
     enables_register: bool = False
     is_path: bool = False
+    non_negative: bool = False
 
 
 #: The register backing the trace destination, named after its on/off switch.
@@ -130,6 +133,14 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         config_attr="debug",
         default=False,
     ),
+    EngineKeySpec(
+        "parse-error-retries",
+        EngineKeyKind.INT,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="parse_error_retries",
+        default=4,
+        non_negative=True,
+    ),
 )
 
 # Ordered projection for consumers that only need name -> value kind.
@@ -169,6 +180,11 @@ TRACE_ENGINE_KEYS: frozenset[str] = engine_keys_for_register(TRACE_REGISTER)
 
 _TRACE_ENABLING_KEYS: frozenset[str] = frozenset(
     spec.name for spec in ENGINE_KEYS if spec.register == TRACE_REGISTER and spec.enables_register
+)
+
+#: Names of the engine keys whose value must not be negative.
+NON_NEGATIVE_ENGINE_KEYS: frozenset[str] = frozenset(
+    spec.name for spec in ENGINE_KEYS if spec.non_negative
 )
 
 #: Ordered names of the engine keys whose value is a filesystem path.

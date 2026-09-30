@@ -145,7 +145,11 @@ from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import DefaultResolver
-from agm.agl.runtime.engine_config import engine_default_settings, restamp_engine_setting
+from agm.agl.runtime.engine_config import (
+    engine_default_settings,
+    engine_value_range_error,
+    restamp_engine_setting,
+)
 from agm.agl.runtime.externs import (
     AglCallableProxy,
     ExternCallWindow,
@@ -2260,13 +2264,19 @@ class IrInterpreter:
         the write onward; the host-consumed keys update their register.
         Writes to the ``trace``/``trace-file`` register pair additionally
         reconfigure the live trace service when a host reconfigurer is present;
-        ``default-agent`` remains a register-only value.
+        ``default-agent`` remains a register-only value. A value outside the
+        key's range raises the catchable ``TypeError`` and leaves it unchanged.
         """
         key = self._builtin_var_key(key)
         _, _, name = key
         if not is_engine_builtin_var_key(key):
             self._builtin_vars[key] = value
             return
+        range_error = engine_value_range_error(name, value)
+        if range_error is not None:
+            raise AglRaise(
+                _make_exc_value("TypeError", range_error, nominals=self._program.builtin_nominals)
+            )
         if name in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(name, value)
             if name == "timeout":

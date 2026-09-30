@@ -27,6 +27,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # trace = false                 # trace logging; off by default — set true to enable
 # trace-file = "trace.jsonl"    # explicit trace path (omit for auto timestamped path)
 # debug = false                 # keep std/fs temp paths after exit; trace unless trace is set
+# parse-error-retries = 4       # corrective retry count used by ask's default parse policy
 #
 
 # [agent] — defaults for empty fields of AgL native agents, resolved in order:

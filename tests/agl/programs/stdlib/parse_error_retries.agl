@@ -1,0 +1,14 @@
+# std/config: `parse-error-retries` reads its default, accepts a non-negative
+# write, and rejects a negative one with a catchable TypeError that leaves the
+# setting unchanged.
+import std/config
+
+program def main(retries: int) -> unit =
+  print config::parse-error-retries
+  let accepted = try
+      config::parse-error-retries := retries
+      true
+    catch TypeError as e =>
+      false
+  print accepted
+  print config::parse-error-retries

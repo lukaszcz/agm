@@ -11,3 +11,5 @@ builtin var trace: bool = false
 builtin var trace-file: Option[path] = None
 # Keeps `std/fs` temporary paths when the host session ends.
 builtin var debug: bool = false
+# Corrective retry count used by `ask`'s default parse policy.
+builtin var parse-error-retries: int = 4

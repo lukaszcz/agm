@@ -110,6 +110,7 @@ class _RunOptionValues(TypedDict):
     timeout: str | None
     no_timeout: bool
     debug: bool | None
+    parse_error_retries: int | None
 
 
 def _command_summary(path: str, command: CommandRegistration) -> str:

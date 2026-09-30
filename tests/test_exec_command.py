@@ -5217,3 +5217,108 @@ class TestExecDebugKeepsTempPaths:
         exec_command.run(_exec_args_no_trace(agl_file, debug=debug))
 
         assert len(list(os_temp.iterdir())) == kept
+
+
+class TestExecParseErrorRetriesSetting:
+    """``std/config::parse-error-retries``: CLI, config tables, ``@config``, and source writes."""
+
+    _PROGRAM = (
+        "import std/config\nprogram def main() -> unit = print(config::parse-error-retries)\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("config", "flags", "expected"),
+        [
+            ("", [], "4"),
+            ("", ["--parse-error-retries", "2"], "2"),
+            ("[exec]\nparse-error-retries = 3\n", [], "3"),
+            ("[exec]\nparse-error-retries = 3\n[prog.main]\nparse-error-retries = 5\n", [], "5"),
+            ("[exec]\nparse-error-retries = 3\n", ["--parse-error-retries=0"], "0"),
+        ],
+    )
+    def test_cli_and_config_seed_the_setting(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config: str,
+        flags: list[str],
+        expected: str,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == f"{expected}\n"
+
+    def test_source_write_beats_the_cli(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std/config\n"
+            "program def main() -> unit =\n"
+            "  config::parse-error-retries := 1\n"
+            "  print(config::parse-error-retries)\n"
+        )
+
+        exec_command.run(_exec_args_no_trace(agl_file, parse_error_retries=6))
+
+        assert capsys.readouterr().out == "1\n"
+
+    def test_config_attribute_seeds_the_setting(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std/config\n\n@config(config::parse-error-retries = 8)\n"
+            "program def main() -> unit = print(config::parse-error-retries)\n"
+        )
+
+        exec_command.run(_exec_args_no_trace(agl_file))
+
+        assert capsys.readouterr().out == "8\n"
+
+    @pytest.mark.parametrize(
+        ("config", "flags", "program", "exit_code"),
+        [
+            ("", ["--parse-error-retries", "-1"], _PROGRAM, 1),
+            ("[exec]\nparse-error-retries = -2\n", [], _PROGRAM, 1),
+            ("[prog.main]\nparse-error-retries = -2\n", [], _PROGRAM, 1),
+            (
+                "",
+                [],
+                "import std/config\n\n@config(config::parse-error-retries = -3)\n"
+                "program def main() -> unit = ()\n",
+                1,
+            ),
+            (
+                "",
+                [],
+                "import std/config\n"
+                "program def main() -> unit =\n"
+                "  config::parse-error-retries := -1\n",
+                2,
+            ),
+        ],
+    )
+    def test_negative_values_are_rejected(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config: str,
+        flags: list[str],
+        program: str,
+        exit_code: int,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(program)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == exit_code, result.output

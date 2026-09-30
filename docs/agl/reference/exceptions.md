@@ -482,7 +482,8 @@ operation: text    # the operator, e.g. "/"
 ### `TypeError`
 
 Raised by an engine-setting write the host cannot accept — a `timeout` whose
-text is not a duration ([Host environment](host-environment.md#engine-settings)).
+text is not a duration, or a negative `parse-error-retries`
+([Host environment](host-environment.md#engine-settings)).
 
 ```text
 (base fields only)

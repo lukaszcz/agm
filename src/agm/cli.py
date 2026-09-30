@@ -190,6 +190,16 @@ def _debug_option() -> bool | None:
     )
 
 
+def _parse_error_retries_option() -> int | None:
+    option = execution_option_spec("parse_error_retries")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Corrective retry count used by ask's default parse policy.",
+    )
+
+
 def _max_call_depth_option() -> int | None:
     option = execution_option_spec("max_call_depth")
     return typer.Option(
@@ -1104,6 +1114,7 @@ def exec_cmd(
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
     debug: bool | None = _debug_option(),
+    parse_error_retries: int | None = _parse_error_retries_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole
@@ -1163,6 +1174,7 @@ def exec_cmd(
         timeout=timeout,
         no_timeout=no_timeout,
         debug=debug,
+        parse_error_retries=parse_error_retries,
         pipeline_cache=discovery.cached_artifacts(file),
     )
     _reject_run_option_conflict("exec", execution_option_conflict(exec_args))
@@ -1191,6 +1203,7 @@ def repl_cmd(
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
     debug: bool | None = _debug_option(),
+    parse_error_retries: int | None = _parse_error_retries_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
@@ -1211,6 +1224,7 @@ def repl_cmd(
         timeout=timeout,
         no_timeout=no_timeout,
         debug=debug,
+        parse_error_retries=parse_error_retries,
         no_stdlib=no_stdlib,
         plain=plain,
     )

@@ -984,6 +984,24 @@ class TestManifestConfigDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    @pytest.mark.parametrize(("value", "valid"), [("0", True), ("3", True), ("-1", False)])
+    def test_parse_error_retries_must_not_be_negative(
+        self, tmp_path: Path, value: str, valid: bool
+    ) -> None:
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            f"[config]\nparse-error-retries = {value}\n",
+            "program def main() -> unit = ()\n",
+        )
+
+        if valid:
+            validate_package(package)
+        else:
+            with pytest.raises(DisciplineError):
+                validate_package(package)
+
     def test_accepts_numeric_and_blank_timeout_values(self, tmp_path: Path) -> None:
         """A manifest ``timeout`` leaf follows the host's config-file normalization.
 

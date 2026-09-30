@@ -704,6 +704,8 @@ class ExecConfig:
     max_call_depth: int | None = None
     # Keep debugging artifacts (``std/fs`` temporary paths) past the host session.
     debug: bool = False
+    # Raw TOML value: exec/repl decode it as a non-negative host int.
+    parse_error_retries: object | None = None
 
 
 def exec_config_from_merged(
@@ -746,12 +748,14 @@ def exec_config_from_merged(
     resolved_trace = _optional_bool(effective, "trace")
     resolved_trace_file = _optional_str(effective, "trace-file")
     resolved_debug = _optional_bool(effective, "debug")
-    # Keep every explicitly supplied Agent/AgentSandbox value raw (a string or
-    # a native TOML table) so exec/repl can decode it through the shared
-    # host-value decoder at their AgL host boundary; other commands stay free
-    # of AgL imports.
+    # Keep every explicitly supplied Agent/AgentSandbox/parse-error-retries
+    # value raw (for the first two, a string or a native TOML table) so
+    # exec/repl can decode and validate it through the shared host-value
+    # decoder at their AgL host boundary; other commands stay free of AgL
+    # imports.
     resolved_default_agent = effective.get("default-agent")
     resolved_default_sandbox = effective.get("default-sandbox")
+    resolved_parse_error_retries = effective.get("parse-error-retries")
 
     return ExecConfig(
         strict_json=resolved_strict_json,
@@ -762,6 +766,7 @@ def exec_config_from_merged(
         default_agent=resolved_default_agent,
         default_sandbox=resolved_default_sandbox,
         debug=resolved_debug,
+        parse_error_retries=resolved_parse_error_retries,
     )
 
 

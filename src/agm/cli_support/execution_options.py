@@ -40,6 +40,9 @@ EXECUTION_OPTION_SPECS: tuple[ExecutionOptionSpec, ...] = (
     ExecutionOptionSpec("no_trace", ("--no-trace",), None, "trace"),
     ExecutionOptionSpec("trace_file", ("--trace-file",), "PATH", "trace_file"),
     ExecutionOptionSpec("debug", ("--debug/--no-debug",), None, "debug"),
+    ExecutionOptionSpec(
+        "parse_error_retries", ("--parse-error-retries",), "N", "parse_error_retries"
+    ),
 )
 
 _SPEC_BY_NAME = {spec.name: spec for spec in EXECUTION_OPTION_SPECS}
@@ -55,6 +58,7 @@ _HELP_GROUPS: tuple[_HelpGroup, ...] = (
     _HelpGroup("trace", "Enable or disable trace logging."),
     _HelpGroup("trace_file", "Write the JSONL trace to PATH."),
     _HelpGroup("debug", "Debug mode."),
+    _HelpGroup("parse_error_retries", "Corrective retry count used by ask's default parse policy."),
 )
 
 

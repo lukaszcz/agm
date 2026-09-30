@@ -375,6 +375,8 @@ def test_registered_command_forwards_exec_run_time_options(
             "--trace-file",
             "trace.jsonl",
             "--debug",
+            "--parse-error-retries",
+            "2",
         ],
     )
     negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout", "--no-debug"])
@@ -393,6 +395,7 @@ def test_registered_command_forwards_exec_run_time_options(
             trace_file="trace.jsonl",
             no_trace=False,
             debug=True,
+            parse_error_retries=2,
         ),
         ExecArgs(
             file="tools/lint::main",

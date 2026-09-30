@@ -346,7 +346,10 @@ def validate_manifest_leaf_value(name: str, raw: object, type_table: "TypeTable"
     An ``Option[text]``-kind key is first normalized by
     :func:`_normalize_option_text_value`, as a config-file entry is: a positive
     int/float becomes its string spelling, a blank or non-positive value is absent.
+    A value of any other type (bool, array, table) is an error, not absence.
     """
     if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
+        if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+            raise ValueError(f"Setting {name!r}: expected a string or number, got {raw!r}.")
         raw = _normalize_option_text_value(raw)
     return validate_engine_leaf_value(name, raw, type_table)

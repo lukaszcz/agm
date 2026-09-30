@@ -1017,6 +1017,23 @@ class TestManifestConfigDiscipline:
         )
         validate_package(package)
 
+    @pytest.mark.parametrize(
+        "leaf",
+        ["timeout = true", "timeout = [1]", "timeout = { a = 1 }", "trace-file = true"],
+    )
+    def test_rejects_a_mistyped_option_text_leaf(self, tmp_path: Path, leaf: str) -> None:
+        """A non-string, non-numeric ``timeout``/``trace-file`` is an error, not absence."""
+        package = self._write(
+            tmp_path / "package",
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nstart = { program = "custom/main::main" }\n\n'
+            f"[config]\n{leaf}\n",
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_rejects_a_bad_default_agent_value(self, tmp_path: Path) -> None:
         package = self._write(
             tmp_path / "package",

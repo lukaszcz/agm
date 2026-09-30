@@ -510,7 +510,7 @@ def _validate_manifest_config(manifest: PackageManifest, resolutions: _ModuleRes
     """
     if not manifest.config:
         return
-    from agm.agl.runtime.engine_config import validate_engine_leaf_value
+    from agm.agl.runtime.engine_config import validate_manifest_leaf_value
     from agm.agl.semantics.type_table import create_seeded_type_table
 
     registered = registered_command_paths(manifest)
@@ -521,7 +521,7 @@ def _validate_manifest_config(manifest: PackageManifest, resolutions: _ModuleRes
         registered,
         param_spellings,
         create_seeded_type_table(),
-        validate_engine_leaf_value,
+        validate_manifest_leaf_value,
     )
 
 

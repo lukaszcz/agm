@@ -26,6 +26,7 @@ __all__ = [
     "raw_option_str",
     "restamp_engine_setting",
     "validate_engine_leaf_value",
+    "validate_manifest_leaf_value",
 ]
 
 
@@ -143,9 +144,10 @@ def _normalize_option_text_value(value: object) -> str | None:
     int/float becomes its string spelling (e.g. ``60`` -> ``"60"``); a blank
     string, a non-positive number, or anything else is treated as absent.
     Shared by :func:`raw_option_str` (config-file tables) and
-    :func:`validate_engine_leaf_value` (CLI flags and package manifest
-    ``[config]`` leaves), so all three read an ``Option[text]``-kind engine
-    value — ``timeout``, ``trace-file`` — by the identical rule.
+    :func:`validate_manifest_leaf_value` (package manifest ``[config]`` leaves),
+    so both read an ``Option[text]``-kind engine value — ``timeout``,
+    ``trace-file`` — by the identical rule. A CLI flag is never normalized: a
+    blank flag value is an error, not absence.
     """
     if isinstance(value, str):
         return value if value.strip() else None
@@ -318,20 +320,14 @@ def convert_config_value(
 def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
     """Decode one named engine setting's raw value, raising ``ValueError`` on any failure.
 
-    An ``Option[text]``-kind key (``timeout``, ``trace-file``) is first
-    normalized by :func:`_normalize_option_text_value`, exactly as a
-    config-file entry is (:func:`raw_option_str`): a positive int/float
-    becomes its string spelling, a blank or non-positive value is absent.
     Looks up *name*'s type in ``ENGINE_KEY_TYPES`` and decodes through
     :func:`convert_config_value`; ``timeout`` additionally must parse as a
-    duration (:func:`~agm.core.parse.parse_timeout`). The one rule a CLI
-    flag, a config-file entry, and a package manifest ``[config]`` leaf are
-    all held to.
+    duration (:func:`~agm.core.parse.parse_timeout`). *raw* is decoded as given
+    (a blank ``timeout`` fails): callers holding a config-file or manifest
+    spelling normalize it first.
     """
     from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 
-    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
-        raw = _normalize_option_text_value(raw)
     value = convert_config_value(name, raw, ENGINE_KEY_TYPES[name], type_table)
     if name == "timeout" and isinstance(value, RecordValue):
         from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -342,3 +338,15 @@ def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") 
         if text is not None:
             parse_timeout(text)
     return value
+
+
+def validate_manifest_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
+    """:func:`validate_engine_leaf_value` for a manifest ``[config]`` leaf.
+
+    An ``Option[text]``-kind key is first normalized by
+    :func:`_normalize_option_text_value`, as a config-file entry is: a positive
+    int/float becomes its string spelling, a blank or non-positive value is absent.
+    """
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
+        raw = _normalize_option_text_value(raw)
+    return validate_engine_leaf_value(name, raw, type_table)

@@ -1250,6 +1250,25 @@ class TestExecLogFileValidatedUpFront:
         assert "should-not-run" not in captured.out
 
 
+class TestExecBlankOptionTextFlags:
+    """A blank ``--timeout``/``--trace-file`` value is an error, never absence."""
+
+    @pytest.mark.parametrize("flag", ["timeout", "trace_file"])
+    def test_blank_flag_value_exits_1_before_running(
+        self, flag: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, 'program def main() -> unit =\n  print "should-not-run"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(replace(_exec_args(agl_file), **{flag: ""}))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "should-not-run" not in captured.out
+
+
 class TestExecCommandEdgePaths:
     """Real-program coverage of the ok=True and pre-execution-error branches.
 

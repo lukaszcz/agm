@@ -140,6 +140,10 @@ matching `text` form does, with `PATH` as its default value placeholder. Shell c
 filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for its positional slot,
 under `agm exec FILE` and a registered package command alike.
 
+A parameter of an `enum` type — or `Option[E]` / `Optional[E]` of one — completes its value
+spellings (a member's `@name` when present) after `--x`, `-x`, and `--x=`, under `agm exec FILE`
+and a registered package command alike.
+
 A positional slot has no `--no-x`, so `Option[T]` and `Optional[T]` get no special treatment
 there: `text` is verbatim, `Agent` uses host syntax, and every other type is strict JSON or
 value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Some("hi")'` for

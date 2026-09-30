@@ -406,7 +406,31 @@ def test_os_cpu_count_is_at_least_one(capsys: pytest.CaptureFixture[str]) -> Non
 def test_os_cpu_count_falls_back_to_one_when_the_host_cannot_tell(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(os, "process_cpu_count", lambda: None)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(), raising=False)
+
+    result = _run("import std/os\nprogram def main() -> unit = print(os::cpu-count())")
+
+    assert result.ok
+    assert capsys.readouterr().out == "1\n"
+
+
+def test_os_cpu_count_without_affinity_support_uses_the_total_cpu_count(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 6)
+
+    result = _run("import std/os\nprogram def main() -> unit = print(os::cpu-count())")
+
+    assert result.ok
+    assert capsys.readouterr().out == "6\n"
+
+
+def test_os_cpu_count_without_affinity_support_falls_back_to_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
 
     result = _run("import std/os\nprogram def main() -> unit = print(os::cpu-count())")
 

@@ -118,7 +118,9 @@ def platform() -> str:
 
 def cpu_count() -> int:
     """Return the usable CPU count, at least 1."""
-    return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0)) or 1
+    return os.cpu_count() or 1
 
 
 def _raise_launch_error(command: str, exit_code: int | None) -> NoReturn:

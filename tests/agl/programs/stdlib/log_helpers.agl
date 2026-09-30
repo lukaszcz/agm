@@ -1,0 +1,17 @@
+# std/log: the per-level `-nl`, `-sep` and `-heading` helpers print at their own level.
+import std/log
+
+program def main() -> unit =
+  log::error("e")
+  log::error-nl()
+  log::error-sep()
+  log::error-heading("eh")
+  log::warn-nl()
+  log::warn-sep()
+  log::warn-heading("wh")
+  log::info-nl()
+  log::info-sep()
+  log::info-heading("ih")
+  log::debug-nl()
+  log::debug-sep()
+  log::debug-heading("dh")

@@ -52,7 +52,7 @@ def error-sep() -> unit =
   print-sep(Error)
 
 def error-nl() -> unit =
-  print-sep(Error)
+  print-nl(Error)
 
 def error-heading[T](val: T) -> unit =
   print-heading(Error, val)
@@ -64,7 +64,7 @@ def warn-sep() -> unit =
   print-sep(Warn)
 
 def warn-nl() -> unit =
-  print-sep(Warn)
+  print-nl(Warn)
 
 def warn-heading[T](val: T) -> unit =
   print-heading(Warn, val)
@@ -76,7 +76,7 @@ def info-sep() -> unit =
   print-sep(Info)
 
 def info-nl() -> unit =
-  print-sep(Info)
+  print-nl(Info)
 
 def info-heading[T](val: T) -> unit =
   print-heading(Info, val)
@@ -88,7 +88,7 @@ def debug-sep() -> unit =
   print-sep(Debug)
 
 def debug-nl() -> unit =
-  print-sep(Debug)
+  print-nl(Debug)
 
 def debug-heading[T](val: T) -> unit =
-  print-heading(Info, val)
+  print-heading(Debug, val)

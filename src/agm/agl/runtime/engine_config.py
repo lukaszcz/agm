@@ -322,20 +322,25 @@ def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") 
 
     Looks up *name*'s type in ``ENGINE_KEY_TYPES`` and decodes through
     :func:`convert_config_value`; ``timeout`` additionally must parse as a
-    duration (:func:`~agm.core.parse.parse_timeout`). *raw* is decoded as given
-    (a blank ``timeout`` fails): callers holding a config-file or manifest
+    duration (:func:`~agm.core.parse.parse_timeout`), and a present ``Option[text]``
+    value must not be blank. *raw* is decoded as given (a blank ``timeout`` or
+    ``trace-file`` fails): callers holding a config-file or manifest
     spelling normalize it first.
     """
     from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 
     value = convert_config_value(name, raw, ENGINE_KEY_TYPES[name], type_table)
-    if name == "timeout" and isinstance(value, RecordValue):
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT and isinstance(
+        value, RecordValue
+    ):
         from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from agm.agl.runtime.option import option_text
         from agm.core.parse import parse_timeout
 
         text = option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
-        if text is not None:
+        if text is not None and not text.strip():
+            raise ValueError(f"Setting {name!r}: value must not be blank.")
+        if text is not None and name == "timeout":
             parse_timeout(text)
     return value
 

@@ -335,9 +335,10 @@ raw: text   # the host text, with its undecodable bytes escaped
 ### `LaunchError`
 
 `std/os::edit` and `std/os::open` raise `LaunchError` when nothing could be
-launched (`exit-code = None`, `command` the last fallback/opener tried —
-including an editor command that a shell reports as not found) or the
-launched process exited non-zero (`exit-code = Some(code)`).
+launched (`exit-code = None`) or the launched process exited non-zero
+(`exit-code = Some(code)`). `command` is the editor (the `VISUAL`/`EDITOR`
+value, or the last fallback, `vi`, when none is found — also when a shell
+reports it as not found), `sh` if the shell itself is missing, or the opener.
 
 ```text
 command: text

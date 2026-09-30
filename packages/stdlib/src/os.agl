@@ -42,8 +42,10 @@ extern def cpu-count() -> int
 extern def user() -> Option[text]
 
 # Raised by `edit` and `open`. `exit-code` is `Some(code)` for a non-zero
-# exit, or `None` when there was nothing to launch (`command` is then the
-# last fallback/opener tried).
+# exit, or `None` when there was nothing to launch. `command` is what failed
+# to launch or exit: the editor (the `VISUAL`/`EDITOR` value, or the last
+# fallback, `vi`, when none is found), `sh` if the shell itself is missing, or
+# the opener.
 exception LaunchError extends Exception
   command: text
   exit-code: Option[int]

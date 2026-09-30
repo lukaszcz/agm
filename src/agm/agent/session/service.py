@@ -45,6 +45,7 @@ class _HostSession:
     ephemeral: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
+    continues_conversation: bool = True
     env: dict[str, str] = field(kw_only=True, repr=False)
 
 
@@ -104,6 +105,7 @@ class AglSessionHost:
             ephemeral=True,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            continues_conversation=self._service.continues_conversation(handle),
             env=env,
         )
         return handle
@@ -128,6 +130,7 @@ class AglSessionHost:
                 ephemeral=True,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                continues_conversation=self._service.continues_conversation(handle),
                 env=env,
             )
             return action(handle)
@@ -263,6 +266,7 @@ class AglSessionHost:
             permission_mode=session.permission_mode,
             sandbox=session.sandbox,
             env=session.env,
+            continues_conversation=session.continues_conversation,
         )
 
     def close(self, handle: str) -> None:
@@ -408,6 +412,7 @@ class SessionService:
                 transport=transport,
                 name=name,
                 single_prompt=single_prompt,
+                ephemeral=ephemeral,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
                 env=env,
@@ -503,6 +508,10 @@ class SessionService:
             del self._entries[handle]
         else:
             entry.closed = True
+
+    def continues_conversation(self, handle: str) -> bool:
+        """Whether a later prompt to *handle* continues the earlier ones."""
+        return self._entry_for(handle, "continues_conversation").backend.continues_conversation
 
     def is_known(self, handle: str) -> bool:
         """Whether *handle* is still retained by this service."""

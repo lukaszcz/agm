@@ -85,6 +85,7 @@ def test_exec_keeps_a_failed_run_result_primary_when_session_cleanup_fails(
 
 class _InterruptingBackend:
     capabilities = SessionCapabilities.all()
+    continues_conversation = True
 
     def __init__(self) -> None:
         self.opened = False

@@ -762,6 +762,8 @@ class _ScenarioSessionHost:
 class _ScriptedSessionBackend:
     """In-memory backend constrained to one production transport's surface."""
 
+    continues_conversation = True
+
     def __init__(
         self,
         agent: ScriptedAgent,

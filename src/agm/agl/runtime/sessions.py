@@ -45,6 +45,9 @@ class SessionSnapshot:
 
     ``permission_mode``/``sandbox``/``env`` are the mode and environment this
     session's handle was fixed under at open -- never a per-ask override.
+    ``continues_conversation`` is whether a later prompt continues the earlier
+    ones (a corrective retry may then be a short follow-up) or each prompt must
+    be self-contained.
     """
 
     agent: "AgentSpec"
@@ -52,6 +55,7 @@ class SessionSnapshot:
     permission_mode: PermissionMode
     sandbox: "SandboxLimits | None"
     env: dict[str, str] = field(repr=False)
+    continues_conversation: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,7 +278,9 @@ class AgentDispatcherSessionHost(SessionHost):
     ) -> str:
         del single_prompt
         handle = self._new_handle()
-        self._sessions[handle] = SessionSnapshot(agent, transport, permission_mode, sandbox, env)
+        self._sessions[handle] = SessionSnapshot(
+            agent, transport, permission_mode, sandbox, env, continues_conversation=False
+        )
         return handle
 
     def default(
@@ -291,7 +297,7 @@ class AgentDispatcherSessionHost(SessionHost):
         if self._default_handle is None:
             self._default_handle = self._new_handle()
             self._sessions[self._default_handle] = SessionSnapshot(
-                agent, transport, permission_mode, sandbox, env
+                agent, transport, permission_mode, sandbox, env, continues_conversation=False
             )
         return self._default_handle
 

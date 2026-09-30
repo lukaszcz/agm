@@ -92,6 +92,8 @@ def _creation_not_launched(error: SessionAskError) -> bool:
 class _CliPromptBackend(SandboxFixture):
     """Shared prepared-runner boundary for CLI session implementations."""
 
+    continues_conversation = True
+
     def __init__(
         self,
         *,
@@ -229,12 +231,13 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             targets_session_id = command_targets_session_id(command)
         except InterpolationError as exc:
             raise SessionAgentError(str(exc), "open") from exc
-        if not targets_session_id and not request.single_prompt:
+        if not targets_session_id and not (request.single_prompt or request.ephemeral):
             raise SessionHostError(
                 "command session requires a %{SESSION_ID} placeholder; "
-                "use a single-attempt AgentCommand.ask instead",
+                "use AgentCommand.ask instead",
                 "open",
             )
+        self.continues_conversation = targets_session_id
         self._fix_sandbox(request)
         self._session = _CommandSession(command=command, session_id=str(uuid4()))
 

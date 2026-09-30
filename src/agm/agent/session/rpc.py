@@ -100,6 +100,7 @@ class PiRpcSessionBackend(SandboxFixture):
     """Keep one Pi RPC process alive for the lifetime of a session backend."""
 
     capabilities = SessionCapabilities.all()
+    continues_conversation = True
 
     def __init__(
         self,

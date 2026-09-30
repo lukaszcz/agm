@@ -61,7 +61,6 @@ from agm.agl.runtime.sandbox_values import (
     sandbox_mode_from_permission,
 )
 from agm.agl.runtime.sessions import (
-    AgentDispatcherSessionHost,
     SessionAgentError,
     SessionAskError,
     SessionHost,
@@ -673,9 +672,10 @@ class EffectHandlers:
     ) -> Value:
         """Run one ``Agent::ask`` call in a short-lived conversation.
 
-        The handle lives for the complete retry loop, so a corrective retry is
-        a follow-up rather than a fresh one-shot prompt. It is always released
-        once the call completes or fails.
+        The handle lives for the complete retry loop, so on a handle that
+        continues a conversation a corrective retry is a follow-up rather than
+        a fresh one-shot prompt. It is always released once the call completes
+        or fails. A target that can never fail parsing opens single-prompt.
         """
         contract = self._ctx._program.contracts[contract_id]
         try:
@@ -686,6 +686,7 @@ class EffectHandlers:
 
         def ask_in_session(handle: str) -> Value:
             return self._eval_session_ask_attempts(
+                handle=handle,
                 agent=agent,
                 spec=spec,
                 prompt=prompt,
@@ -715,7 +716,7 @@ class EffectHandlers:
                 spec,
                 transport,
                 ask_in_session,
-                single_prompt=max_attempts == 1,
+                single_prompt=max_attempts == 1 or not contract.can_fail_parsing,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
                 env=env,
@@ -737,6 +738,7 @@ class EffectHandlers:
         except SessionHostError as error:
             self._session_error(error)
         return self._eval_session_ask_attempts(
+            handle=handle,
             agent=agent,
             spec=spec,
             prompt=prompt,
@@ -762,8 +764,9 @@ class EffectHandlers:
             ),
         )
 
-    def _compose_session_prompt(self, request: AgentRequest) -> str:
-        if isinstance(self._ctx._session_host, AgentDispatcherSessionHost):
+    def _compose_session_prompt(self, handle: str, request: AgentRequest) -> str:
+        """Compose *request*'s prompt; a short follow-up only on a continuing *handle*."""
+        if not self._ctx._session_host.snapshot(handle).continues_conversation:
             return compose_agent_prompt(request)
         if request.attempt == 0:
             return compose_initial_agent_prompt(request)
@@ -772,6 +775,7 @@ class EffectHandlers:
     def _eval_session_ask_attempts(
         self,
         *,
+        handle: str,
         agent: RecordValue,
         spec: AgentSpec,
         prompt: str,
@@ -805,7 +809,7 @@ class EffectHandlers:
                 permission_mode=permission_mode,
                 sandbox=sandbox,
             )
-            request.prompt = self._compose_session_prompt(request)
+            request.prompt = self._compose_session_prompt(handle, request)
             raw = dispatch(request)
             if contract.is_unit:
                 return UNIT_VALUE

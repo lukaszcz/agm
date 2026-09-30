@@ -407,10 +407,10 @@ which pipes the prompt on stdin. AgL text literals interpolate `%{…}` themselv
 
 A continuing `AgentCommand` session requires an unescaped `%{SESSION_ID}` in its command. AGM
 substitutes a generated id into the argv (not the child environment); the command must use it to
-create or resume its transcript. Free `ask` with an `AgentCommand` default agent,
-`Session::open(AgentCommand(...))`, and `AgentCommand(...).ask(...)` with corrective retries open
-continuing sessions; a single-attempt `AgentCommand(...).ask(...)` sends one prompt and needs no
-placeholder. Opening a session from a command without it raises `SessionError`. See
+create or resume its transcript. Free `ask` with an `AgentCommand` default agent and
+`Session::open(AgentCommand(...))` open continuing sessions; opening one from a command without
+the placeholder raises `SessionError`. `AgentCommand(...).ask(...)` needs none: without it, each
+corrective retry reruns the command with the complete prompt. See
 [Agent calls](../agl/reference/agent-calls.md#sessions) for all session backends.
 
 ### Configuration

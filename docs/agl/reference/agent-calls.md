@@ -169,7 +169,7 @@ parse-retry loop, so its initial invocation is:
 
 | Member | Initial invocation for an explicit ask |
 | --- | --- |
-| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries require `%{SESSION_ID}` |
+| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries continue the conversation with `%{SESSION_ID}`, else rerun the command with the complete prompt |
 | `AgentClaude(model, thinking)` | `claude -p --session-id <id> --model <model> --effort <thinking>` |
 | `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
 | `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
@@ -263,10 +263,11 @@ Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
 `Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
 the same transport default, but its session lasts only for that call and its
 retries; use `Session::open` to keep the conversation after the call. A single-attempt
-`Agent::ask` sends exactly one prompt, so its session never has to be continued: an
-`AgentCommand` does not require `%{SESSION_ID}` and the other CLI backends run their plain
-prompt command. Enabling corrective retries makes every attempt share one conversation, so
-an `AgentCommand` then requires the placeholder.
+`Agent::ask`, or one with a `text` or `unit` target (which can never fail parsing), sends exactly
+one prompt, so the other CLI backends run their plain prompt command. With corrective retries,
+every attempt shares one conversation and a retry is a short follow-up. An `AgentCommand` without
+`%{SESSION_ID}` cannot continue one, so each attempt reruns the command with the original prompt,
+format instructions, the failed response and its validation errors.
 
 ## Target types: types as contracts
 

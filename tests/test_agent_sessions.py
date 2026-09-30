@@ -36,6 +36,7 @@ class FakeBackend:
     """In-memory backend used to observe the session service's behavior."""
 
     capabilities: SessionCapabilities
+    continues_conversation: bool = True
     response: SessionAskResponse = field(
         default_factory=lambda: SessionAskResponse(content="answer")
     )
@@ -412,7 +413,7 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
     assert response == SessionAskResponse(content="answer")
     assert factory.backends[0].close_calls == 1
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", env={})
+        SessionOpenRequest(agent=agent, transport="cli", ephemeral=True, env={})
     ]
     assert service._entries == {}
 
@@ -430,7 +431,11 @@ def test_agl_host_single_prompt_ephemeral_lifecycle_retires_its_agent_mapping() 
     )
     assert factory.backends[0].open_requests == [
         SessionOpenRequest(
-            agent=AgentCommand("worker"), transport="cli", single_prompt=True, env={}
+            agent=AgentCommand("worker"),
+            transport="cli",
+            single_prompt=True,
+            ephemeral=True,
+            env={},
         )
     ]
     assert host._sessions == {}
@@ -497,7 +502,11 @@ def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
 
     assert factory.backends[0].open_requests == [
         SessionOpenRequest(
-            agent=AgentCommand("worker"), transport="cli", single_prompt=True, env={}
+            agent=AgentCommand("worker"),
+            transport="cli",
+            single_prompt=True,
+            ephemeral=True,
+            env={},
         )
     ]
     assert factory.backends[0].close_calls == 1
@@ -540,7 +549,7 @@ def test_ephemeral_ask_returns_its_response_after_closing() -> None:
 
     assert response == SessionAskResponse(content="answer")
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", single_prompt=True, env={})
+        SessionOpenRequest(agent=agent, transport="cli", single_prompt=True, ephemeral=True, env={})
     ]
     assert factory.backends[0].close_calls == 1
 

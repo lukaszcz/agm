@@ -591,6 +591,11 @@ class ContractRequest:
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     type_tree: TypeTree | None = None
 
+    @property
+    def can_fail_parsing(self) -> bool:
+        """Whether agent output can fail to parse, so a parse policy can ever retry."""
+        return not self.is_unit and self.codec_name != "text"
+
 
 _SchemaT = TypeVar("_SchemaT")
 

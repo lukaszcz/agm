@@ -48,7 +48,10 @@ class SessionOpenRequest:
 
     ``single_prompt`` states that this session serves exactly one prompt, so a
     backend need not establish a conversation it will never continue. Handle
-    lifetime is owned separately by the session service. ``permission_mode``/
+    lifetime is owned separately by the session service. ``ephemeral`` marks a
+    session that lives for one ask's retry loop, so a backend that cannot
+    continue a conversation may serve each prompt as an independent invocation
+    instead of rejecting the open. ``permission_mode``/
     ``sandbox``/``env`` fix the sandboxing and environment every process this
     session spawns runs under, for the session's whole lifetime; the
     ``permission_mode``/``sandbox`` defaults keep a caller that does not
@@ -62,6 +65,7 @@ class SessionOpenRequest:
     transport: str
     name: str = ""
     single_prompt: bool = False
+    ephemeral: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: SandboxLimits | None = None
     env: dict[str, str] = field(repr=False, kw_only=True)
@@ -124,6 +128,8 @@ class SessionBackend(Protocol):
     """One native session implementation selected for an agent transport."""
 
     capabilities: SessionCapabilities
+    continues_conversation: bool
+    """Whether a later prompt continues the earlier ones; fixed by ``open``."""
 
     def open(self, request: SessionOpenRequest) -> None:
         """Open the backend's underlying session."""

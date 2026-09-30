@@ -103,6 +103,59 @@ def test_single_prompt_command_session_does_not_require_a_session_id_placeholder
     assert _non_prompt_args(captured[0]) == ["runner", "--quiet"]
 
 
+def _command_service() -> SessionService:
+    return SessionService(
+        lambda _agent, _transport: AgentCommandSessionBackend(
+            get_sandbox_context=unavailable_sandbox_context
+        )
+    )
+
+
+def test_ephemeral_command_session_without_placeholder_serves_independent_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured.append(argv)
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    service = _command_service()
+
+    def action(handle: str) -> bool:
+        service.ask(handle, SessionAskRequest(prompt="first"))
+        service.ask(handle, SessionAskRequest(prompt="second"))
+        return service.continues_conversation(handle)
+
+    continues = service.with_ephemeral(
+        AgentCommand("runner --quiet"), "cli", action, single_prompt=False, env={}
+    )
+
+    assert continues is False
+    assert [_non_prompt_args(argv) for argv in captured] == [["runner", "--quiet"]] * 2
+
+
+def test_ephemeral_command_session_with_placeholder_continues_its_conversation() -> None:
+    service = _command_service()
+
+    continues = service.with_ephemeral(
+        AgentCommand("runner --session %{SESSION_ID}"),
+        "cli",
+        service.continues_conversation,
+        env={},
+    )
+
+    assert continues is True
+
+
+def test_explicit_command_session_without_placeholder_is_rejected_despite_fallback() -> None:
+    with pytest.raises(SessionHostError) as raised:
+        _command_service().open(AgentCommand("runner --quiet"), "cli", env={})
+
+    assert raised.value.operation == "open"
+
+
 def test_open_converts_malformed_placeholder_to_an_open_error() -> None:
     backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 

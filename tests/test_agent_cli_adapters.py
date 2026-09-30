@@ -149,13 +149,6 @@ def test_ephemeral_command_session_with_placeholder_continues_its_conversation()
     assert continues is True
 
 
-def test_explicit_command_session_without_placeholder_is_rejected_despite_fallback() -> None:
-    with pytest.raises(SessionHostError) as raised:
-        _command_service().open(AgentCommand("runner --quiet"), "cli", env={})
-
-    assert raised.value.operation == "open"
-
-
 def test_open_converts_malformed_placeholder_to_an_open_error() -> None:
     backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 

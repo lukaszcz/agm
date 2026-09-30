@@ -165,9 +165,10 @@ program def main() -> unit =
 Each member record selects its backend invocation. `AgentCommand` accepts a
 shell-like command string; the provider members carry their model and thinking
 settings. An explicit `agent.ask(...)` uses an ephemeral session for the complete
-parse-retry loop, so its initial invocation is:
+parse-retry loop, so its initial invocation, when it can retry, is (a single-prompt ask
+runs the plain prompt command; see [Sessions](#sessions)):
 
-| Member | Initial invocation for an explicit ask |
+| Member | Initial invocation for a retrying explicit ask |
 | --- | --- |
 | `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries continue the conversation with `%{SESSION_ID}`, else rerun the command with the complete prompt |
 | `AgentClaude(model, thinking)` | `claude -p --session-id <id> --model <model> --effort <thinking>` |
@@ -264,10 +265,10 @@ Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
 the same transport default, but its session lasts only for that call and its
 retries; use `Session::open` to keep the conversation after the call. A single-attempt
 `Agent::ask`, or one with a `text` or `unit` target (which can never fail parsing), sends exactly
-one prompt, so the other CLI backends run their plain prompt command. With corrective retries,
-every attempt shares one conversation and a retry is a short follow-up. An `AgentCommand` without
-`%{SESSION_ID}` cannot continue one, so each attempt reruns the command with the original prompt,
-format instructions, the failed response and its validation errors.
+one prompt, so the Claude, Codex, and Pi CLI backends run their plain prompt command. With
+corrective retries, every attempt shares one conversation and a retry is a short follow-up. An
+`AgentCommand` without `%{SESSION_ID}` cannot continue one, so each retry reruns the command with
+the original prompt, format instructions, the failed response and its validation errors.
 
 ## Target types: types as contracts
 
@@ -499,9 +500,10 @@ contract's format instructions; the host must not perform further template
 or environment-variable expansion over it. The prompt is delivered through its
 session. Corrective feedback includes a
 category-based validation summary, never validation paths, keys, or other
-response-derived details. Retries stay in their existing conversation and send
-only that summary plus a JSON-format reminder; they never resend the original
-prompt or invalid response.
+response-derived details. A retry in a continuing conversation sends only that
+summary plus a JSON-format reminder; one that cannot continue resends the
+complete prompt with the failed response
+([Parse policies and retries](#parse-policies-and-retries)).
 
 ## The JSON wire format
 
@@ -630,16 +632,20 @@ exactly one bare JSON value with nothing but surrounding whitespace.
 
 For a call with `on-parse-error = Retry(n = N)`, attempt 1 sends the rendered
 prompt plus its output-format instructions. The output is then parsed and
-validated. Each failed parse or validation sends at most `N` corrective
-follow-ups in the **same session** (`N + 1` attempts total). A follow-up contains
-only a category-based validation summary and a reminder to return valid JSON;
-it does not repeat the original prompt, output contract, or invalid response.
-The summary never exposes response-derived paths, keys, or values. Success
-returns the typed value; exhausting the attempts raises **`AgentParseError`**.
+validated. Each failed parse or validation sends at most `N` retries
+(`N + 1` attempts total). When the session continues a conversation — every
+default and explicit session, and every explicit-agent ask except through an
+`AgentCommand` without `%{SESSION_ID}` — a retry is a corrective follow-up in the
+**same session** containing only a category-based validation summary and a
+reminder to return valid JSON; it does not repeat the original prompt, output
+contract, or invalid response. Otherwise each retry reruns the command with the
+complete one-shot prompt: the original prompt, its output-format instructions,
+the failed response, the validation summary, and the reminder. The summary
+never exposes response-derived paths, keys, or values. Success returns the
+typed value; exhausting the attempts raises **`AgentParseError`**.
 
 With `Abort` (the default), the first parse or validation failure raises
-`AgentParseError` directly. This retry rule applies equally to the default,
-explicit-agent, and explicit-session forms.
+`AgentParseError` directly.
 
 ## Transport and session failures
 

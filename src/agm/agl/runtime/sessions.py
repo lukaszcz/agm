@@ -55,7 +55,7 @@ class SessionSnapshot:
     permission_mode: PermissionMode
     sandbox: "SandboxLimits | None"
     env: dict[str, str] = field(repr=False)
-    continues_conversation: bool = True
+    continues_conversation: bool
 
 
 @dataclass(frozen=True, slots=True)

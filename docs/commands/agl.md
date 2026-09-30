@@ -409,8 +409,9 @@ A continuing `AgentCommand` session requires an unescaped `%{SESSION_ID}` in its
 substitutes a generated id into the argv (not the child environment); the command must use it to
 create or resume its transcript. Free `ask` with an `AgentCommand` default agent and
 `Session::open(AgentCommand(...))` open continuing sessions; opening one from a command without
-the placeholder raises `SessionError`. `AgentCommand(...).ask(...)` needs none: without it, each
-corrective retry reruns the command with the complete prompt. See
+the placeholder raises `SessionError`. An explicit-agent ask (`AgentCommand(...).ask(...)` or
+`ask(..., agent = AgentCommand(...))`) needs none: without it, each corrective retry reruns the
+command with the complete prompt. See
 [Agent calls](../agl/reference/agent-calls.md#sessions) for all session backends.
 
 ### Configuration

@@ -1,0 +1,7 @@
+# A text target opens single-prompt despite a retry policy; a parsed target does not.
+program def main() -> unit =
+  let worker = AgentPi("writer", "model", "high")
+  let note: text = worker.ask("describe the plan", on-parse-error = Retry(n = 2))
+  let answer: int = worker.ask("calculate the total", on-parse-error = Retry(n = 2))
+  print note
+  print answer

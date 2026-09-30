@@ -54,7 +54,8 @@
           {
             "agent": "reviewer",
             "call": 1,
-            "starts_with": "Validation errors:"
+            "starts_with": "Draft a task for audit.\nKeep the title short.",
+            "contains": ["Validation errors:"]
           }
         ]
       }
@@ -77,7 +78,8 @@
           {
             "agent": "reviewer",
             "call": 1,
-            "starts_with": "Validation errors:"
+            "starts_with": "Draft a task for handoff.\nKeep the title short.",
+            "contains": ["Validation errors:"]
           }
         ]
       }

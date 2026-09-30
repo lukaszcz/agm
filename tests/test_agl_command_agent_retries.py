@@ -79,6 +79,7 @@ def test_command_without_placeholder_exhausts_its_attempts(
     result = _run(monkeypatch, command, _ask("runner", "int", 1))
 
     assert result.error is not None
+    assert result.error.type_name == "AgentParseError"
     assert len(command.prompts) == 2
 
 

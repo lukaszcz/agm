@@ -140,7 +140,14 @@ class _Host:
     def snapshot(self, handle: str) -> SessionSnapshot:
         agent, transport = self.handles[handle]
         permission_mode, sandbox = self.sandboxing[handle]
-        return SessionSnapshot(agent, transport, permission_mode, sandbox, self.envs[handle])
+        return SessionSnapshot(
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            self.envs[handle],
+            continues_conversation=True,
+        )
 
     def close(self, handle: str) -> None:
         if handle not in self.handles:

@@ -217,9 +217,15 @@ class ScriptedAgent:
             session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
             self.sessions.append(session)
             return _ScriptedSessionBackend(
-                self, session, frozenset(SessionOperation), supports_name=True
+                self,
+                session,
+                frozenset(SessionOperation),
+                supports_name=True,
+                continues_conversation=True,
             )
         spec = agent
+        continues_conversation = True
+        unsupported_one_shot = False
         if transport == "rpc":
             if not isinstance(spec, AgentPi):
                 raise SessionHostError("RPC transport is only supported by AgentPi", "open")
@@ -233,12 +239,8 @@ class ScriptedAgent:
                     argv = spec.argv()
                 except ValueError as error:
                     raise SessionHostError(str(error), "open") from error
-                if self.require_session_id and not command_targets_session_id(argv):
-                    raise SessionHostError(
-                        "command session requires a %{SESSION_ID} placeholder; "
-                        "use [exec] default-agent instead",
-                        "open",
-                    )
+                continues_conversation = command_targets_session_id(argv)
+                unsupported_one_shot = self.require_session_id and not continues_conversation
                 capabilities = frozenset({SessionOperation.ASK})
                 supports_name = False
             elif isinstance(spec, AgentClaude):
@@ -258,7 +260,14 @@ class ScriptedAgent:
             raise SessionHostError(f"unsupported session transport {transport!r}", "open")
         session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
         self.sessions.append(session)
-        return backend_type(self, session, capabilities, supports_name=supports_name)
+        return backend_type(
+            self,
+            session,
+            capabilities,
+            supports_name=supports_name,
+            continues_conversation=continues_conversation,
+            unsupported_one_shot=unsupported_one_shot,
+        )
 
     def _fork_session(self, parent: _ScriptedSession) -> Any:
         session = _ScriptedSession(
@@ -275,6 +284,8 @@ class ScriptedAgent:
             session,
             backend._native_capabilities,
             supports_name=backend._supports_name,
+            continues_conversation=backend.continues_conversation,
+            unsupported_one_shot=backend._unsupported_one_shot,
         )
 
     def _next_response(self) -> str:
@@ -460,6 +471,9 @@ class _ScriptedSessionService:
     def stats(self, handle: str) -> Any:
         return self._attempt(handle, "stats", None, lambda: self._service.stats(handle))
 
+    def continues_conversation(self, handle: str) -> bool:
+        return self._service.continues_conversation(handle)
+
     def close(self, handle: str) -> None:
         self._service.close(handle)
         self._retire_ephemeral(handle)
@@ -510,7 +524,7 @@ class _ScenarioSessionHost:
         self._services = {name: agent.session_service() for name, agent in agents.items()}
         self._handles: dict[str, _ScriptedSessionService] = {}
         self._snapshots: dict[
-            str, tuple[Any, str, PermissionMode, SandboxLimits | None, dict[str, str]]
+            str, tuple[Any, str, PermissionMode, SandboxLimits | None, dict[str, str], bool]
         ] = {}
         self._default_handle: str | None = None
 
@@ -537,7 +551,14 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
+        self._snapshots[handle] = (
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            env or {},
+            service.continues_conversation(handle),
+        )
         return handle
 
     def open_ephemeral(
@@ -563,7 +584,14 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
+        self._snapshots[handle] = (
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            env or {},
+            service.continues_conversation(handle),
+        )
         return handle
 
     def with_ephemeral(
@@ -581,7 +609,14 @@ class _ScenarioSessionHost:
 
         def register(handle: str) -> Any:
             self._handles[handle] = service
-            self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
+            self._snapshots[handle] = (
+                agent,
+                transport,
+                permission_mode,
+                sandbox,
+                env or {},
+                service.continues_conversation(handle),
+            )
             return action(handle)
 
         def retire(handle: str) -> None:
@@ -627,7 +662,14 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
+        self._snapshots[handle] = (
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            env or {},
+            service.continues_conversation(handle),
+        )
         self._default_handle = handle
         return handle
 
@@ -699,10 +741,17 @@ class _ScenarioSessionHost:
         from agm.agl.runtime.sessions import SessionSnapshot
 
         try:
-            agent, transport, permission_mode, sandbox, env = self._snapshots[handle]
+            agent, transport, permission_mode, sandbox, env, continues = self._snapshots[handle]
         except KeyError:
             raise AglSessionHostError("unknown session", "snapshot") from None
-        return SessionSnapshot(agent, transport, permission_mode, sandbox, env=env)
+        return SessionSnapshot(
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            env=env,
+            continues_conversation=continues,
+        )
 
     def close(self, handle: str) -> None:
         service = self._service_for_handle(handle, "close")
@@ -760,9 +809,11 @@ class _ScenarioSessionHost:
 
 
 class _ScriptedSessionBackend:
-    """In-memory backend constrained to one production transport's surface."""
+    """In-memory backend constrained to one production transport's surface.
 
-    continues_conversation = True
+    ``unsupported_one_shot`` mirrors a command without a session placeholder:
+    it opens only for a single-prompt or ephemeral session.
+    """
 
     def __init__(
         self,
@@ -771,7 +822,11 @@ class _ScriptedSessionBackend:
         native_capabilities: frozenset[SessionOperation],
         *,
         supports_name: bool,
+        continues_conversation: bool,
+        unsupported_one_shot: bool = False,
     ) -> None:
+        self.continues_conversation = continues_conversation
+        self._unsupported_one_shot = unsupported_one_shot
         self._agent = agent
         self._session = session
         self._native_capabilities = native_capabilities
@@ -792,6 +847,9 @@ class _ScriptedSessionBackend:
         return self.capabilities.supports(SessionOperation(operation))
 
     def open(self, request: Any) -> None:
+        if self._unsupported_one_shot and not (request.single_prompt or request.ephemeral):
+            self._agent.sessions.remove(self._session)
+            raise SessionHostError("command session requires a session placeholder", "open")
         if request.name and not self._supports_name:
             self._agent.sessions.remove(self._session)
             raise SessionHostError("scripted session does not support names", "set-name")

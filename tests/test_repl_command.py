@@ -404,7 +404,12 @@ class TestReplRun:
                 agent, transport = self._sessions[handle]
                 permission_mode, sandbox = self._sandboxing[handle]
                 return SessionSnapshot(
-                    agent, transport, permission_mode, sandbox, env=self._envs[handle]
+                    agent,
+                    transport,
+                    permission_mode,
+                    sandbox,
+                    env=self._envs[handle],
+                    continues_conversation=True,
                 )
 
             def close_all(self) -> None:

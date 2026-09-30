@@ -1,0 +1,21 @@
+{
+  "scenarios": [
+    {
+      "name": "text_target_opens_single_prompt_but_int_target_does_not",
+      "runtime": {"session_host": true},
+      "agents": {"writer": ["a plan", "7"]},
+      "expect": {
+        "stdout": "a plan\n7\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "transport": "rpc", "single_prompt": true, "opened": true, "closed": true, "parent": null},
+          {"agent": "writer", "tag": "session-2", "transport": "rpc", "single_prompt": false, "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "describe the plan"},
+          {"agent": "writer", "session": "session-2", "call": 0, "starts_with": "calculate the total"}
+        ]
+      }
+    }
+  ]
+}

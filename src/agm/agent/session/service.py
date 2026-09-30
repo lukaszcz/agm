@@ -45,8 +45,8 @@ class _HostSession:
     ephemeral: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
-    continues_conversation: bool = True
     env: dict[str, str] = field(kw_only=True, repr=False)
+    continues_conversation: bool = field(kw_only=True)
 
 
 class AglSessionHost:
@@ -74,10 +74,32 @@ class AglSessionHost:
             sandbox=sandbox,
             env=env,
         )
-        self._sessions[handle] = _HostSession(
-            agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+        self._register(
+            handle, agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
         )
         return handle
+
+    def _register(
+        self,
+        handle: str,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        ephemeral: bool = False,
+        permission_mode: PermissionMode,
+        sandbox: "SandboxLimits | None",
+        env: dict[str, str],
+    ) -> None:
+        """Retain the AgL-facing identity of the freshly opened *handle*."""
+        self._sessions[handle] = _HostSession(
+            agent,
+            transport,
+            ephemeral=ephemeral,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+            continues_conversation=self._service.continues_conversation(handle),
+        )
 
     def open_ephemeral(
         self,
@@ -99,13 +121,13 @@ class AglSessionHost:
             sandbox=sandbox,
             env=env,
         )
-        self._sessions[handle] = _HostSession(
+        self._register(
+            handle,
             agent,
             transport,
             ephemeral=True,
             permission_mode=permission_mode,
             sandbox=sandbox,
-            continues_conversation=self._service.continues_conversation(handle),
             env=env,
         )
         return handle
@@ -124,13 +146,13 @@ class AglSessionHost:
         """Run *action* in one ephemeral session and release it afterward."""
 
         def register(handle: str) -> _T:
-            self._sessions[handle] = _HostSession(
+            self._register(
+                handle,
                 agent,
                 transport,
                 ephemeral=True,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
-                continues_conversation=self._service.continues_conversation(handle),
                 env=env,
             )
             return action(handle)
@@ -193,12 +215,10 @@ class AglSessionHost:
                 env=env,
             )
         )
-        self._sessions.setdefault(
-            handle,
-            _HostSession(
-                agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
-            ),
-        )
+        if handle not in self._sessions:
+            self._register(
+                handle, agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+            )
         return handle
 
     def ask(self, handle: str, prompt: str) -> str:

@@ -1958,6 +1958,17 @@ class TestExecCommandShellComplete:
         sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
+    def test_implicit_positional_enum_completes_values(self, tmp_path: Path) -> None:
+        """A required enum parameter completes at its positional slot."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'enum Mode\n  | @name("fast") Fast\n  | @name("slow") Slow\n\n'
+            "program def main(mode: Mode) -> unit = ()\n"
+        )
+
+        assert self._complete(["exec", str(agl_file)], "") == ["fast", "slow"]
+        assert self._complete(["exec", str(agl_file)], "f") == ["fast"]
+
     def test_file_program_omits_implicit_positional_flag(self, tmp_path: Path) -> None:
         """``agm exec FILE --<TAB>`` offers flags only for named CLI parameters."""
         agl_file = tmp_path / "prog.agl"

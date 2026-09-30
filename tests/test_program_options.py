@@ -1450,6 +1450,13 @@ class TestCompletionQueries:
             ("tag", ("--tag",)),
         ]
 
+    def test_value_options_omit_implicitly_positional_parameters(self) -> None:
+        command = _command(
+            _param("name", TextType(), cli_positional=True), _param("count", IntType())
+        )
+
+        assert [param.name for param, _ in command.value_options()] == ["count"]
+
 
 class TestOptionSpellings:
     def test_both_polarities_of_a_bool_parameter_are_completable(self) -> None:

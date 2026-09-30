@@ -612,11 +612,16 @@ def _program_value_completer(
     @_completes_quietly
     def complete(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
         del ctx, args
-        if param.is_path:
-            return _path_candidates(incomplete)
-        return [value for value in param.enum_values if value.startswith(incomplete)]
+        return _value_candidates(param, incomplete)
 
     return complete
+
+
+def _value_candidates(param: ProgramParamInfo | ParamBindingInfo, incomplete: str) -> list[str]:
+    """Complete *incomplete* as a value of *param*: paths, or its enum spellings."""
+    if param.is_path:
+        return _path_candidates(incomplete)
+    return [value for value in param.enum_values if value.startswith(incomplete)]
 
 
 def program_value_completion_options(program_command: ProgramCommand | None) -> list[TyperOption]:
@@ -648,11 +653,12 @@ def _positional_candidates(
 ) -> list[str]:
     """Complete the positional slot *incomplete* fills after the program's *tokens*.
 
-    Filesystem paths for a ``path`` parameter; nothing for any other slot,
-    past the last slot, or when *incomplete* is an option's value.
+    Filesystem paths for a ``path`` parameter, the spellings of an enum
+    parameter; nothing for any other slot, past the last slot, or when
+    *incomplete* is an option's value.
     """
     slot = program_command.next_positional(tokens, incomplete, host_options=host_options)
-    return _path_candidates(incomplete) if slot is not None and slot.is_path else []
+    return _value_candidates(slot, incomplete) if slot is not None else []
 
 
 _EXEC_PROGRAM_META_KEY = "exec_completion_program"

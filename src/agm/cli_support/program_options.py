@@ -1525,11 +1525,12 @@ class ProgramCommand:
         """Return each value-taking parameter with the spellings its value follows.
 
         Program and module option spellings that take a value are included;
-        a ``--no-x`` negative never takes a value.
+        a ``--no-x`` negative never takes a value. Implicitly positional
+        parameters have no flag and are omitted.
         """
         result: list[tuple["ProgramParamInfo | ParamBindingInfo", tuple[str, ...]]] = []
         for param, projected in self.options:
-            if not projected.takes_value:
+            if not projected.takes_value or param.cli.cli_positional:
                 continue
             result.append((param, (projected.flag, *_spelling_tuple(_short_flag(param)))))
         for entry, projected in self.module_options:

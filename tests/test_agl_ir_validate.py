@@ -2701,7 +2701,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         validate_ir(prog, deep=False)  # no exception
@@ -2720,7 +2720,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {})  # empty contracts
         with pytest.raises(InvalidIrError, match="9999"):
@@ -2752,7 +2752,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
@@ -2787,7 +2787,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="duplicate.*A"):
@@ -2819,7 +2819,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="defs but decode is None"):
@@ -2850,7 +2850,7 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
@@ -2881,39 +2881,8 @@ class TestIrExecValidation:
             timeout=IrConstText(location=LOC, value="timeout"),
             sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            on_parse_error=IrConstText(location=LOC, value="policy"),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
-            validate_ir(prog, deep=True)
-
-    def test_ir_exec_bad_max_attempts_raises_deep(self) -> None:
-        """IrExec with max_attempts=0 raises InvalidIrError in deep mode."""
-        from agm.agl.ir.contracts import ContractRequest
-        from agm.agl.ir.ids import ContractId
-        from agm.agl.ir.nodes import IrExec
-
-        cid = ContractId(value=0)
-        contract = ContractRequest(
-            codec_name="text",
-            strict_json=None,
-            json_schema=None,
-            decode=None,
-            target_type_label="text",
-            structured_exec=False,
-            format_instructions="",
-            is_unit=False,
-        )
-        node = IrExec(
-            location=LOC,
-            command=IrConstText(location=LOC, value="echo hi"),
-            env=IrConstText(location=LOC, value="env"),
-            cwd=IrConstText(location=LOC, value="cwd"),
-            timeout=IrConstText(location=LOC, value="timeout"),
-            sandbox=IrConstText(location=LOC, value="sandbox"),
-            contract_id=cid,
-            max_attempts=0,  # invalid
-        )
-        prog = self._make_prog_with_contract(node, {cid: contract})
-        with pytest.raises(InvalidIrError, match="max_attempts"):
             validate_ir(prog, deep=True)

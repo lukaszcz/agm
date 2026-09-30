@@ -44,6 +44,7 @@
     },
     {
       "name": "unreadable_verdict",
+      "runtime": {"parse_error_retries": 0},
       "inline_entry": true,
       "agents": {
         "reviewer": [

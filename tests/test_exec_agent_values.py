@@ -177,7 +177,8 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     write_file_program(
         program,
         "try\n"
-        '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count")\n'
+        '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask('
+        '"count", on-parse-error = ParsePolicy::Abort)\n'
         "  print answer\n"
         f"catch {caught_type} as error =>\n"
         "  print render(error.agent)\n",

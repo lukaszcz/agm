@@ -194,7 +194,8 @@ Field notes:
   the full script was used. Seed `"sysone/jev::max-retries": 0` through `module_params` when
   a retryable failure is scripted, so the SDK never backs off.
 - `runtime` — optional `PipelineDriver` constructor overrides
-  (`default_call_depth_limit`, `default_strict_json`).
+  (`default_call_depth_limit`, `default_strict_json`) and the `parse_error_retries` engine
+  seed (`std/config::parse-error-retries`, default 4).
 - `filesystem` — optional fixture in a test-created temporary root. It may declare
   `directories`, UTF-8 `text_files`, hexadecimal `hex_files`, and
   `directory_symlinks`; a `"$TEMP_ROOT"` parameter value is replaced with that root.

@@ -1,0 +1,67 @@
+{
+  "scenarios": [
+    {
+      "name": "computed_policies_set_each_calls_attempts",
+      "params": {"mode": 0},
+      "agents": {"reviewer": ["bad", "bad", "5", "bad", "6"]},
+      "shell": [
+        {"command": "echo x", "stdout": "bad"},
+        {"command": "echo x", "stdout": "bad"},
+        {"command": "echo x", "stdout": "7"}
+      ],
+      "expect": {"stdout": "5\n6\n7\n", "calls": {"reviewer": 5}}
+    },
+    {
+      "name": "computed_policy_exhaustion_reports_its_attempts",
+      "params": {"mode": 0},
+      "agents": {"reviewer": ["bad", "bad", "bad"]},
+      "expect": {
+        "calls": {"reviewer": 3},
+        "raises": {"type": "AgentParseError", "fields": {"attempts": 3}}
+      }
+    },
+    {
+      "name": "setting_write_changes_the_default_retries",
+      "params": {"mode": 1},
+      "agents": {"reviewer": ["bad"]},
+      "expect": {
+        "calls": {"reviewer": 1},
+        "raises": {"type": "AgentParseError", "fields": {"attempts": 1}}
+      }
+    },
+    {
+      "name": "negative_retry_count_raises_before_any_ask",
+      "params": {"mode": 2},
+      "agents": {"reviewer": ["5"]},
+      "expect": {"calls": {"reviewer": 0}, "raises": {"type": "RangeError"}}
+    },
+    {
+      "name": "negative_retry_count_raises_before_any_exec",
+      "params": {"mode": 3},
+      "expect": {"raises": {"type": "RangeError"}}
+    },
+    {
+      "name": "negative_retry_count_raises_for_ask_request",
+      "params": {"mode": 4},
+      "expect": {"raises": {"type": "RangeError"}}
+    },
+    {
+      "name": "negative_retry_count_raises_before_any_session_ask",
+      "params": {"mode": 5},
+      "runtime": {"session_host": true},
+      "agents": {"reviewer": ["5"]},
+      "expect": {"calls": {"reviewer": 0}, "raises": {"type": "RangeError"}}
+    },
+    {
+      "name": "ask_request_carries_the_decoded_attempt_budget",
+      "params": {"mode": 6},
+      "expect": {"stdout_contains": ["\"max_attempts\": 4"]}
+    },
+    {
+      "name": "exec_without_a_policy_makes_a_single_attempt",
+      "params": {"mode": 7},
+      "shell": [{"command": "echo x", "stdout": "bad"}],
+      "expect": {"raises": {"type": "ExecError"}}
+    }
+  ]
+}

@@ -30,7 +30,7 @@ from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.external_names import ExternalName
-from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
+from agm.agl.semantics.types import RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     AttributeKeyedArg,
     EnumDef,
@@ -394,14 +394,6 @@ class ConstructorRef:
             type_params=tuple(arg.name for arg in member.type_args if isinstance(arg, TypeVarType)),
             owner_module_id=member.module_id,
             owner_path=member.scope_path,
-        )
-
-    def matches(self, enum_type: EnumType, member_name: str) -> bool:
-        """Whether this reference denotes *member_name* of *enum_type*."""
-        return (
-            self.owner_module_id == enum_type.module_id
-            and self.owner_path == (*enum_type.scope_path, enum_type.name)
-            and self.owner_name == member_name
         )
 
 

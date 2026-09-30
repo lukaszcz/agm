@@ -948,8 +948,8 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
 @pytest.mark.parametrize(
     ("options", "expected_attempts"),
     [
-        pytest.param("", 1, id="default"),
-        pytest.param(", on-parse-error = Abort", 1, id="abort"),
+        pytest.param("", 5, id="default"),
+        pytest.param(", on-parse-error = ParsePolicy::Abort", 1, id="abort"),
         pytest.param(", on-parse-error = Retry(n = 2)", 3, id="retry"),
     ],
 )

@@ -17,7 +17,57 @@
       }
     },
     {
-      "name": "default_policy_aborts_immediately",
+      "name": "default_policy_retries_four_times_then_aborts",
+      "agents": {
+        "reviewer": [
+          "nonsense 1",
+          "nonsense 2",
+          "nonsense 3",
+          "nonsense 4",
+          "nonsense 5"
+        ]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {
+          "reviewer": 5
+        },
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 5,
+            "target-type": "Review"
+          }
+        }
+      }
+    },
+    {
+      "name": "default_policy_recovers_on_fifth_attempt",
+      "agents": {
+        "reviewer": [
+          "nonsense 1",
+          "nonsense 2",
+          "nonsense 3",
+          "nonsense 4",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\nthird ok\n",
+        "calls": {
+          "reviewer": 7
+        }
+      }
+    },
+    {
+      "name": "zero_default_retries_abort_immediately",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "reviewer": [
           "utter nonsense"

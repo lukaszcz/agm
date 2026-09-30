@@ -37,7 +37,7 @@ builtin def Session::ask[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
 ) -> T
 builtin def Session::compact(self, instructions: text = "") -> unit
 builtin def Session::reset(self) -> unit

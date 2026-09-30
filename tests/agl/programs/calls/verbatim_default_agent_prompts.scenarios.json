@@ -74,6 +74,7 @@
     },
     {
       "name": "typed_dollar_and_call_form_parse_failures_stay_on_default_agent",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "document": "migration guide"
       },

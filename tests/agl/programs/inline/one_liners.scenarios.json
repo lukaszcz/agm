@@ -51,6 +51,7 @@
     },
     {
       "name": "final_check_parse_failure_caught_inline",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "stepper": [
           "{\"$case\": \"Done\"}",

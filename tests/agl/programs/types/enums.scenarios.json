@@ -75,6 +75,7 @@
     },
     {
       "name": "unknown_case_tag_is_parse_error",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "fallback": "n/a"
       },

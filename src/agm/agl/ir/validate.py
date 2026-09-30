@@ -1385,12 +1385,14 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             agent=agent_expr,
             prompt=prompt_expr,
             contract_id=contract_id,
+            on_parse_error=policy_expr,
             sandbox=sandbox_expr,
             env=env_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(policy_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             _validate_expr(env_expr, ctx)
             if ctx.deep:
@@ -1398,10 +1400,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"IrAsk references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrSessionOpen(
@@ -1423,19 +1421,21 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             _validate_expr(env_expr, ctx)
 
-        case IrSessionAsk(session=session_expr, prompt=prompt_expr, contract_id=contract_id):
+        case IrSessionAsk(
+            session=session_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            on_parse_error=policy_expr,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(session_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(policy_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrSessionAsk references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrSessionAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrSessionOp(session=session_expr, op=op, arg=arg_expr):
@@ -1454,21 +1454,22 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _validate_expr(arg_expr, ctx)
 
         case IrAskRequest(
-            agent=agent_expr, prompt=prompt_expr, contract_id=contract_id, sandbox=sandbox_expr
+            agent=agent_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            on_parse_error=policy_expr,
+            sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(policy_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrAskRequest references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrAskRequest has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrExec(
@@ -1477,6 +1478,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             cwd=cwd_expr,
             timeout=timeout_expr,
             contract_id=contract_id,
+            on_parse_error=policy_expr,
             sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
@@ -1484,16 +1486,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(env_expr, ctx)
             _validate_expr(cwd_expr, ctx)
             _validate_expr(timeout_expr, ctx)
+            _validate_expr(policy_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrExec references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrExec has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrBuiltinLoad(key=key):

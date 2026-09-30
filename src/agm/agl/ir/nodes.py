@@ -1066,7 +1066,8 @@ class IrAsk:
     through the value-driven agent runtime, parses the response via the contract,
     and returns the typed Value.
 
-    ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
+    ``on_parse_error`` evaluates to a ``ParsePolicy`` value, decoded once per
+    call into the attempt count: 1 for Abort, 1+n for Retry(n).
     ``sandbox`` evaluates to an ``AgentSandbox`` value, decoded once and reused
     across every retry attempt. ``env`` evaluates to an ``Environ`` value (or an
     empty dict without ``std/env``), likewise decoded once and reused across
@@ -1077,7 +1078,7 @@ class IrAsk:
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    on_parse_error: "IrExpr"
     sandbox: "IrExpr"
     env: "IrExpr"
 
@@ -1145,7 +1146,7 @@ class IrSessionAsk:
     session: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    on_parse_error: "IrExpr"
 
 
 class IrSessionOpKind(enum.StrEnum):
@@ -1189,7 +1190,7 @@ class IrAskRequest:
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    on_parse_error: "IrExpr"
     sandbox: "IrExpr"
 
 
@@ -1208,7 +1209,7 @@ class IrExec:
     cwd: "IrExpr"
     timeout: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    on_parse_error: "IrExpr"
     sandbox: "IrExpr"
 
 

@@ -391,7 +391,7 @@ class TestAgentCallRecord:
         call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert call_recs
         assert isinstance(call_recs[0].get("attempt"), int)
-        assert call_recs[0].get("max_attempts") == 1
+        assert call_recs[0].get("max_attempts") == 5
 
     def test_unit_ask_logs_a_request_and_response(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
@@ -1401,7 +1401,7 @@ class TestUnparseableFeedback:
             result = _run_inline(
                 rt,
                 'let impl = AgentCommand("impl")\n'
-                'let x: int = impl.ask("q", on-parse-error = Abort())\n'
+                'let x: int = impl.ask("q", on-parse-error = ParsePolicy::Abort())\n'
                 "x",
             )
         # The program raises AgentParseError; run returns ok=False.

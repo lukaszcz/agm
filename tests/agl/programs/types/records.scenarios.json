@@ -53,6 +53,7 @@
     },
     {
       "name": "missing_field_aborts_by_default",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "min-severity": 2
       },

@@ -25,6 +25,7 @@
     },
     {
       "name": "declared_field_names_rejected",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "responder": ["{\"text\": \"42\", \"score\": 9}"]
       },
@@ -43,6 +44,7 @@
     },
     {
       "name": "declared_case_tag_rejected",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "responder": ["{\"answer-text\": \"ok\", \"confidence\": 1}"],
         "judge": ["{\"$case\": \"Confirmed\", \"note\": \"x\"}"]

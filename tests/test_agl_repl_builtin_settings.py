@@ -61,6 +61,8 @@ def _copy_core_and_option(directory: Path) -> None:
         additions += 'builtin var default-agent: Agent = AgentCommand("runner")\n'
     if "builtin var default-sandbox" not in config:
         additions += "builtin var default-sandbox: AgentSandbox = Disabled\n"
+    if "builtin var parse-error-retries" not in config:
+        additions += "builtin var parse-error-retries: int = 4\n"
     if additions:
         # An existing ``import std/prelude::{Option, ...}`` line may not yet
         # name every symbol a freshly added default needs: extend it in place

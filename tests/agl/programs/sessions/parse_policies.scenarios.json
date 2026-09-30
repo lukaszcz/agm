@@ -1,7 +1,8 @@
 {
   "scenarios": [
     {
-      "name": "default_abort_and_exhaustion_match_one_shot_parse_policies",
+      "name": "zero_default_retries_and_exhaustion_match_one_shot_parse_policies",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "writer": {"responses": ["bad", "bad", "bad", "bad", "bad", "context"]}
       },
@@ -28,6 +29,33 @@
             "follow_up": {"not_contains": ["retry policy"]}
           },
           {"agent": "writer", "session": "session-1", "call": 5, "equals": "conversation continues"}
+        ]
+      }
+    },
+    {
+      "name": "default_policy_retries_with_corrective_follow_ups",
+      "agents": {
+        "writer": {
+          "responses": ["bad", "bad", "bad", "bad", "bad", "bad", "bad", "bad", "bad", "context"]
+        }
+      },
+      "expect": {
+        "stdout": "default\nabort\nexhausted\ncontext\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "default policy"},
+          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"not_contains": ["default policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 2, "follow_up": {"not_contains": ["default policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 3, "follow_up": {"not_contains": ["default policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 4, "follow_up": {"not_contains": ["default policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 5, "starts_with": "abort policy"},
+          {"agent": "writer", "session": "session-1", "call": 6, "starts_with": "retry policy"},
+          {"agent": "writer", "session": "session-1", "call": 7, "follow_up": {"not_contains": ["retry policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 8, "follow_up": {"not_contains": ["retry policy"]}},
+          {"agent": "writer", "session": "session-1", "call": 9, "equals": "conversation continues"}
         ]
       }
     }

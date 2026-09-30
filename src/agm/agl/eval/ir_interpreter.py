@@ -2102,7 +2102,7 @@ class IrInterpreter:
                 agent=agent_expr,
                 prompt=prompt_expr,
                 contract_id=contract_id,
-                max_attempts=max_attempts,
+                on_parse_error=policy_expr,
                 sandbox=sandbox_expr,
                 env=env_expr,
             ):
@@ -2112,7 +2112,7 @@ class IrInterpreter:
                         agent_expr,
                         prompt_expr,
                         contract_id,
-                        max_attempts,
+                        policy_expr,
                         sandbox_expr,
                         env_expr,
                     )
@@ -2128,11 +2128,11 @@ class IrInterpreter:
                 agent=agent_expr,
                 prompt=prompt_expr,
                 contract_id=contract_id,
-                max_attempts=max_attempts,
+                on_parse_error=policy_expr,
                 sandbox=sandbox_expr,
             ):
                 return self._effects.eval_ir_ask_request(
-                    node, agent_expr, prompt_expr, contract_id, max_attempts, sandbox_expr
+                    node, agent_expr, prompt_expr, contract_id, policy_expr, sandbox_expr
                 )
 
             case IrExec(
@@ -2141,7 +2141,7 @@ class IrInterpreter:
                 cwd=cwd_expr,
                 timeout=timeout_expr,
                 contract_id=contract_id,
-                max_attempts=max_attempts,
+                on_parse_error=policy_expr,
                 sandbox=sandbox_expr,
             ):
                 try:
@@ -2153,7 +2153,7 @@ class IrInterpreter:
                         timeout_expr,
                         sandbox_expr,
                         contract_id,
-                        max_attempts,
+                        policy_expr,
                     )
                 except AglRaise as exc:
                     if exc.span is None:

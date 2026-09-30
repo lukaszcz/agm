@@ -109,7 +109,8 @@ def test_session_ask_records_parse_options_and_output_contract_metadata() -> Non
         "let session = Session::default()\n"
         'let count: int = session.ask("count", format = "json", strict-json = true, '
         "on-parse-error = Retry(n = 2))\n"
-        'let summary: text = session.ask("summarize", format = "text", on-parse-error = Abort)\n'
+        'let summary: text = session.ask("summarize", format = "text", '
+        "on-parse-error = ParsePolicy::Abort)\n"
         "summary"
     )
 

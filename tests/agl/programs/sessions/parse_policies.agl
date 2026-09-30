@@ -5,7 +5,7 @@ program def main() -> unit =
   catch AgentParseError =>
     print "default"
   try
-    let aborted: int = session.ask("abort policy", on-parse-error = Abort)
+    let aborted: int = session.ask("abort policy", on-parse-error = ParsePolicy::Abort)
   catch AgentParseError =>
     print "abort"
   try

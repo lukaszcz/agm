@@ -56,7 +56,7 @@ builtin def ask[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
@@ -65,7 +65,7 @@ builtin def Agent::ask[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
@@ -74,7 +74,7 @@ builtin def Agent::ask-request[T](
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 builtin def ask-request[T](
@@ -82,6 +82,6 @@ builtin def ask-request[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  on-parse-error: ParsePolicy = ParsePolicy::Retry(n = std/config::parse-error-retries),
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest

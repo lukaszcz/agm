@@ -383,7 +383,8 @@ def test_mocked_agent_rejects_an_unknown_member_case() -> None:
         '"prime":{"$case":"Shared","value":3},"tree":{"$case":"Leaf"}}',
     )
 
-    error = evaluate_ir_raises_with_agents(_AGENT_SOURCE, {"worker": [response]})
+    # The default policy retries four times before giving up.
+    error = evaluate_ir_raises_with_agents(_AGENT_SOURCE, {"worker": [response] * 5})
     assert error.type_name == "AgentParseError"
 
 

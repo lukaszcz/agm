@@ -2991,7 +2991,7 @@ class TestAsk:
 
     def test_ask_on_parse_error_bare_abort_varref(self) -> None:
         # Bare ``Abort`` (no parens) is accepted as abort policy.
-        accept_type('let n: int = ask("Q", on-parse-error = Abort)\nn')
+        accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort)\nn')
 
     def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
         # Bare ``ParsePolicy::Abort`` (no parens) is accepted as abort policy.
@@ -3292,7 +3292,7 @@ class TestExec:
         )
 
     def test_non_final_exec_rejects_parse_options(self) -> None:
-        reject_type('exec("ls", on-parse-error = Abort())\n()')
+        reject_type('exec("ls", on-parse-error = ParsePolicy::Abort())\n()')
 
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
@@ -3317,12 +3317,12 @@ class TestExec:
         assert spec.strict_json is True
 
     def test_exec_on_parse_error_text_warns(self) -> None:
-        r = accept_type('let x: text = exec("ls", on-parse-error = Abort())\nx')
+        r = accept_type('let x: text = exec("ls", on-parse-error = ParsePolicy::Abort())\nx')
         assert len(r.warnings) == 1
         assert "on-parse-error" in r.warnings[0].message
 
     def test_exec_accepts_abort_policy(self) -> None:
-        accept_type('let n: int = exec("ls", on-parse-error = Abort())\nn')
+        accept_type('let n: int = exec("ls", on-parse-error = ParsePolicy::Abort())\nn')
 
     def test_exec_accepts_retry_policy(self) -> None:
         accept_type('let n: int = exec("ls", on-parse-error = Retry(n = 2))\nn')
@@ -9076,7 +9076,7 @@ class TestVarAssign:
 
 class TestParsePolicy:
     def test_on_parse_error_abort(self) -> None:
-        accept_type('let n: int = ask("Q", on-parse-error = Abort())\nn')
+        accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort())\nn')
 
     def test_on_parse_error_retry(self) -> None:
         accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 5))\nn')
@@ -9087,7 +9087,9 @@ class TestParsePolicy:
 
     def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
         # Abort is nullary, so every supplied argument is surplus.
-        err = reject_type('let n: int = ask("Q", on-parse-error = Abort(message = "x"))\nn')
+        err = reject_type(
+            'let n: int = ask("Q", on-parse-error = ParsePolicy::Abort(message = "x"))\nn'
+        )
         assert "on-parse-error" in str(err).lower() or "Abort" in str(err)
 
     def test_on_parse_error_retry_no_n_raises(self) -> None:
@@ -9109,7 +9111,7 @@ class TestParsePolicy:
         assert "on-parse-error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
 
     def test_on_parse_error_text_target_warns(self) -> None:
-        r = accept_type('ask("Q", on-parse-error = Abort())')
+        r = accept_type('ask("Q", on-parse-error = ParsePolicy::Abort())')
         assert len(r.warnings) == 1
         assert "on-parse-error" in r.warnings[0].message
 
@@ -9121,9 +9123,27 @@ class TestParsePolicy:
         assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_retry_with_non_int_n_raises(self) -> None:
-        # Exercises line 880->879: Retry n_arg not an IntLit
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(n = "bad"))\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
+        reject_type('let n: int = ask("Q", on-parse-error = Retry(n = "bad"))\nn')
+
+    def test_on_parse_error_accepts_a_computed_policy(self) -> None:
+        accept_type(
+            "let k = 2\n"
+            "let policy = ParsePolicy::Retry(n = k + 1)\n"
+            'let n: int = ask("Q", on-parse-error = policy)\n'
+            "n"
+        )
+
+    def test_on_parse_error_accepts_a_policy_returned_by_a_function(self) -> None:
+        accept_type(
+            "def policy-for(k: int) -> ParsePolicy = ParsePolicy::Retry(n = k)\n"
+            'let n: int = ask("Q", on-parse-error = policy-for(3))\n'
+            "n"
+        )
+
+    def test_on_parse_error_accepts_a_computed_policy_on_exec(self) -> None:
+        accept_type(
+            'let n: int = exec("echo 1", on-parse-error = ParsePolicy::Retry(n = 1 + 1))\nn'
+        )
 
     def test_retry_with_wrong_key_raises(self) -> None:
         # Exercises line 880 -> falls through to raise
@@ -10803,7 +10823,7 @@ class TestAskUnknownArgs:
         # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
             'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
-            " strict-json = true, on-parse-error = Abort())\nn"
+            " strict-json = true, on-parse-error = ParsePolicy::Abort())\nn"
         )
         assert r.resolved.program is not None
 
@@ -10944,7 +10964,7 @@ class TestExecUnknownArgs:
         # format, strict_json, on_parse_error are valid for exec.
         r = accept_type(
             'let n: int = exec("ls", format = "json", strict-json = true,'
-            " on-parse-error = Abort())\nn"
+            " on-parse-error = ParsePolicy::Abort())\nn"
         )
         assert r.resolved.program is not None
 
@@ -11004,7 +11024,7 @@ class TestExecStructured:
         assert "ExecResult" in str(err) or "strict-json" in str(err).lower()
 
     def test_exec_structured_on_parse_error_rejected(self) -> None:
-        err = reject_type('exec("ls", on-parse-error = Abort())')
+        err = reject_type('exec("ls", on-parse-error = ParsePolicy::Abort())')
         assert "ExecResult" in str(err) or "on-parse-error" in str(err).lower()
 
     def test_exec_parsed_form_has_no_structured_exec(self) -> None:

@@ -20,6 +20,7 @@
     },
     {
       "name": "block_prompt_parse_failure_raises_and_is_caught",
+      "runtime": {"parse_error_retries": 0},
       "params": {"topic": "migration", "mode": "block"},
       "agents": {
         "reviewer": ["not json"]

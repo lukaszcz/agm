@@ -2556,9 +2556,7 @@ class TestHostRaisedExceptionContractIdentity:
 
 
 class TestParsePolicyBuiltinIdentity:
-    """``on_parse_error``'s static ``ParsePolicy`` constructor recognition
-    (``BuiltinCallChecker._validate_parse_policy_constructor`` /
-    ``_accepts_as_parse_policy_constructor``)."""
+    """``on-parse-error`` is typed against the program's own ``ParsePolicy`` declaration."""
 
     def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
         """The reported rejection: a static constructor of the program's own
@@ -2626,43 +2624,26 @@ class TestParsePolicyBuiltinIdentity:
             )
         assert qualified.ok, qualified.diagnostics
 
-    def test_on_parse_error_rejects_a_local_binding_shadowing_abort(self) -> None:
-        """The reported bug: a local ``let Abort = ...`` binding shadows the
-        ``ParsePolicy::Abort`` constructor's bare spelling, so the checker
-        must resolve ``on_parse_error``'s value through real name
-        resolution rather than matching the raw spelling ``Abort`` -- a
-        shadowing local binding is not a constructor at all and is rejected
-        exactly like any other non-constructor expression there."""
+    def test_on_parse_error_uses_a_local_binding_named_abort_as_an_ordinary_policy(self) -> None:
+        """``on-parse-error`` is an ordinary expression: a local ``Abort``
+        binding holding a policy is that policy, not the ``Abort`` exception."""
         s = open_session()
-        result = s.eval_entry(
-            "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn'
-        )
-        assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
-
-    def test_on_parse_error_rejects_a_local_binding_shadowing_abort_call_form(self) -> None:
-        """The call-form (``Abort()``) counterpart of the shadowing bug:
-        it bypassed real resolution the same way the bare-spelling form
-        did, and is rejected the same way."""
-        s = open_session()
-        result = s.eval_entry(
-            "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort())\nn'
-        )
-        assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
+        shell = FakeShell(stdout="7")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                "let Abort = ParsePolicy::Retry(n = 3)\n"
+                'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(7)
 
     def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
-        """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
-        bare spelling is rejected rather than silently reinterpreted as a
-        ``ParsePolicy::Retry`` call spelled the same way."""
+        """A local binding shadowing ``Retry`` is not a constructor and cannot be called."""
         s = open_session()
         result = s.eval_entry(
             'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn'
         )
         assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
 
     def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
         """Regression: an unrelated enum's constructor is still rejected as
@@ -6196,6 +6177,7 @@ class TestImports:
             "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             "builtin var default-sandbox: AgentSandbox = Disabled\n"
+            "builtin var parse-error-retries: int = 4\n"
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
         )
@@ -6212,6 +6194,7 @@ class TestImports:
             "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             "builtin var default-sandbox: AgentSandbox = Disabled\n"
+            "builtin var parse-error-retries: int = 4\n"
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
         )

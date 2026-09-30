@@ -42,9 +42,7 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Expr,
-    IntLit,
     NamedArg,
-    QualifierAnchor,
     StringLit,
     VarRef,
 )
@@ -869,6 +867,7 @@ class BuiltinCallChecker:
             env_type = self._resolve_environ_type(callee, env_na.span)
             env_type_actual = self._ctx._check_expr(env_na.value, expected=env_type)
             self._ctx._assert_assignable_from(env_type_actual, env_type, env_na.span, env_na.value)
+        self._check_parse_policy_option(named)
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -943,6 +942,7 @@ class BuiltinCallChecker:
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
         self._check_exec_spawn_options(named)
+        self._check_parse_policy_option(named)
         format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -997,6 +997,15 @@ class BuiltinCallChecker:
             self._ctx._assert_assignable_from(
                 actual, sandbox_type, named["sandbox"].span, named["sandbox"].value
             )
+
+    def _check_parse_policy_option(self, named: dict[str, NamedArg]) -> None:
+        """Check an ``on-parse-error`` argument as an ordinary ``ParsePolicy`` expression."""
+        if "on-parse-error" not in named:
+            return
+        policy = named["on-parse-error"]
+        policy_type = self.contract_type("ParsePolicy")
+        actual = self._ctx._check_expr(policy.value, expected=policy_type)
+        self._ctx._assert_assignable_from(actual, policy_type, policy.span, policy.value)
 
     def _standard_option_text_type(self) -> EnumType:
         """Return the loaded ``std/option::Option[text]`` handle when present."""
@@ -1225,9 +1234,6 @@ class BuiltinCallChecker:
                     "'strict-json' must be a static bool literal.", span=strict_na.span
                 )
             strict_json = strict_na.value.value
-        if "on-parse-error" in named:
-            parse_na = named["on-parse-error"]
-            self._validate_parse_policy_constructor(parse_na.value, parse_na.span)
         return format_name, strict_json
 
     @staticmethod
@@ -1307,111 +1313,6 @@ class BuiltinCallChecker:
             spec = OutputContractSpec(target_type, "text", None, structured_exec=True)
 
         self._ctx._record_contract_spec(obligation.node_id, spec)
-
-    # --- on_parse_error policy extraction ---
-
-    def _validate_parse_policy_constructor(self, arg: Expr, span: SourceSpan) -> None:
-        """Validate that *arg* is a static ``ParsePolicy`` constructor.
-
-        *arg* must actually RESOLVE (through the same constructor-identity
-        mechanism ordinary expression-checking uses,
-        :meth:`BuiltinCheckCtx._constructor_ref_for`) to a genuine
-        constructor — not merely share a constructor's bare spelling. A local
-        binding that shadows the name (``let Abort = ParsePolicy::Retry(n =
-        3)``) resolves to that binding, not any constructor, so
-        ``_constructor_ref_for`` returns ``None`` for it and it is rejected
-        here exactly like any other non-constructor expression, matching how
-        the surrounding checker treats a shadowed constructor name everywhere
-        else (e.g. ``_check_builtin_var``'s constant-expression check).
-        """
-        if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
-            callee = arg.callee
-            if not self._accepts_as_parse_policy_constructor(callee):
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            self._validate_parse_policy_variant(callee.name, arg.named_args, span)
-            return
-        # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
-        if (
-            isinstance(arg, VarRef)
-            and arg.name == "Abort"
-            and self._accepts_as_parse_policy_constructor(arg)
-        ):
-            return
-        raise AglTypeError(
-            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
-            span=span,
-        )
-
-    def _accepts_as_parse_policy_constructor(self, ref: VarRef) -> bool:
-        """Whether *ref* denotes an accepted ``ParsePolicy`` constructor spelling.
-
-        Resolves *ref* through :meth:`BuiltinCheckCtx._constructor_ref_for` so
-        a local binding that shadows the name is never mistaken for the
-        constructor it shadows.
-
-        Unqualified (and current-module-anchored, ``::Retry``) spellings are
-        accepted whenever they resolve to ANY constructor — not necessarily
-        one this program's own ``ParsePolicy`` declares. The built-in
-        ``Abort`` EXCEPTION and ``ParsePolicy``'s nullary ``Abort`` variant
-        share that one bare root spelling, and ordinary name resolution picks
-        one of them (the exception, today); accepting either is unambiguous
-        in this position, since only a ``ParsePolicy`` constructor is ever a
-        legal ``on-parse-error`` value, and it preserves the unqualified
-        spelling's existing leniency while still closing the actual
-        shadowing hole (a binding that resolves to no constructor at all).
-
-        A qualified spelling (other than the current-module anchor) must
-        instead resolve to the exact constructor of this program's own
-        ``ParsePolicy`` (:meth:`contract_type`) that its final
-        segment names — the bare root ``ParsePolicy::`` prefix when the
-        program declares none of its own, or that declaration's own scope
-        path (e.g. ``A::ParsePolicy::``) when it does — so a scoped
-        ``ParsePolicy`` is recognized at its own path exactly like the root
-        one, and an unrelated same-named constructor is rejected. A qualifier
-        segment carrying an explicit type argument (``ParsePolicy[int]::``)
-        is never accepted, regardless of what it would otherwise resolve to:
-        ``ParsePolicy`` is not generic, so a type argument there can only be
-        a mistake.
-        """
-        chain = ref.qualifier
-        if chain is None or chain.anchor is QualifierAnchor.CURRENT_MODULE:
-            return self._ctx._constructor_ref_for(ref.node_id) is not None
-        if any(segment.type_args is not None for segment in chain.segments):
-            return False
-        parse_policy_type = self.contract_type("ParsePolicy")
-        assert isinstance(parse_policy_type, EnumType), "ParsePolicy is always an enum contract"
-        ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
-        return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)
-
-    def _validate_parse_policy_variant(
-        self, name: str, named_args: tuple[NamedArg, ...], span: SourceSpan
-    ) -> None:
-        """Validate the Abort or Retry variant of a ``ParsePolicy`` call."""
-        if name == "Abort":
-            if named_args:
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return
-        if name == "Retry":
-            n_arg = next((a for a in named_args if a.name == "n"), None)
-            if n_arg is None or not isinstance(n_arg.value, IntLit):
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return
-        raise AglTypeError(
-            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
-            span=span,
-        )
 
     # --- codec helpers ---
 

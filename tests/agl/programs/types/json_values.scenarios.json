@@ -78,6 +78,7 @@
     },
     {
       "name": "wrong_shape_for_array_target",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "payload": [
           1,

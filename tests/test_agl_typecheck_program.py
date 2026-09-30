@@ -498,9 +498,9 @@ def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> No
                 "import libA\n"
                 "def b() -> text =\n"
                 "  let _ = libA::a()\n"
-                '  ask("Q", on-parse-error = Abort())\n'
+                '  ask("Q", on-parse-error = ParsePolicy::Abort())\n'
             ),
-            "libA": 'def a() -> text = ask("Q", on-parse-error = Abort())\n',
+            "libA": 'def a() -> text = ask("Q", on-parse-error = ParsePolicy::Abort())\n',
         },
     )
 

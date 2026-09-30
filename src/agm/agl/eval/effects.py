@@ -40,6 +40,7 @@ from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 from agm.agl.runtime.externs import ActiveCall, ExternRegistry, ExternRuntimeState
 from agm.agl.runtime.option import none_value, option_text, some_value
+from agm.agl.runtime.parse_policy import decode_max_attempts
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import (
     AgentCallHostError,
@@ -332,7 +333,7 @@ class EffectHandlers:
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        policy_expr: IrExpr,
         sandbox_expr: IrExpr,
         env_expr: IrExpr,
     ) -> Value:
@@ -344,6 +345,7 @@ class EffectHandlers:
                 f"got {type(agent_val).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        max_attempts = self._eval_max_attempts(policy_expr)
         permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
         env = self._decode_environ(self._ctx._eval(env_expr))
 
@@ -372,6 +374,19 @@ class EffectHandlers:
         )
         entries = cast(DictValue, vars_value).entries
         return {name: cast(TextValue, entry).value for name, entry in entries.items()}
+
+    def _eval_max_attempts(self, policy_expr: IrExpr) -> int:
+        """Evaluate a ``ParsePolicy`` operand once into its attempt count.
+
+        A negative ``Retry`` count raises the catchable ``RangeError``.
+        """
+        policy = self._ctx._eval(policy_expr)
+        assert isinstance(policy, RecordValue)
+        nominals = self._ctx._program.builtin_nominals
+        try:
+            return decode_max_attempts(policy, nominals)
+        except ValueError as exc:
+            raise AglRaise(_make_exc_value("RangeError", str(exc), nominals=nominals)) from exc
 
     def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
         """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
@@ -730,6 +745,7 @@ class EffectHandlers:
         """Send a prompt through a session and run its shared retry engine."""
         handle, agent, _transport, _sandbox = self._session_parts(self._ctx._eval(node.session))
         prompt = self._text_of(self._ctx._eval(node.prompt))
+        max_attempts = self._eval_max_attempts(node.on_parse_error)
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
         try:
@@ -743,7 +759,7 @@ class EffectHandlers:
             spec=spec,
             prompt=prompt,
             contract_id=node.contract_id,
-            max_attempts=node.max_attempts,
+            max_attempts=max_attempts,
             node=node,
             output_contract=output_contract,
             # A session's sandbox mode, fixed at open, is never per-ask; the
@@ -756,7 +772,7 @@ class EffectHandlers:
                 request,
                 node,
                 agent_value=agent,
-                max_attempts=node.max_attempts,
+                max_attempts=max_attempts,
                 target_type=contract.target_type_label,
                 codec=contract.codec_name,
                 strict_json=contract.strict_json,
@@ -888,7 +904,7 @@ class EffectHandlers:
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        policy_expr: IrExpr,
         sandbox_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
@@ -899,6 +915,7 @@ class EffectHandlers:
                 f"got {type(agent_value).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        max_attempts = self._eval_max_attempts(policy_expr)
         # The AgL-visible request carries the raw evaluated AgentSandbox value
         # verbatim, exactly as it carries the raw agent value: ask-request
         # never dispatches, so nothing decodes it.
@@ -1156,12 +1173,13 @@ class EffectHandlers:
         timeout_expr: IrExpr,
         sandbox_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        policy_expr: IrExpr,
     ) -> Value:
         """Handle IrExec: run shell command and parse output."""
         # Evaluate every call operand once. Retried parsing reruns the shell,
         # not the argument expressions, just as an ordinary call would.
         cmd = self._text_of(self._ctx._eval(command_expr))
+        max_attempts = self._eval_max_attempts(policy_expr)
         env = self._decode_environ(self._ctx._eval(env_expr))
         nominals = self._ctx._program.builtin_nominals
         cwd_value = self._ctx._eval(cwd_expr)

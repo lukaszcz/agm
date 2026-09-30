@@ -69,6 +69,7 @@
     },
     {
       "name": "strict_option_rejects_fenced_value",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "counter": [
           "5",
@@ -96,6 +97,7 @@
     },
     {
       "name": "strict_option_rejects_trailing_prose",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "counter": [
           "5",
@@ -124,7 +126,8 @@
     {
       "name": "runtime_default_strict_applies_to_plain_calls",
       "runtime": {
-        "default_strict_json": true
+        "default_strict_json": true,
+        "parse_error_retries": 0
       },
       "agents": {
         "counter": [
@@ -155,6 +158,7 @@
     },
     {
       "name": "unparseable_for_int_target_fails_even_leniently",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "counter": [
           "complete gibberish, no number here"

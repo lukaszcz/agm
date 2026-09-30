@@ -34,6 +34,7 @@
     },
     {
       "name": "parse_error_routes_to_first_clause",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "mode": "parse"
       },

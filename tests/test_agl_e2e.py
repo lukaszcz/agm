@@ -52,6 +52,9 @@ from agm.agent.session import (
     SessionService,
 )
 from agm.agent.spec import PermissionMode
+from agm.agl.ir.builtin_vars import builtin_var_key
+from agm.agl.modules.ids import STD_CONFIG_ID
+from agm.agl.semantics.values import IntValue, Value
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.sandbox.prepare import SandboxContext
 from agm.sandbox.request import Default, SandboxLimits
@@ -995,6 +998,7 @@ def _run_prepared_entry(
     module_params: dict[str, Any] | None = None,
     positional: list[Any] | None = None,
     process_environment: dict[str, str] | None = None,
+    engine_seeds: dict[Any, Value] | None = None,
 ) -> Any:
     """Run the sole selected file-style entry through the public pipeline seams.
 
@@ -1006,7 +1010,9 @@ def _run_prepared_entry(
     """
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
-        return runtime.run_prepared(prepared, process_environment=process_environment)
+        return runtime.run_prepared(
+            prepared, builtin_var_seeds=engine_seeds, process_environment=process_environment
+        )
     entry_programs = [item for item in discovery.programs if item.module.is_entry]
     assert len(entry_programs) == 1
     entry_program = entry_programs[0]
@@ -1040,7 +1046,11 @@ def _run_prepared_entry(
         program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
         arguments=argument_preflight.arguments,
         param_seeds=argument_preflight.param_seeds,
-        builtin_var_seeds=program_config_engine_seeds(argument_preflight) or None,
+        builtin_var_seeds={
+            **program_config_engine_seeds(argument_preflight),
+            **(engine_seeds or {}),
+        }
+        or None,
         process_environment=process_environment,
     )
 
@@ -1178,6 +1188,11 @@ def _run_program(
         runtime_options["default_call_depth_limit"] = runtime_config["default_call_depth_limit"]
     if "default_strict_json" in runtime_config:
         runtime_options["default_strict_json"] = runtime_config["default_strict_json"]
+    engine_seeds: dict[Any, Value] = {}
+    if "parse_error_retries" in runtime_config:
+        engine_seeds[builtin_var_key(STD_CONFIG_ID, (), "parse-error-retries")] = IntValue(
+            runtime_config["parse_error_retries"]
+        )
 
     def dispatch_agent(request: Any) -> str:
         return agents[_scripted_agent_name(request.agent)](request)
@@ -1225,6 +1240,7 @@ def _run_program(
                 module_params=scenario.get("module_params"),
                 positional=scenario.get("positional"),
                 process_environment=scenario.get("process_environment"),
+                engine_seeds=engine_seeds,
             )
         except SystemExit as exc:
             result = exc
@@ -2152,6 +2168,9 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         # imports stay first, while every per-module import is dropped in
         # favor of the scoped Option/Result/Sandbox imports.
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))
+        source = source.replace(
+            "ParsePolicy::Retry(n = std/config::parse-error-retries)", "ParsePolicy::Abort"
+        )
         if name == "session":
             source = source.replace(_SESSION_STATIC_DECLARATIONS, "")
         if name == "agent":

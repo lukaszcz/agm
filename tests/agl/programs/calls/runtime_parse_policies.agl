@@ -1,0 +1,42 @@
+# on-parse-error is an ordinary ParsePolicy expression evaluated once per call,
+# and the default reads std/config::parse-error-retries at call time.
+import std/config
+
+def policy-for(k: int) -> ParsePolicy =
+  ParsePolicy::Retry(n = k)
+
+program def main(mode: int) -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  let k = 1
+  case mode of
+    | 0 =>
+        let bound = ParsePolicy::Retry(n = k + 1)
+        let a: int = ask("first", agent = reviewer, on-parse-error = bound)
+        print a
+        let b: int = ask("second", agent = reviewer, on-parse-error = policy-for(k))
+        print b
+        let c: int = exec("echo x", on-parse-error = policy-for(k + 1))
+        print c
+    | 1 =>
+        std/config::parse-error-retries := 0
+        let a: int = ask("default", agent = reviewer)
+        print a
+    | 2 =>
+        let a: int = ask("negative", agent = reviewer, on-parse-error = policy-for(k - 2))
+        print a
+    | 3 =>
+        let c: int = exec("echo x", on-parse-error = policy-for(k - 2))
+        print c
+    | 4 =>
+        let request = ask-request::[int]("request", on-parse-error = policy-for(k - 2))
+        print request.prompt
+    | 5 =>
+        let session = Session::open(reviewer)
+        let a: int = session.ask("session", on-parse-error = policy-for(k - 2))
+        print a
+    | 6 =>
+        let request = ask-request::[int]("request", on-parse-error = policy-for(k + 2))
+        print request
+    | _ =>
+        let c: int = exec("echo x")
+        print c

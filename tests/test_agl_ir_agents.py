@@ -21,7 +21,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from agm.agl.zones import ParamZone
-from tests._agl_helpers import run_inline_code
+from tests._agl_helpers import policy_ir, run_inline_code
 from tests.agl.ir_harness import (
     agent_caps,
     evaluate_ir,
@@ -31,7 +31,6 @@ from tests.agl.ir_harness import (
 )
 
 if TYPE_CHECKING:
-    from agm.agl.syntax.nodes import Call
     from agm.agl.syntax.spans import SourceSpan
 
 
@@ -537,7 +536,7 @@ def test_schema_validation_failure_wrong_type() -> None:
     """Agent returns invalid JSON (fails schema validation) → AgentParseError."""
     source = """\
 let validator = AgentCommand("validator")
-let n: int = ask("Give int.", agent = validator)
+let n: int = ask("Give int.", agent = validator, on-parse-error = ParsePolicy::Abort)
 n
 """
     # Agent returns a string, not an integer — schema validation fails.
@@ -557,7 +556,12 @@ def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
 let strict-agent = AgentCommand("strict_agent")
-let n: int = ask("Give int.", agent = strict-agent, strict-json = true)
+let n: int = ask(
+  "Give int.",
+  agent = strict-agent,
+  strict-json = true,
+  on-parse-error = ParsePolicy::Abort,
+)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
@@ -933,7 +937,7 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=ContractId(999),
-        max_attempts=1,
+        on_parse_error=IrConstText(location=dummy_loc, value="policy"),
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     if node_type is IrAsk:
@@ -948,54 +952,6 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
         contracts={},  # No contracts!
     )
     with pytest.raises(InvalidIrError, match="contract_id"):
-        validate_ir(prog, deep=True)
-
-
-@pytest.mark.parametrize("request_only", (False, True))
-def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
-    """validate_ir: an ask node with max_attempts=0 → InvalidIrError."""
-
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    ask_kwargs: dict[str, object] = dict(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=0,  # invalid!
-        sandbox=IrConstText(location=dummy_loc, value="unused"),
-    )
-    if node_type is IrAsk:
-        ask_kwargs["env"] = IrConstText(location=dummy_loc, value="unused")
-    ask_node = node_type(**ask_kwargs)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(ask_node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    with pytest.raises(InvalidIrError, match="max_attempts"):
         validate_ir(prog, deep=True)
 
 
@@ -2120,10 +2076,10 @@ prompt-text
 
 
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
-    """_extract_max_attempts: Abort policy → 1 attempt."""
+    """An explicit Abort policy gives one attempt."""
     source = """\
 let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on-parse-error = Abort)
+let n: int = ask("?", agent = a, on-parse-error = ParsePolicy::Abort)
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -2209,7 +2165,7 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=cid,
-        max_attempts=1,
+        on_parse_error=IrConstText(location=dummy_loc, value="policy"),
         sandbox=IrConstText(location=dummy_loc, value="unused"),
         env=IrConstText(location=dummy_loc, value="unused"),
     )
@@ -2242,7 +2198,7 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=cid,
-        max_attempts=1,
+        on_parse_error=IrConstText(location=dummy_loc, value="policy"),
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
@@ -2323,7 +2279,7 @@ def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) ->
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=bad_cid,
-        max_attempts=1,
+        on_parse_error=IrConstText(location=dummy_loc, value="policy"),
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     if node_type is IrAsk:
@@ -2388,109 +2344,6 @@ def _make_span() -> "SourceSpan":
     return SourceSpan(
         start_line=1, start_col=1, end_line=1, end_col=2, start_offset=0, end_offset=1
     )
-
-
-def _extract_max_attempts_for_test(
-    outer_call: "Call",
-) -> int:
-    """Call _Lowerer._extract_max_attempts via object.__new__ to avoid full initialisation."""
-    from agm.agl.lower.lowerer import _Lowerer
-
-    fake: _Lowerer = object.__new__(_Lowerer)
-    return fake._extract_max_attempts(outer_call)
-
-
-def test_lower_extract_max_attempts_field_access_retry() -> None:
-    """_extract_max_attempts: FieldAccess callee → callee.field = 'Retry'."""
-    from agm.agl.syntax.nodes import Call, FieldAccess, IntLit, NamedArg, VarRef
-
-    span = _make_span()
-    # FieldAccess callee: like writing `somemod.Retry`.
-    field_callee = FieldAccess(
-        obj=VarRef(name="somemod", span=span, node_id=1),
-        field="Retry",
-        span=span,
-        node_id=2,
-    )
-    n_arg = NamedArg(name="n", value=IntLit(value=3, span=span, node_id=5), span=span, node_id=6)
-    inner_call = Call(
-        callee=field_callee,
-        args=(),
-        named_args=(n_arg,),
-        span=span,
-        node_id=3,
-    )
-    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=7)
-    outer_call = Call(
-        callee=VarRef(name="ask", span=span, node_id=8),
-        args=(),
-        named_args=(named_arg,),
-        span=span,
-        node_id=4,
-    )
-    result = _extract_max_attempts_for_test(outer_call)
-    # Retry(n: 3) → 1 + 3 = 4.
-    assert result == 4
-
-
-def test_lower_extract_max_attempts_unknown_callee() -> None:
-    """_extract_max_attempts: non-VarRef/FieldAccess callee → callee_name=None → 1 attempt."""
-    from agm.agl.syntax.nodes import Call, IntLit, NamedArg, VarRef
-
-    span = _make_span()
-    # Use IntLit as callee (not VarRef or FieldAccess) → else branch → callee_name=None.
-    # IntLit is a valid Expr, so this is type-clean; callee type is the Expr union.
-    weird_callee = IntLit(value=0, span=span, node_id=10)
-    inner_call = Call(
-        callee=weird_callee,
-        args=(),
-        named_args=(),
-        span=span,
-        node_id=11,
-    )
-    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=14)
-    outer_call = Call(
-        callee=VarRef(name="ask", span=span, node_id=12),
-        args=(),
-        named_args=(named_arg,),
-        span=span,
-        node_id=13,
-    )
-    result = _extract_max_attempts_for_test(outer_call)
-    # callee_name=None → not "Retry" → returns 1.
-    assert result == 1
-
-
-def test_lower_extract_max_attempts_field_access_non_retry() -> None:
-    """_extract_max_attempts: FieldAccess callee with non-Retry field → 1 attempt."""
-    from agm.agl.syntax.nodes import Call, FieldAccess, NamedArg, VarRef
-
-    span = _make_span()
-    # FieldAccess with non-Retry field name.
-    field_callee = FieldAccess(
-        obj=VarRef(name="somemod", span=span, node_id=20),
-        field="Abort",  # not "Retry"!
-        span=span,
-        node_id=21,
-    )
-    inner_call = Call(
-        callee=field_callee,
-        args=(),
-        named_args=(),
-        span=span,
-        node_id=22,
-    )
-    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=25)
-    outer_call = Call(
-        callee=VarRef(name="ask", span=span, node_id=23),
-        args=(),
-        named_args=(named_arg,),
-        span=span,
-        node_id=24,
-    )
-    result = _extract_max_attempts_for_test(outer_call)
-    # callee_name="Abort" (from FieldAccess.field), not "Retry" → returns 1.
-    assert result == 1
 
 
 def test_enum_required_field_loop_partial_coverage() -> None:
@@ -2823,7 +2676,7 @@ enum Status
   | @json-name("ERR") Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = ask("Check.", agent = checker, on-parse-error = ParsePolicy::Abort)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2852,7 +2705,7 @@ enum Status
   | Err(@json-name("msg-text") msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = ask("Check.", agent = checker, on-parse-error = ParsePolicy::Abort)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2890,7 +2743,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = ask("Check.", agent = checker, on-parse-error = ParsePolicy::Abort)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2923,7 +2776,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = ask("Check.", agent = checker, on-parse-error = ParsePolicy::Abort)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2968,7 +2821,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = ask("Check.", agent = checker, on-parse-error = ParsePolicy::Abort)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -3027,7 +2880,7 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         agent=IrConstInt(location=location, value=1),
         prompt=IrConstText(location=location, value="prompt"),
         contract_id=contract_id,
-        max_attempts=1,
+        on_parse_error=policy_ir(1, location),
         sandbox=IrConstText(location=location, value="unused"),
     )
     if node_type is IrAsk:
@@ -3092,7 +2945,7 @@ def test_ir_ask_rejects_a_non_agent_sandbox_value() -> None:
         agent=agent_node,
         prompt=IrConstText(location=location, value="prompt"),
         contract_id=contract_id,
-        max_attempts=1,
+        on_parse_error=policy_ir(1, location),
         sandbox=IrConstInt(location=location, value=1),
         env=IrConstText(location=location, value="unused"),
     )

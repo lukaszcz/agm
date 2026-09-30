@@ -30,6 +30,7 @@
     },
     {
       "name": "missing_required_name_still_fails",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "profile_source": [
           "{\"role\": \"admin\"}"

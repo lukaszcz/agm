@@ -15,6 +15,7 @@ from agm.core.process import CapturedOutput, ProcessCaptureResult
 from tests._agl_helpers import (
     agl_roots,
     let_root_capture,
+    policy_ir,
     session_sandbox_context,
     unavailable_sandbox_context,
     write_sandbox_home,
@@ -426,7 +427,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
             (),
         ),
         contract_id=cid,
-        max_attempts=1,
+        on_parse_error=policy_ir(1, loc),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,

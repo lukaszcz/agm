@@ -655,11 +655,11 @@ AgentSandbox syntax](#host-agentsandbox-syntax), and all are effective whether o
 loads `std/config` or `--no-stdlib` is given. [`[agent]` defaults](#agent-defaults) apply as
 well.
 
-Free `ask` lazily opens one default conversation, snapshotting `default-agent` and
-`default-sandbox` at first use; later free calls reuse them even if the settings change. Explicit
-`Session::open` sessions stay live until closed or the REPL exits. `:reset` clears AgL bindings
-and settings but **not** host sessions: a later free `ask` continues the default conversation,
-and unneeded explicit sessions must be closed yourself.
+Free `ask` lazily opens one default conversation, snapshotting `default-agent`,
+`default-sandbox`, and the ambient `std/env::environ` at first use; later free calls reuse them
+even if the settings change or `setenv` is called. Explicit `Session::open` sessions stay live
+until closed or the REPL exits. `:reset` clears AgL bindings and settings and closes host
+sessions: a later free `ask` opens a new default conversation with freshly snapshotted values.
 
 Each loaded program gets the automatic prelude as in `agm exec`, so `Option`, `Some`, `None`,
 etc. are unqualified from a fresh prompt.

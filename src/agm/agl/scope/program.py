@@ -212,6 +212,7 @@ def _build_cross_module_constructor_candidates(
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
     type_owners: TypeOwnerIndex,
+    tail_removes: Callable[[NameAtom, QName, QName], bool],
 ) -> dict[str, tuple[ConstructorRef, ...]]:
     """Build constructor candidates from types exposed by import tails for a module.
 
@@ -227,6 +228,9 @@ def _build_cross_module_constructor_candidates(
     ``all_public_types`` (which is keyed by owning-type QName), so they are
     resolved through ``cross_module_constructor_refs`` instead, which already
     carries a per-variant :class:`ConstructorRef`.
+
+    A declaration every tail exposing it removes by ``hiding``
+    (*tail_removes*) adds none.
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     exposed_qnames = frozenset(
@@ -236,7 +240,7 @@ def _build_cross_module_constructor_candidates(
 
     def hidden_here(ref: ConstructorRef) -> bool:
         """Whether an import hides *ref*'s declaration, which no other exposes."""
-        qname = (ref.owner_module_id, _atom((*ref.owner_path, ref.owner_name)))
+        qname = ref.qname
         return qname in import_env.unqualified_hidden and qname not in exposed_qnames
 
     def add_candidate(name: str, ref: ConstructorRef) -> None:
@@ -250,6 +254,8 @@ def _build_cross_module_constructor_candidates(
             continue
         for mid, src_name in qnames:
             key = (mid, src_name)
+            if tail_removes(exposed_name, key, key):
+                continue
             decl = all_public_types.get(key)
             if decl is None:
                 variant_ref = cross_module_constructor_refs.get(key)
@@ -270,7 +276,9 @@ def _build_cross_module_constructor_candidates(
                 for member in decl.members:
                     if isinstance(member, VariantRef):
                         for referenced_cref in type_owners.referenced_member_refs(key, member):
-                            if not hidden_here(referenced_cref):
+                            if not hidden_here(referenced_cref) and not tail_removes(
+                                exposed_name, key, referenced_cref.qname
+                            ):
                                 add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
                     if declares_bare_constructor(
@@ -279,7 +287,9 @@ def _build_cross_module_constructor_candidates(
                         continue
                     member_atom = _atom((*owner_path, decl.name, member.name))
                     member_qname = (mid, member_atom)
-                    if member_qname in exposed_qnames:
+                    if member_qname in exposed_qnames and not tail_removes(
+                        exposed_name, key, member_qname
+                    ):
                         add_candidate(member.name, cross_module_constructor_refs[member_qname])
     return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}
 
@@ -768,14 +778,15 @@ def resolve_program(
     export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
     scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]] = {}
     type_origins: set[QName] = set()
+    alias_origins: set[QName] = set()
     for mid, loaded in graph.modules.items():
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
         scope_export_maps[mid] = _compute_local_scope_exports(mid, loaded.program)
-        type_origins.update(
-            (mid, _item_atom(item))
-            for item in static_items(loaded.program.body.items)
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-        )
+        for item in static_items(loaded.program.body.items):
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+                type_origins.add((mid, _item_atom(item)))
+            if isinstance(item, TypeAlias):
+                alias_origins.add((mid, _item_atom(item)))
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
@@ -811,7 +822,9 @@ def resolve_program(
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in decls
         }
-        import_envs[mid] = build_import_env(decls, module_targets, export_maps, scope_export_maps)
+        import_envs[mid] = build_import_env(
+            decls, module_targets, export_maps, scope_export_maps, alias_origins
+        )
 
     # ------------------------------------------------------------------
     # Step 5: Whole-program pre-pass — collect all funcs/types and
@@ -991,7 +1004,11 @@ def resolve_program(
         is_entry = mid == graph.entry_id
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates = _build_cross_module_constructor_candidates(
-            import_envs[mid], all_public_types, cross_module_constructor_refs, type_owners
+            import_envs[mid],
+            all_public_types,
+            cross_module_constructor_refs,
+            type_owners,
+            resolver.tail_removes,
         )
         resolved = resolver.resolve(ambient_constructor_candidates=cross_module_candidates or None)
         resolved_modules[mid] = ResolvedModule(

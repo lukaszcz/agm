@@ -1141,6 +1141,18 @@ PATH_TYPE_NAME = "path"
 # A name no declaration reaches still resolves to its target.
 BUILTIN_ALIAS_TARGETS: Mapping[str, Type] = {PATH_TYPE_NAME: TextType()}
 
+#: Every built-in name a module's type namespace carries a reserved fallback
+#: binding for, whether or not any source declares it.
+BUILTIN_FALLBACK_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS) | (
+    BUILTIN_PRELUDE_TYPE_NAMES
+)
+
+
+def is_builtin_type_name(name: str) -> bool:
+    """Whether bare *name* names a built-in type when no declaration is selected for it."""
+    return name in BUILTIN_FALLBACK_TYPE_NAMES or name in BUILTIN_ALIAS_TARGETS
+
+
 # Every bare name the host recognizes as a built-in exception or prelude
 # record/enum — used by ``spells_bare`` to recognize a standard-library
 # declaration of one of them, as opposed to an ordinary, non-builtin

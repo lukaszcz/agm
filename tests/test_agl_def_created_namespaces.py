@@ -4,7 +4,8 @@ A method (``def Owner::m(self)``) joins its owner's namespace, so the
 owner's members stay reachable through the same path; a plain function's
 path (``def Geo::f()``) only declares ``Geo::f``: it never hides a
 same-named imported type or scope, whose members stay reachable beside it.
-Receivers an alias or scalar cannot own are rejected.
+A renaming alias's method is its target's; receivers a scalar cannot own
+are rejected.
 
 Every probe is checked in file mode and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
@@ -162,8 +163,8 @@ _SCENARIOS = {
         modules={"al": _AL},
         header=("import al::*",),
         probes={
-            # An alias cannot own a method.
-            "receiver": rejected("def Geo::m(self) -> int = 1", AglScopeError, "self"),
+            # An alias's method is its target's.
+            "receiver": accepted("def Geo::m(self) -> int = self.x\nBase(x = 2).m()", "int"),
             "nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
             "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
         },

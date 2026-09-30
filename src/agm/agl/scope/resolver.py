@@ -58,36 +58,45 @@ from agm.agl.diagnostics import (
     ReferencedMemberError,
     static_root_message,
     type_name_not_a_value,
+    unknown_type,
 )
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, render_route_member, spell_declaration
 from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.scope.imports import (
     BareRoute,
     ImportEnv,
+    ItemDeclaration,
     NameAtom,
+    PathAtom,
     QName,
     QualResolutionFound,
     ScopeOrigins,
     declares_bare_constructor,
     qualifier_candidates,
+    qualifier_decls,
     qualifier_hides,
+    qualifier_member_decls,
     qualifier_members,
     qualifier_scope_paths,
     resolve_qualified,
     route_spelling,
 )
 from agm.agl.scope.lookup import (
+    NOT_HIDDEN,
     Candidate,
+    Hiding,
     LookupKind,
     Misfit,
     QualifiedTarget,
     Reading,
+    is_removed,
     lookup_bare,
     lookup_declared,
     lookup_origins,
     lookup_qualified,
     lookup_reached,
     lookup_steps,
+    removes,
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
@@ -139,6 +148,7 @@ from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
     MemberHidden,
     MemberReferenced,
+    is_nominal_type_expr,
     member_chain,
     owner_member_selection,
     selection_node_id,
@@ -153,6 +163,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
+    is_builtin_type_name,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
@@ -445,6 +456,11 @@ def _type_qnames(refs: Iterable[BindingRef]) -> Iterator[QName]:
     return (_ref_qname(ref) for ref in refs if ref.contributes_a_type)
 
 
+def _item_order(named: ItemDeclaration) -> PathAtom:
+    """Order import items naming declarations by the path they spell."""
+    return named.item
+
+
 def _key_qname(key: DeclarationKey) -> QName:
     """Return the full path declaration *key* names."""
     module_id, scope_path, name = key
@@ -615,9 +631,11 @@ class _Resolver:
         self._use_horizon: int | None = None
         # What the outermost read in progress has learned about each use.
         self._use_reads: _UseReads | None = None
-        # Whether each use is a single-item rename, and the target it names.
+        # Whether each use is a single-item rename, the target it names, and
+        # the declarations its ``hiding`` removes.
         self._use_renamed: dict[int, bool] = {}
         self._use_identities: dict[int, frozenset[QName]] = {}
+        self._use_hidden_by: dict[int, frozenset[DeclarationKey]] = {}
         # Every enum this module reads by the names of its members, built on
         # first use.
         self._enum_member_index: dict[str, dict[QName, ConstructorRef]] | None = None
@@ -643,6 +661,8 @@ class _Resolver:
         # descendant region), independent of the decl's textual position
         # relative to whatever consults it.
         self._import_decl_scope_paths: dict[int, ScopePath] = {}
+        # Import declaration id -> the declarations its ``hiding`` removes, by identity.
+        self._hidden_by: dict[int, frozenset[DeclarationKey]] = {}
         # Every registered declaration's item, keyed like its binding, so
         # legacy root-only tables can be derived from the same collection
         # without admitting scoped members.
@@ -699,9 +719,6 @@ class _Resolver:
         # Structured method identity -> nominal receiver owner. This is
         # scope's single receiver classification artifact for later passes.
         self._method_declarations: dict[DeclarationKey, ReceiverOwner] = {}
-        # Alias scope paths a receiver may not claim, built on first use from
-        # the completed declaration pre-pass and shared by every method.
-        self._alias_receivers: dict[ScopePath, TypeAlias] | None = None
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
@@ -804,6 +821,15 @@ class _Resolver:
             if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
         }
         self._validate_alias_member_paths(current_type_owners)
+        # A tail or ``hiding`` item written through an alias must name a
+        # declaration whether or not anything reads it.
+        for node_id in self._import_env.decl_hiding:
+            self._import_hidden(node_id)
+        for exposures in self._import_env.decl_tail_beneath.values():
+            for named in sorted(
+                {named for items in exposures.values() for named in items}, key=_item_order
+            ):
+                self._named_by(named)
         for complete in self._deferred_constructors:
             complete()
         if ambient_constructor_candidates:
@@ -1227,22 +1253,22 @@ class _Resolver:
         return next(iter(owners), None)
 
     def _receiver_key_owner(self, key: DeclarationKey, span: SourceSpan) -> ReceiverOwner | None:
-        """Return the receiver owner declaration *key* names when it is a type, rejecting an alias.
+        """Return the receiver owner type *key* names, rejecting an alias of its own.
 
-        This module's aliases are read from its REPL-retention-aware alias
-        table (:meth:`_alias_receiver_paths`).
+        A renaming alias names its target (:meth:`TypeOwnerIndex.identity`),
+        so its methods are the target's; any other alias is no receiver.
         """
-        module_id, scope_path, name = key
-        path = (*scope_path, name)
-        qname = _key_qname(key)
+        qname = self._type_owners.identity(_key_qname(key))
+        owner = self._type_owners.owner(qname)
+        if owner is not None and owner.alias is not None:
+            self._raise_alias_receiver(key[2], owner.alias, span)
+        module_id, path, name = self._qname_decl_key(qname)
         if module_id == self._module_id:
-            alias = self._alias_receiver_paths().get(path)
-            if alias is not None:
-                self._raise_alias_receiver(name, alias, span)
-            return ReceiverOwner(module_id, path) if self._type_owners.is_declared(qname) else None
-        declaration = self._all_public_types.get(qname)
-        if isinstance(declaration, TypeAlias):
-            self._raise_alias_receiver(name, declaration, span)
+            return (
+                ReceiverOwner(module_id, (*path, name))
+                if self._type_owners.is_declared(qname)
+                else None
+            )
         return self._cross_module_type_owners.get(qname)
 
     @staticmethod
@@ -1268,27 +1294,6 @@ class _Resolver:
         module_id, atom = qname
         path = _bare_path(atom)
         return (module_id, path[:-1], path[-1])
-
-    def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
-        """Return the module's alias scope paths with their declarations, computed once.
-
-        The declaration pre-pass fills ``_type_declarations`` before any
-        receiver is classified, so the table is the same for every method.
-        """
-        if self._alias_receivers is None:
-            aliases: dict[ScopePath, TypeAlias] = {
-                path: owner.alias
-                for path, owner in self._repl_session_type_paths.items()
-                if owner.alias is not None
-            }
-            for type_decl, path in self._type_declarations:
-                type_scope = path + (type_decl.name,)
-                if isinstance(type_decl, TypeAlias):
-                    aliases[type_scope] = type_decl
-                else:
-                    aliases.pop(type_scope, None)
-            self._alias_receivers = aliases
-        return self._alias_receivers
 
     def _raise_alias_receiver(self, name: str, alias: TypeAlias, span: SourceSpan) -> None:
         """Reject a method receiver that names *alias*."""
@@ -2184,23 +2189,32 @@ class _Resolver:
                 )
                 self._deferred_constructors.append(
                     partial(
-                        self._contribute_bare_constructor,
-                        scope,
-                        atom,
-                        qname,
-                        ContributionLayer.IMPORTED,
+                        self._contribute_regional_constructors, scope, decl, atom, qname, exposures
                     )
                 )
-                if isinstance(atom, str):
-                    self._deferred_constructors.append(
-                        partial(
-                            self._contribute_regional_enum_variants,
-                            scope,
-                            qname,
-                            decl.span,
-                            exposures,
-                        )
-                    )
+
+    def _contribute_regional_constructors(
+        self,
+        scope: ScopeNode,
+        decl: ImportDecl,
+        atom: NameAtom,
+        qname: QName,
+        exposures: Mapping[NameAtom, Collection[QName]],
+    ) -> None:
+        """Contribute the constructors region-scoped *decl* makes bare *atom* through *qname*.
+
+        *qname*'s own, and an enum's variants when *atom* is one name. What
+        *decl*'s ``hiding`` removes is none. Deferred, since the constructors
+        and what the ``hiding`` names read the type owners.
+        """
+        hiding = self._hiding((decl.node_id,))
+        if removes(hiding, self._qname_decl_key(qname), self.identity):
+            return
+        constructor = self._cross_module_constructor(qname)
+        if constructor is not None:
+            scope.contribute_bare_constructor(atom, constructor, ContributionLayer.IMPORTED)
+        if isinstance(atom, str):
+            self._contribute_regional_enum_variants(scope, qname, decl.span, exposures, hiding)
 
     def _contribute_regional_enum_variants(
         self,
@@ -2208,6 +2222,7 @@ class _Resolver:
         qname: QName,
         span: SourceSpan,
         exposures: Mapping[NameAtom, Collection[QName]],
+        hiding: Hiding,
     ) -> None:
         """Expand a bare-exposed enum type into its own bare variants, region-scoped.
 
@@ -2215,31 +2230,24 @@ class _Resolver:
         matchable -- ``_build_cross_module_constructor_candidates`` performs
         the same expansion module-wide, from a root-position bare exposure.
         Mirroring it here covers the scoped case, whose bare exposure never
-        reaches that module-wide table. Deferred, since a referenced member
-        reads the type owners.
+        reaches that module-wide table. A member *hiding* removes is none.
         """
         selected_qnames = frozenset(qname for qnames in exposures.values() for qname in qnames)
         for atom, constructor, path in self._enum_variant_members(qname):
             # An inline member the tail hides, or whose spelling a same-named
             # record or exception exposed bare already owns, stays unexposed.
-            if constructor.inline_enum_owner_decl_node_id is not None and (
-                (qname[0], _bare_atom(path)) not in selected_qnames
-                or declares_bare_constructor(exposures.get(atom, ()), self._all_public_types)
-            ):
+            if (
+                constructor.inline_enum_owner_decl_node_id is not None
+                and (
+                    (qname[0], _bare_atom(path)) not in selected_qnames
+                    or declares_bare_constructor(exposures.get(atom, ()), self._all_public_types)
+                )
+            ) or removes(hiding, self._qname_decl_key(constructor.qname), self.identity):
                 continue
             scope.contribute_bare(
                 atom, self._variant_binding_ref(constructor, span), ContributionLayer.IMPORTED
             )
             scope.contribute_bare_constructor(atom, constructor, ContributionLayer.IMPORTED)
-
-    def _contribute_bare_constructor(
-        self, scope: ScopeNode, atom: NameAtom, qname: QName, layer: ContributionLayer
-    ) -> ConstructorRef | None:
-        """Contribute the constructor imported *qname* names bare to *scope* through *layer*."""
-        constructor = self._cross_module_constructor(qname)
-        if constructor is not None:
-            scope.contribute_bare_constructor(atom, constructor, layer)
-        return constructor
 
     # -- ``use`` declarations: read where written, whenever used --
 
@@ -2414,15 +2422,19 @@ class _Resolver:
         if kind is not LookupKind.TYPE and len(relative) == 1:
             reached = itertools.chain(reached, self._use_injected(site, decl, relative[0]))
         for candidate in reached:
-            used = self._as_used(candidate)
+            used = self._as_used(site, decl, candidate, alone=len(relative) == 1)
             if self._fits(used.target, kind):
                 yield used
 
-    def _as_used(self, candidate: Candidate) -> Candidate:
-        """*candidate* as a use contributes it: a member an alias selects as its target's own.
+    def _as_used(
+        self, site: ScopePath, decl: UseDecl, candidate: Candidate, *, alone: bool
+    ) -> Candidate:
+        """*candidate* as *decl*, in region *site*, contributes it, exposed *alone* or owned.
 
-        An alias segment stands for its target's path, so what a use exposes
-        through one is the target's member.
+        An alias segment stands for its target's path, so a member an alias
+        selects that the use exposes *alone* -- no longer spelled beneath
+        the alias -- is the target's own. Each way it was reached also
+        removes what the use's ``hiding`` names.
         """
         target = candidate.target
         declaration = candidate.origin.declaration
@@ -2430,7 +2442,7 @@ class _Resolver:
         constructor = target.constructor
         member = (
             None
-            if key is None or constructor is None or constructor.member is None
+            if not alone or key is None or constructor is None or constructor.member is None
             else self._type_owners.owner_member(
                 self._qname_decl_key((key[0], _bare_atom(key[1]))), key[2]
             )
@@ -2441,7 +2453,29 @@ class _Resolver:
             )
             declaration = member.qname
         layer = ContributionLayer.USE
-        return Candidate(target, layer, contribution_origin(declaration, layer))
+        removed = self._use_hidden(site, decl)
+        hiding = (
+            frozenset(way | removed for way in candidate.hiding) if removed else candidate.hiding
+        )
+        return Candidate(target, layer, contribution_origin(declaration, layer), hiding)
+
+    def _use_hidden(self, site: ScopePath, decl: UseDecl) -> frozenset[DeclarationKey]:
+        """The declarations *decl*'s ``hiding``, read in region *site*, names, by identity."""
+        found = self._use_hidden_by.get(decl.node_id)
+        if found is None:
+            target = _use_target(decl)
+            with self._reading_use(decl):
+                found = frozenset(
+                    self.identity(key)
+                    for item in decl.hidden
+                    for kind in LookupKind
+                    for candidate in self._use_path_reached(
+                        site, decl, (*target, *_item_path(item)), kind, len(target)
+                    )
+                    if (key := candidate.target.key) is not None
+                )
+            self._use_hidden_by[decl.node_id] = found
+        return found
 
     def _use_injected(self, site: ScopePath, decl: UseDecl, name: str) -> Iterator[Candidate]:
         """Yield the enum member *name* each enum *decl*, in region *site*, exposes injects.
@@ -2592,8 +2626,8 @@ class _Resolver:
 
         A single-item rename's target is the declaration it renames. An item
         is a path declared beneath the target: a type the target reaches
-        projects its member table, but an alias inside the item never stands
-        for its target's path.
+        projects its member table, and an alias inside the item stands for
+        its target's path.
         """
         site = self._scope.scope_path
         target = _use_target(decl)
@@ -2702,11 +2736,23 @@ class _Resolver:
         return self._owner_declarations.get(selection_node_id(spelling))
 
     def _validate_alias(self, path: ScopePath, alias: TypeAlias) -> None:
-        """Validate *alias*, declared at scope *path*, once."""
+        """Validate *alias*, declared at scope *path*, once.
+
+        A bare nominal target selecting nothing that names no built-in type is
+        unknown here, where the alias is declared, whoever reads it.
+        """
         if alias.node_id not in self._validated_aliases:
             self._validated_aliases.add(alias.node_id)
             with self._full_view(), self._named_scope(path):
                 self._validate_type_decl(alias)
+            target = alias.type_expr
+            if (
+                is_nominal_type_expr(target, alias.type_params)
+                and target.qualifier is None
+                and target.node_id not in self._owner_declarations
+                and not is_builtin_type_name(target.name)
+            ):
+                raise unknown_type(target.name, alias.span)
 
     def _validate_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Validate *node*'s type names in the current layer, an exception's base included."""
@@ -3439,8 +3485,9 @@ class _Resolver:
                 self._contributed_target(ref, ()),
                 layer,
                 contribution_origin(_ref_qname(ref), layer),
+                hiding,
             )
-            for ref, layers in self._imported_bindings(step, path).items()
+            for ref, (layers, hiding) in self._imported(step, path).items()
             for layer in layered(layers)
         )
         used = (candidate for candidate, _decl in self._use_exposures(step, path, kind))
@@ -3455,8 +3502,11 @@ class _Resolver:
                 self._contributed_target(self._cross_module_binding_ref(qname), ()),
                 ContributionLayer.IMPORTED,
                 ImportedModuleOrigin(qname),
+                self._hiding(decls),
             )
-            for qname in self._routed_qnames(chain.leading_route, path, anchored=chain.anchored)
+            for qname, decls in qualifier_member_decls(
+                self._import_env, chain.leading_route, _bare_atom(path), anchored=chain.anchored
+            ).items()
         )
         return Reading(tuple(c for c in candidates if self._fits(c.target, kind)))
 
@@ -3658,18 +3708,44 @@ class _Resolver:
                 for item in decl.hidden
             ):
                 return True
-        if any(
-            _bare_atom(path[len(anchor) :]) in hidden
-            for node_id, hidden in self._import_env.decl_hidden.items()
-            if step[: len(anchor := self._import_decl_scope_paths.get(node_id, ()))] == anchor
-        ):
-            return True
-        return len(path) > 1 and qualifier_hides(self._import_env, (path[0],), _bare_atom(path[1:]))
+        env = self._import_env
+        for node_id in {*env.decl_hidden, *env.decl_hiding}:
+            anchor = self._import_decl_scope_paths.get(node_id, ())
+            relative = path[len(anchor) :]
+            if step[: len(anchor)] == anchor and (
+                _bare_atom(relative) in env.decl_hidden.get(node_id, ())
+                or self._hides_beneath_alias(node_id, relative)
+            ):
+                return True
+        return len(path) > 1 and self._route_hides((path[0],), path[1:], anchored=False)
+
+    def _hides_beneath_alias(self, node_id: int, path: ScopePath) -> bool:
+        """Whether import *node_id*'s ``hiding`` names an alias above *path*, declared beneath.
+
+        The item removed the alias's spelling, and with its target every
+        path its target declares beneath.
+        """
+        return any(
+            not named.beneath
+            and named.item == path[: (size := len(named.item))]
+            and size < len(path)
+            and self.aliases(self._qname_decl_key(named.declaration))
+            and self._declares(
+                _key_qname(self._declaration_beneath(named.declaration, path[size:]))
+            )
+            for named in self._import_env.decl_hiding.get(node_id, ())
+        )
 
     def routed_hidden(self, chain: QualifierChain, path: ScopePath) -> bool:
         """Whether a ``hiding`` removed *path* from *chain*'s leading module route."""
-        return qualifier_hides(
-            self._import_env, chain.leading_route, _bare_atom(path), anchored=chain.anchored
+        return self._route_hides(chain.leading_route, path, anchored=chain.anchored)
+
+    def _route_hides(self, route: tuple[str, ...], path: ScopePath, *, anchored: bool) -> bool:
+        """Whether a ``hiding`` removed *path* from module *route*: it, or an alias above it."""
+        env = self._import_env
+        return qualifier_hides(env, route, _bare_atom(path), anchored=anchored) or any(
+            self._hides_beneath_alias(node_id, path)
+            for node_id in qualifier_decls(env, route, anchored=anchored)
         )
 
     def own_origins(self, path: ScopePath) -> frozenset[QName]:
@@ -3678,6 +3754,29 @@ class _Resolver:
         if path in self._scope_nodes or self._type_owners.is_declared(qname):
             return frozenset({qname})
         return frozenset()
+
+    def identity(self, key: DeclarationKey) -> DeclarationKey:
+        """The declaration *key* names: a renaming alias's is its target's.
+
+        A path beneath an alias is its target's path there.
+        """
+        qname = _key_qname(key)
+        module_id, atom = qname
+        path = _bare_path(atom)
+        for end in range(1, len(path)):
+            alias = (module_id, _bare_atom(path[:end]))
+            owner = self._type_owners.owner(alias)
+            if owner is not None and owner.alias is not None:
+                beneath = self._alias_target_path(alias, owner, path[end:])
+                if beneath is not None:
+                    qname = beneath[0]
+                break
+        return self._qname_decl_key(self._type_owners.identity(qname))
+
+    def aliases(self, key: DeclarationKey) -> bool:
+        """Whether *key* declares a type alias."""
+        owner = self._type_owners.owner(_key_qname(key))
+        return owner is not None and owner.alias is not None
 
     def contributed_origins(self, step: ScopePath, path: ScopePath) -> frozenset[QName]:
         """The scopes and types contributions anchored at or above *step* reach as *path*.
@@ -3759,38 +3858,117 @@ class _Resolver:
             )
         return frozenset(qname for qname in types if self._type_owners.is_declared(qname))
 
-    def _routed_qnames(
-        self, route: tuple[str, ...], path: ScopePath, *, anchored: bool
-    ) -> Iterator[QName]:
-        """Yield what module *route* reaches at *path* beneath it."""
-        atom = _bare_atom(path)
-        for _module, members in qualifier_members(self._import_env, route, anchored=anchored):
-            qname = members.get(atom)
-            if qname is not None:
-                yield qname
-
-    def _imported_bindings(self, step: ScopePath, path: ScopePath) -> dict[BindingRef, Layers]:
-        """Return what import tails anchored at or above *step* bind at full *path*, with layers.
+    def _imported(
+        self, step: ScopePath, path: ScopePath
+    ) -> dict[BindingRef, tuple[Layers, Hiding]]:
+        """Return what import tails anchored at or above *step* bind at full *path*.
 
         Every layer from *step* outward contributes the path relative to its
         own; the module root's import tails and the module route spelled by
         its leading name contribute it whole. A binding several contribute
-        keeps every one's tag.
+        keeps every one's tag, and what the ``hiding`` of each declaration
+        contributing it removes.
         """
-        bindings: dict[BindingRef, Layers] = {}
+        env = self._import_env
+        reached: dict[BindingRef, tuple[Layers, set[frozenset[DeclarationKey]]]] = {}
+
+        def add(ref: BindingRef, layers: Layers, decls: Iterable[int]) -> None:
+            found, ways = reached.setdefault(ref, (frozenset(), set()))
+            reached[ref] = found | layers, ways
+            ways.update(self._hiding(decls))
+
         for layer, atom in anchored_layers(self._scope_nodes, step, path):
             for ref, layers in layer.bare_contributions.get(atom, {}).items():
-                add_layers(bindings, ref, layers)
-        imported: Iterable[QName] = self._import_env.unqualified.get(_bare_atom(path), ())
+                qname = _ref_qname(ref)
+                add(
+                    ref,
+                    layers,
+                    (
+                        node_id
+                        for node_id, members in env.decl_bare.items()
+                        if self._import_decl_scope_paths.get(node_id) == layer.scope_path
+                        and qname in members.get(atom, ())
+                    ),
+                )
+        for node_id, exposures in self._reachable_decl_contributions(env.decl_tail_beneath, step):
+            relative = _bare_atom(path[len(self._import_decl_scope_paths.get(node_id, ())) :])
+            for named in exposures.get(relative, ()):
+                add(
+                    self._cross_module_binding_ref(_key_qname(self._named_by(named))),
+                    frozenset({ContributionLayer.IMPORTED}),
+                    (node_id,),
+                )
+        atom = _bare_atom(path)
+        imported = dict(env.unqualified_decls.get(atom, {}))
         if path[1:]:
-            imported = itertools.chain(
-                imported, self._routed_qnames((path[0],), path[1:], anchored=False)
+            routed = qualifier_member_decls(env, (path[0],), _bare_atom(path[1:]))
+            for qname, decls in routed.items():
+                imported[qname] = imported.get(qname, frozenset()) | decls
+        for qname, decls in imported.items():
+            add(
+                self._cross_module_binding_ref(qname),
+                frozenset({ContributionLayer.IMPORTED}),
+                decls,
             )
-        for qname in imported:
-            add_layers(
-                bindings, self._cross_module_binding_ref(qname), (ContributionLayer.IMPORTED,)
+        return {ref: (layers, frozenset(ways)) for ref, (layers, ways) in reached.items()}
+
+    def _hiding(self, decls: Iterable[int]) -> Hiding:
+        """What the ``hiding`` of each import declaration of *decls* removes; none without any."""
+        return frozenset(self._import_hidden(node_id) for node_id in decls) or NOT_HIDDEN
+
+    def _import_hidden(self, node_id: int) -> frozenset[DeclarationKey]:
+        """The declarations import declaration *node_id*'s ``hiding`` removes, by identity.
+
+        A path an item names beneath an exported alias is its target's, and
+        must name a declaration there.
+        """
+        found = self._hidden_by.get(node_id)
+        if found is None:
+            found = self._hidden_by[node_id] = frozenset(
+                self._named_by(named) for named in self._import_env.decl_hiding.get(node_id, ())
             )
-        return bindings
+        return found
+
+    def _named_by(self, named: ItemDeclaration) -> DeclarationKey:
+        """The declaration import item *named* names, by identity.
+
+        A path it names beneath an exported alias is its target's, and must
+        name a declaration there.
+        """
+        key = self._declaration_beneath(named.declaration, named.beneath)
+        if named.beneath and not self._declares(_key_qname(key)):
+            raise UnknownMemberError(
+                spell_declaration(named.module, named.item),
+                span=named.span,
+                repair=MissRepair.NOT_EXPORTED,
+            )
+        return key
+
+    def _declaration_beneath(self, qname: QName, path: ScopePath) -> DeclarationKey:
+        """The declaration full path *qname* then *path* names (:meth:`identity`)."""
+        module_id, atom = qname
+        return self.identity(
+            self._qname_decl_key((module_id, _bare_atom((*_bare_path(atom), *path))))
+        )
+
+    def tail_removes(self, exposed: NameAtom, qname: QName, declaration: QName) -> bool:
+        """Whether every root import tail exposing *qname* as *exposed* removes *declaration*.
+
+        *declaration* is *qname*'s own or a member's beneath it.
+        """
+        decls = self._import_env.unqualified_decls.get(exposed, {}).get(qname, ())
+        return removes(self._hiding(decls), self._qname_decl_key(declaration), self.identity)
+
+    def _imported_bindings(self, step: ScopePath, path: ScopePath) -> dict[BindingRef, Layers]:
+        """Return what import tails anchored at or above *step* bind at full *path*, with layers.
+
+        A binding every declaration contributing it hides is none.
+        """
+        return {
+            ref: layers
+            for ref, (layers, hiding) in self._imported(step, path).items()
+            if not removes(hiding, (ref.module_id, ref.scope_path, ref.name), self.identity)
+        }
 
     def _use_exposures(
         self, step: ScopePath, path: ScopePath, kind: LookupKind
@@ -3813,6 +3991,7 @@ class _Resolver:
         exposed = (
             self._exposed_binding(candidate.target, decl.span)
             for candidate, decl in self._use_exposures(step, path, kind)
+            if not is_removed(candidate, self.identity)
         )
         for ref in filter(None, exposed):
             add_layers(bindings, ref, (ContributionLayer.USE,))
@@ -3840,7 +4019,9 @@ class _Resolver:
             for constructor, layers in layer.bare_constructor_contributions.get(atom, {}).items():
                 add_layers(constructors, constructor, layers)
         for candidate, _decl in self._use_exposures(step, path, kind):
-            if candidate.target.constructor is not None:
+            if candidate.target.constructor is not None and not is_removed(
+                candidate, self.identity
+            ):
                 add_layers(constructors, candidate.target.constructor, (ContributionLayer.USE,))
         return constructors
 
@@ -4494,7 +4675,10 @@ class _Resolver:
             ),
             {},
         )
-        return (*own, *(candidate for candidate in contributed if candidate not in own))
+        found = dict(own)
+        for candidate, layers in contributed.items():
+            add_layers(found, candidate, layers)
+        return tuple(self._one_per_declaration(found))
 
     def _own_step_constructors(
         self, step: ScopePath, name: str, *, nested: bool = True
@@ -4576,7 +4760,29 @@ class _Resolver:
             candidate for candidate in candidates if candidate.owner_module_id == self._module_id
         ]
         declared = [candidate for candidate in own if not candidate.owner_path]
-        return {candidate: candidates[candidate] for candidate in declared or own or candidates}
+        return self._one_per_declaration(
+            {candidate: candidates[candidate] for candidate in declared or own or candidates}
+        )
+
+    def _one_per_declaration(
+        self, candidates: Mapping[ConstructorRef, Layers]
+    ) -> dict[ConstructorRef, Layers]:
+        """*candidates*, one per declaration they construct, with every layer reaching it.
+
+        A renaming alias's constructor is its target's
+        (:meth:`TypeOwnerIndex.constructor_identity`): the candidate naming the
+        declaration directly stands for it, else its first by path.
+        """
+        grouped: dict[ConstructorRef, dict[ConstructorRef, Layers]] = {}
+        for candidate, layers in candidates.items():
+            named = self._type_owners.constructor_identity(candidate)
+            grouped.setdefault(named, {})[candidate] = layers
+        return {
+            (
+                named if named in reached else min(reached, key=_constructor_candidate_sort_key)
+            ): frozenset().union(*reached.values())
+            for named, reached in grouped.items()
+        }
 
     def _visible_bare_constructor_candidates(
         self, name: str, span: SourceSpan

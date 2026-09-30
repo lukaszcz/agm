@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TypeGuard
 
 from agm.agl.scope.symbols import ScopePath, TypeOwner
-from agm.agl.syntax.nodes import QualifierChain, QualifierSegment, VariantRef
+from agm.agl.syntax.nodes import QualifierChain, QualifierSegment, TypeAlias, VariantRef
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "member_chain",
     "owner_member_selection",
     "owner_type_expr",
+    "renames_target",
     "selection_node_id",
 ]
 
@@ -39,6 +40,21 @@ def is_nominal_type_expr(
         isinstance(type_expr, NameT)
         and type_expr.qualifier is None
         and type_expr.name in type_params
+    )
+
+
+def renames_target(alias: TypeAlias) -> bool:
+    """Whether *alias* is another name for its target: it passes its type parameters through.
+
+    ``type A = m::B`` and ``type A[T] = m::B[T]`` rename ``m::B``; ``type A =
+    m::B[int]`` and ``type A[T] = m::B`` are types of their own.
+    """
+    target = alias.type_expr
+    if isinstance(target, NameT):
+        return not alias.type_params
+    return isinstance(target, AppliedT) and alias.type_params == tuple(
+        arg.name if isinstance(arg, NameT) and arg.qualifier is None else None
+        for arg in target.args
     )
 
 

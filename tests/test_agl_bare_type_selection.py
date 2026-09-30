@@ -170,7 +170,8 @@ class TestScopeRegionNeverStopsABareTypeName:
     Past a region a ``use`` opens, two root import tails' types stay
     ambiguous; past an own region, the own root type is selected; past a
     ``use``-opened region, a root import tail's exception is caught and
-    extended; a region alone names no type.
+    extended; a region alone names no type, an alias's target rejected where
+    the alias is declared.
     """
 
     @pytest.mark.parametrize("groupings", grouping_batches(4))
@@ -243,7 +244,7 @@ class TestScopeRegionNeverStopsABareTypeName:
             _LOCAL_REGION_HEADER,
             probe_table(
                 probes,
-                {key: ("typecheck", AglTypeError) for key in probes},
+                {key: ("scope" if key == "alias" else "typecheck", AglTypeError) for key in probes},
                 span_texts={
                     "annotation": "x: Geo",
                     "alias": "type A = Geo",

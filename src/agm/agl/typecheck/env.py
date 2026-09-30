@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, unknown_type
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -69,7 +69,7 @@ from agm.agl.semantics.type_table import (
 from agm.agl.semantics.types import (
     BUILTIN_ALIAS_TARGETS,
     BUILTIN_EXCEPTIONS,
-    BUILTIN_PRELUDE_TYPE_NAMES,
+    BUILTIN_FALLBACK_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     ArrayType,
     BoolType,
@@ -90,17 +90,12 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
     contains_inference_var,
+    is_builtin_type_name,
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, render_qualified_name
 from agm.agl.zones import ParamZone
-
-#: Every built-in name a module's type namespace carries a reserved fallback
-#: binding for, whether or not any source declares it.
-_BUILTIN_FALLBACK_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS) | (
-    BUILTIN_PRELUDE_TYPE_NAMES
-)
 
 
 def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
@@ -1415,7 +1410,7 @@ class TypeEnvironment:
         ``_BUILTIN_TYPE_NAMES``), so the builder never calls this for them,
         but the guard makes the helper safe to call defensively.
         """
-        if name in _BUILTIN_FALLBACK_TYPE_NAMES:
+        if name in BUILTIN_FALLBACK_TYPE_NAMES:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
@@ -1876,9 +1871,9 @@ class TypeEnvironment:
             return self._own_type_name(key)
         if qualifier is not None:
             return None
-        if name in _BUILTIN_FALLBACK_TYPE_NAMES or name in BUILTIN_ALIAS_TARGETS:
+        if is_builtin_type_name(name):
             return name
-        raise AglTypeError(f"Unknown type '{name}'.", span=span)
+        raise unknown_type(name, span)
 
     def _resolve_selected_type(
         self,
@@ -2223,7 +2218,7 @@ class TypeEnvironment:
         return [
             (name, typ)
             for name, typ in self._types.items()
-            if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ)
+            if name not in BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ)
         ]
 
     def all_declared_type_names(self) -> frozenset[str]:
@@ -2524,7 +2519,7 @@ class TypeEnvironment:
         incoming_type_names = {
             name
             for name in (
-                {name for name in other._types if name not in _BUILTIN_FALLBACK_TYPE_NAMES}
+                {name for name in other._types if name not in BUILTIN_FALLBACK_TYPE_NAMES}
                 | set(other._alias_targets)
                 | set(other._generic_types)
                 | set(other._alias_type_params)
@@ -2538,7 +2533,7 @@ class TypeEnvironment:
         for name, typ in other._types.items():
             if retired(name):
                 continue
-            if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
+            if name not in BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
         self._alias_targets.update(
             {name: expr for name, expr in other._alias_targets.items() if not retired(name)}

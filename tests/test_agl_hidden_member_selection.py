@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglTypeError, HiddenMemberError
-from agm.agl.scope.symbols import UnknownMemberError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
@@ -354,11 +353,12 @@ _SCENARIOS = {
             "use n::*",
         ),
         probes={
-            "alias-use-hide-Green": rejected(
-                "Color::Green", UnknownMemberError, "use m::* hiding Color::Green"
+            "alias-use-hide-Green": rejected("Color::Green", HiddenMemberError, "Color::Green"),
+            "alias-use-hide-Green-target": rejected(
+                "Base::Green", HiddenMemberError, "Base::Green"
             ),
+            "alias-use-other-Blue": accepted("Color::Blue", "record n::Color::Blue"),
         },
-        legal=frozenset({(1, 1, 3), (1, 4), (2, 3), (5,)}),
     ),
 }
 

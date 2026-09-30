@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
@@ -24,6 +24,7 @@ from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
     "EMPTY_IMPORT_ENV",
+    "ItemDeclaration",
     "ImportEnv",
     "ImportTarget",
     "BareRoute",
@@ -44,7 +45,9 @@ __all__ = [
     "matching_atoms",
     "qualifier_candidates",
     "qualifier_contributes",
+    "qualifier_decls",
     "qualifier_hides",
+    "qualifier_member_decls",
     "qualifier_members",
     "qualifier_scope_paths",
     "resolve_qualified",
@@ -111,7 +114,11 @@ def _frozen_routes(
 
 @dataclass(frozen=True, slots=True)
 class ModuleContribution:
-    """One imported module's route-keyed declaration and named-scope contribution."""
+    """One imported module's route-keyed declaration and named-scope contribution.
+
+    ``path_decls`` and ``alias_decls`` are the import declarations forming
+    each route.
+    """
 
     module: ModuleId
     members: Mapping[NameAtom, QName]
@@ -123,6 +130,12 @@ class ModuleContribution:
     alias_scope_paths: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
     path_hidden: frozenset[NameAtom] = frozenset()
     alias_hidden: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
+    path_member_decls: Mapping[NameAtom, frozenset[int]] = field(default_factory=dict)
+    alias_member_decls: Mapping[str, Mapping[NameAtom, frozenset[int]]] = field(
+        default_factory=dict
+    )
+    path_decls: frozenset[int] = frozenset()
+    alias_decls: Mapping[str, frozenset[int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         members: Mapping[NameAtom, QName] = MappingProxyType(
@@ -158,6 +171,23 @@ class ModuleContribution:
 
 
 @dataclass(frozen=True, slots=True)
+class ItemDeclaration:
+    """The declaration one tail or ``hiding`` item names in one imported *module*.
+
+    ``declaration`` is the export the item's path, or its longest prefix
+    naming an exported alias, selects; ``beneath`` is the rest of the path,
+    read beneath that alias's target by scope. ``item`` and ``span`` spell
+    a path naming nothing.
+    """
+
+    module: ModuleId
+    item: PathAtom
+    declaration: QName
+    beneath: PathAtom
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class ImportEnv:
     """Pure contribution environment, including structured public paths.
 
@@ -176,6 +206,13 @@ class ImportEnv:
     ``decl_hidden`` holds, per tailed declaration, the bare atoms its
     ``hiding`` removed from its tail; ``unqualified_hidden`` holds the
     declarations a root-position import's ``hiding`` removed.
+    ``unqualified_decls`` names the declarations contributing each root bare
+    atom's origins, as :attr:`ModuleContribution.path_member_decls` does a
+    route's members; ``decl_hiding`` holds the declarations each tailed or
+    routed declaration's ``hiding`` names, which scope removes from every
+    spelling it contributes. ``decl_tail_beneath`` holds, per tailed
+    declaration, each spelling a tail item naming a path beneath an exported
+    alias exposes, with the items; scope reads the path beneath the target.
     """
 
     contributions: Mapping[ModuleId, ModuleContribution]
@@ -191,6 +228,13 @@ class ImportEnv:
     )
     decl_hidden: Mapping[int, frozenset[NameAtom]] = field(default_factory=dict)
     unqualified_hidden: frozenset[QName] = frozenset()
+    unqualified_decls: Mapping[NameAtom, Mapping[QName, frozenset[int]]] = field(
+        default_factory=dict
+    )
+    decl_hiding: Mapping[int, tuple[ItemDeclaration, ...]] = field(default_factory=dict)
+    decl_tail_beneath: Mapping[int, Mapping[NameAtom, frozenset[ItemDeclaration]]] = field(
+        default_factory=dict
+    )
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
@@ -314,6 +358,10 @@ class _ContributionAccumulator:
     alias_scope_paths: dict[str, set[NameAtom]]
     path_hidden: set[NameAtom]
     alias_hidden: dict[str, set[NameAtom]]
+    path_member_decls: dict[NameAtom, set[int]]
+    alias_member_decls: dict[str, dict[NameAtom, set[int]]]
+    path_decls: set[int]
+    alias_decls: dict[str, set[int]]
 
 
 def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
@@ -327,15 +375,20 @@ def _selected_public_atoms(
     exports: Mapping[NameAtom, QName],
     scope_exports: Mapping[NameAtom, ScopeOrigins],
     span: SourceSpan,
+    aliases: Collection[QName],
 ) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
-    """Expand selected declaration atoms and independent scope identities."""
+    """Expand selected declaration atoms and independent scope identities.
+
+    An item beneath one of the exported *aliases* selects nothing here: it
+    names a path beneath the alias's target, which scope reads.
+    """
     matched_exports: dict[NameAtom, None] = {}
     matched_scopes: dict[NameAtom, None] = {}
     for item in items:
         prefix = _item_path(item)
         declarations = matching_atoms(exports, prefix)
         scopes = matching_atoms(scope_exports, prefix)
-        if not declarations and not scopes:
+        if not declarations and not scopes and _beneath_alias(prefix, exports, aliases) is None:
             raise UnknownMemberError(
                 spell_declaration(module, prefix), span=span, repair=MissRepair.NOT_EXPORTED
             )
@@ -344,6 +397,64 @@ def _selected_public_atoms(
         for atom in scopes:
             matched_scopes[atom] = None
     return tuple(matched_exports), tuple(matched_scopes)
+
+
+def _beneath_alias(
+    path: PathAtom, exports: Mapping[NameAtom, QName], aliases: Collection[QName]
+) -> tuple[QName, PathAtom] | None:
+    """The exported alias the longest proper prefix of *path* names, and the rest; if any."""
+    for end in range(len(path) - 1, 0, -1):
+        qname = exports.get(_atom(path[:end]))
+        if qname is not None and qname in aliases:
+            return qname, path[end:]
+    return None
+
+
+def _item_declarations(
+    items: tuple[ImportItem, ...],
+    module: ModuleId,
+    exports: Mapping[NameAtom, QName],
+    aliases: Collection[QName],
+    span: SourceSpan,
+) -> tuple[ItemDeclaration, ...]:
+    """The declarations *items* name in *module*: an export, or a path beneath an alias.
+
+    An item naming only a named scope names no declaration.
+    """
+    named: list[ItemDeclaration] = []
+    for item in items:
+        path = _item_path(item)
+        exported = exports.get(_atom(path))
+        found = (exported, ()) if exported is not None else _beneath_alias(path, exports, aliases)
+        if found is not None:
+            named.append(ItemDeclaration(module, path, *found, span))
+    return tuple(named)
+
+
+def _tail_beneath_exposures(
+    items: tuple[ImportItem, ...],
+    module: ModuleId,
+    exports: Mapping[NameAtom, QName],
+    aliases: Collection[QName],
+    span: SourceSpan,
+) -> dict[NameAtom, set[ItemDeclaration]]:
+    """The spellings tail *items* naming a path beneath an alias *module* exports expose.
+
+    Each exposes its path, and a renamed one its rename too.
+    """
+    exposures: dict[NameAtom, set[ItemDeclaration]] = {}
+    for item in items:
+        path = _item_path(item)
+        if matching_atoms(exports, path):
+            continue
+        beneath = _beneath_alias(path, exports, aliases)
+        if beneath is None:
+            continue
+        named = ItemDeclaration(module, path, *beneath, span)
+        spellings: list[PathAtom] = [path] if item.rename is None else [path, (item.rename,)]
+        for exposed in spellings:
+            exposures.setdefault(_atom(exposed), set()).add(named)
+    return exposures
 
 
 def _tail_exposures(
@@ -385,21 +496,25 @@ def build_import_env(
     targets: Mapping[int, ImportTarget],
     exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
     scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
+    aliases: Collection[QName] = (),
 ) -> ImportEnv:
     """Build route and implicit-tail contributions for import declarations.
 
     A region-scoped declaration still contributes qualifier routes module-wide,
     but its implicit tail's bare atoms are recorded in ``decl_bare`` so the
-    scope pass can narrow them to that region.
+    scope pass can narrow them to that region. *aliases* are the program's
+    type aliases, beneath whose exports a ``hiding`` item may name a path.
     """
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
-    root_bare: dict[NameAtom, set[QName]] = {}
+    root_bare: dict[NameAtom, dict[QName, set[int]]] = {}
     decl_bare: dict[int, dict[NameAtom, set[QName]]] = {}
     root_bare_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_bare_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     decl_hidden: dict[int, set[NameAtom]] = {}
+    decl_hiding: dict[int, list[ItemDeclaration]] = {}
+    decl_tail_beneath: dict[int, dict[NameAtom, set[ItemDeclaration]]] = {}
     root_hidden: set[QName] = set()
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     for decl in decls:
@@ -409,8 +524,11 @@ def build_import_env(
             module_exports = exports[module]
             module_scopes = scope_exports[module]
             hidden_exports, hidden_scopes = _selected_public_atoms(
-                decl.hidden, module, module_exports, module_scopes, decl.span
+                decl.hidden, module, module_exports, module_scopes, decl.span, aliases
             )
+            named = _item_declarations(decl.hidden, module, module_exports, aliases, decl.span)
+            if named:
+                decl_hiding.setdefault(decl.node_id, []).extend(named)
             if decl.tail is None:
                 selected_exports: tuple[NameAtom, ...] = ()
                 selected_scopes: tuple[NameAtom, ...] = ()
@@ -419,31 +537,46 @@ def build_import_env(
                 selected_scopes = tuple(module_scopes)
             else:
                 selected_exports, selected_scopes = _selected_public_atoms(
-                    decl.tail, module, module_exports, module_scopes, decl.span
+                    decl.tail, module, module_exports, module_scopes, decl.span, aliases
                 )
+                beneath = _tail_beneath_exposures(
+                    decl.tail, module, module_exports, aliases, decl.span
+                )
+                for exposed, items in beneath.items():
+                    decl_tail_beneath.setdefault(decl.node_id, {}).setdefault(
+                        exposed, set()
+                    ).update(items)
             hidden = set(hidden_exports)
             hidden_scope_paths = set(hidden_scopes)
             if not decl.scope_path:
                 root_hidden.update(module_exports[source] for source in hidden)
             acc = accumulators.setdefault(
                 module,
-                _ContributionAccumulator({}, False, set(), {}, {}, set(), {}, set(), {}),
+                _ContributionAccumulator(
+                    {}, False, set(), {}, {}, set(), {}, set(), {}, {}, {}, set(), {}
+                ),
             )
             if decl.alias is None:
                 route_members = acc.path_members
                 route_scope_paths = acc.path_scope_paths
                 route_hidden = acc.path_hidden
+                route_member_decls = acc.path_member_decls
+                route_decls = acc.path_decls
                 acc.path_enabled = True
             else:
                 route_members = acc.alias_members.setdefault(decl.alias, {})
                 route_scope_paths = acc.alias_scope_paths.setdefault(decl.alias, set())
                 route_hidden = acc.alias_hidden.setdefault(decl.alias, set())
+                route_member_decls = acc.alias_member_decls.setdefault(decl.alias, {})
+                route_decls = acc.alias_decls.setdefault(decl.alias, set())
                 acc.aliases.add(decl.alias)
             route_hidden.update(hidden)
+            route_decls.add(decl.node_id)
             for source, qname in module_exports.items():
                 if source not in hidden:
                     acc.members[source] = qname
                     route_members[source] = qname
+                    route_member_decls.setdefault(source, set()).add(decl.node_id)
             visible_scope_paths = tuple(
                 source for source in module_scopes if source not in hidden_scope_paths
             )
@@ -465,7 +598,7 @@ def build_import_env(
                         route
                     )
                 else:
-                    root_bare.setdefault(exposed, set()).add(qname)
+                    root_bare.setdefault(exposed, {}).setdefault(qname, set()).add(decl.node_id)
                     root_bare_routes.setdefault(exposed, set()).add(route)
             for exposed, source in _tail_exposures(decl, hidden_scope_paths, selected_scopes):
                 route = (module, _path(source))
@@ -492,10 +625,20 @@ def build_import_env(
                 alias: frozenset(hidden - acc.alias_members[alias].keys())
                 for alias, hidden in acc.alias_hidden.items()
             },
+            _frozen_decls(acc.path_member_decls),
+            {alias: _frozen_decls(decls) for alias, decls in acc.alias_member_decls.items()},
+            frozenset(acc.path_decls),
+            _frozen_decls(acc.alias_decls),
         )
     return ImportEnv(
         contributions=contributions,
         unqualified={name: frozenset(qnames) for name, qnames in root_bare.items()},
+        unqualified_decls={name: _frozen_decls(qnames) for name, qnames in root_bare.items()},
+        decl_hiding={node_id: tuple(named) for node_id, named in decl_hiding.items()},
+        decl_tail_beneath={
+            node_id: {exposed: frozenset(items) for exposed, items in exposures.items()}
+            for node_id, exposures in decl_tail_beneath.items()
+        },
         decl_bare={
             node_id: {atom: frozenset(qnames) for atom, qnames in members.items()}
             for node_id, members in decl_bare.items()
@@ -516,6 +659,10 @@ def build_import_env(
         unqualified_hidden=frozenset(root_hidden),
         scope_origins_by_route=scope_origins_by_route,
     )
+
+
+def _frozen_decls[K](decls: Mapping[K, set[int]]) -> dict[K, frozenset[int]]:
+    return {key: frozenset(ids) for key, ids in decls.items()}
 
 
 def qualifier_candidates(
@@ -619,6 +766,28 @@ def qualifier_members(
     return tuple(members)
 
 
+def qualifier_member_decls(
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
+) -> dict[QName, frozenset[int]]:
+    """Return what each import route *qualifier* names reaches as *member*.
+
+    Each with the import declarations contributing it on those routes.
+    """
+    found: dict[QName, frozenset[int]] = {}
+    for module in qualifier_candidates(env, qualifier, anchored=anchored):
+        contribution = env.contributions[module]
+        for route in _matching_contribution_routes(contribution, qualifier, anchored=anchored):
+            qname = _route_members(contribution, route).get(member)
+            if qname is not None:
+                decls = (
+                    contribution.path_member_decls
+                    if route is None
+                    else contribution.alias_member_decls[route]
+                )
+                found[qname] = found.get(qname, frozenset()) | decls[member]
+    return found
+
+
 def qualifier_scope_paths(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
 ) -> tuple[tuple[ModuleId, frozenset[NameAtom]], ...]:
@@ -643,6 +812,24 @@ def qualifier_hides(
         for module in qualifier_candidates(env, qualifier, anchored=anchored)
         for route in _matching_contribution_routes(
             env.contributions[module], qualifier, anchored=anchored
+        )
+    )
+
+
+def qualifier_decls(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
+) -> frozenset[int]:
+    """Return the import declarations forming every route *qualifier* names."""
+    return frozenset(
+        node_id
+        for module in qualifier_candidates(env, qualifier, anchored=anchored)
+        for route in _matching_contribution_routes(
+            env.contributions[module], qualifier, anchored=anchored
+        )
+        for node_id in (
+            env.contributions[module].path_decls
+            if route is None
+            else env.contributions[module].alias_decls[route]
         )
     )
 

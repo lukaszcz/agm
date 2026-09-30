@@ -2671,12 +2671,23 @@ class TestMethodOrphanRule:
         }
         assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "self")
 
-    def test_foreign_alias_is_rejected_as_a_receiver(self, tmp_path: Path) -> None:
-        modules = {
-            "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
-            "shapes": "record Actual\ntype Point = Actual",
+    def test_foreign_renaming_alias_receiver_declares_a_method_of_its_target(
+        self, tmp_path: Path
+    ) -> None:
+        """An imported alias's method is its target's."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
+                "shapes": "record Actual\ntype Point = Actual",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Actual",)),
         }
-        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_local_nested_alias_is_rejected_as_a_multi_segment_receiver(
         self, tmp_path: Path

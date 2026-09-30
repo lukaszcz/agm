@@ -2211,14 +2211,13 @@ def test_enum_variant_expansion_never_contributes_a_type_to_an_alias_target(
     ``contributes_a_type`` filter as a direct type annotation, but through the
     alias-resolution route (:meth:`TypeOwnerIndex.owner`) instead of a plain
     type-position lookup: the alias itself is declared and visible, but its
-    target selects nothing, so using it fails the same way an annotation
-    naming ``Other`` directly would.
+    target selects nothing, so the alias fails where it is declared the same
+    way an annotation naming ``Other`` directly would.
     """
     entry = "import pk/* as F\nuse F::*\ntype Alias = Other\nlet f = fn(x: Alias) => 1\nf\n"
     graph = make_graph_from_files(tmp_path, {"entry": entry, **_VARIANT_MODULES})
-    resolved = resolve_program(graph)
     with pytest.raises(AglTypeError) as raised:
-        check_program(resolved, base_caps())
+        resolve_program(graph)
     assert type(raised.value) is AglTypeError
 
 

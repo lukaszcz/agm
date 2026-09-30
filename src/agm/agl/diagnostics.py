@@ -268,6 +268,15 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
     )
 
 
+def unknown_type(name: str, span: SourceSpan | None) -> AglTypeError:
+    """Return the diagnostic for a bare type name selecting nothing and naming no built-in type.
+
+    Raised by typecheck for a type position, and by scope for an alias's
+    target where the alias is declared.
+    """
+    return AglTypeError(f"Unknown type '{name}'.", span=span)
+
+
 class HiddenMemberError(AglTypeError):
     """An owner spelling that names a member no route at its site currently reaches.
 

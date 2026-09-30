@@ -19,7 +19,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Protocol, TypeAlias
 
 from agm.agl.diagnostics import AglError, HiddenMemberError
 from agm.agl.modules.ids import ModuleId
@@ -45,7 +45,9 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import render_qualified_name, render_qualifier_path
 
 __all__ = [
+    "NOT_HIDDEN",
     "Candidate",
+    "Hiding",
     "LookupKind",
     "Misfit",
     "PathSources",
@@ -57,6 +59,8 @@ __all__ = [
     "lookup_qualified",
     "lookup_reached",
     "lookup_steps",
+    "is_removed",
+    "removes",
 ]
 
 
@@ -113,13 +117,54 @@ class Misfit:
     target: QualifiedTarget
 
 
+Hiding: TypeAlias = frozenset[frozenset[DeclarationKey]]
+"""What the ``hiding`` on each way a declaration is reached removes, by identity.
+
+A declaration every way removes -- it or one above it -- is reached no way.
+"""
+
+#: Reached one way, hiding nothing.
+NOT_HIDDEN: Hiding = frozenset({frozenset()})
+
+
+def removes(
+    hiding: Hiding, key: DeclarationKey, identity: Callable[[DeclarationKey], DeclarationKey]
+) -> bool:
+    """Whether every way of *hiding* removes the declaration *key* names, or one above it.
+
+    *identity* names it (:meth:`PathSources.identity`).
+    """
+    if hiding == NOT_HIDDEN:
+        return False
+    module, path, name = identity(key)
+    full = (*path, name)
+    return all(
+        any(
+            hidden[0] == module and full[: len(hidden[1]) + 1] == (*hidden[1], hidden[2])
+            for hidden in way
+        )
+        for way in hiding
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Candidate:
-    """A declaration one source reaches, with the layer and origin that made it visible."""
+    """A declaration one source reaches, with the layer and origin that made it visible.
+
+    ``hiding`` is what the ways that reached it hide; a path its owner table
+    selects beneath it is reached the same ways.
+    """
 
     target: QualifiedTarget
     layer: ContributionLayer
     origin: QualificationOrigin
+    hiding: Hiding = NOT_HIDDEN
+
+
+def is_removed(candidate: Candidate, identity: Callable[[DeclarationKey], DeclarationKey]) -> bool:
+    """Whether every way that reached *candidate* removes its declaration (:func:`removes`)."""
+    key = candidate.target.key
+    return key is not None and removes(candidate.hiding, key, identity)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +235,14 @@ class PathSources(Protocol):
 
     def own_origins(self, path: ScopePath) -> frozenset[QName]:
         """Full *path* when it is one of the module's own scope paths or types."""
+        ...
+
+    def identity(self, key: DeclarationKey) -> DeclarationKey:
+        """The declaration *key* names: a renaming alias's is its target's."""
+        ...
+
+    def aliases(self, key: DeclarationKey) -> bool:
+        """Whether *key* declares a type alias."""
         ...
 
     def contributed_origins(self, step: ScopePath, path: ScopePath) -> frozenset[QName]:
@@ -305,8 +358,8 @@ def lookup_reached(
     some: several distinct ones are ambiguous where the spelling is used. A
     module qualifier's surface injects no enum member here. *chain* spells
     more than a module route. With *owners_within*, only a type its first
-    that many names reach projects its member table: the rest of the path
-    must be declared.
+    that many names reach, or an alias, projects its member table: the rest
+    of the path must be declared, an alias standing for its target's path.
     """
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
@@ -471,11 +524,12 @@ class _Walk:
     def reached(self, kind: LookupKind, owners_within: int) -> tuple[Candidate, ...]:
         """Return what the first step reaching a declaration of *kind* reaches; own ones alone.
 
-        Only a type the first *owners_within* names reach projects its member table.
+        Only a type the first *owners_within* names reach, or an alias,
+        projects its member table.
         """
         for step in self._steps:
             reading = self._reading(step, kind, injects=False, owners_within=owners_within)
-            candidates = reading.candidates
+            candidates = self._kept(reading).candidates
             if candidates:
                 own = tuple(
                     candidate
@@ -487,9 +541,11 @@ class _Walk:
 
     def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Decide the full path at *step*: own first, then one distinct contribution."""
-        reading = self._reading(step, kind, injects=True, owners_within=len(self._names))
+        reading = self._kept(
+            self._reading(step, kind, injects=True, owners_within=len(self._names))
+        )
         self._refusals.extend(reading.refusals)
-        selected = _decided(reading.candidates)
+        selected = _decided(reading.candidates, self._sources.identity)
         chain = self._chain
         if selected is None:
             return None
@@ -506,8 +562,9 @@ class _Walk:
     ) -> Reading:
         """Read the full path at *step*.
 
-        Every type a written prefix of at most *owners_within* names reaches
-        adds what its own member table selects for the rest of the path. When
+        Every type a written prefix of at most *owners_within* names reaches,
+        and every alias a longer one reaches, adds what its own member table
+        selects for the rest of the path. When
         *injects*, a module qualifier's surface adds the enum member it injects.
         """
         full = (*step.path, *self._names)
@@ -517,13 +574,13 @@ class _Walk:
             return reading
         reading = sum(
             (
-                self._sources.projected(key, owner.layer, full[end:], chain, kind)
-                for end in range(
-                    len(step.path) + step.start + 1,
-                    min(len(full), len(step.path) + owners_within + 1),
+                _reached_as(
+                    self._sources.projected(key, owner.layer, full[end:], chain, kind), owner
                 )
+                for end in range(len(step.path) + step.start + 1, len(full))
                 for owner in step.owners(full[:end]).candidates
                 if (key := owner.target.key) is not None
+                and (end <= len(step.path) + owners_within or self._sources.aliases(key))
             ),
             reading,
         )
@@ -535,6 +592,22 @@ class _Walk:
         ):
             reading += self._sources.surface_injected(chain, self._names[-1])
         return reading
+
+    def _kept(self, reading: Reading) -> Reading:
+        """*reading* without the candidates every way that reached them removes.
+
+        A qualified spelling reaching only removed ones is hidden.
+        """
+        kept = tuple(
+            candidate
+            for candidate in reading.candidates
+            if not is_removed(candidate, self._sources.identity)
+        )
+        chain = self._chain
+        if len(kept) == len(reading.candidates) or chain is None:
+            return Reading(kept, reading.refusals)
+        hidden = HiddenMemberError(render_qualifier_path(chain), self._names[-1], span=chain.span)
+        return Reading(kept, (*reading.refusals, hidden))
 
     def _owned(
         self, chain: QualifierChain, step: _Step, target: QualifiedTarget
@@ -560,9 +633,12 @@ class _Walk:
             following = (
                 target
                 if last
-                else _decided(step.read((*prefix, member), LookupKind.TYPE).candidates)
+                else _decided(
+                    self._kept(step.read((*prefix, member), LookupKind.TYPE)).candidates,
+                    self._sources.identity,
+                )
             )
-            owners = step.owners(prefix).candidates
+            owners = self._kept(step.owners(prefix)).candidates
             owner, arity = next(
                 (
                     (key, arity)
@@ -575,7 +651,7 @@ class _Walk:
             )
             if segment.type_args is None:
                 continue
-            selected = _decided(owners)
+            selected = _decided(owners, self._sources.identity)
             if isinstance(selected, tuple):
                 return self._ambiguous(selected, self._names[step.start : index + 1], segment.span)
             if selected is None or selected.target.key != owner:
@@ -628,24 +704,47 @@ def _unknown(
     return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 
 
+def _reached_as(reading: Reading, owner: Candidate) -> Reading:
+    """*reading*, what *owner*'s member table selects, reached the ways *owner* was."""
+    if owner.hiding == NOT_HIDDEN:
+        return reading
+    return Reading(
+        tuple(replace(candidate, hiding=owner.hiding) for candidate in reading.candidates),
+        reading.refusals,
+    )
+
+
 def _decided(
-    candidates: Iterable[Candidate],
+    candidates: Iterable[Candidate], identity: Callable[[DeclarationKey], DeclarationKey]
 ) -> Candidate | tuple[QualificationOrigin, ...] | None:
     """The one candidate selected, own first; the origins when several distinct ones compete.
 
-    A declaration reached several ways is one candidate, yet an ambiguity it
-    takes part in names every way it was reached.
+    Candidates are distinct when they name distinct declarations by
+    *identity*: an alias renaming a declaration is that declaration. A
+    declaration reached several ways is one candidate -- the one spelling it
+    directly, else the first by path -- yet an ambiguity it takes part in
+    names every way it was reached.
     """
     pool = list(candidates)
     own = [candidate for candidate in pool if candidate.layer is ContributionLayer.DECLARED]
     distinct: dict[object, list[Candidate]] = {}
     for candidate in own or pool:
         target = candidate.target
-        key = target.key if target.key is not None else target.constructor
+        key = target.constructor if target.key is None else identity(target.key)
         distinct.setdefault(key, []).append(candidate)
     if len(distinct) > 1:
         return tuple(candidate.origin for reached in distinct.values() for candidate in reached)
-    return next((reached[0] for reached in distinct.values()), None)
+    if not distinct:
+        return None
+    ((named, reached),) = distinct.items()
+
+    def spelled_first(
+        candidate: Candidate,
+    ) -> tuple[bool, tuple[tuple[str, ...], ScopePath, str] | None]:
+        key = candidate.target.key
+        return key != named, None if key is None else (key[0].segments, key[1], key[2])
+
+    return min(reached, key=spelled_first)
 
 
 def _is_beneath(

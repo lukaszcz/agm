@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope import (
     AglScopeError,
@@ -2131,16 +2132,11 @@ class TestMethodReceiverClassification:
         ("source", "alias", "target"),
         (
             ("type Count = int\ndef Count::value(self) -> int = 1", "Count", "int"),
-            (
-                "record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
-                "Alias",
-                "Target",
-            ),
             # The alias below the method is still an alias scope: receiver
             # classification reads the whole module, not the text above it.
             ("def Count::value(self) -> int = 1\ntype Count = int", "Count", "int"),
         ),
-        ids=("alias-above", "alias-target-above", "alias-below"),
+        ids=("alias-above", "alias-below"),
     )
     def test_alias_scope_receiver_is_rejected_with_its_target(
         self, source: str, alias: str, target: str
@@ -2150,6 +2146,22 @@ class TestMethodReceiverClassification:
         _, message = diag(err)
         assert alias in message
         assert target in message
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
+            "def Alias::value(self) -> int = 1\ntype Alias = Target\nrecord Target",
+            "record Target\ntype Via = Target\ntype Alias = Via\ndef Alias::value(self) -> int = 1",
+        ),
+        ids=("alias-above", "alias-below", "alias-chain"),
+    )
+    def test_renaming_alias_receiver_declares_a_method_of_its_target(self, source: str) -> None:
+        resolved = parse_and_resolve(f"{source}\n()")
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Alias",), "value"): ReceiverOwner(ENTRY_ID, ("Target",)),
+        }
 
     def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:
         resolved = parse_and_resolve(
@@ -3622,19 +3634,13 @@ class TestConstructorBindings:
         r = parse_and_resolve("type MyInt = int\n()")
         assert "MyInt" in _root_type_names(r)
 
-    def test_alias_with_unresolvable_unqualified_target_is_presumed_constructible(
-        self,
-    ) -> None:
-        """A standalone module has no import environment.
+    def test_alias_with_unresolvable_unqualified_target_is_rejected(self) -> None:
+        """An unqualified target naming no declaration and no built-in type is unknown.
 
-        An alias whose unqualified target names no local declaration cannot be
-        resolved through an import either (there is none to try), so the
-        alias falls back to the permissive "presumed constructible" default
-        and keeps its own variant-less constructor candidate.
+        Scope decides it where the alias is declared, used or not.
         """
-        r = parse_and_resolve("type Local = Undeclared\n()\n")
-        candidates = r.constructor_candidates["Local"]
-        assert candidates[0].owner_path == ()
+        with pytest.raises(AglTypeError):
+            parse_and_resolve("type Local = Undeclared\n()\n")
 
     def test_alias_with_unresolvable_qualified_target_is_rejected(self) -> None:
         """Unlike a bare name, a qualified target names a definite route.

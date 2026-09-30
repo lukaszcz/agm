@@ -32,6 +32,7 @@ from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.scope.type_names import (
     is_nominal_type_expr,
+    renames_target,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -260,12 +261,12 @@ class TypeOwnerIndex:
         }
         return reachable, hidden
 
-    def final_target(self, qname: QName) -> QName | None:
-        """Return the type path *qname*'s alias chain ends at: *qname* itself when no alias.
+    def _alias_chain(self, qname: QName) -> Iterator[tuple[QName, TypeOwner]]:
+        """Yield *qname* and each alias target along its chain, with what each selects.
 
-        ``None`` when *qname* names no type, or an alias on the chain has no
-        nominal target or a target a later REPL entry redeclared (a retained
-        alias's frozen target); a cycle of retained targets included.
+        The chain ends at a path naming no type, an alias with no nominal
+        target, a target a later REPL entry redeclared (a retained alias's
+        frozen target), or a path it passed before.
         """
         seen: set[QName] = set()
         current, expected = qname, None
@@ -273,13 +274,52 @@ class TypeOwnerIndex:
             seen.add(current)
             owner = self.owner(current)
             if owner is None or (expected is not None and owner.decl_node_id != expected):
-                return None
-            if owner.alias is None:
-                return current
+                return
+            yield current, owner
             if owner.target is None:
-                return None
+                return
             current, expected = owner.target.qname, owner.target.decl_node_id
-        return None
+
+    def final_target(self, qname: QName) -> QName | None:
+        """Return the type path *qname*'s alias chain ends at: *qname* itself when no alias.
+
+        ``None`` when the chain (:meth:`_alias_chain`) ends at no type or an
+        alias, a cycle included.
+        """
+        final = None
+        for current, owner in self._alias_chain(qname):
+            final = current if owner.alias is None else None
+        return final
+
+    def identity(self, qname: QName) -> QName:
+        """Return the declaration type path *qname* names: a renaming alias's is its target's.
+
+        An alias passing its type parameters through to its target
+        (:func:`~agm.agl.scope.type_names.renames_target`) is another name for
+        it, along the chain (:meth:`_alias_chain`); any other alias is a type
+        of its own.
+        """
+        named = self._named(qname)
+        return qname if named is None else named[0]
+
+    def constructor_identity(self, constructor: ConstructorRef) -> ConstructorRef:
+        """Return the constructor *constructor* names: a renaming alias's is its target's."""
+        named = self._named(constructor.qname)
+        if named is None or named[0] == constructor.qname or named[1].constructor is None:
+            return constructor
+        return named[1].constructor
+
+    def _named(self, qname: QName) -> tuple[QName, TypeOwner] | None:
+        """Return the declaration *qname* names (:meth:`identity`) and what it selects.
+
+        ``None`` when *qname* names no type.
+        """
+        named = None
+        for current, owner in self._alias_chain(qname):
+            named = current, owner
+            if owner.alias is not None and not renames_target(owner.alias):
+                break
+        return named
 
     def declared_owner(
         self, qname: QName, declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias

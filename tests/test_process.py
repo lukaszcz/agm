@@ -700,6 +700,26 @@ def test_run_foreground_ignoring_signals_restores_a_custom_previous_handler() ->
         signal.signal(signal.SIGINT, previous)
 
 
+def test_run_foreground_ignoring_signals_restores_sigint_when_interrupted_mid_install(
+    monkeypatch: pytest.MonkeyPatch, default_sigint: None
+) -> None:
+    """A termination mid-install must not leave SIGINT ignored."""
+    real_signal = signal.signal
+
+    def interrupted_on_sigquit(number: int, handler: Any) -> Any:
+        if number == signal.SIGQUIT and handler == signal.SIG_IGN:
+            raise SystemExit(128 + signal.SIGTERM)
+        return real_signal(number, handler)
+
+    monkeypatch.setattr(process_mod.signal, "signal", interrupted_on_sigquit)
+    try:
+        with pytest.raises(SystemExit):
+            run_foreground_ignoring_signals(["true"])
+    finally:
+        monkeypatch.undo()
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
 def test_run_foreground_ignoring_signals_is_a_no_op_off_the_main_thread() -> None:
     """Off the main thread, signal handling is skipped; the command still runs."""
     with ThreadPoolExecutor(max_workers=1) as executor:

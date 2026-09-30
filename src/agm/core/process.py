@@ -118,8 +118,10 @@ def _signals_handled_by(signals: tuple[int, ...], handler: _Handler) -> Iterator
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    previous = {number: signal.signal(number, handler) for number in signals}
+    previous: dict[int, _Handler | int | None] = {}
     try:
+        for number in signals:
+            previous[number] = signal.signal(number, handler)
         yield
     finally:
         for number, restored in previous.items():

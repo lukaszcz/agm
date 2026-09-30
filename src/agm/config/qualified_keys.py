@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 
 from agm.command_catalog import RESERVED_CONFIG_SECTION_NAMES, SCHEMA_CONFIG_SECTION_NAMES
@@ -208,6 +208,20 @@ def _leaf_table_paths(
     return tuple(paths)
 
 
+def _leaf_entries(
+    layers: Iterable[TomlDict], paths: Iterable[tuple[str, ...]]
+) -> Iterator[tuple[str, tuple[str, ...]]]:
+    """Yield ``(leaf, table path)`` for each non-table key of *paths* in *layers*, in scan order."""
+    for layer in layers:
+        for path in paths:
+            table = _table_at(layer, path)
+            if table is None:
+                continue
+            for name, value in table.items():
+                if not isinstance(value, dict):
+                    yield name, path
+
+
 def configured_leaf_tables(
     config: GeneralConfig,
     module_segments: tuple[str, ...],
@@ -228,14 +242,8 @@ def configured_leaf_tables(
     """
     paths = route_table_paths(module_segments, scope_path, command_paths)
     tables: dict[str, tuple[str, ...]] = {}
-    for layer in config.layers:
-        for path in paths:
-            table = _table_at(layer, path)
-            if table is None:
-                continue
-            for name, value in table.items():
-                if not isinstance(value, dict):
-                    tables.setdefault(name, path)
+    for name, path in _leaf_entries(config.layers, paths):
+        tables.setdefault(name, path)
     return tables
 
 
@@ -255,14 +263,8 @@ def configured_leaf_table_candidates(
     """
     paths = _leaf_table_paths(module_segments, scope_path, command_paths)
     tables: dict[str, set[tuple[str, ...]]] = {}
-    for layer in config.layers:
-        for path in paths:
-            table = _table_at(layer, path)
-            if table is None:
-                continue
-            for name, value in table.items():
-                if not isinstance(value, dict):
-                    tables.setdefault(name, set()).add(path)
+    for name, path in _leaf_entries(config.layers, paths):
+        tables.setdefault(name, set()).add(path)
     return {name: frozenset(paths_seen) for name, paths_seen in tables.items()}
 
 
@@ -317,16 +319,10 @@ def manifest_leaf_tables(
     resolves values through. Used to extend the ambiguous-bare-leaf check
     over manifest tables, not just config-file ones.
     """
-    layer: TomlDict = {"config": manifest_config}
+    paths = [path for tier in _manifest_tiers(command_paths) for path in tier]
     tables: dict[str, tuple[str, ...]] = {}
-    for tier in _manifest_tiers(command_paths):
-        for path in tier:
-            table = _table_at(layer, path)
-            if table is None:
-                continue
-            for name, value in table.items():
-                if not isinstance(value, dict):
-                    tables.setdefault(name, path)
+    for name, path in _leaf_entries(_manifest_layer(manifest_config), paths):
+        tables.setdefault(name, path)
     return tables
 
 

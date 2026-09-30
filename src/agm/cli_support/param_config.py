@@ -152,8 +152,9 @@ def _report_unused_manifest_leaves(
         if table_path not in own_tables or leaf in ENGINE_KEY_NAMES or leaf in consumed:
             continue
         print(
-            f"warning: config key '{leaf}' in the '{display_table_path(table_path)}' "
-            "configuration table is not a declared program argument and will be ignored",
+            f"warning: manifest config key '{leaf}' in the '{display_table_path(table_path)}' "
+            "table is not an engine setting or a module parameter of the program "
+            "and will be ignored",
             file=sys.stderr,
         )
 

@@ -417,12 +417,16 @@ def _reject_configured_ambiguous_program_leaves(
     spelling several parameters claim resolves to none of them, so *using* it
     names the candidates rather than silently picking one. *package_config*
     extends the same check over the owning package's manifest command, group,
-    and root tables, since those address the same program-route spellings.
+    and root tables. Config group tables are covered too, since an inherited
+    leaf is just as ambiguous as one set on the exact route.
     """
     if not entry_segments:
         return
     program_path = (*program.scope_path, program.name)
-    configured = configured_leaf_tables(config, entry_segments, program_path, command_paths)
+    candidates = configured_leaf_table_candidates(
+        config, entry_segments, program_path, command_paths
+    )
+    configured = {leaf: min(tables) for leaf, tables in candidates.items()}
     if package_config:
         configured = {**manifest_leaf_tables(package_config, command_paths), **configured}
     _reject_configured_ambiguity(configured, surface.ambiguous)

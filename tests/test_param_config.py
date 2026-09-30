@@ -680,6 +680,26 @@ def test_a_group_table_supplies_a_module_parameter_via_the_program_route() -> No
     assert tiers.upper == {binding.key: True}
 
 
+def test_rejects_a_group_table_leaf_claimed_by_peer_parameters() -> None:
+    """A config group table setting an ambiguous bare leaf errors, as a manifest one does."""
+    first = _binding("first/logging", "verbose")
+    second = _binding("second/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config({"devel": {"verbose": True}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (first, second)),
+        )
+
+    assert first.declaration_path in str(exc_info.value)
+    assert second.declaration_path in str(exc_info.value)
+
+
 def test_a_nearer_command_table_beats_an_inherited_group_table() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))

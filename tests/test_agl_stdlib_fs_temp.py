@@ -118,6 +118,38 @@ program def main() -> unit =
     assert (os_temp.parent / "kept.txt").is_file()
 
 
+def test_temp_paths_the_program_removed_are_not_retried_at_session_end(
+    os_temp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cleanup_attempts: list[Path] = []
+    unlink = core_fs.unlink
+
+    def record(target: Path, *, missing_ok: bool = False) -> None:
+        if missing_ok:
+            cleanup_attempts.append(target)
+        unlink(target, missing_ok=missing_ok)
+
+    monkeypatch.setattr(core_fs, "unlink", record)
+
+    result = _run(
+        """import std/fs
+import std/path
+program def main() -> unit =
+  fs::remove(fs::temp-file())
+  let dir = fs::temp-dir()
+  let inner = path::join([dir, "inner.txt"])
+  fs::write(inner, "x")
+  fs::remove(dir)
+  let _ = fs::temp-file()
+""",
+        os_temp.parent / "main.agl",
+    )
+
+    assert result.ok
+    assert len(cleanup_attempts) == 1
+    assert _entries(os_temp) == []
+
+
 def test_temp_paths_that_cannot_be_removed_do_not_fail_the_run(
     os_temp: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

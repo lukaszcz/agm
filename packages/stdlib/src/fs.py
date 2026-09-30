@@ -115,9 +115,20 @@ def _remove_entry(target: Path, *, missing_ok: bool = False) -> None:
         fs.rmtree(target)
 
 
+def _temp_paths() -> list[Path]:
+    """Return the session's registered temporary paths, creating the registry if absent."""
+    return runtime.state(
+        _TEMP_PATHS_KEY, _no_temp_paths, close=_remove_temp_paths, keep_in_debug=True
+    )
+
+
 def remove(path: str) -> None:
     """Remove a file, symbolic link, or directory tree at *path*."""
-    run_fs_action(FsError, path, "remove", lambda: _remove_entry(Path(path)))
+    target = Path(path)
+    run_fs_action(FsError, path, "remove", lambda: _remove_entry(target))
+    # Drop registered temporary paths this removal took with it, so the registry stays bounded.
+    registered = _temp_paths()
+    registered[:] = [p for p in registered if p != target and target not in p.parents]
 
 
 def _prepare_destination(source: str, destination: str, operation: str) -> Path:
@@ -190,9 +201,7 @@ def _session_temp_path(operation: str, create: Callable[[], Path]) -> str:
     """Create a temporary path with *create* and register it for removal at session end."""
     directory = _checked_temp_root(operation)
     created = run_fs_action(FsError, directory, operation, create)
-    runtime.state(
-        _TEMP_PATHS_KEY, _no_temp_paths, close=_remove_temp_paths, keep_in_debug=True
-    ).append(created)
+    _temp_paths().append(created)
     return str(created)
 
 

@@ -2253,16 +2253,16 @@ def test_enum_variant_expansion_never_contributes_a_bare_type(
     """A bare-exposed enum's variant name is unknown in type position, not hidden.
 
     Variant expansion offers ``Other``/``Rec`` as a constructor and pattern
-    candidate only: a type annotation naming it fails the same way an
-    undeclared type would (plain ``AglTypeError``), never as a
-    :class:`HiddenMemberError`/:class:`ReferencedMemberError` -- those mean a
-    route to a real member exists but is currently blocked, which is not the
-    case here since no route ever contributes the name as a type at all.
+    candidate only: scope accepts the spelling, and typecheck rejects the
+    annotation the same way an undeclared type would (plain ``AglTypeError``),
+    never as a :class:`HiddenMemberError`/:class:`ReferencedMemberError` --
+    those mean a route to a real member exists but is currently blocked, which
+    is not the case here since no route ever contributes the name as a type.
     """
-    graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
-    with pytest.raises((AglTypeError, AglScopeError)) as raised:
-        check_program(resolve_program(graph), base_caps())
-    assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))
+    resolved = resolve_program(make_graph_from_files(tmp_path, {"entry": entry, **modules}))
+    with pytest.raises(AglTypeError) as raised:
+        check_program(resolved, base_caps())
+    assert type(raised.value) is AglTypeError
 
 
 def test_enum_variant_expansion_never_contributes_a_type_to_an_alias_target(
@@ -2279,9 +2279,10 @@ def test_enum_variant_expansion_never_contributes_a_type_to_an_alias_target(
     """
     entry = "import pk/* as F\nuse F::*\ntype Alias = Other\nlet f = fn(x: Alias) => 1\nf\n"
     graph = make_graph_from_files(tmp_path, {"entry": entry, **_VARIANT_MODULES})
+    resolved = resolve_program(graph)
     with pytest.raises(AglTypeError) as raised:
-        check_program(resolve_program(graph), base_caps())
-    assert not isinstance(raised.value, (HiddenMemberError, ReferencedMemberError))
+        check_program(resolved, base_caps())
+    assert type(raised.value) is AglTypeError
 
 
 @pytest.mark.parametrize(

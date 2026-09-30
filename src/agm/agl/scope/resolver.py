@@ -2167,10 +2167,22 @@ class _Resolver:
                     )
                 )
                 if isinstance(atom, str):
-                    self._contribute_regional_enum_variants(qname, decl.span, exposures=exposures)
+                    self._deferred_constructors.append(
+                        partial(
+                            self._contribute_regional_enum_variants,
+                            scope,
+                            qname,
+                            decl.span,
+                            exposures,
+                        )
+                    )
 
     def _contribute_regional_enum_variants(
-        self, qname: QName, span: SourceSpan, *, exposures: Mapping[NameAtom, Collection[QName]]
+        self,
+        scope: ScopeNode,
+        qname: QName,
+        span: SourceSpan,
+        exposures: Mapping[NameAtom, Collection[QName]],
     ) -> None:
         """Expand a bare-exposed enum type into its own bare variants, region-scoped.
 
@@ -2178,52 +2190,22 @@ class _Resolver:
         matchable -- ``_build_cross_module_constructor_candidates`` performs
         the same expansion module-wide, from a root-position bare exposure.
         Mirroring it here covers the scoped case, whose bare exposure never
-        reaches that module-wide table.
+        reaches that module-wide table. Deferred, since a referenced member
+        reads the type owners.
         """
-        declaration = self._all_public_types.get(qname)
-        if not isinstance(declaration, EnumDef):
-            return
-        module, source = qname
-        owner_path = _bare_path(source)
-        scope = self._scope
         selected_qnames = frozenset(qname for qnames in exposures.values() for qname in qnames)
-        for member in declaration.members:
-            if isinstance(member, VariantRef):
-                self._deferred_constructors.append(
-                    partial(self._contribute_referenced_member, scope, qname, member, span)
-                )
-                continue
-            # A same-named record or exception exposed bare already owns the
-            # spelling; its own bare contribution stands alone.
-            if declares_bare_constructor(exposures.get(member.name, ()), self._all_public_types):
-                continue
-            variant_qname = (module, _bare_atom((*owner_path, member.name)))
-            if variant_qname not in selected_qnames:
+        for atom, constructor, path in self._enum_variant_members(qname):
+            # An inline member the tail hides, or whose spelling a same-named
+            # record or exception exposed bare already owns, stays unexposed.
+            if constructor.inline_enum_owner_decl_node_id is not None and (
+                (qname[0], _bare_atom(path)) not in selected_qnames
+                or declares_bare_constructor(exposures.get(atom, ()), self._all_public_types)
+            ):
                 continue
             scope.contribute_bare(
-                member.name,
-                replace(self._cross_module_binding_ref(variant_qname), is_variant_member=True),
-                ContributionLayer.IMPORTED,
+                atom, self._variant_binding_ref(constructor, span), ContributionLayer.IMPORTED
             )
-            scope.contribute_bare_constructor(
-                member.name,
-                self._cross_module_constructor_refs[variant_qname],
-                ContributionLayer.IMPORTED,
-            )
-
-    def _contribute_referenced_member(
-        self, scope: ScopeNode, qname: QName, member: VariantRef, span: SourceSpan
-    ) -> None:
-        """Contribute the record constructors a bare-exposed enum's member reference denotes."""
-        for constructor in self._type_owners.referenced_member_refs(qname, member):
-            scope.contribute_bare(
-                constructor.owner_name,
-                self._variant_binding_ref(constructor, span),
-                ContributionLayer.IMPORTED,
-            )
-            scope.contribute_bare_constructor(
-                constructor.owner_name, constructor, ContributionLayer.IMPORTED
-            )
+            scope.contribute_bare_constructor(atom, constructor, ContributionLayer.IMPORTED)
 
     def _contribute_bare_constructor(
         self, scope: ScopeNode, atom: NameAtom, qname: QName, layer: ContributionLayer
@@ -4048,11 +4030,19 @@ class _Resolver:
         )
 
     def names_contributed(self, step: ScopePath, path: ScopePath) -> bool:
-        """Whether a contribution anchored at or above *step* reaches *path* or beneath it."""
+        """Whether a contribution anchored at or above *step* reaches *path* or beneath it.
+
+        An injected enum member is a constructor value only, never a name a
+        qualifier reaches.
+        """
         for layer in self._layer_chain(self._scope_nodes[step]):
             relative = path[len(layer.scope_path) :]
             atoms = (
-                *layer.bare_contributions,
+                *(
+                    atom
+                    for atom, refs in layer.bare_contributions.items()
+                    if any(ref.contributes_a_type for ref in refs)
+                ),
                 *(
                     atom
                     for contribution in layer.imported_use_contributions
@@ -4337,10 +4327,10 @@ class _Resolver:
 
         ``None`` when *contribution* does not refresh *name*: a selective use
         naming an explicit tail never refreshes, and a hidden name never
-        does either. A wildcard-facade use additionally re-derives which
-        modules are currently live (:meth:`_facade_modules`); any other
-        ``use ...::*`` names a fixed module set that cannot itself grow or
-        shrink, so only the variant expansion below is live for it.
+        does either. Only a wildcard facade's module set can change between
+        entries (:meth:`_facade_modules`), so its bindings are re-derived over
+        the live modules; any other use keeps its own snapshot. Either adds
+        the variant expansion of the enums it exposes bare.
         """
         if not contribution.refreshes_all_members:
             return None
@@ -4402,8 +4392,9 @@ class _Resolver:
     ) -> Iterator[tuple[NameAtom, ConstructorRef, ScopePath]]:
         """Yield each bare atom, constructor, and hidden-check path an enum expands into.
 
-        Shared by the live overlay (:meth:`_facade_variant_refs`) and its
-        static re-snapshot (:meth:`_refresh_imported_use`): a bare-exposed
+        Shared by the live overlay (:meth:`_facade_variant_refs`), its
+        static re-snapshot (:meth:`_refresh_imported_use`) and a region-scoped
+        import tail (:meth:`_contribute_regional_enum_variants`): a bare-exposed
         enum type makes its own variants bare-matchable too, referenced
         members included. A referenced member's hidden-check path is its own
         declaration route; an inline member's is its path under the enum's
@@ -4430,10 +4421,10 @@ class _Resolver:
 
         A facade's bare-exposed enum type makes its own variants
         bare-matchable too, the same expansion
-        :meth:`_contribute_regional_enum_variants`/:meth:`_contribute_referenced_member`
-        perform for a region-scoped import, but derived live here instead of
-        as a declaration-time side effect, so a later entry re-derives it
-        exactly like every other candidate rather than losing it.
+        :meth:`_contribute_regional_enum_variants` performs for a
+        region-scoped import, but derived live here instead of as a
+        declaration-time side effect, so a later entry re-derives it exactly
+        like every other candidate rather than losing it.
         """
         bindings: set[BindingRef] = set()
         constructors: set[ConstructorRef] = set()
@@ -4471,15 +4462,11 @@ class _Resolver:
         The static counterpart of the per-name reads in
         :meth:`_layer_bare_bindings`/:meth:`_layer_bare_constructors`: the same
         :meth:`_facade_refresh` derivation, applied once across every atom the
-        contribution's own snapshot or its current facade modules could
-        expose -- so the snapshot a REPL session promotes into its stored
-        tables agrees with a live lookup, whether a module was gained or
-        dropped or a member's own variant expansion changed. Applied to every
-        refreshing use, not only a wildcard facade: even a fixed module set,
-        which cannot itself grow or shrink (see :meth:`_facade_refresh`),
-        still needs its variant expansion re-derived the same way. A
-        contribution that does not refresh every member -- a selective use,
-        even of a wildcard-facade alias -- keeps its snapshot as declared.
+        contribution's own snapshot or its current modules could expose, for
+        every refreshing use -- so the stored tables a REPL session promotes
+        agree with a live lookup. A contribution that does not refresh every
+        member -- a selective use, even of a wildcard-facade alias -- keeps
+        its snapshot as declared.
         """
         if not contribution.refreshes_all_members:
             return contribution
@@ -4487,8 +4474,7 @@ class _Resolver:
         modules = self._use_modules(contribution, origin)
         atoms = set(contribution.bindings) | set(contribution.constructors)
         if origin is not None:
-            # A fixed module set (below) can only lose or keep its members;
-            # only a wildcard facade's module set itself grows or shrinks.
+            # A wildcard facade's live modules may expose atoms its snapshot lacks.
             for module in modules:
                 atoms.update(self._import_env.contributions[module].members)
         for qname in contribution.members.values():

@@ -72,9 +72,9 @@ def test_git_discovery_cannot_climb_into_a_repository_the_temp_root_sits_inside(
     repository rooted exactly at the temp root itself (e.g. a sandboxed ``TMPDIR``
     that is already a git working tree).
 
-    Git excludes only the ceiling directory itself from discovery, so the ceiling
-    must be the temp root, not its parent: a parent-of-root ceiling still lets a
-    repository rooted at the temp root be found.
+    Git never searches the ceiling directory itself or anything above it, so the
+    ceiling must be the temp root, not its parent: a parent-of-root ceiling still
+    lets a repository rooted at the temp root be found.
     """
     assert (
         subprocess.run(

@@ -329,7 +329,7 @@ _BUILTIN_INFIX_PRIORITIES: dict[str, int] = {
 _BUILTIN_INFIX_ASSOC: dict[str, syntax.InfixAssoc] = {
     name: syntax.InfixAssoc.LEFT for name in _BUILTIN_INFIX_PRIORITIES
 }
-_BUILTIN_INFIX_OPS: dict[str, syntax.BinOp] = {op.value: op for op in syntax.BinOp}
+_BUILTIN_INFIX_OPS: dict[str, syntax.BinOp] = {op.symbol: op for op in syntax.BinOp}
 _NON_ASSOC_INFIX: frozenset[str] = frozenset({"in", "==", "!=", "<", "<=", ">", ">="})
 _DEFAULT_USER_INFIX_PRIORITY = 40
 _NOT_PRIORITY = 25
@@ -3911,7 +3911,7 @@ def _make_infix_node(
 
 
 def _is_nonassoc_binary(expr: syntax.Expr) -> bool:
-    return isinstance(expr, syntax.BinaryOp) and expr.op.value in _NON_ASSOC_INFIX
+    return isinstance(expr, syntax.BinaryOp) and expr.op.symbol in _NON_ASSOC_INFIX
 
 
 def _extract_ann_and_optional_expr(

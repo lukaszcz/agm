@@ -1978,9 +1978,9 @@ class TestEnumVariantExpansionNeverContributesABareType:
         for decl in setup.split("\n"):
             assert s.eval_entry(decl).ok
 
-        with pytest.raises(AglError) as excinfo:
+        with pytest.raises(AglTypeError) as excinfo:
             s.type_of("fn(x: Other) => 1")
-        assert not isinstance(excinfo.value, (HiddenMemberError, ReferencedMemberError))
+        assert type(excinfo.value) is AglTypeError
 
     @pytest.mark.parametrize(
         "setup",

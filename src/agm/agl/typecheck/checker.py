@@ -4851,17 +4851,17 @@ class _Checker:
                         engine.origin(
                             node.span,
                             role=ConstraintRole.EXPECTED_RESULT,
-                            subject=f"'({node.op.value})'",
+                            subject=f"'({node.op.symbol})'",
                         ),
                     )
                 except InferenceError as exc:
                     raise _InferenceConstraintError(
-                        f"Inconsistent result type for '({node.op.value})': {exc}", original=exc
+                        f"Inconsistent result type for '({node.op.symbol})': {exc}", original=exc
                     ) from exc
         if require and region.operator_values:
             node = region.operator_values[0][0]
             raise AglTypeError(
-                f"Cannot infer operand types for '({node.op.value})'; "
+                f"Cannot infer operand types for '({node.op.symbol})'; "
                 "add a function type annotation.",
                 span=node.span,
             )
@@ -4878,17 +4878,17 @@ class _Checker:
     ) -> Type:
         """Check ``left op right`` operand types; return the operation's result type."""
         if op in (BinOp.AND, BinOp.OR):
-            op_name = "and" if op is BinOp.AND else "or"
             if self._candidate_operation_can_defer((left_type, right_type), (BoolType,)):
                 return BoolType()
             if not self._is_type_or_bottom(left_type, BoolType):
                 raise AglTypeError(
-                    f"'{op_name}' requires bool operands; left operand has type '{left_type!r}'.",
+                    f"'{op.symbol}' requires bool operands; left operand has type '{left_type!r}'.",
                     span=left_span,
                 )
             if not self._is_type_or_bottom(right_type, BoolType):
                 raise AglTypeError(
-                    f"'{op_name}' requires bool operands; right operand has type '{right_type!r}'.",
+                    f"'{op.symbol}' requires bool operands; "
+                    f"right operand has type '{right_type!r}'.",
                     span=right_span,
                 )
             return BoolType()
@@ -4951,12 +4951,8 @@ class _Checker:
         if op == BinOp.IN:
             return self._check_in_op(left_type, right_type, span)
 
-        if op == BinOp.ADD:
-            return self._check_numeric_binop(left_type, right_type, span, "+")
-        if op in (BinOp.SUB, BinOp.MUL):
-            return self._check_numeric_binop(
-                left_type, right_type, span, "-" if op == BinOp.SUB else "*"
-            )
+        if op in (BinOp.ADD, BinOp.SUB, BinOp.MUL):
+            return self._check_numeric_binop(left_type, right_type, span, op.symbol)
 
         if op == BinOp.DIV:
             if self._candidate_operation_can_defer((left_type, right_type), (IntType, DecimalType)):

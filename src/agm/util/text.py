@@ -68,6 +68,7 @@ def keep_indented_paragraphs(text: str) -> str:
     paragraph holding an indented line — an example, a list, a table — is
     opened with Click's verbatim marker so it prints as written, while prose
     still wraps to the terminal. The text's common indentation is removed first.
+    Idempotent: a paragraph already opened with the marker is left as it is.
     """
     paragraphs: list[list[str]] = [[]]
     for line in textwrap.dedent(normalize_newlines(text)).split("\n"):
@@ -76,7 +77,11 @@ def keep_indented_paragraphs(text: str) -> str:
         elif paragraphs[-1]:
             paragraphs.append([])
     return "\n\n".join(
-        "\n".join([_CLICK_VERBATIM, *lines] if any(line[:1].isspace() for line in lines) else lines)
+        "\n".join(
+            [_CLICK_VERBATIM, *lines]
+            if lines[0] != _CLICK_VERBATIM and any(line[:1].isspace() for line in lines)
+            else lines
+        )
         for lines in paragraphs
         if lines
     )

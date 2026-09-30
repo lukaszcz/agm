@@ -94,6 +94,11 @@ class TestKeepIndentedParagraphs:
 
         assert _wrapped(text) == text
 
+    def test_the_transform_is_idempotent(self) -> None:
+        once = keep_indented_paragraphs("Examples:\n  agm refine main\n\nProse.")
+
+        assert keep_indented_paragraphs(once) == once
+
     def test_prose_paragraphs_still_rewrap(self) -> None:
         assert _wrapped("Runs a loop\nuntil done.\n\nThen stops.") == (
             "Runs a loop until done.\n\nThen stops."

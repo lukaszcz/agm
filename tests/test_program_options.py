@@ -1172,6 +1172,7 @@ class TestRenderHelp:
         text = _command(doc=doc).render_help("main")
 
         assert "  Examples:\n    agm refine main\n    agm refine tip\n" in text
+        assert "\x08" not in text
 
     def test_prose_in_the_program_doc_still_rewraps(self) -> None:
         text = _command(doc="Refines\na subject.").render_help("main")

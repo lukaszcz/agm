@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import IO, Literal, TypeVar, cast
 from uuid import uuid4
 
@@ -244,7 +245,7 @@ class PiRpcSessionBackend(SandboxFixture):
         if sandbox_run is not None:
             spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
             try:
-                prepared = sandbox_run.context.prepare(command, spec, env=env)
+                prepared = sandbox_run.context.prepare(command, spec, env=env, cwd=Path.cwd())
             except (SandboxUnavailableError, SandboxSettingsError) as exc:
                 raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
             argv = prepared.argv

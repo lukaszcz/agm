@@ -21,7 +21,12 @@ from agm.agent.session import (
     rpc,
 )
 from agm.agent.spec import AgentClaude, AgentPi
-from tests._agl_helpers import unavailable_sandbox_context
+from agm.sandbox.request import SandboxLimits
+from tests._agl_helpers import (
+    session_sandbox_context,
+    unavailable_sandbox_context,
+    write_sandbox_home,
+)
 from tests.test_agent_rpc import RpcStub, open_backend
 
 _PI = AgentPi(provider="provider", model="model", thinking="think")
@@ -453,6 +458,32 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
             SessionOpenRequest(AgentPi("", "", ""), "rpc", env={})
         )
+
+
+def test_sandboxed_spawn_follows_the_process_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A sandboxed Pi RPC child starts in the process's current directory
+    (e.g. after `os::chdir`), not the directory the sandbox context was built in.
+    """
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    monkeypatch.chdir(moved)
+    spawned: dict[str, object] = {}
+
+    def fake_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        spawned.update(kwargs)
+        raise OSError("stop")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    with pytest.raises(SessionHostError):
+        rpc.PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home)).open(
+            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={}, sandbox=SandboxLimits())
+        )
+    assert spawned["cwd"] == Path.cwd()
 
 
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:

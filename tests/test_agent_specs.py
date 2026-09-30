@@ -925,6 +925,34 @@ def test_sandboxed_run_reaches_the_process_primitive_with_the_prepared_wrap(
     assert cleanup_cmd[:3] == ["systemctl", "--user", "--no-block"]
 
 
+def test_sandboxed_run_follows_the_process_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A sandboxed agent runs in the process's current directory (e.g. after
+    `os::chdir`), not the directory its sandbox context was built in.
+    """
+    from agm.agent.runner import cleanup_temp_files, prepare_rendered_prompt_run
+
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    monkeypatch.chdir(moved)
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "prompt",
+            runner=AgentClaude("sonnet", "high").argv(),
+            temp_files=temp_files,
+            env={"PATH": "/bin"},
+            sandbox=_sandbox_run(tmp_path, profile_name="claude"),
+        )
+        assert isinstance(prepared.sandbox, PreparedSandboxCommand)
+        assert prepared.sandbox.cwd == Path.cwd()
+    finally:
+        cleanup_temp_files(temp_files)
+
+
 def test_sandbox_preparation_failure_becomes_a_spawn_failure_without_stderr_prints(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

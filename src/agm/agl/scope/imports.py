@@ -40,6 +40,7 @@ __all__ = [
     "ScopeOrigins",
     "SingleTarget",
     "WildcardTarget",
+    "alias_prefix",
     "build_import_env",
     "contribution_routes",
     "matching_atoms",
@@ -388,7 +389,7 @@ def _selected_public_atoms(
         prefix = _item_path(item)
         declarations = matching_atoms(exports, prefix)
         scopes = matching_atoms(scope_exports, prefix)
-        if not declarations and not scopes and _beneath_alias(prefix, exports, aliases) is None:
+        if not declarations and not scopes and alias_prefix(prefix, exports, aliases) is None:
             raise UnknownMemberError(
                 spell_declaration(module, prefix), span=span, repair=MissRepair.NOT_EXPORTED
             )
@@ -399,7 +400,7 @@ def _selected_public_atoms(
     return tuple(matched_exports), tuple(matched_scopes)
 
 
-def _beneath_alias(
+def alias_prefix(
     path: PathAtom, exports: Mapping[NameAtom, QName], aliases: Collection[QName]
 ) -> tuple[QName, PathAtom] | None:
     """The exported alias the longest proper prefix of *path* names, and the rest; if any."""
@@ -425,7 +426,7 @@ def _item_declarations(
     for item in items:
         path = _item_path(item)
         exported = exports.get(_atom(path))
-        found = (exported, ()) if exported is not None else _beneath_alias(path, exports, aliases)
+        found = (exported, ()) if exported is not None else alias_prefix(path, exports, aliases)
         if found is not None:
             named.append(ItemDeclaration(module, path, *found, span))
     return tuple(named)
@@ -447,7 +448,7 @@ def _tail_beneath_exposures(
         path = _item_path(item)
         if matching_atoms(exports, path):
             continue
-        beneath = _beneath_alias(path, exports, aliases)
+        beneath = alias_prefix(path, exports, aliases)
         if beneath is None:
             continue
         named = ItemDeclaration(module, path, *beneath, span)

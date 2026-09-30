@@ -55,6 +55,7 @@ from agm.agl.scope.imports import (
     ScopeOrigins,
     SingleTarget,
     WildcardTarget,
+    alias_prefix,
     build_import_env,
     declares_bare_constructor,
     matching_atoms,
@@ -483,18 +484,40 @@ def _raise_reexport_scope_conflict(exposed: NameAtom, decl: ExportDecl) -> None:
     raise DuplicateDeclarationError(spell_scope_path(_path(exposed)), span=decl.span)
 
 
+Through = Callable[[ModuleId, PathAtom], Mapping[PathAtom, QName]]
+"""The declarations a path beneath an alias module *ModuleId* exports reaches.
+
+Its target's declaration at that path and every one beneath it, keyed by
+their paths relative to it; none when the path lies beneath no exported
+alias or the alias's module is not resolved yet.
+"""
+
+
+def _reaches_nothing(_module: ModuleId, _path: PathAtom) -> Mapping[PathAtom, QName]:
+    """A :data:`Through` before any alias is resolvable."""
+    return {}
+
+
 def _resolve_reexports(
     export_maps: dict[ModuleId, dict[NameAtom, QName]],
     scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]],
     type_origins: frozenset[QName],
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
+    component: tuple[ModuleId, ...],
+    through: Through,
+    *,
+    validate: bool,
 ) -> None:
-    """Fixed-point resolution of explicit export declarations across the program.
+    """Fixed-point resolution of *component*'s explicit export declarations.
 
-    Iterates until no new re-exported names are added.  For each ``ExportDecl``,
-    this function propagates the target module's exported names into the
-    current module's export map with their origin :data:`QName` preserved.
+    *component* is one strongly-connected component of the module graph whose
+    dependencies' export maps are final. Iterates until no new re-exported
+    names are added. For each ``ExportDecl``, this function propagates the
+    target module's exported names into the current module's export map with
+    their origin :data:`QName` preserved; an item written through an alias the
+    target exports names the declarations *through* reaches beneath its
+    target. When *validate*, an item naming nothing is then an error.
 
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
@@ -505,25 +528,31 @@ def _resolve_reexports(
     only depend on reapplying a declaration through a cycle.
     """
 
+    def targets(decl: ExportDecl) -> tuple[ModuleId, ...]:
+        target = all_targets[decl.node_id]
+        if isinstance(target, SingleTarget):
+            return (target.module,)
+        return tuple(sorted(target.modules, key=_mid_sort_key))
+
+    def additions(
+        decl: ExportDecl, target_mid: ModuleId, *, allow_missing: bool
+    ) -> tuple[dict[NameAtom, QName], dict[NameAtom, ScopeOrigins]]:
+        return _compute_reexport_additions(
+            decl,
+            export_maps[target_mid],
+            scope_export_maps[target_mid],
+            lambda path: through(target_mid, path),
+            allow_missing=allow_missing,
+        )
+
     def propagate() -> tuple[bool, ExportDecl | None]:
         changed = False
         changed_decl: ExportDecl | None = None
-        for mid, loaded in graph.modules.items():
-            for decl in loaded.export_decls:
-                target = all_targets[decl.node_id]
-                if isinstance(target, SingleTarget):
-                    target_mids: list[ModuleId] = [target.module]
-                else:
-                    target_mids = sorted(target.modules, key=_mid_sort_key)
-
-                for target_mid in target_mids:
-                    additions, scope_additions = _compute_reexport_additions(
-                        decl,
-                        export_maps[target_mid],
-                        scope_export_maps[target_mid],
-                        allow_missing=True,
-                    )
-                    for exposed, qname in additions.items():
+        for mid in component:
+            for decl in graph.modules[mid].export_decls:
+                for target_mid in targets(decl):
+                    declarations, scopes = additions(decl, target_mid, allow_missing=True)
+                    for exposed, qname in declarations.items():
                         if exposed in scope_export_maps[mid] and qname not in type_origins:
                             _raise_reexport_scope_conflict(exposed, decl)
                         existing = export_maps[mid].get(exposed)
@@ -533,7 +562,7 @@ def _resolve_reexports(
                             changed_decl = decl
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
-                    for exposed, origins in scope_additions.items():
+                    for exposed, origins in scopes.items():
                         existing = export_maps[mid].get(exposed)
                         if existing is not None and existing not in type_origins:
                             _raise_reexport_scope_conflict(exposed, decl)
@@ -545,7 +574,7 @@ def _resolve_reexports(
                             changed_decl = decl
         return changed, changed_decl
 
-    declaration_count = sum(len(loaded.export_decls) for loaded in graph.modules.values())
+    declaration_count = sum(len(graph.modules[mid].export_decls) for mid in component)
     last_changed_decl: ExportDecl | None = None
     for _ in range(declaration_count + 1):
         changed, changed_decl = propagate()
@@ -561,53 +590,62 @@ def _resolve_reexports(
 
     # A selection may target a re-export which is populated later in the
     # fixed point. Validate only after every reachable export has propagated.
-    for _mid, loaded in graph.modules.items():
-        for decl in loaded.export_decls:
-            target = all_targets[decl.node_id]
-            validation_targets = (
-                (target.module,)
-                if isinstance(target, SingleTarget)
-                else tuple(sorted(target.modules, key=_mid_sort_key))
-            )
-            for target_mid in validation_targets:
-                _compute_reexport_additions(
-                    decl,
-                    export_maps[target_mid],
-                    scope_export_maps[target_mid],
-                )
+    if not validate:
+        return
+    for mid in component:
+        for decl in graph.modules[mid].export_decls:
+            for target_mid in targets(decl):
+                additions(decl, target_mid, allow_missing=False)
 
 
 def _compute_reexport_additions(
     decl: ExportDecl,
     target_exports: Mapping[NameAtom, QName],
     target_scopes: Mapping[NameAtom, ScopeOrigins],
+    through: Callable[[PathAtom], Mapping[PathAtom, QName]],
     *,
     allow_missing: bool = False,
 ) -> tuple[dict[NameAtom, QName], dict[NameAtom, ScopeOrigins]]:
-    """Compute declaration and scope identities forwarded by one export."""
+    """Compute declaration and scope identities forwarded by one export.
+
+    An item matching nothing the target exports names what *through* reaches
+    beneath an alias the target exports, and forwards it. With
+    *allow_missing*, a selected item matching nothing forwards nothing, and a
+    ``hiding`` item matching nothing withholds the whole export.
+    """
     result: dict[NameAtom, QName] = {}
     scope_result: dict[NameAtom, ScopeOrigins] = {}
     region_prefix = tuple(segment.name for segment in decl.scope_path)
 
-    def match(item: ExportItem) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
+    def match(
+        item: ExportItem,
+    ) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...], Mapping[PathAtom, QName]]:
         """Expand one selection item over the target's declaration and scope surfaces."""
         prefix = _item_path(item)
         declarations = matching_atoms(target_exports, prefix)
         scopes = matching_atoms(target_scopes, prefix)
-        if not declarations and not scopes and not allow_missing:
+        reached = {} if declarations or scopes else through(prefix)
+        if not declarations and not scopes and not reached and not allow_missing:
             raise UnknownMemberError(
                 render_route_member(decl.module_path, prefix),
                 span=decl.span,
                 repair=MissRepair.NOT_EXPORTED,
             )
-        return declarations, scopes
+        return declarations, scopes, reached
 
     selected_items = [(item, *match(item)) for item in decl.items]
     hidden_items = [match(item) for item in decl.hidden]
+    if not all(any(found) for found in hidden_items):
+        # Resolution is partial: withholding everything keeps it beneath the
+        # final one, which a later pass reaches.
+        return result, scope_result
     hidden_declarations = {
-        source for declarations, _scopes in hidden_items for source in declarations
+        source for declarations, _scopes, _named in hidden_items for source in declarations
     }
-    hidden_scopes = {source for _declarations, scopes in hidden_items for source in scopes}
+    hidden_scopes = {source for _declarations, scopes, _named in hidden_items for source in scopes}
+    hidden_through = {
+        origin for _declarations, _scopes, reached in hidden_items for origin in reached.values()
+    }
 
     def rooted_atom(path: PathAtom) -> NameAtom:
         return _atom(region_prefix + path) if region_prefix else _atom(path)
@@ -618,9 +656,8 @@ def _compute_reexport_additions(
             return source
         return _atom((item.rename, *_path(source)[len(_item_path(item)) :]))
 
-    def add(source: NameAtom, exposed: NameAtom) -> None:
+    def add(exposed: NameAtom, origin: QName) -> None:
         rooted = rooted_atom(_path(exposed))
-        origin = target_exports[source]
         existing = result.get(rooted)
         if existing is not None and existing != origin:
             _raise_reexport_conflict(rooted, existing, origin, decl)
@@ -646,23 +683,54 @@ def _compute_reexport_additions(
             rooted = rooted_atom(exposed_path[:length])
             scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
 
+    def add_scopes_through(path: PathAtom, named: QName) -> None:
+        """Publish the scopes reaching *path*, which names *named* through an alias.
+
+        Those down to the alias are the target module's own; one beneath it
+        is the target's path there.
+        """
+        module, atom = named
+        target = _path(atom)
+        for length in range(1, len(path)):
+            origins = target_scopes.get(_atom(path[:length]))
+            if origins is None:
+                origins = frozenset({(module, _atom(target[: len(target) - len(path) + length]))})
+            rooted = rooted_atom(path[:length])
+            scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
+
+    def hidden(source: NameAtom) -> bool:
+        """Whether a ``hiding`` item removes *source*: by path, or the declaration it names."""
+        if source in hidden_declarations:
+            return True
+        module, atom = target_exports[source]
+        path = _path(atom)
+        return any(
+            named[0] == module and path[: len(_path(named[1]))] == _path(named[1])
+            for named in hidden_through
+        )
+
     if not decl.items:
-        for source in target_exports:
-            if source not in hidden_declarations:
-                add(source, source)
+        for source, origin in target_exports.items():
+            if not hidden(source):
+                add(source, origin)
         for source, origins in target_scopes.items():
             if source not in hidden_scopes:
                 rooted = rooted_atom(_path(source))
                 scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
         return result, scope_result
 
-    for item, declarations, scopes in selected_items:
+    for item, declarations, scopes, reached in selected_items:
         for source in declarations:
             exposed = exposed_for(item, source)
-            add(source, exposed)
+            add(exposed, target_exports[source])
             add_selected_scope_prefixes(item, source, exposed, include_leaf=False)
         for source in scopes:
             add_selected_scope_prefixes(item, source, exposed_for(item, source), include_leaf=True)
+        for relative, origin in reached.items():
+            path = (*_item_path(item), *relative)
+            add(exposed_for(item, _atom(path)), origin)
+            if item.rename is None:
+                add_scopes_through(path, origin)
     return result, scope_result
 
 
@@ -801,33 +869,7 @@ def resolve_program(
             all_targets[export_decl.node_id] = target
 
     # ------------------------------------------------------------------
-    # Step 3: Resolve re-exports (fixed-point propagation).
-    # ------------------------------------------------------------------
-    _resolve_reexports(export_maps, scope_export_maps, frozenset(type_origins), all_targets, graph)
-
-    # ------------------------------------------------------------------
-    # Step 4: Build ImportEnv per module.
-    # ------------------------------------------------------------------
-    import_envs: dict[ModuleId, ImportEnv] = {}
-    for mid, loaded in graph.modules.items():
-        cached = _reusable(cached_modules, mid, loaded)
-        if cached is not None:
-            # An import environment is a function of the module's own import
-            # declarations and the exports of what they name -- exactly what a
-            # reusable resolution was built against -- so it is reused with it.
-            import_envs[mid] = cached.import_env
-            continue
-        decls = loaded.imports
-        # Build a targets mapping scoped to this module's declarations.
-        module_targets: dict[int, ImportTarget] = {
-            decl.node_id: all_targets[decl.node_id] for decl in decls
-        }
-        import_envs[mid] = build_import_env(
-            decls, module_targets, export_maps, scope_export_maps, alias_origins
-        )
-
-    # ------------------------------------------------------------------
-    # Step 5: Whole-program pre-pass — collect all funcs/types and
+    # Step 3: Whole-program pre-pass — collect all funcs/types and
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
     all_public_funcs: dict[QName, FuncDef] = {}
@@ -891,8 +933,7 @@ def resolve_program(
     cross_module_type_owners = _public_type_owners(all_public_types)
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
     # ------------------------------------------------------------------
-    # Step 6: Prepare each module's headers, then resolve its bodies against
-    # the type owners the prepared headers make selectable.
+    # Step 4: The type-owner index over every module's prepared headers.
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     resolvers: dict[ModuleId, _Resolver] = {}
@@ -969,39 +1010,99 @@ def resolve_program(
             if not beneath(path, retired)
         }
     )
-    for mid, loaded in graph.modules.items():
-        cached = _reusable(cached_modules, mid, loaded)
-        if cached is not None:
-            resolved_modules[mid] = cached
-            continue
-        is_entry = mid == graph.entry_id
-        type_names = _import_tail_type_names(import_envs[mid], all_public_types)
-        resolvers[mid] = _Resolver(
-            loaded.program,
-            module_id=mid,
-            import_env=import_envs[mid],
-            decl_info=decl_info,
-            cross_module_constructor_refs=cross_module_constructor_refs,
-            builtin_static_decl_node_ids=prelude_static_decl_node_ids,
-            cross_module_type_owners=cross_module_type_owners,
-            all_public_types=all_public_types,
-            type_owners=(
-                type_owners.with_retained(mid, retained_type_owners)
-                if is_entry and retained_type_owners is not None
-                else type_owners
-            ),
-            allow_root_statements=is_entry and entry_repl_session_scope is not None,
-            is_standard_library_module=mid.is_standard_library,
-            repl_session_scope=entry_repl_session_scope if is_entry else None,
-            repl_session_scope_nodes=retained_scope_nodes if is_entry else None,
-            repl_session_type_paths=retained_type_owners if is_entry else None,
-            origin_path=loaded.path,
-            spaced_qualifiers=loaded.spaced_qualifiers,
-            ambient_type_names=type_names,
+
+    def through(module_id: ModuleId, path: PathAtom) -> dict[PathAtom, QName]:
+        found = alias_prefix(path, export_maps[module_id], alias_origins)
+        if found is None:
+            return {}
+        (alias_module, alias_atom), rest = found
+        named = type_owners.path_target((alias_module, _atom((*_path(alias_atom), *rest))))
+        target_module, target_atom = named
+        reached: dict[PathAtom, QName] = {(): named} if named in decl_info else {}
+        for relative in declared_in_program(named):
+            reached[relative] = (target_module, _atom((*_path(target_atom), *relative)))
+        return reached
+
+    # ------------------------------------------------------------------
+    # Step 5: Per strongly-connected component, dependencies first: resolve
+    # its re-exports, build its import environments and prepare its modules'
+    # headers. A re-export written through an alias reads the alias's
+    # module, so it is resolved once the component is prepared: an importer
+    # on the component's own cycle reads the first resolution, which lacks it.
+    # ------------------------------------------------------------------
+    import_envs: dict[ModuleId, ImportEnv] = {}
+    for component in graph.sccs:
+        members = tuple(sorted(component, key=_mid_sort_key))
+        _resolve_reexports(
+            export_maps,
+            scope_export_maps,
+            frozenset(type_origins),
+            all_targets,
+            graph,
+            members,
+            _reaches_nothing,
+            validate=False,
+        )
+        for mid in members:
+            loaded = graph.modules[mid]
+            cached = _reusable(cached_modules, mid, loaded)
+            if cached is not None:
+                # An import environment is a function of the module's own
+                # import declarations and the exports of what they name --
+                # exactly what a reusable resolution was built against -- so
+                # it is reused with it.
+                import_envs[mid] = cached.import_env
+                resolved_modules[mid] = cached
+                continue
+            module_targets: dict[int, ImportTarget] = {
+                decl.node_id: all_targets[decl.node_id] for decl in loaded.imports
+            }
+            import_envs[mid] = build_import_env(
+                loaded.imports, module_targets, export_maps, scope_export_maps, alias_origins
+            )
+            is_entry = mid == graph.entry_id
+            resolvers[mid] = _Resolver(
+                loaded.program,
+                module_id=mid,
+                import_env=import_envs[mid],
+                decl_info=decl_info,
+                cross_module_constructor_refs=cross_module_constructor_refs,
+                builtin_static_decl_node_ids=prelude_static_decl_node_ids,
+                cross_module_type_owners=cross_module_type_owners,
+                all_public_types=all_public_types,
+                type_owners=(
+                    type_owners.with_retained(mid, retained_type_owners)
+                    if is_entry and retained_type_owners is not None
+                    else type_owners
+                ),
+                allow_root_statements=is_entry and entry_repl_session_scope is not None,
+                is_standard_library_module=mid.is_standard_library,
+                repl_session_scope=entry_repl_session_scope if is_entry else None,
+                repl_session_scope_nodes=retained_scope_nodes if is_entry else None,
+                repl_session_type_paths=retained_type_owners if is_entry else None,
+                origin_path=loaded.path,
+                spaced_qualifiers=loaded.spaced_qualifiers,
+                ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
+            )
+        _resolve_reexports(
+            export_maps,
+            scope_export_maps,
+            frozenset(type_origins),
+            all_targets,
+            graph,
+            members,
+            through,
+            validate=True,
         )
 
-    for mid, resolver in resolvers.items():
-        is_entry = mid == graph.entry_id
+    # ------------------------------------------------------------------
+    # Step 6: Resolve each prepared module's bodies against the type owners
+    # the prepared headers make selectable.
+    # ------------------------------------------------------------------
+    for mid in graph.modules:
+        resolver = resolvers.get(mid)
+        if resolver is None:
+            continue
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates = _build_cross_module_constructor_candidates(
             import_envs[mid],

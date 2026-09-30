@@ -64,6 +64,11 @@ _RENAMING = "import base\ntype Base = base::Base\ntype Geo = Base\n"
 _TWIN = "import base\ntype Geo = base::Base\n"
 _ELSEWHERE = "record Base\n  x: int\ntype Geo = Base\n"
 _REEXPORTING = "import al\nexport al::{Geo}\n"
+_EXPORTING_THROUGH = (
+    "import al\nexport al::{Geo::Inner, Geo::Inner as I, Geo::Shape, Geo::f, Hue::Red}\n"
+)
+"""Re-exports paths written through ``al``'s aliases."""
+_HIDING_THROUGH = "import al\nexport al hiding Geo::Inner\n"
 _MODULES = {"base": _BASE, "al": _EXPORTING}
 
 _RECORD = "record base::Base\n  x: int"
@@ -230,8 +235,15 @@ _SCENARIOS = {
     ),
     "an-import-tail-names-a-path-through-an-alias": Scenario(
         modules=_MODULES,
-        header=("import al::{Geo::Inner as I, Hue::Red}",),
+        header=("import al::{Geo::Inner as I, Hue::Red, Geo::Shape}",),
         probes={
+            "beneath-it": accepted(
+                "fn(p: Geo::Shape) => p is Geo::Shape::Sq", "base::Base::Shape -> bool"
+            ),
+            "beneath-it-value": accepted("Geo::Shape::Sq", "record base::Base::Shape::Sq"),
+            "beneath-it-unknown": rejected(
+                "Geo::Shape::Nope", UnknownMemberError, "Geo::Shape::Nope"
+            ),
             "path-value": accepted("Geo::Inner(y = 1)", _INNER),
             **type_positions("path", "Geo::Inner", "base::Base::Inner"),
             "rename-value": accepted("I(y = 1)", _INNER),
@@ -323,6 +335,41 @@ _SCENARIOS = {
             "kept": accepted("Green", _GREEN),
         },
     ),
+    "an-export-item-names-a-path-through-an-alias": Scenario(
+        modules={**_MODULES, "ex": _EXPORTING_THROUGH},
+        header=("import ex::*",),
+        probes={
+            "path-value": accepted("Geo::Inner(y = 1)", _INNER),
+            **type_positions("path", "Geo::Inner", "base::Base::Inner"),
+            "path-pattern": accepted(
+                "fn(p: I) => case p of\n  | Geo::Inner(y) => y", "base::Base::Inner -> int"
+            ),
+            "rename-value": accepted("I(y = 1)", _INNER),
+            "rename-pattern": accepted(
+                "fn(p: Geo::Inner) => case p of\n  | I(y) => y", "base::Base::Inner -> int"
+            ),
+            "nested": accepted(
+                "fn(p: Geo::Shape) => p is Geo::Shape::Sq", "base::Base::Shape -> bool"
+            ),
+            "nested-value": accepted("Geo::Shape::Sq", "record base::Base::Shape::Sq"),
+            "function": accepted("Geo::f", "() -> int"),
+            "member": accepted("Hue::Red", "record base::Color::Red"),
+            "routed": accepted("ex::Geo::Inner(y = 1)", _INNER),
+            "routed-rename": accepted("ex::I(y = 1)", _INNER),
+            "alias-not-exposed": rejected("Geo(x = 1)", AglScopeError, "Geo"),
+            "info": info("I", "I is a constructor.\nSignature:\n  I(y: int) -> base::Base::Inner"),
+        },
+    ),
+    "an-export-hiding-names-a-path-through-an-alias": Scenario(
+        modules={**_MODULES, "ex": _HIDING_THROUGH},
+        header=("import ex::*",),
+        probes={
+            **_hidden_probes("Base::Inner"),
+            "routed": rejected("ex::Base::Inner(y = 1)", HiddenMemberError, "ex::Base::Inner"),
+            "target": accepted("Base(x = 1)", _RECORD),
+            "sibling": accepted("Base::f", "() -> int"),
+        },
+    ),
     "an-alias-spelling-reads-as-its-target-in-every-position": Scenario(
         modules=_MODULES,
         header=("import al::*",),
@@ -393,3 +440,22 @@ def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
     assert (phase, error) == ("scope", AglTypeError)
     assert span is not None and span.source.label.endswith("al.agl")
     assert span_text(_UNRESOLVED, span) == "type Geo = Base"
+
+
+@pytest.mark.parametrize(
+    "export",
+    [
+        pytest.param("import al\nexport al::{Geo::Nope}\n", id="item"),
+        pytest.param("import al\nexport al hiding Geo::Nope\n", id="hiding"),
+    ],
+)
+def test_an_export_item_through_an_alias_naming_nothing_is_an_error_where_written(
+    tmp_path: Path, export: str
+) -> None:
+    phase, error, span, _identity = file_verdict(
+        tmp_path, {"entry": "import ex\n1", "ex": export, **_MODULES}
+    )
+
+    assert (phase, error) == ("scope", UnknownMemberError)
+    assert span is not None and span.source.label.endswith("ex.agl")
+    assert span_text(export, span) == export.splitlines()[1]

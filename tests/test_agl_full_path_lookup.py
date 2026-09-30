@@ -438,6 +438,17 @@ _SCENARIOS = {
             ),
         },
     ),
+    "an-alias-of-an-imported-enum-declared-after-its-member-path": Scenario(
+        modules={"one": _ALIASED_ENUM},
+        header=("import one::{E}",),
+        probes={
+            "scope-function": rejected(
+                "scope C\n  def Red() -> int = 1\nend C\n\ntype C = E",
+                DuplicateDeclarationError,
+                "type C = E",
+            ),
+        },
+    ),
     "hiding-an-enum-member-path-removes-its-bare-spelling": Scenario(
         modules={"a": _REFERENCED_R},
         header=("import std/prelude::* hiding Option::Some", "import a::* hiding R"),

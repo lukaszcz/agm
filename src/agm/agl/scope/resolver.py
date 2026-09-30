@@ -404,6 +404,11 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     return (len(path), path)
 
 
+def _source_order_key(span: SourceSpan) -> int:
+    """Order spans by where they start."""
+    return span.start_offset
+
+
 def _binding_sort_key(ref: BindingRef) -> tuple[tuple[str, ...], ScopePath, str, int]:
     """Order bindings by their declaration identity, never by set order."""
     return (ref.module_id.segments, ref.scope_path, ref.name, ref.decl_node_id)
@@ -719,6 +724,12 @@ class _Resolver:
         # Structured method identity -> nominal receiver owner. This is
         # scope's single receiver classification artifact for later passes.
         self._method_declarations: dict[DeclarationKey, ReceiverOwner] = {}
+        # The full path each own scope path spelled otherwise declares (an
+        # alias segment stands for its target's path), and those declaring
+        # each; set once by ``resolve``, since reading an alias needs every
+        # module's prepared headers.
+        self._declared_paths: dict[ScopePath, QName] = {}
+        self._declaring_paths: dict[QName, tuple[ScopePath, ...]] = {}
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
@@ -821,6 +832,7 @@ class _Resolver:
             if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
         }
         self._validate_alias_member_paths(current_type_owners)
+        self._declare_scope_paths()
         # A tail or ``hiding`` item written through an alias must name a
         # declaration whether or not anything reads it.
         for node_id in self._import_env.decl_hiding:
@@ -902,14 +914,15 @@ class _Resolver:
         }
 
     def _validate_alias_member_paths(self, owners: Mapping[ScopePath, TypeOwner]) -> None:
-        """Reject a declaration at a path an own alias already declares.
+        """Reject a declaration at a path an own alias of another module's type declares.
 
         An alias segment stands for its target's path (``type C = E``
         declares ``C::Red``, and every other path beneath ``E``), so an
         ordinary or type declaration of this entry at a path beneath the
-        alias that its target declares too declares that path twice, as one
-        beneath the target itself would. The later of the two is reported; a
-        retained alias is the earlier.
+        alias that its target's module declares too declares that path twice.
+        The later of the two is reported; a retained alias is the earlier. An
+        own target's paths are checked with the own scope paths declaring
+        them (:meth:`_declare_scope_paths`).
         """
         declared_here = {id(declaration) for declaration, _path in self._type_declarations}
         for path, owner in owners.items():
@@ -920,12 +933,17 @@ class _Resolver:
                 _module, declared_path, name = key
                 if entity not in {"ordinary", "type"} or declared_path[: len(path)] != path:
                     continue
-                beneath = self._alias_target_path(
+                beneath = self._type_owners.beneath_alias(
                     (self._module_id, _bare_atom(path)),
                     owner,
                     (*declared_path[len(path) :], name),
                 )
-                if beneath is None or beneath[1] or not self._declares(beneath[0]):
+                if (
+                    beneath is None
+                    or beneath[1]
+                    or beneath[0][0] == self._module_id
+                    or not self._declares(beneath[0])
+                ):
                     continue
                 duplicate = self._declaration_items[key]
                 if (
@@ -934,6 +952,86 @@ class _Resolver:
                 ):
                     duplicate = alias
                 raise DuplicateDeclarationError(name, span=duplicate.span)
+
+    def _declare_scope_paths(self) -> None:
+        """Record the full path each own scope path declares, then check it is declared once.
+
+        A scope path whose whole spelling selects a type declares that type's
+        path: through an alias, its target's (``def Geo::m`` with ``type Geo
+        = Base`` declares ``Base::m``). Any other declares its parent's path
+        and its own name. Own scope paths declaring one path are one path: a
+        name declared beneath two of them is declared twice, and a spelling of
+        any reaches what the others declare (:meth:`own_at`).
+        """
+        declared: dict[ScopePath, QName] = {}
+        for path in sorted(self._scope_nodes, key=_scope_path_sort_key):
+            if not path:
+                continue
+            found = lookup_declared(
+                self,
+                path,
+                None,
+                LookupKind.TYPE,
+                span=self._program.span,
+                local_to=self._module_id,
+            )
+            if isinstance(found, QualifiedTarget) and found.key is not None:
+                declared[path] = _key_qname(self.identity(found.key))
+                continue
+            module_id, atom = declared.get(path[:-1], (self._module_id, _bare_atom(path[:-1])))
+            declared[path] = (module_id, _bare_atom((*_bare_path(atom), path[-1])))
+        redirected = {
+            path: qname
+            for path, qname in declared.items()
+            if qname != (self._module_id, _bare_atom(path))
+        }
+        declaring: dict[QName, list[ScopePath]] = {}
+        for path, qname in redirected.items():
+            declaring.setdefault(qname, []).append(path)
+        self._declared_paths = redirected
+        self._declaring_paths = {qname: tuple(paths) for qname, paths in declaring.items()}
+        for (module_id, atom), paths in self._declaring_paths.items():
+            spelled = _bare_path(atom)
+            if module_id == self._module_id and spelled in self._scope_nodes:
+                paths = (spelled, *paths)
+            if len(paths) > 1:
+                self._declare_once_beneath(paths)
+
+    def _declare_once_beneath(self, paths: tuple[ScopePath, ...]) -> None:
+        """Reject a name declared twice beneath *paths*, which declare one path.
+
+        A retained REPL entry's declaration beneath one of them counts, unless
+        this entry redeclares it at its own spelling. The later declaration of
+        this entry, or an alias of this entry making *paths* one after both,
+        is reported.
+        """
+        aliases = [
+            item.span
+            for path in paths
+            for index in range(len(path))
+            if isinstance(
+                item := self._declaration_items.get((self._module_id, path[:index], path[index])),
+                TypeAlias,
+            )
+        ]
+        declared: dict[str, dict[ScopePath, str]] = {}
+        for member_path in self._repl_session_ordinary_member_paths:
+            if member_path[:-1] in paths:
+                declared.setdefault(member_path[-1], {})[member_path[:-1]] = "ordinary"
+        for (_module_id, path, name), entity in self._scope_entity_kinds.items():
+            if path in paths:
+                retained_type = entity == "scope" and (*path, name) in self._type_paths
+                declared.setdefault(name, {})[path] = "type" if retained_type else entity
+        for name, entities in declared.items():
+            kinds = list(entities.values())
+            if len(kinds) > 1 and ("ordinary" in kinds or kinds.count("type") > 1):
+                spans = (
+                    self._declaration_items[key].span
+                    for path in entities
+                    if (key := (self._module_id, path, name)) in self._declaration_items
+                )
+                later = max((*spans, *aliases), key=_source_order_key)
+                raise DuplicateDeclarationError(name, span=later)
 
     def _declares(self, qname: QName) -> bool:
         """Whether a declaration of any kind stands at full path *qname*."""
@@ -3427,7 +3525,27 @@ class _Resolver:
     # -- What the one lookup reads (``lookup.PathSources``) --
 
     def own_at(self, path: ScopePath, kind: LookupKind) -> Reading:
-        """This module's own declaration of *kind* at full *path*."""
+        """This module's own declarations of *kind* at full *path*.
+
+        Those spelled *path*, and those beneath every own scope path spelled
+        otherwise that declares the path its parent does.
+        """
+        reading = self._own_spelled_at(path, kind)
+        parent = path[:-1]
+        if not parent:
+            return reading
+        declared = self._declared_paths.get(parent, (self._module_id, _bare_atom(parent)))
+        return sum(
+            (
+                self._own_spelled_at((*spelling, path[-1]), kind)
+                for spelling in self._declaring_paths.get(declared, ())
+                if spelling != parent
+            ),
+            reading,
+        )
+
+    def _own_spelled_at(self, path: ScopePath, kind: LookupKind) -> Reading:
+        """This module's own declaration of *kind* spelled *path*."""
         if kind is LookupKind.TYPE:
             qname = (self._module_id, _bare_atom(path))
             target = (
@@ -3591,7 +3709,36 @@ class _Resolver:
         alias's projection, or a record's own spelling, selects. Any other
         path beneath an alias is its target's (:meth:`_beneath_alias`), read
         as a declaration of *kind*.
+
+        This module's own declarations beneath an owner another module
+        declares are read beneath every own scope path declaring its path
+        (``def Geo::m`` with ``Geo`` an alias of an imported ``Base``); an own
+        owner's spellings are own scope paths, which :meth:`own_at` reads.
         """
+        declared = _key_qname(self.identity(owner))
+        selected = self._selected_by_table(owner, layer, rest, chain, kind)
+        if declared[0] == self._module_id:
+            return selected
+        return (
+            sum(
+                (
+                    self.own_at((*spelling, *rest), kind)
+                    for spelling in self._declaring_paths.get(declared, ())
+                ),
+                Reading(),
+            )
+            + selected
+        )
+
+    def _selected_by_table(
+        self,
+        owner: DeclarationKey,
+        layer: ContributionLayer,
+        rest: ScopePath,
+        chain: QualifierChain,
+        kind: LookupKind,
+    ) -> Reading:
+        """What type *owner*'s own member table selects for *rest* (:meth:`projected`)."""
         segments = chain.segments
         start = len(segments) + 1 - len(rest)
         current = _key_qname(owner)
@@ -3637,7 +3784,7 @@ class _Resolver:
         An alias segment stands for its target's path; a path a ``hiding``
         at the alias's site removed is refused.
         """
-        beneath = self._alias_target_path(alias, table, path)
+        beneath = self._type_owners.beneath_alias(alias, table, path)
         if beneath is None:
             return Reading()
         qname, hidden = beneath
@@ -3645,34 +3792,6 @@ class _Resolver:
             spelling = render_qualifier_path(chain)
             return Reading(refusals=(HiddenMemberError(spelling, path[-1], span=chain.span),))
         return self._declared_at(qname, layer, kind)
-
-    def _alias_target_path(
-        self, alias: QName, table: TypeOwner, path: ScopePath
-    ) -> tuple[QName, bool] | None:
-        """Return the full path *path* beneath *alias* stands for, and whether it is hidden.
-
-        *table* is *alias*'s owner. *path* is read beneath the type the alias
-        chain ends at, and a prefix of it there naming another alias stands
-        for that alias's target in turn. It is hidden when a ``hiding`` at
-        one of those aliases' sites removed it or a prefix of it. ``None``
-        when an alias names no nominal target.
-        """
-        hidden = False
-        while True:
-            hidden = hidden or any(path[:end] in table.hidden for end in range(1, len(path) + 1))
-            final = self._type_owners.final_target(alias)
-            if final is None:
-                return None
-            module_id, atom = final
-            base = _bare_path(atom)
-            for end in range(1, len(path)):
-                inner = (module_id, _bare_atom((*base, *path[:end])))
-                inner_table = self._type_owners.owner(inner)
-                if inner_table is not None and inner_table.alias is not None:
-                    alias, table, path = inner, inner_table, path[end:]
-                    break
-            else:
-                return (module_id, _bare_atom((*base, *path))), hidden
 
     def _declared_at(self, qname: QName, layer: ContributionLayer, kind: LookupKind) -> Reading:
         """The declaration at full path *qname*, as one of *kind*, made visible by *layer*."""
@@ -3684,6 +3803,10 @@ class _Resolver:
             )
         elif qname in self._decl_info:
             targets = (self._contributed_target(self._cross_module_binding_ref(qname), ()),)
+            # Another module's declaration is never this module's own, not
+            # even reached through an own alias.
+            if layer is ContributionLayer.DECLARED:
+                layer = ContributionLayer.IMPORTED
         else:
             targets = ()
         origin = contribution_origin(qname, layer)
@@ -3758,20 +3881,16 @@ class _Resolver:
     def identity(self, key: DeclarationKey) -> DeclarationKey:
         """The declaration *key* names: a renaming alias's is its target's.
 
-        A path beneath an alias is its target's path there.
+        A path beneath an alias is its target's path there, unless this
+        module declares it so.
         """
+        owners = self._type_owners
+        module_id, path, name = key
         qname = _key_qname(key)
-        module_id, atom = qname
-        path = _bare_path(atom)
-        for end in range(1, len(path)):
-            alias = (module_id, _bare_atom(path[:end]))
-            owner = self._type_owners.owner(alias)
-            if owner is not None and owner.alias is not None:
-                beneath = self._alias_target_path(alias, owner, path[end:])
-                if beneath is not None:
-                    qname = beneath[0]
-                break
-        return self._qname_decl_key(self._type_owners.identity(qname))
+        node = self._scope_nodes.get(path) if module_id == self._module_id else None
+        if node is None or name not in node.members:
+            qname = owners.path_target(qname)
+        return self._qname_decl_key(owners.identity(qname))
 
     def aliases(self, key: DeclarationKey) -> bool:
         """Whether *key* declares a type alias."""
@@ -3891,13 +4010,23 @@ class _Resolver:
                     ),
                 )
         for node_id, exposures in self._reachable_decl_contributions(env.decl_tail_beneath, step):
-            relative = _bare_atom(path[len(self._import_decl_scope_paths.get(node_id, ())) :])
-            for named in exposures.get(relative, ()):
-                add(
-                    self._cross_module_binding_ref(_key_qname(self._named_by(named))),
-                    frozenset({ContributionLayer.IMPORTED}),
-                    (node_id,),
-                )
+            relative = path[len(self._import_decl_scope_paths.get(node_id, ())) :]
+            for exposed, items in exposures.items():
+                size = len(_bare_path(exposed))
+                if _bare_atom(relative[:size]) != exposed:
+                    continue
+                for named in items:
+                    qname = _key_qname(
+                        self._declaration_beneath(
+                            _key_qname(self._named_by(named)), relative[size:]
+                        )
+                    )
+                    if self._declares(qname):
+                        add(
+                            self._cross_module_binding_ref(qname),
+                            frozenset({ContributionLayer.IMPORTED}),
+                            (node_id,),
+                        )
         atom = _bare_atom(path)
         imported = dict(env.unqualified_decls.get(atom, {}))
         if path[1:]:

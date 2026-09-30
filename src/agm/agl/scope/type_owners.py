@@ -291,6 +291,46 @@ class TypeOwnerIndex:
             final = current if owner.alias is None else None
         return final
 
+    def beneath_alias(
+        self, alias: QName, table: TypeOwner, path: ScopePath
+    ) -> tuple[QName, bool] | None:
+        """Return the full path *path* beneath alias *alias* stands for, and whether it is hidden.
+
+        *table* is what *alias* selects. *path* is read beneath the type the
+        alias chain ends at, and a prefix of it there naming another alias
+        stands for that alias's target in turn. It is hidden when a ``hiding``
+        at one of those aliases' sites removed it or a prefix of it. ``None``
+        when an alias names no nominal target.
+        """
+        hidden = False
+        while True:
+            hidden = hidden or any(path[:end] in table.hidden for end in range(1, len(path) + 1))
+            final = self.final_target(alias)
+            if final is None:
+                return None
+            module_id, atom = final
+            base = _path(atom)
+            for end in range(1, len(path)):
+                inner = (module_id, _atom((*base, *path[:end])))
+                inner_table = self.owner(inner)
+                if inner_table is not None and inner_table.alias is not None:
+                    alias, table, path = inner, inner_table, path[end:]
+                    break
+            else:
+                return (module_id, _atom((*base, *path))), hidden
+
+    def path_target(self, qname: QName) -> QName:
+        """Return the full path *qname* stands for: beneath an alias, its target's path there."""
+        module_id, atom = qname
+        path = _path(atom)
+        for end in range(1, len(path)):
+            alias = (module_id, _atom(path[:end]))
+            owner = self.owner(alias)
+            if owner is not None and owner.alias is not None:
+                beneath = self.beneath_alias(alias, owner, path[end:])
+                return qname if beneath is None else beneath[0]
+        return qname
+
     def identity(self, qname: QName) -> QName:
         """Return the declaration type path *qname* names: a renaming alias's is its target's.
 

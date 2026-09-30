@@ -5,7 +5,8 @@ import std/option::Option
 import std/path::path
 
 extern def exit(code: int = 0) -> unit
-# Raises `EncodingError` if the working directory is not valid Unicode.
+# Raises `std/fs::FsError(path = ".", operation = "cwd")` if the working
+# directory no longer exists, or `EncodingError` if it is not valid Unicode.
 extern def cwd() -> path
 extern def pid() -> int
 # Raises `EncodingError` if the host name is not valid Unicode.
@@ -23,7 +24,8 @@ end ChdirInternals
 # directory before) and `PWD` (`cwd()` after) into `std/env::environ`.
 # Raises `std/fs::FsError(path = dir, operation = "chdir")` on failure, or
 # `EncodingError` if the directory before or after is not valid Unicode,
-# leaving the directory unchanged.
+# leaving the directory unchanged. Leaving a working directory that no longer
+# exists is allowed; `OLDPWD` then keeps the previous `PWD`.
 def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.vars)
 
 # Whether standard input and output are both connected to a terminal.

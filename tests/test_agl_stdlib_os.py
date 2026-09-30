@@ -323,6 +323,69 @@ def test_os_chdir_raises_encoding_error_and_restores_the_directory_when_after_is
     assert Path(real_getcwd()) == tmp_path
 
 
+def test_os_cwd_raises_fs_error_when_the_working_directory_was_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+
+    result = _run("import std/os\nprogram def main() -> unit = print(os::cwd())")
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "FsError"
+    assert result.error.fields["operation"] == "cwd"
+
+
+def test_os_chdir_leaves_a_removed_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    source = (
+        "import std/env\n"
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        f'  std/env::environ.set("PWD", "{gone}")\n'
+        f'  os::chdir("{tmp_path}")\n'
+        "  print(os::cwd())\n"
+        '  print(std/env::environ.get("OLDPWD"))\n'
+    )
+
+    result = _run(source)
+
+    assert result.ok
+    assert capsys.readouterr().out.splitlines() == [str(tmp_path), str(gone)]
+
+
+def test_os_chdir_from_a_removed_directory_raises_encoding_error_when_after_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gone = tmp_path / "gone"
+    target = tmp_path / "sub"
+    gone.mkdir()
+    target.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    real_getcwd = os.getcwd
+
+    def fake_getcwd() -> str:
+        cwd = real_getcwd()
+        return "/tmp/h\udcffome" if Path(cwd) == target else cwd
+
+    monkeypatch.setattr(os, "getcwd", fake_getcwd)
+
+    result = _run(f'import std/os\nprogram def main() -> unit = os::chdir("{target}")')
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "EncodingError"
+
+
 def test_os_chdir_resolves_a_symlink_to_its_physical_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

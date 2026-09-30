@@ -46,8 +46,8 @@ def exit(code: int = 0) -> None:
 
 
 def cwd() -> str:
-    """Return the current working directory."""
-    return scalar_host_text(os.getcwd(), EncodingError)
+    """Return the current working directory; raise `FsError` if it no longer exists."""
+    return scalar_host_text(run_fs_action(FsError, ".", "cwd", os.getcwd), EncodingError)
 
 
 def pid() -> int:
@@ -65,12 +65,22 @@ def temp_dir() -> str:
     return scalar_host_text(tempfile.gettempdir(), EncodingError)
 
 
-def _restore_start_directory(directory: str) -> None:
-    """Change back to *directory*; skip it if it is no longer enterable."""
+def _restore_start_directory(directory: str | None) -> None:
+    """Change back to *directory*; skip it if unknown or no longer enterable."""
+    if directory is None:
+        return
     try:
         os.chdir(directory)
     except OSError:
         pass
+
+
+def _cwd_or_none() -> str | None:
+    """Return the working directory, or `None` if it no longer exists."""
+    try:
+        return scalar_host_text(os.getcwd(), EncodingError)
+    except FileNotFoundError:
+        return None
 
 
 def chdir(directory: str, vars_: MutableMapping[str, str]) -> None:
@@ -81,17 +91,18 @@ def chdir(directory: str, vars_: MutableMapping[str, str]) -> None:
     `EncodingError`; the latter case restores the prior directory first, so
     the directory is unchanged either way. The starting directory is
     registered once, on a session's first `chdir`, to be restored when the
-    host session ends.
+    host session ends. A working directory that no longer exists can be left:
+    `OLDPWD` then takes the previous `PWD`, and nothing is restored.
     """
-    before = scalar_host_text(os.getcwd(), EncodingError)
+    before = _cwd_or_none()
     run_fs_action(FsError, directory, "chdir", lambda: os.chdir(directory))
     try:
         after = scalar_host_text(os.getcwd(), EncodingError)
     except AglException:
-        os.chdir(before)
+        _restore_start_directory(before)
         raise
     runtime.state(_START_DIR_KEY, lambda: before, close=_restore_start_directory)
-    vars_["OLDPWD"] = before
+    vars_["OLDPWD"] = before if before is not None else vars_.get("PWD", "")
     vars_["PWD"] = after
 
 

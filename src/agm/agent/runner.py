@@ -605,7 +605,7 @@ def _prepare_sandboxed_argv(
     spec = sandbox.limits.for_command(profile_name(argv[0]) if argv else None)
     try:
         prepared = sandbox.context.prepare(argv, spec, env=env, cwd=Path.cwd())
-    except (SandboxUnavailableError, SandboxSettingsError) as exc:
+    except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
         return argv, SandboxPreparationFailure(str(exc))
     return prepared.argv, prepared
 

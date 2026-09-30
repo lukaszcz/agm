@@ -996,3 +996,32 @@ def test_sandbox_preparation_failure_becomes_a_spawn_failure_without_stderr_prin
     assert failure is not None
     assert failure.cause == "spawn_failure"
     assert capsys.readouterr() == ("", "")
+
+
+def test_sandboxed_run_with_removed_working_directory_is_a_spawn_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agm.agent.runner import (
+        SandboxPreparationFailure,
+        cleanup_temp_files,
+        prepare_rendered_prompt_run,
+    )
+
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "prompt",
+            runner=AgentClaude("sonnet", "high").argv(),
+            temp_files=temp_files,
+            env={"PATH": "/bin"},
+            sandbox=_sandbox_run(tmp_path, profile_name="claude"),
+        )
+    finally:
+        cleanup_temp_files(temp_files)
+    assert isinstance(prepared.sandbox, SandboxPreparationFailure)

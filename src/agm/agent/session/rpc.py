@@ -246,7 +246,7 @@ class PiRpcSessionBackend(SandboxFixture):
             spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
             try:
                 prepared = sandbox_run.context.prepare(command, spec, env=env, cwd=Path.cwd())
-            except (SandboxUnavailableError, SandboxSettingsError) as exc:
+            except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
                 raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
             argv = prepared.argv
         try:

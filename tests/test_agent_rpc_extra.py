@@ -486,6 +486,22 @@ def test_sandboxed_spawn_follows_the_process_working_directory(
     assert spawned["cwd"] == Path.cwd()
 
 
+def test_sandboxed_spawn_with_removed_working_directory_is_a_session_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    with pytest.raises(SessionHostError):
+        rpc.PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home)).open(
+            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={}, sandbox=SandboxLimits())
+        )
+
+
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     with pytest.raises(SessionHostError):

@@ -251,7 +251,7 @@ order (a config value may instead be a native TOML table, read directly as the t
 1. a JSON object;
 2. an [AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member
    constructor call (`AgentCodex(model = "o3", thinking = "high")`, `AgentClaude("opus")`, bare
-   or qualified `Agent::AgentPi(...)`);
+   or qualified `Agent::AgentPi(...)`) or a member name alone for its defaults (`AgentClaude`);
 3. compact shorthand, every name and the effort optional:
    - `claude[/MODEL][:EFFORT]` → `AgentClaude(MODEL, EFFORT)`
    - `codex[/MODEL][:EFFORT]` → `AgentCodex(MODEL, EFFORT)`
@@ -277,7 +277,7 @@ Generic text with three or more segments (`openrouter/anthropic/claude-sonnet-4`
 shorthand but a verbatim command, and `pi/` takes at most `pi/PROVIDER/MODEL`, so a model id
 containing `/` needs the constructor form (`AgentPi("openrouter", "anthropic/claude-sonnet-4")`).
 
-Text that opens a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`,
+Text that is a member call or name alone but fails to read or bind — an unclosed `AgentClaude(model = "x"`,
 an unknown field, a qualifier naming anything but `Agent` — is a host error, not a verbatim
 command. Whitespace-only text is always a host error, never a verbatim empty command.
 

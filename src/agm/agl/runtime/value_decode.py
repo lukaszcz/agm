@@ -408,7 +408,7 @@ def host_text_to_json(
 
 
 def _agent_ctor_probe(text: str, schema: EnumDecode) -> bool:
-    """Return whether *text* lexically opens an Agent member constructor call.
+    """Return whether *text* lexically is an Agent member constructor call or bare name.
 
     Delegates the qualifier/name/``(`` lexing to
     :func:`~agm.agl.value_syntax.reader.read_ctor_head`, so this can never

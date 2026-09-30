@@ -285,6 +285,20 @@ def test_call_form_constructor_selects_a_member() -> None:
     assert result == agent_spec_shape(AgentClaude("sonnet", "high"))
 
 
+@pytest.mark.parametrize("text", ["AgentClaude", " Agent::AgentClaude ", "AgentClaude()"])
+def test_bare_member_name_builds_the_member_with_default_fields(text: str) -> None:
+    assert _decode(text) == {"$case": "AgentClaude"}
+
+
+def test_bare_member_name_with_required_fields_is_an_error_not_a_command() -> None:
+    with pytest.raises(ValueError):
+        _decode("AgentCommand")
+
+
+def test_member_name_followed_by_other_text_is_an_agent_command_verbatim() -> None:
+    assert _decode("AgentClaude --x") == {"$case": "AgentCommand", "command": "AgentClaude --x"}
+
+
 def test_unrecognized_text_is_an_agent_command_verbatim() -> None:
     command = "custom-agent --model 'some model' \\%{SESSION_ID}"
 

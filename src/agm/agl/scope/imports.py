@@ -174,7 +174,8 @@ class ImportEnv:
     ``decl_bare_scope_routes`` carry the parallel namespace-only contribution
     for scopes that have no declaration member to put in a bare table.
     ``decl_hidden`` holds, per tailed declaration, the bare atoms its
-    ``hiding`` removed from its tail.
+    ``hiding`` removed from its tail; ``unqualified_hidden`` holds the
+    declarations a root-position import's ``hiding`` removed.
     """
 
     contributions: Mapping[ModuleId, ModuleContribution]
@@ -189,6 +190,7 @@ class ImportEnv:
         default_factory=dict
     )
     decl_hidden: Mapping[int, frozenset[NameAtom]] = field(default_factory=dict)
+    unqualified_hidden: frozenset[QName] = frozenset()
     facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
     # Where each imported module was first named in this module's source, so a
@@ -411,6 +413,7 @@ def build_import_env(
     root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     decl_hidden: dict[int, set[NameAtom]] = {}
+    root_hidden: set[QName] = set()
     facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
     canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
@@ -446,6 +449,8 @@ def build_import_env(
                 )
             hidden = set(hidden_exports)
             hidden_scope_paths = set(hidden_scopes)
+            if not decl.scope_path:
+                root_hidden.update(module_exports[source] for source in hidden)
             acc = accumulators.setdefault(
                 module,
                 _ContributionAccumulator({}, False, set(), {}, {}, set(), {}, set(), {}),
@@ -534,6 +539,7 @@ def build_import_env(
             for node_id, members in decl_scope_routes.items()
         },
         decl_hidden={node_id: frozenset(atoms) for node_id, atoms in decl_hidden.items()},
+        unqualified_hidden=frozenset(root_hidden),
         facade_aliases={
             alias: {
                 origin_node_id: frozenset(modules)

@@ -476,14 +476,24 @@ def make_inline_graph_from_files(
 
 
 def make_file_graph_from_files(
-    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+    tmp_path: Path,
+    modules: dict[str, str],
+    *,
+    default_stdlib: bool = True,
+    entry_path: Path | None = None,
 ) -> ModuleGraph:
-    """Build a file-style graph from explicit entry-program source and imports."""
+    """Build a file-style graph from explicit entry-program source and imports.
+
+    With *entry_path*, the entry is written there and loaded as that file, as
+    ``agm exec <file>`` loads it.
+    """
     root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
+    if entry_path is not None:
+        entry_path.write_text(entry_source, encoding="utf-8")
     return load_graph(
         entry_source,
-        entry_path=None,
+        entry_path=entry_path,
         roots=_roots(root, include_stdlib=default_stdlib),
         default_stdlib=default_stdlib,
     )

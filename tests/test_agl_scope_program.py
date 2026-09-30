@@ -1091,6 +1091,13 @@ class TestSelfReference:
         )
         assert (result["first"], result["seen"]) == (IntValue(42), IntValue(42))
 
+    def test_inline_entry_statement_var_is_written_through_its_root_path(
+        self, tmp_path: Path
+    ) -> None:
+        """An inline entry's top-level ``var`` is a root binding: ``::x := e`` writes it."""
+        result = evaluate_ir_graph("var x = 1\n::x := ::x + 41\nlet seen = x", {}, tmp_path)
+        assert result["seen"] == IntValue(42)
+
 
 # ---------------------------------------------------------------------------
 # Test: qualified-member diagnostics
@@ -1450,6 +1457,67 @@ class TestPlacementIsCheckedBeforeNames:
         assert type(failure) is AglScopeError
         assert failure.span.start_col == 1
         assert failure.span.start_line == source.count("\n") + 1
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file", "repl"))
+    @pytest.mark.parametrize(
+        "nested",
+        (
+            "import tl",
+            "export tl",
+            "infixl |> at 12",
+            "def h() -> int = 1",
+            "record R",
+            "let A::x = 1",
+            "var A::x = 1",
+        ),
+    )
+    def test_a_nested_block_declaration_after_an_unknown_name(
+        self, tmp_path: Path, graph_kind: str, nested: str
+    ) -> None:
+        source = f"def f() -> int = missing\n\ndef g() -> int =\n  {nested}\n  1"
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is AglScopeError
+        assert (failure.span.start_line, failure.span.start_col) == (4, 3)
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file", "repl"))
+    def test_nested_misplacements_in_source_order(self, tmp_path: Path, graph_kind: str) -> None:
+        """An inner block's misplaced item precedes a later one of its enclosing block."""
+        source = (
+            "def g() -> int =\n  if true =>\n    def k() -> int = 1\n    ()\n  | else =>\n    ()\n"
+            "  record R\n  1"
+        )
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is AglScopeError
+        assert (failure.span.start_line, failure.span.start_col) == (3, 5)
+
+
+_OWN_SCOPE = "scope S\n  enum E\n    | Red\n  let x = 1\nend S"
+
+
+class TestOwnUseSelectionsInSourceOrder:
+    """A use tail or hiding naming nothing an own target reaches fails where the use is written."""
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file", "repl"))
+    @pytest.mark.parametrize(
+        "use", ("use S::E::{Nope}", "use S::* hiding Nope", "use S::{E::Nope}")
+    )
+    def test_before_a_later_unknown_name(self, tmp_path: Path, graph_kind: str, use: str) -> None:
+        source = f"{use}\n\n{_OWN_SCOPE}\n\ndef f() -> int = missing"
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is UnknownMemberError
+        assert (failure.span.start_line, failure.span.start_col) == (1, 1)
+
+    @pytest.mark.parametrize("graph_kind", ("inline", "file", "repl"))
+    def test_after_an_earlier_unknown_name(self, tmp_path: Path, graph_kind: str) -> None:
+        source = f"def f() -> int = missing\n\nscope Q\n  use S::{{Nope}}\nend Q\n\n{_OWN_SCOPE}"
+        failure = _placement_failure(tmp_path, graph_kind, source)
+        assert type(failure) is not UnknownMemberError
+        assert (failure.span.start_line, failure.span.start_col) == (1, 18)
+
+    @pytest.mark.parametrize("use", ("use S::{x}", "use S::* hiding x", "use S::{E::Red, x}"))
+    def test_a_later_scoped_binding_is_selectable(self, tmp_path: Path, use: str) -> None:
+        result = evaluate_ir_graph(f"{use}\n\n{_OWN_SCOPE}\n\nlet seen = S::x", {}, tmp_path)
+        assert result["seen"] == IntValue(1)
 
 
 # ---------------------------------------------------------------------------

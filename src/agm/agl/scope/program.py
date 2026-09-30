@@ -217,7 +217,8 @@ def _build_cross_module_constructor_candidates(
 
     For each type exposed unqualified by an import tail:
     - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
-    - EnumDef: add each variant name as a candidate (e.g. ``Red``).
+    - EnumDef: add each variant name as a candidate (e.g. ``Red``), and each
+      member it references unless an import hides that member's declaration.
     - TypeAlias: add the alias name unless *type_owners* resolves it to an
       enum, following each alias of the chain where it is declared.
 
@@ -232,6 +233,11 @@ def _build_cross_module_constructor_candidates(
         qname for qnames in import_env.unqualified.values() for qname in qnames
     )
     seen_candidates: set[tuple[str, ConstructorRef]] = set()
+
+    def hidden_here(ref: ConstructorRef) -> bool:
+        """Whether an import hides *ref*'s declaration, which no other exposes."""
+        qname = (ref.owner_module_id, _atom((*ref.owner_path, ref.owner_name)))
+        return qname in import_env.unqualified_hidden and qname not in exposed_qnames
 
     def add_candidate(name: str, ref: ConstructorRef) -> None:
         candidate = (name, ref)
@@ -264,7 +270,8 @@ def _build_cross_module_constructor_candidates(
                 for member in decl.members:
                     if isinstance(member, VariantRef):
                         for referenced_cref in type_owners.referenced_member_refs(key, member):
-                            add_candidate(referenced_cref.owner_name, referenced_cref)
+                            if not hidden_here(referenced_cref):
+                                add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
                     if declares_bare_constructor(
                         import_env.unqualified.get(member.name, ()), all_public_types

@@ -78,6 +78,7 @@ shared with ``tests/test_agl_repl_session.py``.
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -88,14 +89,15 @@ import pytest
 from agm.agl.diagnostics import AglError
 from agm.agl.matchcompile import compile_program_matches, match_issue_error
 from agm.agl.modules.ids import ENTRY_ID, spell_declaration
+from agm.agl.modules.loader import parse_entry_module
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.repl.type_display import format_type_for_repl
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AmbiguousQualificationError, to_bare_path
-from agm.agl.syntax.nodes import Block, FuncDef
+from agm.agl.syntax.nodes import Block, FuncDef, Item, LetDecl, VarDecl
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.ir_harness import base_caps, make_file_graph_from_files, make_graph_from_files
 
 if TYPE_CHECKING:
     from agm.agl.modules.loader import ModuleGraph
@@ -542,24 +544,112 @@ _PROBES_PER_CASE = 12
 """Probes one scenario test case checks: each probe costs a file build and a REPL entry."""
 
 
-def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
-    """``pytest.param(scenario, sizes)`` per scenario, grouping and chunk of its probes.
-
-    Every chunk replays the scenario's header in its own session, so a large
-    probe table spreads over several cheap test cases instead of one costly one.
-    """
-    params: list[object] = []
+def _scenario_chunks(scenarios: Mapping[str, Scenario]) -> list[tuple[str, Scenario]]:
+    """Every scenario split into parts of at most ``_PROBES_PER_CASE`` probes, each with an id."""
+    parts: list[tuple[str, Scenario]] = []
     for name, scenario in scenarios.items():
         keys = list(scenario.probes)
         chunks = [keys[i : i + _PROBES_PER_CASE] for i in range(0, len(keys), _PROBES_PER_CASE)]
         for index, chunk in enumerate(chunks):
             part = replace(scenario, probes={key: scenario.probes[key] for key in chunk})
             suffix = "" if len(chunks) == 1 else f"-part{index + 1}"
-            params.extend(
-                pytest.param(part, sizes, id=f"{name}{suffix}-{gid}")
-                for gid, sizes in grouping_cases(len(scenario.header) + 1)
+            parts.append((f"{name}{suffix}", part))
+    return parts
+
+
+def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
+    """``pytest.param(scenario, sizes)`` per scenario, grouping and chunk of its probes.
+
+    Every chunk replays the scenario's header in its own session, so a large
+    probe table spreads over several cheap test cases instead of one costly one.
+    """
+    return [
+        pytest.param(part, sizes, id=f"{part_id}-{gid}")
+        for part_id, part in _scenario_chunks(scenarios)
+        for gid, sizes in grouping_cases(len(part.header) + 1)
+    ]
+
+
+def file_params(scenarios: Mapping[str, Scenario]) -> list[object]:
+    """``pytest.param(scenario)`` per chunk of every scenario's probes.
+
+    For :func:`assert_file_resolves_like_inline_entry`.
+    """
+    return [pytest.param(part, id=part_id) for part_id, part in _scenario_chunks(scenarios)]
+
+
+_FILE_ENTRY_HEAD = "def probe() =\n"
+"""The function a file holds an inline entry's statements in."""
+
+
+def file_source(source: str) -> tuple[str, int]:
+    """*source* as a file declaring what its inline entry declares, and where its statements start.
+
+    A file's root holds bindings but no expressions or assignments, so the
+    inline entry's statements from its first such one on -- which must follow
+    every declaration -- become the body of a trailing ``def``, each line
+    indented. Returns the file text and the offset its body starts at: the
+    text's length when there is none.
+    """
+    items = parse_entry_module(source, entry_path=None, inline_command=True).program.body.items
+    statements: tuple[Item, ...] = ()
+    for item in items:
+        if isinstance(item, FuncDef) and item.is_synthetic and isinstance(item.body, Block):
+            statements = item.body.items
+    executable = [item for item in statements if not isinstance(item, (LetDecl, VarDecl))]
+    if not executable:
+        return source, len(source)
+    start = executable[0].span.start_offset
+    assert all(
+        item.span.end_offset <= start
+        for item in items
+        if not (isinstance(item, FuncDef) and item.is_synthetic)
+    ), source
+    head = source[:start] + _FILE_ENTRY_HEAD
+    return head + textwrap.indent(source[start:], "  "), len(head)
+
+
+def _scope_failure(graph: "ModuleGraph") -> AglError | None:
+    """The error resolving *graph* raises, or ``None``."""
+    try:
+        resolve_program(graph)
+    except AglError as exc:
+        return exc
+    return None
+
+
+def assert_file_resolves_like_inline_entry(tmp_path: Path, scenario: Scenario) -> None:
+    """Assert every probe of *scenario* resolves as a file exactly as as an inline entry.
+
+    ``agm exec <file>`` and ``agm exec -c`` read the same text in source
+    order: scope accepts both, or rejects both with the same class, span and
+    message. The file holds the entry's statements in a function
+    (:func:`file_source`); only resolution is compared, since a file's root
+    initializers must also be constant.
+    """
+    modules = dict(scenario.modules)
+    for key, probe in scenario.probes.items():
+        source = "\n".join((*scenario.header, probe.text))
+        inline = _scope_failure(
+            make_graph_from_files(tmp_path / key / "inline", {"entry": source, **modules})
+        )
+        text, body_start = file_source(source)
+        file_dir = tmp_path / key / "file"
+        file_dir.mkdir(parents=True)
+        file = _scope_failure(
+            make_file_graph_from_files(
+                file_dir, {"entry": text, **modules}, entry_path=file_dir / "entry.agl"
             )
-    return params
+        )
+        assert type(file) is type(inline), key
+        if file is None or inline is None:
+            continue
+        assert file.span is not None and inline.span is not None, key
+        sliced = text[file.span.start_offset : file.span.end_offset]
+        if file.span.start_offset >= body_start:
+            sliced = sliced.replace("\n  ", "\n")
+        assert sliced == source[inline.span.start_offset : inline.span.end_offset], key
+        assert str(file) == str(inline), key
 
 
 def assert_scenario_for_grouping(

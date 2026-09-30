@@ -313,7 +313,7 @@ class _UseTargetResolution:
 
     declaration: UseDecl
     target: ScopePath
-    local: tuple[ScopePath, ...]
+    local: tuple[tuple[ScopePath, ...], ...]
     route: tuple[str, ...]
     direct_candidates: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]
     direct_import_scope_routes: Mapping[BareRoute, Mapping[NameAtom, frozenset[BareRoute]]]
@@ -342,14 +342,55 @@ _ROOT_DECLARATION_ITEMS = (
     InfixDecl,
 )
 
-_TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
-    {
-        BinderKind.let_binding,
-        BinderKind.var_binding,
-        BinderKind.param_binding,
-        BinderKind.pattern_slot,
-    }
-)
+
+def _start_offset(item: Item) -> int:
+    """Where *item* starts in its source text."""
+    return item.span.start_offset
+
+
+def _nested_misplacement(item: Item) -> AglScopeError | None:
+    """Why a nested block may not hold *item*, or ``None``: these declare at a module root."""
+    if isinstance(item, (ImportDecl, ExportDecl)):
+        kind = "import" if isinstance(item, ImportDecl) else "export"
+        message = (
+            f"'{kind}' declarations are only allowed at the program root, "
+            "not inside a nested block."
+        )
+    elif isinstance(item, InfixDecl):
+        message = "infix declarations are only allowed at the program root."
+    elif isinstance(item, FuncDef) and not item.scope_path:
+        message = (
+            "'def' declarations are only allowed at the program root, "
+            f"not inside a nested block (found 'def {item.name}' here)."
+        )
+    elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+        kind_word = (
+            "record"
+            if isinstance(item, RecordDef)
+            else "enum"
+            if isinstance(item, EnumDef)
+            else "exception"
+            if isinstance(item, ExceptionDef)
+            else "type"
+        )
+        message = (
+            "Type declarations are only allowed at the top level of the program, "
+            f"not inside a nested block (found '{kind_word}' here)."
+        )
+    elif isinstance(item, (LetDecl, VarDecl)) and item.scope_path:
+        keyword = "let" if isinstance(item, LetDecl) else "var"
+        message = (
+            f"A scoped '{keyword}' binder path is only allowed at the program root, "
+            "not inside a nested block."
+        )
+    elif isinstance(item, BuiltinVarDecl):
+        message = (
+            "'builtin var' declarations are only allowed at the module root, "
+            f"not inside a nested block (found 'builtin var {item.name}' here)."
+        )
+    else:
+        return None
+    return AglScopeError(message, span=item.span)
 
 
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
@@ -594,9 +635,9 @@ class _Resolver:
         # descendant region), independent of the decl's textual position
         # relative to whatever consults it.
         self._import_decl_scope_paths: dict[int, ScopePath] = {}
-        # The declaration item accompanies its path-keyed binding so legacy
-        # root-only tables can be derived from the same collection without
-        # admitting scoped members.
+        # Every registered declaration's item, keyed like its binding, so
+        # legacy root-only tables can be derived from the same collection
+        # without admitting scoped members.
         self._declaration_items: dict[
             DeclarationKey,
             FuncDef
@@ -686,10 +727,6 @@ class _Resolver:
         # Function-body flag: True only while resolving a def/fn body (not parameter
         # defaults). Used to reject `return` outside the nearest function boundary.
         self._in_function: bool = False
-        # The inline wrapper moves static bindings ahead of its synthetic
-        # entry. While resolving that entry, source offsets preserve the
-        # bindings' original textual visibility despite the AST partition.
-        self._in_synthetic_entry: bool = False
         # Whether this module declares a ``program def`` of its own, which
         # decides how a static-root rejection is explained.
         self._declares_program_entry = declares_source_entry(program.body.items)
@@ -748,23 +785,24 @@ class _Resolver:
         """
         program = self._program
         root = self._root_scope
+        type_owners = self._declared_type_owners()
+        # A retained path's owner is re-derived through the index rather than
+        # read off its stored, declaration-time value: an alias's
+        # reachable members/hidden set can go stale as later entries change
+        # what is imported (``TypeOwnerIndex.owner``). Constructor candidates
+        # and alias member paths read this one derivation.
+        current_type_owners = {
+            path: owner
+            for path in {**self._repl_session_type_paths, **type_owners}
+            if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
+        }
+        self._validate_alias_member_paths(current_type_owners)
         for complete in self._deferred_constructors:
             complete()
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
                     self._add_constructor_candidate(cname, cref)
-        type_owners = self._declared_type_owners()
-        # A retained path's owner is re-derived through the index rather than
-        # read off its stored, declaration-time value: an alias's
-        # reachable members/hidden set can go stale as later entries change
-        # what is imported (``TypeOwnerIndex.owner``). Constructor candidates
-        # read this one derivation.
-        current_type_owners = {
-            path: owner
-            for path in {**self._repl_session_type_paths, **type_owners}
-            if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
-        }
         # Pre-pass 4: collect constructor candidates from the module's current
         # types: the earlier REPL entries' this entry leaves current, then its own.
         self._collect_constructor_candidates(current_type_owners)
@@ -781,14 +819,14 @@ class _Resolver:
         self._define_static_builtin_var_bindings()
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
-        self._resolve_block_items(program.body.items)
+        self._resolve_root_items(program.body.items)
         self._validate_function_names()
         self._validate_non_method_type_params()
         # Receiver classification follows the ordered lexical walk, so attribute
         # recognition runs only after every method declaration is known.
         attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
         self._validate_extern_backing()
-        self._validate_local_use_contributions()
+        self._refresh_local_use_contributions()
         self._validate_retained_imported_use_routes()
 
         return ModuleResolution(
@@ -830,6 +868,32 @@ class _Resolver:
             )
             for declaration, path in self._type_declarations
         }
+
+    def _validate_alias_member_paths(self, owners: Mapping[ScopePath, TypeOwner]) -> None:
+        """Reject a declaration at a path an own alias already declares.
+
+        An alias's members are its target's (``type C = E`` declares
+        ``C::Red``), so an ordinary or type declaration of this entry beneath
+        the alias's path declares that path twice, as one beneath the enum
+        itself would. The later of the two is reported; a retained alias is
+        the earlier.
+        """
+        declared_here = {id(declaration) for declaration, _path in self._type_declarations}
+        for path, owner in owners.items():
+            alias = owner.alias
+            if alias is None:
+                continue
+            for member in owner.members:
+                key = (self._module_id, path, member)
+                if self._scope_entity_kinds.get(key) not in {"ordinary", "type"}:
+                    continue
+                duplicate = self._declaration_items[key]
+                if (
+                    id(alias) in declared_here
+                    and alias.span.start_offset > duplicate.span.start_offset
+                ):
+                    duplicate = alias
+                raise DuplicateDeclarationError(member, span=duplicate.span)
 
     def _reachable_declarations(self) -> frozenset[DeclarationKey]:
         """Return local, imported, and retained declaration identities."""
@@ -989,11 +1053,11 @@ class _Resolver:
         Claims *name* at *path* in ``_scope_entity_kinds``, the registry
         ``_ensure_scope_path``/``_register_declaration`` also consult, so a
         let/var collides with a same-path scope, def, or type regardless of
-        textual order, in every module.
+        textual order, in every module; ``_declaration_items`` keeps its item.
 
         A static-root module additionally installs the binding itself, like
-        ``_declared_functions`` does for a def: ``_declarations``/
-        ``_declaration_items`` make it a scope member before the ordered walk
+        ``_declared_functions`` does for a def: ``_declarations`` makes it a
+        scope member before the ordered walk
         reaches it (root through ``_define_static_binding_bindings``, a scope
         region through ``_build_scope_nodes``), so a def declared above it may
         read it. A non-static module's scoped bindings install only when the
@@ -1011,13 +1075,12 @@ class _Resolver:
         if existing_entity is not None:
             raise DuplicateDeclarationError(name, span=item.span)
         self._scope_entity_kinds[key] = "ordinary"
-        decl_node_id = static_binding_node_id(item)
+        self._declaration_items[key] = item
         if path and not self._is_static_root_module:
             return
         self._declarations[key] = self._binder_ref(
-            item, decl_node_id=decl_node_id, name=name, scope_path=path
+            item, decl_node_id=static_binding_node_id(item), name=name, scope_path=path
         )
-        self._declaration_items[key] = item
 
     def _register_builtin_var_declaration(self, item: BuiltinVarDecl, path: ScopePath) -> None:
         """Claim a ``builtin var``'s name early, like a static let/var.
@@ -1026,10 +1089,9 @@ class _Resolver:
         is always file-backed and so always static-root: unlike a scoped
         simple let/var, there is no non-static-root case, so this always
         installs the binding alongside claiming the name (mirrors
-        :meth:`_register_static_binding_declaration`). The module-kind and
-        root-only checks stay in :meth:`_resolve_builtin_var`, at the walk's
-        ordered position, since a misplaced declaration must still fail
-        regardless of pre-pass timing.
+        :meth:`_register_static_binding_declaration`). Placement is checked
+        first (:meth:`_validate_item_placement`) and the module kind by
+        :meth:`_resolve_builtin_var`, at the walk's ordered position.
         """
         key = (self._module_id, path, item.name)
         existing_entity = self._scope_entity_kinds.get(key)
@@ -1252,7 +1314,7 @@ class _Resolver:
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
                 # Its use contributions are re-snapshotted later, once for
-                # every layer, by ``_validate_local_use_contributions``.
+                # every layer, by ``_refresh_local_use_contributions``.
             nodes[path] = node
         # A replacement type declaration owns fresh constructors: stale enum
         # variants must not survive, while unrelated retained members remain.
@@ -1720,17 +1782,10 @@ class _Resolver:
         """Resolve a standard-library host-backed mutable binding.
 
         A ``builtin var`` may be declared by any standard-library module and
-        is otherwise a member like any other: legal at the module root and
-        inside a named scope region (both keep ``_at_root`` set), rejected
-        only inside a nested block. The typecheck pass reserves engine-setting
-        names and types to ``std/config``.
+        is otherwise a member like any other, at the module root or inside a
+        named scope region (placement is checked first). The typecheck pass
+        reserves engine-setting names and types to ``std/config``.
         """
-        if not self._at_root:
-            raise AglScopeError(
-                f"'builtin var' declarations are only allowed at the module root, "
-                f"not inside a nested block (found 'builtin var {node.name}' here).",
-                span=node.span,
-            )
         if not self._is_standard_library_module:
             raise AglScopeError(
                 "'builtin var' declarations are only allowed in standard-library modules "
@@ -1870,8 +1925,8 @@ class _Resolver:
         no assignment or bare expression. The REPL is the sole incremental host
         that admits root statements. A synthetic entry's body holds what the
         source wrote at its root after an executable item, so a header there
-        breaks the ordering rule. Nested blocks' own rules are the ordered
-        walk's (:meth:`_resolve_block_items`).
+        breaks the ordering rule. Each item's nested blocks follow, in source
+        order (:func:`_nested_misplacement`).
         """
         seen_non_header = False
         for item in items:
@@ -1887,6 +1942,7 @@ class _Resolver:
                 continue
             seen_non_header = True
             if entry_body:
+                self._raise_nested_misplacement(item)
                 continue
             if isinstance(item, ScopeRegion):
                 self._validate_item_placement(item.items)
@@ -1907,6 +1963,25 @@ class _Resolver:
                     ),
                     span=item.span,
                 )
+            else:
+                self._raise_nested_misplacement(item)
+
+    @staticmethod
+    def _raise_nested_misplacement(item: Item) -> None:
+        """Raise for the first item, in source order, that a nested block of *item* may not hold."""
+        errors: dict[int, AglScopeError] = {}
+
+        def check(node: object) -> None:
+            if isinstance(node, Block):
+                errors.update(
+                    (nested.span.start_offset, error)
+                    for nested in node.items
+                    if (error := _nested_misplacement(nested)) is not None
+                )
+
+        walk(item, check)
+        if errors:
+            raise errors[min(errors)]
 
     def _resolve_block_items(self, items: tuple[Item, ...]) -> None:
         """Resolve items in order; each binder adds to the current scope.
@@ -1916,31 +1991,19 @@ class _Resolver:
         are not pure expressions are handled first; everything else is treated
         as an expression item.
 
-        A module's own item sequences were checked for placement before
-        anything resolved (:meth:`_validate_item_placement`); a nested block
-        additionally rejects ``import``, ``export``, and ``infix`` here.
+        Every item sequence, nested blocks included, was checked for
+        placement before anything resolved (:meth:`_validate_item_placement`).
         """
         for item in items:
             if isinstance(item, UseDecl):
-                # Resolved with the headers (``_resolve_headers``).
+                # Resolved with the headers (``_resolve_headers``); what its
+                # tail or hiding names under an own target is checked here.
+                self._validate_own_use_selection(item)
                 continue
-            if isinstance(item, (ImportDecl, ExportDecl)):
-                if not self._at_root:
-                    kind = "import" if isinstance(item, ImportDecl) else "export"
-                    raise AglScopeError(
-                        f"'{kind}' declarations are only allowed at the program root, "
-                        "not inside a nested block.",
-                        span=item.span,
-                    )
+            if isinstance(item, (ImportDecl, ExportDecl, InfixDecl)):
                 # The program module-system pass processes imports/exports; a
-                # region-scoped import's contribution is resolved with the headers.
-                continue
-            if isinstance(item, InfixDecl):
-                if not self._at_root:
-                    raise AglScopeError(
-                        "infix declarations are only allowed at the program root.",
-                        span=item.span,
-                    )
+                # region-scoped import's contribution is resolved with the
+                # headers, and infix declarations with the parse.
                 continue
             # Named declarations (def/record/enum/exception/type, and a
             # scoped let/var binder) validate their own whole subtree,
@@ -1976,6 +2039,31 @@ class _Resolver:
             else:
                 # Pure expression item (Expr union).
                 self._resolve_expr(item)
+
+    def _resolve_root_items(self, items: tuple[Item, ...]) -> None:
+        """Resolve the module root's *items*, an inline entry's statements among them.
+
+        The inline wrap (``parser/wrap.py``) moves the root statements of a
+        source without a ``program def`` into a synthetic entry after the root
+        declarations. They still resolve at their own source positions among
+        those declarations, in the root scope, with a function body's flags:
+        the text reads -- and reports its first error -- exactly as written,
+        and a statement's ``let``/``var`` is a root binding ``::name`` reaches.
+        """
+        statements: tuple[Item, ...] = ()
+        declarations: list[Item] = []
+        for item in items:
+            if isinstance(item, FuncDef) and item.is_synthetic and isinstance(item.body, Block):
+                statements = item.body.items
+            else:
+                declarations.append(item)
+        statement_ids = {id(statement) for statement in statements}
+        for item in sorted((*declarations, *statements), key=_start_offset):
+            if id(item) not in statement_ids:
+                self._resolve_block_items((item,))
+                continue
+            with self._resolution_flags_ctx(in_loop=False, in_function=True):
+                self._resolve_block_items((item,))
 
     def _resolve_headers(self, items: tuple[Item, ...]) -> None:
         """Contribute the ``use`` and region-scoped ``import`` headers of *items* and its regions.
@@ -2178,7 +2266,8 @@ class _Resolver:
                     member in self._scope_nodes[local].members
                     or (*local, member) in self._ordered_binding_paths
                 )
-                for local in parent.local
+                for tier in parent.local
+                for local in tier
             )
             imported_member = any(
                 (qname := members.get(member)) is not None
@@ -2197,14 +2286,6 @@ class _Resolver:
                     replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
                 )
         target = tuple(segment.name for segment in decl.target)
-        own = self._use_local_target(decl, target)
-        local = (
-            (own,)
-            if own is not None
-            else ()
-            if decl.anchored
-            else self._use_contributed_local_targets(target)
-        )
         route = () if decl.current_module else tuple(target[0].split("/"))
         route_target = () if decl.current_module else target[1:]
         direct_candidates = (
@@ -2241,7 +2322,7 @@ class _Resolver:
         return _UseTargetResolution(
             declaration=decl,
             target=target,
-            local=local,
+            local=self._use_local_tiers(decl, target),
             route=route,
             direct_candidates=direct_candidates,
             direct_import_scope_routes=direct_import_scope_routes,
@@ -2329,7 +2410,7 @@ class _Resolver:
             if len(matching_origins) == 1:
                 facade_origin_node_id = matching_origins[0]
         resolved_identity = ResolvedUseTarget(
-            local_paths=local,
+            local_paths=tuple(path for tier in local for path in tier),
             imported_routes=tuple(route for route, _members in imported),
             aliases=tuple(aliases),
             wildcard_facade_origin_node_id=facade_origin_node_id,
@@ -2372,14 +2453,20 @@ class _Resolver:
             self._select_use_members(decl, imported_surface)
         if local:
             # The own scopes' members are known once the whole entry is
-            # declared, so the tail and hiding are checked then, against all.
+            # declared, so the tail and hiding are checked where the walk
+            # reaches the use (``_validate_own_use_selection``).
             self._imported_use_surfaces[decl.node_id] = imported_surface
-            for path in local:
-                self._scope.contribute_local_use(
-                    LocalUseContribution(
-                        declaration=decl, source=self._scope_nodes[path], target=resolved_identity
+            for index, tier in enumerate(local):
+                outranked_by = tuple(path for earlier in local[:index] for path in earlier)
+                for path in tier:
+                    self._scope.contribute_local_use(
+                        LocalUseContribution(
+                            declaration=decl,
+                            source=self._scope_nodes[path],
+                            target=resolved_identity,
+                            outranked_by=outranked_by,
+                        )
                     )
-                )
         for members, scope_routes in surfaces:
             self._contribute_use_members(decl, members, scope_routes, self._scope)
 
@@ -2398,7 +2485,7 @@ class _Resolver:
         alias reaches what its target declares: an own target as a local
         scope, an imported one as imported members. Read once every module's
         headers are prepared, as the type-owner index requires. With local
-        scopes reached, the tail and hiding are checked with theirs later.
+        scopes reached, the tail and hiding are checked where the walk reaches it.
         """
         surface = dict(imported_surface)
         members: dict[NameAtom, QName] = {}
@@ -2615,16 +2702,37 @@ class _Resolver:
             route, frozenset({(module, _bare_atom(path))})
         )
 
-    def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:
-        """Resolve a use target through exact lexical scope paths."""
-        return next(
-            (
-                base + target
-                for base in self._use_local_bases(decl)
-                if base + target in self._scope_nodes
-            ),
-            None,
-        )
+    def _use_local_tiers(
+        self, decl: UseDecl, target: ScopePath
+    ) -> tuple[tuple[ScopePath, ...], ...]:
+        """Return the own scopes *decl*'s target reaches, in tiers ordered as their paths win.
+
+        Each lexical step, innermost first, offers the own scope declared at
+        its path, then the own scopes an earlier local ``use`` anchored there
+        exposes as *target*. A path beneath the target is read from the first
+        tier declaring it; the scopes of one tier compete only where one path
+        is used. A ``::`` target names the module root's own scope; any other
+        anchored one names a module route, never an own path.
+        """
+        if decl.current_module:
+            return ((target,),) if target in self._scope_nodes else ()
+        if decl.anchored:
+            return ()
+        tiers: list[tuple[ScopePath, ...]] = []
+        for layer in self._layer_chain(self._scope):
+            reached = {path for tier in tiers for path in tier}
+            own = layer.scope_path + target
+            if own in self._scope_nodes and own not in reached:
+                tiers.append((own,))
+                reached.add(own)
+            exposed = tuple(
+                path
+                for path in self._use_contributed_local_targets(layer, target)
+                if path not in reached
+            )
+            if exposed:
+                tiers.append(exposed)
+        return tuple(tiers)
 
     def _use_local_bases(self, decl: UseDecl) -> list[ScopePath]:
         """Return the own scope paths *decl*'s target is tried under, innermost first.
@@ -2663,7 +2771,7 @@ class _Resolver:
         from a prior entry whose declaration id was never added here.
 
         The one definition of this predicate, shared by the two live
-        consumers below and by :meth:`_validate_local_use_contributions`'s
+        consumers below and by :meth:`_refresh_local_use_contributions`'s
         bare-contribution snapshot, so a superseded contribution's members
         never leak into a static ``bare_contributions`` read that (unlike the
         live consumers) applies no filter of its own.
@@ -2673,60 +2781,74 @@ class _Resolver:
             and contribution.declaration.node_id not in self._current_use_declaration_ids
         )
 
-    def _use_contributed_local_targets(self, target: ScopePath) -> tuple[ScopePath, ...]:
-        """Return every own scope an earlier local ``use`` here or enclosing exposes as *target*.
-
-        Scopes combine: each contributes the paths beneath it, which compete
-        only where one path is used.
-        """
+    def _use_contributed_local_targets(
+        self, layer: ScopeNode, target: ScopePath
+    ) -> tuple[ScopePath, ...]:
+        """Return every own scope an earlier local ``use`` of *layer* exposes as *target*."""
         candidates: set[ScopePath] = set()
-        for layer in self._layer_chain(self._scope):
-            for local_contribution in layer.local_use_contributions:
-                if self._local_contribution_superseded(local_contribution):
+        for local_contribution in layer.local_use_contributions:
+            if self._local_contribution_superseded(local_contribution):
+                continue
+            for exposed, source in self._local_use_exposures(local_contribution):
+                exposed_path = _bare_path(exposed)
+                if exposed_path[: len(target)] != target:
                     continue
-                for exposed, source in self._local_use_exposures(local_contribution):
-                    exposed_path = _bare_path(exposed)
-                    if exposed_path[: len(target)] != target:
-                        continue
-                    source_path = (
-                        source.path
-                        if isinstance(source, _LocalScopeRoute)
-                        else (*source.scope_path, source.name)
-                    )
-                    trailing_length = len(exposed_path) - len(target)
-                    candidate = (
-                        source_path if trailing_length == 0 else source_path[:-trailing_length]
-                    )
-                    if candidate in self._scope_nodes:
-                        candidates.add(candidate)
+                source_path = (
+                    source.path
+                    if isinstance(source, _LocalScopeRoute)
+                    else (*source.scope_path, source.name)
+                )
+                trailing_length = len(exposed_path) - len(target)
+                candidate = source_path if trailing_length == 0 else source_path[:-trailing_length]
+                if candidate in self._scope_nodes:
+                    candidates.add(candidate)
         return tuple(sorted(candidates))
 
     def _local_use_exposures(
-        self, contribution: LocalUseContribution, *, validate: bool = False
+        self, contribution: LocalUseContribution
     ) -> list[tuple[NameAtom, BindingRef | _LocalScopeRoute]]:
         """Expand one local ``use`` into every bare spelling it exposes.
 
         The single definition of the select-then-rename protocol: a use's tail
         selection and its additive renames both draw on the same snapshot of
-        the target subtree, so every consumer sees one consistent surface.
+        the target subtree, so every consumer sees one consistent surface. A
+        declaration path an outranking target declares is read from there.
         """
         declaration = contribution.declaration
-        source_members = self._local_use_members(contribution.source.scope_path)
-        if validate:
-            # Checked against every scope the declaration's target reaches.
-            self._select_use_members(
-                declaration,
-                {
-                    **self._imported_use_surfaces.get(declaration.node_id, {}),
-                    **{
-                        atom: None
-                        for path in contribution.target.local_paths
-                        for atom in self._local_use_members(path)
-                    },
-                },
-            )
+        outranking = {
+            atom
+            for path in contribution.outranked_by
+            for atom, member in self._local_use_members(path).items()
+            if isinstance(member, BindingRef)
+        }
+        source_members = {
+            atom: member
+            for atom, member in self._local_use_members(contribution.source.scope_path).items()
+            if not isinstance(member, BindingRef) or atom not in outranking
+        }
         selected = self._select_use_members(declaration, source_members, validate=False)
         return [*selected.items(), *self._use_renamed_members(declaration, source_members)]
+
+    def _validate_own_use_selection(self, decl: UseDecl) -> None:
+        """Check that *decl*'s tail and hiding name paths its targets reach, own ones included.
+
+        Every own member is declared before the walk, but a non-static
+        module's scoped let/var is installed only when the walk reaches it,
+        so the declaration registry supplies its path.
+        """
+        surface = self._imported_use_surfaces.get(decl.node_id)
+        if surface is None:
+            return
+        members = dict(surface)
+        for target in self._use_targets[decl.node_id].local_paths:
+            members.update((atom, None) for atom in self._local_use_members(target))
+            members.update(
+                (_bare_atom(relative), None)
+                for module, path, name in self._scope_entity_kinds
+                if module == self._module_id
+                and (relative := _relative_under((*path, name), target))
+            )
+        self._select_use_members(decl, members)
 
     def _local_use_members(
         self, target: ScopePath
@@ -2742,8 +2864,8 @@ class _Resolver:
                 members[_bare_atom((*relative, name))] = ref
         return members
 
-    def _validate_local_use_contributions(self) -> None:
-        """Re-snapshot the uses of every layer this entry built, validating this entry's own.
+    def _refresh_local_use_contributions(self) -> None:
+        """Re-snapshot the uses of every layer this entry built.
 
         A REPL session parent layer holds only earlier entries' uses, and REPL
         promotion reads only the layers this entry built.
@@ -2752,15 +2874,11 @@ class _Resolver:
             self._refresh_layer_contributions(layer)
 
     def _refresh_layer_contributions(self, layer: ScopeNode) -> None:
-        """Re-snapshot *layer*'s uses against their live derivation, validating this entry's.
+        """Re-snapshot *layer*'s uses against their live derivation.
 
-        Only uses declared in the current entry are re-validated below: an
-        earlier entry's use was already validated when it was declared, and
-        re-validating it here would turn a later, unrelated redeclaration
-        into a static error on that old entry instead of on the entry that
-        actually changed. Re-snapshotting is unconditional -- it is not a
-        validity check -- so it runs for every use regardless of which entry
-        declared it.
+        Re-snapshotting is not a validity check -- a use's tail and hiding
+        are checked where it is written (:meth:`_validate_own_use_selection`)
+        -- so it runs for every use regardless of which entry declared it.
         """
         layer.imported_use_contributions = [
             self._refresh_imported_use(imported_contribution)
@@ -2768,18 +2886,7 @@ class _Resolver:
         ]
         rebuilt: list[LocalUseContribution] = []
         for local_contribution in layer.local_use_contributions:
-            # A local use's tail/hiding names are checked against the members
-            # visible when it is first declared -- this entry's own new
-            # declarations, identified the same way
-            # ``_local_contribution_superseded`` tells them apart from a
-            # retained one. A retained contribution from an earlier entry is
-            # never re-validated here: a later entry may retire or reshape
-            # its target so that a hidden name no longer matches, which must
-            # not turn an already-valid ``use`` into a static error on
-            # re-derivation, and it must agree with the live overlay
-            # (``_local_use_sources``), which never validates either.
-            validate = local_contribution.declaration.node_id in self._current_use_declaration_ids
-            exposures = self._local_use_exposures(local_contribution, validate=validate)
+            exposures = self._local_use_exposures(local_contribution)
             if self._local_contribution_superseded(local_contribution):
                 # Dropped from the rebuilt list rather than kept with an
                 # empty snapshot: a named (non-root) scope re-seeds its node
@@ -2944,7 +3051,8 @@ class _Resolver:
 
         At the root, the pre-pass already defined the function binding, so we
         just resolve the body with a fresh param scope. Named-scope members
-        use their collected member layer; ordinary blocks reject ``def``.
+        use their collected member layer; a nested block holds no ``def``
+        (placement is checked first).
         """
         if node.scope_path:
             written_in = self._scope.scope_path
@@ -2954,23 +3062,12 @@ class _Resolver:
                 self._resolve_program_config(node)
                 self._resolve_params_and_body(node)
             return
-        if not self._at_root:
-            raise AglScopeError(
-                f"'def' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'def {node.name}' here).",
-                span=node.span,
-            )
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
         self._classify_method_declaration(node, ())
         self._validate_qualifier_chains(node, node.type_params)
         self._resolve_program_config(node)
-        previous_synthetic_entry = self._in_synthetic_entry
-        self._in_synthetic_entry = node.is_synthetic
-        try:
-            self._resolve_params_and_body(node)
-        finally:
-            self._in_synthetic_entry = previous_synthetic_entry
+        self._resolve_params_and_body(node)
 
     def _resolve_program_config(self, node: FuncDef) -> None:
         """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
@@ -2988,22 +3085,7 @@ class _Resolver:
                 self._resolve_expr(entry.value)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
-        """Reject type declarations outside the program root."""
-        if not self._at_root:
-            kind_word = (
-                "record"
-                if isinstance(node, RecordDef)
-                else "enum"
-                if isinstance(node, EnumDef)
-                else "exception"
-                if isinstance(node, ExceptionDef)
-                else "type"
-            )
-            raise AglScopeError(
-                f"Type declarations are only allowed at the top level of the "
-                f"program, not inside a nested block (found '{kind_word}' here).",
-                span=node.span,
-            )
+        """Validate a type declaration's type names in its lexical owner layer."""
         # Type declarations do not otherwise participate in value resolution,
         # but their annotations still need qualifier validation in the actual
         # lexical owner layer.
@@ -3048,31 +3130,23 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     @contextmanager
-    def _binder_scope(self, node: LetDecl | VarDecl, keyword: str) -> Iterator[None]:
+    def _binder_scope(self, node: LetDecl | VarDecl) -> Iterator[None]:
         """Enter the named layer a scoped ``let``/``var`` binder path selects.
 
-        A path prefix is legal at the program root and inside a scope
-        region's own body — both keep ``_at_root`` set, since a region does
-        not open a fresh lexical block — and rejected inside a nested block,
-        root-only like ``def``. An unprefixed binder resolves ambiently, so
-        a region's bare contents and a root shorthand for the same path
-        compose identically.
+        A path prefix stands only at the program root or in a scope region's
+        own body (placement is checked first). An unprefixed binder resolves
+        ambiently, so a region's bare contents and a root shorthand for the
+        same path compose identically.
         """
         if not node.scope_path:
             yield
             return
-        if not self._at_root:
-            raise AglScopeError(
-                f"A scoped '{keyword}' binder path is only allowed at the program root, "
-                f"not inside a nested block.",
-                span=node.span,
-            )
         with self._named_scope(tuple(segment.name for segment in node.scope_path)):
             self._validate_qualifier_chains(node)
             yield
 
     def _resolve_let(self, node: LetDecl) -> None:
-        with self._binder_scope(node, "let"):
+        with self._binder_scope(node):
             # Resolve the initializer before the ordered definition. Static-root
             # bindings may already expose this identity through the pre-pass.
             self._resolve_expr(node.value)
@@ -3084,7 +3158,7 @@ class _Resolver:
             )
 
     def _resolve_var(self, node: VarDecl) -> None:
-        with self._binder_scope(node, "var"):
+        with self._binder_scope(node):
             self._check_not_reserved(node.name, node.span)
             # Resolve RHS before defining the name (lambda non-recursion).
             self._resolve_expr(node.value)
@@ -3160,7 +3234,6 @@ class _Resolver:
         # Mutability is not decided here: a field-directed pattern slot's final
         # binding is only known once checking selects it, so type checking owns
         # the ``:=``-on-immutable rejection for every unqualified target.
-        self._require_textually_visible(ref, node.span)
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
 
@@ -3184,7 +3257,6 @@ class _Resolver:
             raise ImmutableAssignmentError(
                 name, BinderKind.constructor_binding, cross_module=False, span=node.span
             )
-        self._require_textually_visible(ref, node.span)
         if not ref.mutable:
             raise ImmutableAssignmentError(
                 name, ref.kind, cross_module=ref.module_id != self._module_id, span=node.span
@@ -3339,7 +3411,6 @@ class _Resolver:
                 raise type_name_not_a_value(render_qualified_name(qualifier, node.name), node.span)
             ref = target.ref
             if ref is not None:
-                self._require_textually_visible(ref, node.span)
                 # A module root's own constructor keeps its binding; any
                 # other selected constructor is read through its candidate.
                 if ref.kind is not BinderKind.constructor_binding or not qualifier.segments:
@@ -3474,7 +3545,6 @@ class _Resolver:
         *candidates* is the constructor decision's, each with its contributing
         layers; several are ambiguous.
         """
-        self._require_textually_visible(ref, node.span)
         self._resolution[node.node_id] = ref
         if ref.kind != BinderKind.constructor_binding or not candidates:
             return
@@ -3554,16 +3624,6 @@ class _Resolver:
             span=span,
             local_to=self._module_id,
         )
-
-    def _require_textually_visible(self, ref: BindingRef, span: SourceSpan) -> None:
-        """Reject a binding that inline wrapping moved before an earlier use."""
-        if (
-            self._in_synthetic_entry
-            and ref.module_id == self._module_id
-            and ref.kind in _TEXTUALLY_ORDERED_BINDER_KINDS
-            and ref.decl_span.start_offset > span.start_offset
-        ):
-            raise AglScopeError(f"'{ref.name}' is not defined.", span=span)
 
     def _declaring_constructor_candidates(
         self, name: str, ref: BindingRef

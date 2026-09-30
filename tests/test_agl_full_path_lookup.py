@@ -31,6 +31,8 @@ from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
     AmbiguousQualificationError,
     DeclarationSelection,
+    DuplicateDeclarationError,
+    ImmutableAssignmentError,
     OwnerMemberSelection,
     TypeArgumentsError,
     UnknownMemberError,
@@ -43,7 +45,9 @@ from tests.agl.module_graph import resolve_inline_entry
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
+    assert_file_resolves_like_inline_entry,
     assert_scenario_for_grouping,
+    file_params,
     rejected,
     scenario_params,
 )
@@ -111,7 +115,21 @@ _ONE_BLUE = "record one::E::Blue\n  v: int"
 _OTHER_RED = "enum F\n  | Red\n"
 _OUTSIDE_THE_REGION = "scope r\n  use C::*\n  let v = Red\nend r\n\nRed"
 _OWN_ALIASED_ENUM = ("scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S", "type C = S::E")
+_REFERENCED_R = "record R\n  x: int\nenum A\n  | ::R\n  | B\n"
+_TWICE_REFERENCED_P = "record P\n  x: int\nenum A\n  | ::P\n  | Q\nenum B\n  | ::P\n  | Z\n"
 _USES_X = "use A::*\n  use B::*\n  use X::*"
+
+
+_OWN_ROOT_X = "scope X\n  def f() -> int = 1\n  def h() -> int = 1\nend X"
+_OWN_NESTED_X = (
+    'scope A\n\n  scope X\n    def k() -> int = 3\n    def h() -> text = "a"\n  end X\nend A'
+)
+
+
+def _in_q(uses: str, value: str) -> str:
+    """A region ``Q`` with *uses* and its own ``X``; its ``let v`` reads *value*, then ``Q::v``."""
+    inner = "  scope X\n    def g() -> int = 2\n    def h() -> bool = true\n  end X"
+    return f"scope Q\n  {uses}\n{inner}\n  let v = {value}\nend Q\n\nQ::v"
 
 
 def _in_region(use: str, value: str) -> str:
@@ -248,6 +266,123 @@ _SCENARIOS = {
         modules={"one": _ALIASED_ENUM},
         header=("import one::{C}", *_OWN_ALIASED_ENUM),
         probes={"member": accepted(_in_region("use C::*", "Red"), "record S::E::Red")},
+    ),
+    "an-alias-member-path-is-declared-once": Scenario(
+        header=_OWN_ALIASED_ENUM,
+        probes={
+            "scope-function": rejected(
+                "scope C\n  def Red() -> int = 1\nend C",
+                DuplicateDeclarationError,
+                "def Red() -> int = 1",
+            ),
+            "scope-binding": rejected(
+                "scope C\n  let Blue = 1\nend C", DuplicateDeclarationError, "let Blue = 1"
+            ),
+            "qualified-function": rejected(
+                "def C::Blue() -> int = 1", DuplicateDeclarationError, "def C::Blue() -> int = 1"
+            ),
+            "qualified-type": rejected("record C::Red", DuplicateDeclarationError, "record C::Red"),
+            "another-name": accepted(
+                "scope C\n  def Green() -> int = 1\nend C\n\nC::Green()", "int"
+            ),
+        },
+    ),
+    "an-alias-declared-after-its-member-path": Scenario(
+        header=(_OWN_ALIASED_ENUM[0],),
+        probes={
+            "scope-function": rejected(
+                "scope C\n  def Red() -> int = 1\nend C\n\ntype C = S::E",
+                DuplicateDeclarationError,
+                "type C = S::E",
+            ),
+        },
+    ),
+    "an-alias-of-an-imported-enum-declares-its-member-paths": Scenario(
+        modules={"one": _ALIASED_ENUM},
+        header=("import one::{E}", "type C = E"),
+        probes={
+            "scope-function": rejected(
+                "scope C\n  def Red() -> int = 1\nend C",
+                DuplicateDeclarationError,
+                "def Red() -> int = 1",
+            ),
+        },
+    ),
+    "hiding-an-enum-member-path-removes-its-bare-spelling": Scenario(
+        modules={"a": _REFERENCED_R},
+        header=("import std/prelude::* hiding Option::Some", "import a::* hiding R"),
+        probes={
+            "prelude-member": rejected("Some(1)", AglScopeError, "Some"),
+            "prelude-sibling": accepted("[None, Option::None]", "array[std/option::Option::None]"),
+            "referenced-member": rejected("R(x = 1)", AglScopeError, "R"),
+            "referencing-sibling": accepted("B", "record a::A::B"),
+        },
+    ),
+    "a-hidden-enum-member-spelling-is-free": Scenario(
+        modules={"lib": "def Some() -> int = 1\ndef R() -> int = 2\n", "a": _REFERENCED_R},
+        header=(
+            "import std/prelude::* hiding Option::Some",
+            "import a::* hiding R",
+            "import lib::*",
+        ),
+        probes={
+            "prelude-member": accepted("Some()", "int"),
+            "referenced-member": accepted("R()", "int"),
+        },
+    ),
+    "another-import-keeps-a-hidden-enum-member": Scenario(
+        modules={"a": _REFERENCED_R},
+        header=(
+            "import std/prelude::* hiding Option::Some",
+            "import std/option::{Option}",
+            "import a::* hiding R",
+            "import a::{R}",
+        ),
+        probes={
+            "prelude-member": accepted(
+                "Some(1)", "record std/option::Option::Some[int]\n  value: int"
+            ),
+            "referenced-member": accepted("R(x = 1)", "record a::R\n  x: int"),
+        },
+    ),
+    "a-use-reads-own-scopes-by-whole-path": Scenario(
+        header=(_OWN_ROOT_X, _OWN_NESTED_X),
+        probes={
+            "outer-and-inner-scope": accepted(_in_q("use X::*", "f() + g()"), "int"),
+            "inner-scope-wins-its-path": accepted(_in_q("use X::*", "h()"), "bool"),
+            "tail-over-both": accepted(_in_q("use X::{f, g}", "f() + g()"), "int"),
+            "alias-over-both": accepted(_in_q("use X as Y", "Y::f() + Y::g()"), "int"),
+            "exposed-and-inner-scope": accepted(
+                _in_q("use A::*\n  use X::*", "k() + g() + f()"), "int"
+            ),
+            "inner-scope-wins-over-an-exposed-one": accepted(
+                _in_q("use A::*\n  use X::*", "h()"), "bool"
+            ),
+            "exposed-scope-wins-over-an-outer-one": accepted(
+                "scope Q\n  use A::*\n  use X::*\n  let v = h()\nend Q\n\nQ::v", "text"
+            ),
+        },
+    ),
+    "a-record-two-imported-enums-reference-is-one-declaration": Scenario(
+        modules={"lib": _TWICE_REFERENCED_P},
+        header=("import lib::{A, B}",),
+        probes={"bare": accepted("P(x = 1)", "record lib::P\n  x: int")},
+    ),
+    "a-use-of-an-enum-exposes-only-its-inline-members": Scenario(
+        modules={"lib": _TWICE_REFERENCED_P},
+        header=("import lib", "use lib::A::*", "use lib::B::*"),
+        probes={
+            "referenced": rejected("P(x = 1)", AglScopeError, "P"),
+            "inline": accepted("Z", "record lib::B::Z"),
+        },
+    ),
+    "an-enum-member-is-no-bare-type-own-or-imported": Scenario(
+        modules={"two": "enum Color\n  | Red\n  | Green\n"},
+        header=("import two::*", "enum Shade\n  | Dark\n  | Light"),
+        probes={
+            "own": rejected("fn(x: Dark) => x", AglTypeError, "x: Dark", phase="typecheck"),
+            "imported": rejected("fn(x: Red) => x", AglTypeError, "x: Red", phase="typecheck"),
+        },
     ),
     "a-use-combines-the-scopes-earlier-uses-expose": Scenario(
         header=(_EXPOSED_A, _EXPOSED_B),
@@ -601,6 +736,36 @@ _SCENARIOS = {
             ),
         },
     ),
+    "a-binding-reads-in-source-order": Scenario(
+        modules={"tl": _TL, "tl2": _TL.replace("y: int", "z: int")},
+        header=("import tl::*", "import tl2::*"),
+        probes={
+            "binding-before-a-declaration": rejected(
+                "let p = fn(p: Geo::Inner::Nope) => 1\ndef Geo::Inner::m(self) -> int = 1",
+                UnknownMemberError,
+                "Geo::Inner::Nope",
+            ),
+            "declaration-before-a-binding": rejected(
+                "def Geo::Inner::m(self) -> int = 1\nlet p = fn(p: Geo::Inner::Nope) => 1",
+                AmbiguousQualificationError,
+                "Geo::Inner",
+            ),
+        },
+    ),
+    "an-inline-entry-binds-at-the-module-root": Scenario(
+        header=("var x = 1", "let y = 2"),
+        probes={
+            "anchored-var": accepted("::x", "int"),
+            "anchored-var-assignment": accepted("::x := 3\nx", "int"),
+            "anchored-let": accepted("::y", "int"),
+            "anchored-let-assignment": rejected("::y := 3", ImmutableAssignmentError, "::y := 3"),
+            "anchored-statement-binding": accepted("let z = true\n::z", "bool"),
+            "anchored-before-its-binding": rejected("::z\nlet z = true", UnknownMemberError, "::z"),
+            "binding-claiming-a-declared-name": rejected(
+                "def f() -> int = 1\nlet f = 2\nf", DuplicateDeclarationError, "let f = 2"
+            ),
+        },
+    ),
     "receivers-read-the-full-path": Scenario(
         modules={"tl": _TL},
         header=("import tl::*", "record Geo\n  z: int"),
@@ -640,6 +805,12 @@ class TestFullPathLookup:
         self, tmp_path: Path, scenario: Scenario, sizes: tuple[int, ...]
     ) -> None:
         assert_scenario_for_grouping(tmp_path, scenario, sizes)
+
+    @pytest.mark.parametrize("scenario", file_params(_SCENARIOS))
+    def test_a_file_resolves_like_the_inline_entry(
+        self, tmp_path: Path, scenario: Scenario
+    ) -> None:
+        assert_file_resolves_like_inline_entry(tmp_path, scenario)
 
 
 def test_info_reads_an_imported_type_beside_an_own_scope_of_its_name(tmp_path: Path) -> None:

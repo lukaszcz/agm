@@ -707,17 +707,20 @@ class LocalUseContribution:
 
     ``bindings``/``constructors`` snapshot exactly the bare bindings and
     constructor candidates this contribution exposed once its target's
-    members were fully validated (see
-    :meth:`_Resolver._validate_local_use_contributions`), mirroring
+    members were all resolved (see
+    :meth:`_Resolver._refresh_local_use_contributions`), mirroring
     :class:`ImportedUseContribution`'s snapshot so both use kinds share the
     same subtract-then-readd retraction protocol on REPL supersession. A
     freshly declared contribution starts with empty snapshots -- they are
-    filled in once validation has walked the whole target subtree.
+    filled in once the walk has resolved the whole target subtree.
+    ``outranked_by`` holds the own scopes the same target reaches first: a
+    declaration path one of them declares is not read from ``source``.
     """
 
     declaration: UseDecl
     source: ScopeNode
     target: ResolvedUseTarget
+    outranked_by: tuple[ScopePath, ...] = ()
     bindings: Mapping[BareAtom, frozenset[BindingRef]] = field(default_factory=dict)
     constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
 

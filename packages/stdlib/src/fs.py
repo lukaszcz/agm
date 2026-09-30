@@ -120,12 +120,22 @@ def remove(path: str) -> None:
     run_fs_action(FsError, path, "remove", lambda: _remove_entry(Path(path)))
 
 
+def _prepare_destination(source: str, destination: str, operation: str) -> Path:
+    """Return *destination* as a path after creating its parents, only if *source* exists.
+
+    A failure to create the parents is reported against *destination*.
+    """
+    fs.lstat(Path(source))
+    target = Path(destination)
+    run_fs_action(FsError, destination, operation, lambda: _ensure_parent_directory(target))
+    return target
+
+
 def copy(source: str, destination: str) -> None:
     """Copy a file from *source* to *destination*, creating its missing parent directories."""
 
     def do() -> None:
-        target = Path(destination)
-        _ensure_parent_directory(target)
+        target = _prepare_destination(source, destination, "copy")
         fs.copy_file(Path(source), target)
 
     run_fs_action(FsError, source, "copy", do)
@@ -135,8 +145,7 @@ def move(source: str, destination: str) -> None:
     """Move a file or directory to *destination*, creating its missing parent directories."""
 
     def do() -> None:
-        target = Path(destination)
-        _ensure_parent_directory(target)
+        target = _prepare_destination(source, destination, "move")
         fs.move(Path(source), target)
 
     run_fs_action(FsError, source, "move", do)

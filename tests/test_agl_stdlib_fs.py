@@ -289,6 +289,52 @@ program def main() -> unit =
     assert capsys.readouterr().out == "contents\ncontents\nfalse\n"
 
 
+@pytest.mark.parametrize("operation", ("copy", "move"))
+def test_fs_copy_and_move_of_missing_source_create_no_destination_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_file(
+        f"""import std/fs
+program def main() -> unit =
+  fs::{operation}("missing.txt", "out/a/b.txt")
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "FsError"
+    assert result.error.fields["path"] == "missing.txt"
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("operation", ("copy", "move"))
+def test_fs_copy_and_move_report_uncreatable_destination_parent_by_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "source.txt").write_text("contents", encoding="utf-8")
+    (tmp_path / "blocker").write_text("file", encoding="utf-8")
+
+    result = _run_file(
+        f"""import std/fs
+program def main() -> unit =
+  fs::{operation}("source.txt", "blocker/sub/b.txt")
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "FsError"
+    assert result.error.fields["path"] == "blocker/sub/b.txt"
+    assert (tmp_path / "source.txt").is_file()
+
+
 def test_fs_externs_honor_the_existing_extern_capability_gate() -> None:
     graph = load_graph(
         'import std/fs\nprogram def main() -> unit =\n  let _ = fs::exists("file")\n',

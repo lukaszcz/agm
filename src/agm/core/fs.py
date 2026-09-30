@@ -94,6 +94,12 @@ def stat(path: Path) -> os.stat_result:
     return path.stat()
 
 
+def lstat(path: Path) -> os.stat_result:
+    """Return stat information for *path* itself, without following a final symbolic link."""
+
+    return path.lstat()
+
+
 def identity_stamp(path: Path) -> IdentityStamp:
     """Return a stamp that changes whenever *path*'s contents could have.
 

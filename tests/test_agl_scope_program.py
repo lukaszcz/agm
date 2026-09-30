@@ -34,7 +34,6 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     BinderKind,
     DuplicateDeclarationError,
-    ImmutableAssignmentError,
     MissRepair,
     ReceiverOwner,
     UnknownMemberError,
@@ -50,6 +49,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
 )
+from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
@@ -1041,7 +1041,7 @@ class TestSelfReference:
             pytest.param("var x = 1", "let _ = ::x", None, id="read-var"),
             pytest.param("var x = 1", "::x := 2", None, id="assign-var"),
             pytest.param("let x = 1", "let _ = ::x", None, id="read-let"),
-            pytest.param("let x = 1", "::x := 2", ImmutableAssignmentError, id="assign-let"),
+            pytest.param("let x = 1", "::x := 2", None, id="assign-let"),
             pytest.param("var y = 1", "let _ = ::x", UnknownMemberError, id="read-missing"),
             pytest.param("var y = 1", "::x := 2", UnknownMemberError, id="assign-missing"),
         ],
@@ -2215,10 +2215,10 @@ class TestAssignStmtModuleId:
             pytest.param("lib::Red", id="module-surface"),
         ],
     )
-    def test_qualified_assign_to_an_imported_enum_member_names_its_constructor(
+    def test_qualified_assign_to_an_imported_enum_member_targets_its_constructor(
         self, tmp_path: Path, target: str
     ) -> None:
-        """The rejection classifies an imported enum member as a constructor, however selected."""
+        """An imported enum member is an immutable constructor target, however selected."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2226,10 +2226,16 @@ class TestAssignStmtModuleId:
                 "lib": "enum Color =\n  | Red\n  | Blue\ntype Shade = Color",
             },
         )
-        with pytest.raises(ImmutableAssignmentError) as caught:
-            resolve_program(graph)
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+        assigns: list[AssignStmt] = []
+        walk(
+            resolved.program,
+            lambda node: assigns.append(node) if isinstance(node, AssignStmt) else None,
+        )
 
-        assert caught.value.binder_kind is BinderKind.constructor_binding
+        ref = resolved.resolution[assigns[0].node_id]
+
+        assert (ref.kind, ref.mutable) == (BinderKind.constructor_binding, False)
 
 
 # ---------------------------------------------------------------------------
@@ -2538,17 +2544,36 @@ class TestMethodOrphanRule:
         with pytest.raises(HiddenMemberError):
             resolve_program(graph)
 
-    def test_bare_receiver_uses_nearest_lexical_type(self, tmp_path: Path) -> None:
+    def test_a_receiver_takes_only_the_type_declared_at_its_whole_path(
+        self, tmp_path: Path
+    ) -> None:
+        """``scope A / scope B / def Point::tag`` declares ``A::B::Point::tag``: no type there."""
+        modules = {
+            "entry": (
+                "record Point\n\n"
+                "scope A\n"
+                "  record Point\n\n"
+                "  scope B\n"
+                "    def Point::tag(self) -> int = 1\n"
+                "  end B\n"
+                "end A"
+            ),
+        }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
+
+    def test_region_path_names_the_receiver_type_declared_in_an_enclosing_region(
+        self, tmp_path: Path
+    ) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": (
-                    "type Point = int\n\n"
+                    "record Point\n\n"
                     "scope A\n"
                     "  record Point\n\n"
-                    "  scope B\n"
-                    "    def Point::tag(self) -> int = 1\n"
-                    "  end B\n"
+                    "  scope Point\n"
+                    "    def tag(self) -> int = 1\n"
+                    "  end Point\n"
                     "end A"
                 ),
             },
@@ -2557,19 +2582,16 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("A", "B", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("A", "Point")),
+            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("A", "Point")),
         }
 
-    def test_root_local_type_wins_over_a_bare_import_inside_a_plain_region(
-        self, tmp_path: Path
-    ) -> None:
-        """A local receiver type remains local below a plain scope region."""
+    def test_root_local_type_wins_over_a_bare_import(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": (
                     "import shapes::*\n\nrecord Point\n  x: int\n\n"
-                    "scope A\n  def Point::tag(self) -> int = self.x\nend A"
+                    "def Point::tag(self) -> int = self.x"
                 ),
                 "shapes": "record Point\n  x: int",
             },
@@ -2578,7 +2600,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("Point",)),
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ENTRY_ID, ("Point",)),
         }
 
     def test_selected_enum_member_path_owns_an_orphan_method(self, tmp_path: Path) -> None:
@@ -2610,8 +2632,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": (
-                    "import shapes::*\n\nscope Point\n"
-                    "  def Point::tag(self) -> int = self.x\nend Point"
+                    "import shapes::*\n\nscope Point\n  def tag(self) -> int = self.x\nend Point"
                 ),
                 "shapes": "record Point\n  x: int",
             },
@@ -2620,9 +2641,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point", "Point"), "tag"): ReceiverOwner(
-                ModuleId.from_path("shapes"), ("Point",)
-            ),
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Point",)),
         }
 
     def test_qualified_only_import_does_not_supply_an_orphan_receiver(self, tmp_path: Path) -> None:

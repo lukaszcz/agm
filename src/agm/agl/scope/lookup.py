@@ -32,6 +32,7 @@ from agm.agl.scope.symbols import (
     DeclarationKey,
     DeclarationSelection,
     OwnerMemberSelection,
+    QName,
     QualificationOrigin,
     ScopePath,
     TypeArgumentsError,
@@ -51,7 +52,10 @@ __all__ = [
     "QualifiedTarget",
     "Reading",
     "lookup_bare",
+    "lookup_declared",
+    "lookup_origins",
     "lookup_qualified",
+    "lookup_reached",
     "lookup_steps",
 ]
 
@@ -164,10 +168,6 @@ class PathSources(Protocol):
         """
         ...
 
-    def aliased_at(self, step: ScopePath, path: ScopePath) -> Reading:
-        """The types a ``use`` alias visible at *step* spells as full *path* stands for."""
-        ...
-
     def surface_injected(self, chain: QualifierChain, member: str) -> Reading:
         """The enum member module qualifier *chain*'s surface injects as *member*."""
         ...
@@ -188,16 +188,20 @@ class PathSources(Protocol):
         """Whether a ``hiding`` removed *path* from *chain*'s leading module route."""
         ...
 
-    def names_own(self, path: ScopePath) -> bool:
-        """Whether full *path* is one of the module's own scope paths or types."""
+    def own_origins(self, path: ScopePath) -> frozenset[QName]:
+        """Full *path* when it is one of the module's own scope paths or types."""
         ...
 
-    def names_contributed(self, step: ScopePath, path: ScopePath) -> bool:
-        """Whether a contribution anchored at or above *step* reaches *path* or beneath it."""
+    def contributed_origins(self, step: ScopePath, path: ScopePath) -> frozenset[QName]:
+        """The scopes and types contributions anchored at or above *step* reach as *path*.
+
+        Only a path a contribution reaches as a qualifier -- a scope above
+        what it reaches, or a type -- has any.
+        """
         ...
 
-    def names_routed(self, chain: QualifierChain, path: ScopePath) -> bool:
-        """Whether *chain*'s leading module route reaches *path* or beneath it."""
+    def routed_origins(self, chain: QualifierChain, path: ScopePath) -> frozenset[QName]:
+        """The scopes and types *chain*'s leading module route reaches as *path* beneath it."""
         ...
 
 
@@ -227,7 +231,7 @@ class _Anchor:
 
     steps: tuple[_Step, ...]
     hidden: Callable[[ScopePath], bool]
-    visible: Callable[[ScopePath], bool]
+    visible: Callable[[ScopePath], frozenset[QName]]
     route: tuple[str, ...] = ()
 
 
@@ -244,8 +248,81 @@ def lookup_bare(
 
     *span* locates an ambiguity.
     """
-    return _Walk(sources, _anchor(sources, None, scope_path), None, (name,), local_to, span).find(
-        kind
+    anchor = _anchor(sources, None, scope_path)
+    return _Walk(sources, anchor.steps, (), None, (name,), local_to, span).find(kind)
+
+
+def lookup_declared(
+    sources: PathSources,
+    path: ScopePath,
+    written: QualifierChain | None,
+    kind: LookupKind,
+    *,
+    span: SourceSpan,
+    local_to: ModuleId,
+) -> QualifiedTarget | AglError | None:
+    """Return the declaration of *kind* at full *path*, read at its parent step alone.
+
+    A declaration at *path* is what a declaring path (a receiver's) names, so
+    no step further out is tried. *written* is the qualifier chain spelling
+    the last names of *path*, if any; the types its prefixes select add what
+    their own member tables select. Finding nothing is then an owner-table
+    refusal, a hidden member when a ``hiding`` removed *path*, else an
+    unknown member of it, since every prefix of a declaring path is a scope
+    path of the module's own. *span* locates a bare spelling's ambiguity.
+    """
+    names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
+    parent = _step(sources, path[:-1])
+    step = replace(parent, path=path[: len(path) - len(names)])
+    walk = _Walk(sources, (step,), (), written, names, local_to, span)
+    found = walk.find(kind)
+    if found is not None or written is None:
+        return found
+    refusal = walk.refusal()
+    if refusal is not None:
+        return refusal
+    if sources.hidden_at(parent.path, path):
+        return HiddenMemberError(render_qualifier_path(written), path[-1], span=written.span)
+    return UnknownMemberError(render_qualified_name(written, path[-1]), span=written.span)
+
+
+def _nowhere(_path: ScopePath) -> bool:
+    return False
+
+
+def lookup_reached(
+    sources: PathSources,
+    chain: QualifierChain,
+    scope_path: ScopePath,
+    kind: LookupKind,
+    *,
+    local_to: ModuleId,
+    owners_within: int | None = None,
+) -> tuple[Candidate, ...]:
+    """Return the declarations of *kind* that *chain*, written in *scope_path*, reaches.
+
+    Those the first step reaching any finds, its own ones alone when it has
+    some: several distinct ones are ambiguous where the spelling is used. A
+    module qualifier's surface injects no enum member here. *chain* spells
+    more than a module route. With *owners_within*, only a type its first
+    that many names reach projects its member table: the rest of the path
+    must be declared.
+    """
+    names = (*(segment.name for segment in chain.segments), chain.member)
+    anchor = _anchor(sources, chain, scope_path)
+    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, chain.span)
+    return walk.reached(kind, len(names) if owners_within is None else owners_within)
+
+
+def lookup_origins(
+    sources: PathSources, chain: QualifierChain, scope_path: ScopePath
+) -> frozenset[QName]:
+    """Return the scopes and types *chain*'s full path, written in *scope_path*, names.
+
+    Those of every step: a qualifier names each scope it reaches.
+    """
+    return _anchor(sources, chain, scope_path).visible(
+        (*(segment.name for segment in chain.segments), chain.member)
     )
 
 
@@ -266,7 +343,7 @@ def lookup_qualified(
     """
     names = (*(segment.name for segment in chain.segments), member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, anchor, chain, names, local_to, span)
+    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, span)
     found = walk.find(kind)
     if found is not None:
         return found
@@ -274,7 +351,9 @@ def lookup_qualified(
     if refusal is not None:
         return refusal
     for other in _OTHER_KINDS[kind]:
-        misfit = _Walk(sources, anchor, chain, names, local_to, span).find(other)
+        misfit = _Walk(sources, anchor.steps, anchor.route, chain, names, local_to, span).find(
+            other
+        )
         if isinstance(misfit, QualifiedTarget):
             return Misfit(misfit)
         if misfit is not None:
@@ -286,7 +365,9 @@ def lookup_qualified(
 
     def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
         written = names[: len(prefix.segments) + 1]
-        return _Walk(sources, anchor, prefix, written, local_to, span).find(kind)
+        return _Walk(sources, anchor.steps, anchor.route, prefix, written, local_to, span).find(
+            kind
+        )
 
     return _unknown(chain, names, anchor.visible, selects)
 
@@ -307,53 +388,65 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
                 ),
             ),
             lambda path: sources.routed_hidden(routed, path[1:]),
-            lambda path: sources.names_routed(routed, path[1:]),
+            lambda path: sources.routed_origins(routed, path[1:]),
             chain.leading_route,
         )
     if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
         own = _Step((), sources.own_at, lambda path: sources.own_at(path, LookupKind.TYPE))
-        return _Anchor((own,), lambda _path: False, sources.names_own)
+        return _Anchor((own,), _nowhere, sources.own_origins)
     steps = lookup_steps(scope_path)
     return _Anchor(
         tuple(_step(sources, step) for step in steps),
         lambda path: any(sources.hidden_at(step, (*step, *path)) for step in steps),
-        lambda path: any(
-            sources.names_own((*step, *path)) or sources.names_contributed(step, (*step, *path))
-            for step in steps
+        lambda path: frozenset().union(
+            *(
+                sources.own_origins((*step, *path))
+                | sources.contributed_origins(step, (*step, *path))
+                for step in steps
+            )
         ),
     )
 
 
 def _step(sources: PathSources, step: ScopePath) -> _Step:
-    """Return *step* reading own declarations and contributions together.
+    """Return *step* reading own declarations and contributions.
 
-    An alias segment stands for its target's path, so a prefix's owners
-    include the types ``use`` aliases spelled as it stand for.
+    An own declaration at a full path wins it, so the contributions there are
+    read only when there is none. Every type a prefix reaches owns what its
+    member table selects, the contributed ones beside an own one included.
     """
 
     def read(path: ScopePath, kind: LookupKind) -> Reading:
-        return sources.own_at(path, kind) + sources.contributed_at(step, path, kind)
+        own = sources.own_at(path, kind)
+        return own if own.candidates else sources.contributed_at(step, path, kind)
 
     def owners(path: ScopePath) -> Reading:
-        return read(path, LookupKind.TYPE) + sources.aliased_at(step, path)
+        return sources.own_at(path, LookupKind.TYPE) + sources.contributed_at(
+            step, path, LookupKind.TYPE
+        )
 
     return _Step(step, read, owners)
 
 
 class _Walk:
-    """One spelling's walk over its anchor's steps for one kind."""
+    """One spelling's walk over its anchor's steps for one kind.
+
+    *route* is the module route the spelling leads with, if any.
+    """
 
     def __init__(
         self,
         sources: PathSources,
-        anchor: _Anchor,
+        steps: tuple[_Step, ...],
+        route: tuple[str, ...],
         chain: QualifierChain | None,
         names: ScopePath,
         local_to: ModuleId,
         span: SourceSpan,
     ) -> None:
         self._sources = sources
-        self._anchor = anchor
+        self._steps = steps
+        self._route = route
         self._chain = chain
         self._names = names
         self._local_to = local_to
@@ -362,7 +455,7 @@ class _Walk:
 
     def find(self, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Return what the first step selecting a declaration of *kind* selects."""
-        for step in self._anchor.steps:
+        for step in self._steps:
             found = self._decide(step, kind)
             if found is not None:
                 return found
@@ -375,51 +468,85 @@ class _Walk:
             next(iter(self._refusals), None),
         )
 
-    def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
-        """Decide the full path at *step*: own first, then one distinct contribution.
+    def reached(self, kind: LookupKind, owners_within: int) -> tuple[Candidate, ...]:
+        """Return what the first step reaching a declaration of *kind* reaches; own ones alone.
 
-        Every type a written prefix reaches adds what its own member table
-        selects for the rest of the path.
+        Only a type the first *owners_within* names reach projects its member table.
         """
-        full = (*step.path, *self._names)
-        reading = step.read(full, kind)
-        chain = self._chain
-        if chain is not None:
-            reading = sum(
-                (
-                    self._sources.projected(key, owner.layer, full[end:], chain, kind)
-                    for end in range(len(step.path) + step.start + 1, len(full))
-                    for owner in step.owners(full[:end]).candidates
-                    if (key := owner.target.key) is not None
-                ),
-                reading,
-            )
-            if (
-                kind is not LookupKind.TYPE
-                and not reading.candidates
-                and _is_module_qualifier(chain, step)
-            ):
-                reading += self._sources.surface_injected(chain, self._names[-1])
+        for step in self._steps:
+            reading = self._reading(step, kind, injects=False, owners_within=owners_within)
+            candidates = reading.candidates
+            if candidates:
+                own = tuple(
+                    candidate
+                    for candidate in candidates
+                    if candidate.layer is ContributionLayer.DECLARED
+                )
+                return own or candidates
+        return ()
+
+    def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
+        """Decide the full path at *step*: own first, then one distinct contribution."""
+        reading = self._reading(step, kind, injects=True, owners_within=len(self._names))
         self._refusals.extend(reading.refusals)
         selected = _decided(reading.candidates)
+        chain = self._chain
         if selected is None:
             return None
         if not isinstance(selected, Candidate):
-            return self._ambiguous(selected, step.start)
+            return self._ambiguous(
+                selected, self._names[step.start :], self._span if chain is None else chain.span
+            )
         if chain is None:
             return selected.target
         return self._owned(chain, step, selected.target)
 
+    def _reading(
+        self, step: _Step, kind: LookupKind, *, injects: bool, owners_within: int
+    ) -> Reading:
+        """Read the full path at *step*.
+
+        Every type a written prefix of at most *owners_within* names reaches
+        adds what its own member table selects for the rest of the path. When
+        *injects*, a module qualifier's surface adds the enum member it injects.
+        """
+        full = (*step.path, *self._names)
+        reading = step.read(full, kind)
+        chain = self._chain
+        if chain is None:
+            return reading
+        reading = sum(
+            (
+                self._sources.projected(key, owner.layer, full[end:], chain, kind)
+                for end in range(
+                    len(step.path) + step.start + 1,
+                    min(len(full), len(step.path) + owners_within + 1),
+                )
+                for owner in step.owners(full[:end]).candidates
+                if (key := owner.target.key) is not None
+            ),
+            reading,
+        )
+        if (
+            injects
+            and kind is not LookupKind.TYPE
+            and not reading.candidates
+            and _is_module_qualifier(chain, step)
+        ):
+            reading += self._sources.surface_injected(chain, self._names[-1])
+        return reading
+
     def _owned(
         self, chain: QualifierChain, step: _Step, target: QualifiedTarget
-    ) -> QualifiedTarget | TypeArgumentsError:
+    ) -> QualifiedTarget | AglError:
         """Return *target* with the type owning it inline, or why a segment's type arguments fail.
 
         A segment owns what follows it -- the next segment's selection, or
-        *target* after the last -- when a type its full path selects declares
+        *target* after the last -- when a type its full path reaches declares
         that as an inline member (an alias's projected member is declared
-        beneath the alias). A segment carries type arguments only when it owns
-        what follows, as many as its owner takes.
+        beneath the alias). A segment carries type arguments only when the
+        type its full path selects (own first, else the one contributed; two
+        are ambiguous) owns what follows, as many as it takes.
         """
         segments = chain.segments
         owner: DeclarationKey | None = None
@@ -435,17 +562,25 @@ class _Walk:
                 if last
                 else _decided(step.read((*prefix, member), LookupKind.TYPE).candidates)
             )
+            owners = step.owners(prefix).candidates
             owner, arity = next(
                 (
                     (key, arity)
-                    for candidate in step.owners(prefix).candidates
+                    for candidate in owners
                     if (key := candidate.target.key) is not None
                     and _is_beneath(following, key)
                     and (arity := self._sources.inline_arity(key, member)) is not None
                 ),
                 (None, None),
             )
-            if segment.type_args is not None and (arity is None or arity != len(segment.type_args)):
+            if segment.type_args is None:
+                continue
+            selected = _decided(owners)
+            if isinstance(selected, tuple):
+                return self._ambiguous(selected, self._names[step.start : index + 1], segment.span)
+            if selected is None or selected.target.key != owner:
+                arity = None
+            if arity is None or arity != len(segment.type_args):
                 return TypeArgumentsError(segment.name, arity, span=segment.span)
         return (
             target
@@ -454,16 +589,16 @@ class _Walk:
         )
 
     def _ambiguous(
-        self, origins: tuple[QualificationOrigin, ...], start: int
+        self, origins: tuple[QualificationOrigin, ...], names: ScopePath, span: SourceSpan
     ) -> AmbiguousQualificationError:
-        """Return the error for the spelling selecting several declarations."""
+        """Return the error for spelling *names*, at *span*, selecting several declarations."""
         chain = self._chain
         return AmbiguousQualificationError.for_origins(
-            self._anchor.route,
-            self._names[start:],
+            self._route,
+            names,
             origins,
             anchored=chain is not None and chain.anchored,
-            span=self._span if chain is None else chain.span,
+            span=span,
             local_to=self._local_to,
         )
 
@@ -471,7 +606,7 @@ class _Walk:
 def _unknown(
     chain: QualifierChain,
     names: ScopePath,
-    visible: Callable[[ScopePath], bool],
+    visible: Callable[[ScopePath], frozenset[QName]],
     selects: Callable[[QualifierChain, LookupKind], QualifiedTarget | AglError | None],
 ) -> AglScopeError:
     """An unknown member of the longest prefix naming something, else an unknown qualifier.

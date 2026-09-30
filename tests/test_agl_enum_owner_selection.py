@@ -281,11 +281,6 @@ def _check(tmp_path: Path, entry: str, *, stdlib: bool = False) -> None:
             _LOCAL + "def Status::Saved::label(self) -> int = self.id", "Saved", id="method-owner"
         ),
         pytest.param(
-            _LOCAL + "scope Status::Saved\n  def label(self) -> int = self.id\nend Status::Saved",
-            "Saved",
-            id="method-region",
-        ),
-        pytest.param(
             "import library::Status\ndef Status::Saved::label(self) -> int = self.id",
             "Saved",
             id="method-imported-owner",

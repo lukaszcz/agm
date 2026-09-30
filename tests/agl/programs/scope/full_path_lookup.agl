@@ -1,0 +1,62 @@
+# A spelling is looked up as its whole path, against every source: an own
+# `scope Agent` and the imported one combine, the own declaration winning its
+# path; an own `scope Geo` leaves the imported type `Geo` in type positions. A
+# use in a nearer region beats an own root declaration, `use e::Color as C`
+# renames the type and its member paths, and type arguments sit on the
+# segment that owns the next one.
+import M::*
+import N
+import e
+import gen::*
+
+use e::Color as C
+
+scope Agent
+  def g() -> int = 2
+
+  def both() -> text = "own"
+end Agent
+
+scope Geo
+  def make() -> int = 3
+end Geo
+
+def pick() -> text = "root"
+
+scope r
+  use N::Pal::*
+
+  def read() -> text = pick()
+end r
+
+def h() -> int = Agent::f() + Agent::g()
+
+def k(p: Geo) -> int = p.x + Geo::make()
+
+def shade(n: int) -> C =
+  if
+    | n > 0 => C::Red
+    | else => Color::Green
+
+def shade-name(c: Color) -> text =
+  case c of
+  | C::Red => "red"
+  | C::Green => "green"
+
+def boxed(n: int) -> Outer::Inner[int] =
+  if
+    | n > 0 => Outer::Inner[int]::A(v = n)
+    | else => Outer::Inner[int]::B
+
+def unboxed(b: Outer::Inner[int]) -> int =
+  case b of
+  | Outer::Inner[int]::A(v) => v
+  | Outer::Inner[int]::B => 0
+
+program def main(n: int) -> unit =
+  print(h())
+  print(k(Geo(x = n)))
+  print("%{Agent::both()} %{Agent::only-imported()}")
+  print("%{r::read()} %{pick()}")
+  print("%{shade-name(shade(n))} %{shade(n) is C::Red}")
+  print(unboxed(boxed(n)))

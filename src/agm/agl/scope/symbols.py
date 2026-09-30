@@ -343,11 +343,10 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: bool = False) -> str:
     """Return the canonical ``:=``-on-immutable rejection message for *name*.
 
-    Scope judges a qualified target (:class:`ImmutableAssignmentError`); type
-    checking judges an unqualified one, since a field-directed pattern slot's
-    final binding is selected there. *cross_module* drops the "declare with
-    'var'" hint: an importer cannot change how another module declared its
-    own binding.
+    Type checking judges every target scope selects, since a field-directed
+    pattern slot's final binding is selected there. *cross_module* drops the
+    "declare with 'var'" hint: an importer cannot change how another module
+    declared its own binding.
     """
     hint = "" if cross_module else " Declare with 'var' to make the variable mutable."
     return f"Cannot assign to '{name}': {_IMMUTABLE_BINDER_PHRASES[kind]} (immutable).{hint}"
@@ -702,53 +701,6 @@ class DeclInfo:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class LocalUseContribution:
-    """A resolved local-scope use contribution retained on its lexical layer.
-
-    ``bindings``/``constructors`` snapshot exactly the bare bindings and
-    constructor candidates this contribution exposed once its target's
-    members were all resolved (see
-    :meth:`_Resolver._refresh_local_use_contributions`), mirroring
-    :class:`ImportedUseContribution`'s snapshot so both use kinds share the
-    same subtract-then-readd retraction protocol on REPL supersession. A
-    freshly declared contribution starts with empty snapshots -- they are
-    filled in once the walk has resolved the whole target subtree.
-    ``outranked_by`` holds the own scopes the same target reaches first: a
-    declaration path one of them declares is not read from ``source``.
-    """
-
-    declaration: UseDecl
-    source: ScopeNode
-    target: ResolvedUseTarget
-    outranked_by: tuple[ScopePath, ...] = ()
-    bindings: Mapping[BareAtom, frozenset[BindingRef]] = field(default_factory=dict)
-    constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class ImportedUseContribution:
-    """A resolved imported surface retained on its lexical scope layer.
-
-    ``hidden_prefixes`` records the declaration's ``hiding`` clause as
-    selection prefixes (see :func:`import_item_path`), so a wildcard-facade
-    refresh (:meth:`_Resolver._facade_refresh`) can skip re-adding a name the
-    ``use`` hid instead of reinstating it from the import environment.
-    ``constructors`` snapshots the constructor candidates it exposed; it
-    starts empty, since headers are read before type owners are known, and is
-    filled in once they are.
-    """
-
-    declaration: UseDecl
-    target: ResolvedUseTarget
-    refreshes_all_members: bool
-    members: Mapping[BareAtom, QName]
-    scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
-    bindings: Mapping[BareAtom, frozenset[BindingRef]]
-    hidden_prefixes: frozenset[ScopePath]
-    constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
-
-
 class ContributionLayer(enum.Enum):
     """Which layer made a candidate visible, recorded where it is contributed.
 
@@ -773,15 +725,6 @@ def add_layers[K](table: dict[K, Layers], key: K, layers: Iterable[ContributionL
     table[key] = table.get(key, frozenset()).union(layers)
 
 
-def drop_layer[K](table: dict[K, Layers], key: K, layer: ContributionLayer) -> None:
-    """Record that *layer* no longer contributes *key*; drop *key* when no layer does."""
-    remaining = table.get(key, frozenset()) - {layer}
-    if remaining:
-        table[key] = remaining
-    else:
-        table.pop(key, None)
-
-
 def layered(layers: Layers) -> tuple[ContributionLayer, ...]:
     """Return *layers* in declaration order, for a deterministic walk."""
     return tuple(layer for layer in ContributionLayer if layer in layers)
@@ -799,6 +742,8 @@ class ScopeNode:
     - ``bare_contributions``/``bare_constructor_contributions``: selected
       imports snapshotted for this region. Each entry carries every
       :class:`ContributionLayer` contributing it, recorded where contributed.
+    - ``uses``: the ``use`` declarations written in this region, in order.
+      What one exposes is read where it is written whenever it is used.
 
     ``members`` is read freely but written only through the member mutation
     methods on this class.
@@ -816,8 +761,7 @@ class ScopeNode:
     bare_constructor_contributions: dict[BareAtom, dict[ConstructorRef, Layers]] = field(
         default_factory=dict
     )
-    local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
-    imported_use_contributions: list[ImportedUseContribution] = field(default_factory=list)
+    uses: list[UseDecl] = field(default_factory=list)
 
     def lookup(
         self, name: str, *, member_predicate: Callable[[BindingRef], bool] | None = None
@@ -852,15 +796,12 @@ class ScopeNode:
     def entry_copy(self) -> "ScopeNode":
         """Copy this layer into a REPL entry's own image.
 
-        Mirrors how a retained named-scope layer is copied into a fresh entry
-        node: ``bindings`` are shared by reference, since they are read-only
-        during resolve, while the bare tables and use contributions are
-        copied so the entry's own contributions and use re-snapshots (see
-        ``_Resolver._refresh_layer_contributions``) never mutate the
-        session's own record. ``members`` starts shared too, but
-        ``_build_scope_nodes`` immediately replaces it with a fresh dict,
-        re-registering each retained member one at a time, so this entry's
-        own registrations never mutate it either.
+        ``bindings`` are shared by reference, since they are read-only during
+        resolve, while the bare tables and uses are copied so the entry's own
+        contributions never mutate the session's record. ``members`` starts
+        shared too, but ``_build_scope_nodes`` immediately replaces it with a
+        fresh dict, re-registering each retained member one at a time, so
+        this entry's own registrations never mutate it either.
         """
         return ScopeNode(
             node_id=self.node_id,
@@ -874,8 +815,7 @@ class ScopeNode:
             bare_constructor_contributions={
                 atom: dict(refs) for atom, refs in self.bare_constructor_contributions.items()
             },
-            local_use_contributions=list(self.local_use_contributions),
-            imported_use_contributions=list(self.imported_use_contributions),
+            uses=list(self.uses),
         )
 
     def contribute_bare(self, name: BareAtom, ref: BindingRef, layer: ContributionLayer) -> None:
@@ -887,53 +827,6 @@ class ScopeNode:
     ) -> None:
         """Add one constructor candidate contributed bare to this region, from *layer*."""
         add_layers(self.bare_constructor_contributions.setdefault(name, {}), ref, (layer,))
-
-    def contribute_local_use(self, contribution: LocalUseContribution) -> None:
-        """Add a local scope use whose source members remain live."""
-        self.local_use_contributions.append(contribution)
-
-    def retract_bare(
-        self,
-        bindings: Mapping[BareAtom, Iterable[BindingRef]],
-        constructors: Mapping[BareAtom, Iterable[ConstructorRef]],
-    ) -> None:
-        """Subtract one ``use`` contribution's snapshot, promoted into a wider entry's own layer.
-
-        Another layer contributing the same candidate keeps contributing it.
-        """
-        for atom, refs in bindings.items():
-            remaining = self.bare_contributions.get(atom)
-            if remaining is None:
-                continue
-            for ref in refs:
-                drop_layer(remaining, ref, ContributionLayer.USE)
-            if not remaining:
-                del self.bare_contributions[atom]
-        for atom, constructor_refs in constructors.items():
-            remaining_constructors = self.bare_constructor_contributions.get(atom)
-            if remaining_constructors is None:
-                continue
-            for constructor_ref in constructor_refs:
-                drop_layer(remaining_constructors, constructor_ref, ContributionLayer.USE)
-            if not remaining_constructors:
-                del self.bare_constructor_contributions[atom]
-
-    def readd_bare(
-        self,
-        bindings: Mapping[BareAtom, Iterable[BindingRef]],
-        constructors: Mapping[BareAtom, Iterable[ConstructorRef]],
-    ) -> None:
-        """Add back one contribution's snapshot -- the inverse of ``retract_bare``.
-
-        Always a ``use`` declaration's own snapshot -- the only kind
-        ``retract_bare``/``readd_bare`` ever retire and restore.
-        """
-        for atom, refs in bindings.items():
-            for ref in refs:
-                self.contribute_bare(atom, ref, ContributionLayer.USE)
-        for atom, constructor_refs in constructors.items():
-            for constructor_ref in constructor_refs:
-                self.contribute_bare_constructor(atom, constructor_ref, ContributionLayer.USE)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -976,22 +869,6 @@ def binding_qname(ref: BindingRef) -> QName:
 # ---------------------------------------------------------------------------
 # ModuleResolution — output of the scope pass
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedUseTarget:
-    """Stable semantic identity of one local or imported ``use`` target.
-
-    ``wildcard_facade_origin_node_id`` ties a retained facade use to the
-    wildcard declaration that formed it, allowing incremental wildcard
-    expansion without adopting modules from another declaration reusing the
-    same alias.
-    """
-
-    local_paths: tuple[ScopePath, ...] = ()
-    imported_routes: tuple[tuple[ModuleId, ScopePath], ...] = ()
-    aliases: tuple[QName, ...] = ()
-    wildcard_facade_origin_node_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1151,6 +1028,11 @@ class ModuleResolution:
         (:class:`OwnerMemberSelection`); any other selection records the
         declaration (:class:`DeclarationSelection`). Typecheck and the REPL
         read every named type and owner from here, never re-resolving a name.
+    ``use_targets``
+        Maps each ``use`` declaration of the module's layers -- a REPL entry's
+        own and the retained ones it reads -- to the scopes and types its
+        target reaches where it is written. A REPL entry replaces a retained
+        use at the same scope path whose target reaches the same.
     """
 
     program: Program
@@ -1179,6 +1061,7 @@ class ModuleResolution:
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
+    use_targets: dict[int, frozenset[QName]] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.
@@ -1510,15 +1393,3 @@ class TypeArgumentsError(AglScopeError):
         )
         self.segment = segment
         self.arity = arity
-
-
-class ImmutableAssignmentError(AglScopeError):
-    """A qualified ``:=`` whose target resolves to an immutable *binder_kind* binding."""
-
-    def __init__(
-        self, name: str, binder_kind: BinderKind, *, cross_module: bool, span: SourceSpan
-    ) -> None:
-        super().__init__(
-            immutable_assignment_message(name, binder_kind, cross_module=cross_module), span=span
-        )
-        self.binder_kind = binder_kind

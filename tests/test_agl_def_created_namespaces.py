@@ -194,7 +194,7 @@ _SCENARIOS = {
             "nested-imported": accepted(
                 (
                     "scope r\n"
-                    "  def Geo::m(self) -> int = 1\n"
+                    "  def Geo::m(p: int) -> int = p\n"
                     "  def g(p: Geo::Inner) -> int = 1\n"
                     "  let q = Geo::Inner(y = 1)\n"
                     "end r\n"
@@ -202,6 +202,9 @@ _SCENARIOS = {
                     "r::g"
                 ),
                 "tl::Geo::Inner -> int",
+            ),
+            "receiver-names-the-region-path": rejected(
+                "scope r\n  def Geo::m(self) -> int = 1\nend r", AglScopeError, "self"
             ),
         },
     ),
@@ -214,7 +217,7 @@ _SCENARIOS = {
             "nested-local": accepted(
                 (
                     "scope r\n"
-                    "  def Geo::m(self) -> int = 1\n"
+                    "  def Geo::m(p: int) -> int = p\n"
                     "  def g(p: Geo::Inner) -> int = 1\n"
                     "  let q = Geo::Inner(y = 1)\n"
                     "end r\n"
@@ -222,6 +225,9 @@ _SCENARIOS = {
                     "r::g"
                 ),
                 "Geo::Inner -> int",
+            ),
+            "receiver-names-the-region-path": rejected(
+                "scope r\n  def Geo::m(self) -> int = 1\nend r", AglScopeError, "self"
             ),
         },
     ),

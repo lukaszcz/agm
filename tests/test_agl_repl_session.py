@@ -1124,7 +1124,7 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == ArrayValue([IntValue(1)])
 
-    def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
+    def test_retained_relative_use_reads_its_target_again_in_each_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("scope Source\n  def value() -> int = 1\nend Source").ok
         assert session.eval_entry("scope Outer\n  use Source::*\nend Outer").ok
@@ -1135,9 +1135,10 @@ class TestScopedBindingRetention:
         declared = session.eval_entry("scope Outer\n  def selected() -> int = value()\nend Outer")
         result = session.eval_entry("Outer::selected()")
 
+        # The nearer Outer::Source now wins the retained use's relative target.
         assert declared.ok, declared.diagnostics
         assert result.ok, result.diagnostics
-        assert result.value == IntValue(1)
+        assert result.value == IntValue(2)
 
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
@@ -8331,7 +8332,7 @@ class TestImports:
             "scope Outer\n  def read() -> int = old()\nend Outer\n\nOuter::read()"
         ).ok
 
-    def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
+    def test_relative_use_replaces_a_retained_one_its_target_now_resolves_like(
         self,
     ) -> None:
         session = open_session()
@@ -8339,17 +8340,19 @@ class TestImports:
         assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
 
-        result = session.eval_entry(
-            "scope Outer\n"
-            "  use Source::{new}\n"
-            "  def both() -> int = old() + new()\n"
-            "end Outer\n"
-            "\n"
-            "Outer::both()"
+        # Both uses now spell the scopes Source and Outer::Source.
+        replaced = session.eval_entry(
+            "scope Outer\n  use Source::{new}\n  def both() -> int = old() + new()\nend Outer"
+        )
+        declared = session.eval_entry(
+            "scope Outer\n  use Source::{new}\n  def only() -> int = new()\nend Outer"
         )
 
+        assert not replaced.ok
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::only()")
         assert result.ok, result.diagnostics
-        assert result.value == IntValue(3)
+        assert result.value == IntValue(2)
 
     def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
         session = open_session()
@@ -8478,50 +8481,69 @@ class TestImports:
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("old()").ok
 
-    def test_retained_imported_use_survives_import_alias_change(self, tmp_path: Path) -> None:
+    def test_retained_imported_use_reads_the_import_alias_in_force(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib as Old").ok
         assert session.eval_entry("use Old::*").ok
 
         changed = session.eval_entry("import lib as New")
-        result = session.eval_entry("value()")
 
         assert changed.ok, changed.diagnostics
+        assert not session.eval_entry("value()").ok
+        assert session.eval_entry("use New::*").ok
+        result = session.eval_entry("value()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_imported_use_reports_when_a_replacement_hides_its_target(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_imported_use_reads_nothing_a_replacement_hides(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope S\n  def value() -> int = 1\nend S\n", encoding="utf-8"
         )
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib\nuse lib::S::*").ok
+        assert session.eval_entry("value()").value == IntValue(1)
 
         replacement = session.eval_entry("let other = 2\nimport lib hiding S")
 
-        assert not replacement.ok
-        assert replacement.diagnostics[0].message
-        # The complaint locates the import that hid the route, not a placeholder line.
-        assert replacement.diagnostics[0].line == 2
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry("value()").ok
 
-    def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_use_of_a_used_scope_reads_only_earlier_uses(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope Nested\n  def value() -> int = 1\nend Nested\n", encoding="utf-8"
         )
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib as Old").ok
         assert session.eval_entry("use Old::*").ok
+        assert session.eval_entry("use Nested::*").ok
+        assert session.eval_entry("value()").value == IntValue(1)
+
         assert session.eval_entry("import lib as New").ok
+        assert not session.eval_entry("value()").ok
 
+        # A use reads only the uses before it, so the retained one stays empty.
+        assert session.eval_entry("use New::*").ok
+        assert not session.eval_entry("value()").ok
         result = session.eval_entry("use Nested::*\nvalue()")
-
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
+
+    def test_retained_use_combines_an_import_a_later_entry_adds(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Agent\n  def f() -> int = 1\nend Agent\n", encoding="utf-8"
+        )
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry('scope Agent\n  def h() -> text = "own"\nend Agent').ok
+        assert session.eval_entry("use Agent::*").ok
+        assert not session.eval_entry("f()").ok
+
+        assert session.eval_entry("import lib::*").ok
+
+        imported = session.eval_entry("f()")
+        assert imported.ok, imported.diagnostics
+        assert imported.value == IntValue(1)
+        assert session.eval_entry("h()").value == TextValue("own")
 
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
@@ -8566,7 +8588,7 @@ class TestImports:
         assert result.value == IntValue(1)
         assert not session.eval_entry("second()").ok
 
-    def test_retained_wildcard_facade_refreshes_only_its_original_import(
+    def test_retained_wildcard_facade_use_reads_every_import_of_its_alias(
         self, tmp_path: Path
     ) -> None:
         package = tmp_path / "pkg"
@@ -8581,15 +8603,16 @@ class TestImports:
         (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
         assert session.eval_entry("import unrelated/* as Facade").ok
 
-        refreshed = session.eval_entry("first() + second()")
+        refreshed = session.eval_entry("first() + second() + intruder()")
         assert refreshed.ok, refreshed.diagnostics
-        assert refreshed.value == IntValue(3)
-        assert not session.eval_entry("intruder()").ok
+        assert refreshed.value == IntValue(6)
 
+        # The direct import replaces pkg/a's; the facade keeps pkg/b.
         assert session.eval_entry("import pkg/a as Direct").ok
-        fallback = session.eval_entry("first() + second()")
-        assert fallback.ok, fallback.diagnostics
-        assert fallback.value == IntValue(3)
+        assert not session.eval_entry("first()").ok
+        remaining = session.eval_entry("second() + Direct::first()")
+        assert remaining.ok, remaining.diagnostics
+        assert remaining.value == IntValue(3)
 
     def test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries(
         self, tmp_path: Path
@@ -8663,14 +8686,9 @@ class TestImports:
         stale = session.eval_entry("scope Outer\n  def readSecond() -> int = second()\nend Outer")
         assert not stale.ok
 
-    def test_named_scope_retained_wildcard_facade_use_survives_direct_reimport_of_its_members(
+    def test_named_scope_retained_wildcard_facade_use_reads_nothing_once_its_imports_are_replaced(
         self, tmp_path: Path
     ) -> None:
-        """Once every module a wildcard facade discovered is ALSO reimported
-        directly under its own alias, the facade's own resolved origin no
-        longer matches any current declaration -- the retained contribution
-        must fall back to what is still independently importable rather than
-        losing its members."""
         package = tmp_path / "pkg"
         package.mkdir()
         (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
@@ -8682,14 +8700,14 @@ class TestImports:
 
         assert session.eval_entry("import pkg/a as Q1\nimport pkg/b as Q2").ok
 
+        assert not session.eval_entry(
+            "scope Outer\n  def readFirst() -> int = first()\nend Outer"
+        ).ok
         declared = session.eval_entry(
-            "scope Outer\n"
-            "  def readFirst() -> int = first()\n"
-            "  def readSecond() -> int = second()\n"
-            "end Outer"
+            "scope Outer\n  def read() -> int = Q1::first() + Q2::second()\nend Outer"
         )
         assert declared.ok, declared.diagnostics
-        result = session.eval_entry("Outer::readFirst() + Outer::readSecond()")
+        result = session.eval_entry("Outer::read()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(3)
 

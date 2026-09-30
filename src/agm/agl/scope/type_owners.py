@@ -20,6 +20,7 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.symbols import (
     ConstructorRef,
+    DeclarationKey,
     DeclarationSelection,
     ScopePath,
     TypeOwner,
@@ -404,14 +405,18 @@ class TypeOwnerIndex:
             module_id, path, name = selection.key
             qname = (module_id, _atom((*path, name)))
             return qname if self.is_declared(qname) else None
-        owner_module, owner_path, owner_name = selection.owner
-        owner = self.owner((owner_module, _atom((*owner_path, owner_name))))
-        member = None if owner is None else owner.members.get(selection.member)
+        member = self.owner_member(selection.owner, selection.member)
         return (
             None
             if member is None
             else (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
         )
+
+    def owner_member(self, owner: DeclarationKey, name: str) -> ConstructorRef | None:
+        """Return the member type *owner* selects as *name*: an alias's is its target's member."""
+        module_id, path, owner_name = owner
+        table = self.owner((module_id, _atom((*path, owner_name))))
+        return None if table is None else table.members.get(name)
 
     def _enum_members(
         self, module_id: ModuleId, path: ScopePath, declaration: EnumDef

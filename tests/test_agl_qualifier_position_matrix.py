@@ -133,14 +133,15 @@ _FORMS: dict[
     ),
 }
 
+# Forms whose applied owner two imports declare: its type arguments apply to no one type.
+_AMBIGUOUS_APPLIED_OWNERS = frozenset({"applied-owner"})
+
 # The member type each accepted (form, outcome) selects.
 _CASE_TYPE: dict[tuple[str, str], str] = {
     ("route-owner", "unique"): "one/types::Color::Green",
     ("route-owner", "other"): "two/types::Color::Blue",
     ("bare-owner", "unique"): "m::Color::Green",
     ("bare-owner", "other"): "n::Color::Blue",
-    ("applied-owner", "unique"): "gm::Box::Full[int]",
-    ("applied-owner", "other"): "gn::Box::Other",
     ("facade-owner", "unique"): "pkg/a::Thing::Blue",
     ("facade-owner", "other"): "pkg/b::Thing::Yellow",
     ("local-use-owner", "unique"): "a::E::Y",
@@ -153,7 +154,6 @@ _CASE_TYPE: dict[tuple[str, str], str] = {
 _OWNER_ENUM: dict[str, str] = {
     "route-owner": "enum one/types::Color\n  | Red\n  | Green",
     "bare-owner": "enum m::Color\n  | Red\n  | Green",
-    "applied-owner": "enum gm::Box[int]\n  | Full(value: int)\n  | Both\n  | Empty",
     "facade-owner": "enum pkg/a::Thing\n  | Red\n  | Blue",
     "local-use-owner": "enum a::E\n  | X\n  | Y",
     "module-use-owner": "enum m::Color\n  | Red\n  | Green",
@@ -167,28 +167,22 @@ _SCRUTINEE_POSITIONS: dict[str, str] = {
 }
 
 
-def _value_identity(case_type: str) -> str:
-    """A member reference's identity: the record, or its constructor when it has a field."""
-    if case_type == "gm::Box::Full[int]":
-        return "int -> gm::Box::Full[int]"
-    return f"record {case_type}"
-
-
 def _form_probes(form: str) -> dict[str, Probe]:
     _, _, owner, members, _ = _FORMS[form]
     probes: dict[str, Probe] = {}
     for outcome, member in members.items():
         q = f"{owner}::{member}"
-        if outcome in ("amb", "missing"):
-            error = AmbiguousQualificationError if outcome == "amb" else UnknownMemberError
-            probes |= type_positions_rejected(outcome, q, error)
-            probes[f"{outcome}-value"] = rejected(q, error, q)
+        if outcome in ("amb", "missing") or form in _AMBIGUOUS_APPLIED_OWNERS:
+            error = UnknownMemberError if outcome == "missing" else AmbiguousQualificationError
+            span = owner if outcome in ("unique", "other") else q
+            probes |= type_positions_rejected(outcome, q, error, span)
+            probes[f"{outcome}-value"] = rejected(q, error, span)
             for position, text in _SCRUTINEE_POSITIONS.items():
-                probes[f"{outcome}-{position}"] = rejected(text.format(q=q), error, q)
+                probes[f"{outcome}-{position}"] = rejected(text.format(q=q), error, span)
             continue
         case_type = _CASE_TYPE[(form, outcome)]
         probes |= type_positions(outcome, q, case_type)
-        probes[f"{outcome}-value"] = accepted(q, _value_identity(case_type))
+        probes[f"{outcome}-value"] = accepted(q, f"record {case_type}")
         if outcome == "unique":
             probes |= {
                 "unique-pattern": accepted(

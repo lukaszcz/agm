@@ -1085,8 +1085,6 @@ class ReplSession:
         entry_module_id: ModuleId,
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
-        from dataclasses import replace
-
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.scope.type_owners import beneath
@@ -1192,11 +1190,6 @@ class ReplSession:
             name
             for name in self._type_env.all_declared_type_names()
             if beneath(tuple(name.split("::")), unpromoted_type_scope_paths)
-        )
-        replaced_type_scopes = frozenset(
-            (*path, name)
-            for path, name in replaced_type_name_paths
-            if (*path, name) in self._session_scope_nodes
         )
         # Every replacement of an enum owner, including replacement by a
         # record or alias, retires its prior inline member scopes. Nested
@@ -1310,51 +1303,16 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.register_member(name, ref)
-            promoted_imported_uses = [
-                contribution
-                for contribution in node.imported_use_contributions
-                if contribution.declaration.node_id in promoted_use_declaration_ids
+            # A use this entry writes replaces a retained one of its region
+            # naming the same target.
+            promoted_uses = [
+                use for use in node.uses if use.node_id in promoted_use_declaration_ids
             ]
-            current_targets = {contribution.target for contribution in promoted_imported_uses}
-            for contribution in session_node.imported_use_contributions:
-                session_node.retract_bare(contribution.bindings, contribution.constructors)
-            session_node.imported_use_contributions = [
-                contribution
-                for contribution in session_node.imported_use_contributions
-                if contribution.target not in current_targets
-            ]
-            session_node.imported_use_contributions.extend(promoted_imported_uses)
-            for contribution in session_node.imported_use_contributions:
-                session_node.readd_bare(contribution.bindings, contribution.constructors)
-            promoted_local_uses = [
-                contribution
-                for contribution in node.local_use_contributions
-                if contribution.declaration.node_id in promoted_use_declaration_ids
-            ]
-            current_local_targets = {
-                local_contribution.target for local_contribution in promoted_local_uses
-            }
-            for local_contribution in session_node.local_use_contributions:
-                session_node.retract_bare(
-                    local_contribution.bindings, local_contribution.constructors
-                )
-            session_node.local_use_contributions = [
-                (
-                    replace(local_contribution, bindings={}, constructors={})
-                    if local_contribution.source.scope_path in replaced_type_scopes
-                    else local_contribution
-                )
-                for local_contribution in session_node.local_use_contributions
-                if local_contribution.target not in current_local_targets
-            ]
-            for local_contribution in promoted_local_uses:
-                source = self._session_scope_nodes.get(local_contribution.source.scope_path)
-                if source is not None:
-                    session_node.contribute_local_use(replace(local_contribution, source=source))
-            for local_contribution in session_node.local_use_contributions:
-                session_node.readd_bare(
-                    local_contribution.bindings, local_contribution.constructors
-                )
+            use_targets = checked.resolved.use_targets
+            replaced = {use_targets[use.node_id] for use in promoted_uses}
+            session_node.uses = [
+                use for use in session_node.uses if use_targets.get(use.node_id) not in replaced
+            ] + promoted_uses
         self._session_type_paths.update(
             (type_path, checked.resolved.type_owners[type_path])
             for type_path in promoted_type_paths

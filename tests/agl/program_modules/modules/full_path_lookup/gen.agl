@@ -1,0 +1,6 @@
+record Outer
+  a: int
+
+enum Outer::Inner[T]
+  | A(v: T)
+  | B

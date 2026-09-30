@@ -1041,14 +1041,12 @@ class EntryPipeline:
             if not decl.wildcard:
                 expanded.append(decl)
                 continue
-            wildcard_origin_node_id = decl.node_id
             for module in expand_wildcard(tuple(decl.module_path), roots, span=decl.span):
                 expanded.append(
                     replace(
                         decl,
                         module_path=module.segments,
                         wildcard=False,
-                        wildcard_origin_node_id=wildcard_origin_node_id,
                         node_id=next_start_id,
                     )
                 )

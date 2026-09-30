@@ -191,11 +191,7 @@ class ImportEnv:
     )
     decl_hidden: Mapping[int, frozenset[NameAtom]] = field(default_factory=dict)
     unqualified_hidden: frozenset[QName] = frozenset()
-    facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
-    # Where each imported module was first named in this module's source, so a
-    # complaint about what an import no longer provides can point at it.
-    decl_spans: Mapping[ModuleId, SourceSpan] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -252,15 +248,6 @@ class ImportEnv:
             dict(self.scope_origins_by_route)
         )
         object.__setattr__(self, "scope_origins_by_route", scope_origins_by_route)
-        decl_spans: Mapping[ModuleId, SourceSpan] = MappingProxyType(dict(self.decl_spans))
-        object.__setattr__(self, "decl_spans", decl_spans)
-        facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = MappingProxyType(
-            {
-                alias: MappingProxyType(dict(sorted(self.facade_aliases[alias].items())))
-                for alias in sorted(self.facade_aliases)
-            }
-        )
-        object.__setattr__(self, "facade_aliases", facade_aliases)
         suffix: dict[tuple[str, ...], set[ModuleId]] = {}
         anchored: dict[tuple[str, ...], set[ModuleId]] = {}
         for module, contribution in contributions.items():
@@ -414,24 +401,11 @@ def build_import_env(
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     decl_hidden: dict[int, set[NameAtom]] = {}
     root_hidden: set[QName] = set()
-    facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
-    canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
-    decl_spans: dict[ModuleId, SourceSpan] = {}
     for decl in decls:
         target = targets[decl.node_id]
         modules = _targets(target)
-        wildcard_origin_node_id = (
-            canonical_wildcard_node_ids.setdefault(decl, decl.node_id)
-            if isinstance(target, WildcardTarget)
-            else decl.wildcard_origin_node_id
-        )
-        if decl.alias is not None and wildcard_origin_node_id is not None:
-            facade_aliases.setdefault(decl.alias, {}).setdefault(
-                wildcard_origin_node_id, set()
-            ).update(modules)
         for module in modules:
-            decl_spans.setdefault(module, decl.span)
             module_exports = exports[module]
             module_scopes = scope_exports[module]
             hidden_exports, hidden_scopes = _selected_public_atoms(
@@ -540,15 +514,7 @@ def build_import_env(
         },
         decl_hidden={node_id: frozenset(atoms) for node_id, atoms in decl_hidden.items()},
         unqualified_hidden=frozenset(root_hidden),
-        facade_aliases={
-            alias: {
-                origin_node_id: frozenset(modules)
-                for origin_node_id, modules in declarations.items()
-            }
-            for alias, declarations in facade_aliases.items()
-        },
         scope_origins_by_route=scope_origins_by_route,
-        decl_spans=decl_spans,
     )
 
 

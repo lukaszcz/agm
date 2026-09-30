@@ -31,7 +31,6 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     DeclarationSelection,
     DuplicateDeclarationError,
-    ImmutableAssignmentError,
     OwnerMemberSelection,
     TypeArgumentsError,
     UnknownMemberError,
@@ -73,6 +72,10 @@ _COLOR = "enum Color\n  | Red\n  | Green\n"
 _SHADE = "enum Color\n  | Dark\n  | Light\n"
 _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
 _TL_LOCAL = "scope s\n  record Geo\n    x: int\n  record Geo::Inner\n    y: int\nend s"
+_COUNTED = (
+    "scope Agent\n  var cnt: int = 0\n  let fixed: int = 1\n"
+    "  enum Mode\n    | On\n    | Off\nend Agent\n"
+)
 _OPT = "enum Opt[T]\n  | Som(v: T)\n  | Non\n"
 _GENERIC = "record Outer\n  a: int\nenum Outer::Inner[T]\n  | A(v: T)\n  | B\n"
 _NESTED_UNDER_GENERICS = (
@@ -81,6 +84,8 @@ _NESTED_UNDER_GENERICS = (
     "type Al[T] = Box[T]\nrecord Al::Own\n  x: int\n"
     "enum Col\n  | Red\n  | Blue\nenum Two[A, B]\n  | L(l: A)\n  | R(r: B)"
 )
+_NESTED_Y = "scope G\n  record Y\n    b: int\nend G\n"
+_NESTED_Y_CALL = "lib::G::Y(b = 1).m()"
 _GEO_REGION = "scope Geo\n  record Point\n    x: int\nend Geo"
 _GEO_TYPE = "record Geo\n  y: int\nrecord Geo::Point\n  x: int"
 _REFERENCING_ENUM = "enum E\n  | Geo::Point\n  | Other"
@@ -176,12 +181,15 @@ def _beneath_alias_probes(alias: str) -> dict[str, Probe]:
 
 _RENAMED = _COLOR + "record Pt\n  x: int\nrecord Pt::In\n  y: int\ntype P = Pt\n"
 _LOCAL_L = "scope s\n  record L\n    x: int\n  record L::In\n    y: int\nend s\n\n"
+_ROOT_L = "record L\n  x: int\nrecord L::In\n  y: int\n\n"
 
 
-def _renamed_type_probes(local_use: str) -> dict[str, Probe]:
+def _renamed_type_probes(
+    local_use: str, local: str = _LOCAL_L, local_path: str = "s::L"
+) -> dict[str, Probe]:
     """``C``, ``R`` and ``Q`` renaming ``e``'s ``Color``, ``Pt`` and alias ``P``; *local_use*
-    renames the own ``s::L`` to ``M`` inside a region."""
-    in_t = "scope t\n  {use}\n  let v = {value}\nend t\n\nt::v"
+    renames the own *local_path* that *local* declares to ``M`` inside a region."""
+    in_t = local + "scope t\n  {use}\n  let v = {value}\nend t\n\nt::v"
     return {
         **type_positions("enum", "C", "e::Color"),
         "enum-not-a-value": rejected(
@@ -212,14 +220,14 @@ def _renamed_type_probes(local_use: str) -> dict[str, Probe]:
         ),
         "alias-nested": accepted("Q::In(y = 1)", "record e::Pt::In\n  y: int"),
         "local-constructor": accepted(
-            _LOCAL_L + in_t.format(use=local_use, value="M(x = 1)"), "record s::L\n  x: int"
+            in_t.format(use=local_use, value="M(x = 1)"), f"record {local_path}\n  x: int"
         ),
         "local-nested": accepted(
-            _LOCAL_L + in_t.format(use=local_use, value="M::In(y = 1)"),
-            "record s::L::In\n  y: int",
+            in_t.format(use=local_use, value="M::In(y = 1)"),
+            f"record {local_path}::In\n  y: int",
         ),
         "local-annotation": accepted(
-            _LOCAL_L + in_t.format(use=local_use, value="fn(p: M) => p"), "s::L -> s::L"
+            in_t.format(use=local_use, value="fn(p: M) => p"), f"{local_path} -> {local_path}"
         ),
         "info-enum": info(
             "C", "C is an enum type.\nType:\n  enum e::Color\n    | Red\n    | Green"
@@ -244,6 +252,19 @@ def _in_q(uses: str, value: str) -> str:
 def _in_region(use: str, value: str) -> str:
     """A region whose ``use`` exposes names that its ``let v`` reads, then ``r::v``."""
     return f"scope r\n  {use}\n  let v = {value}\nend r\n\nr::v"
+
+
+def _in_nested(use: str, value: str) -> str:
+    """A region whose ``use`` exposes names that a nested region's ``let v`` reads."""
+    return f"scope r\n  {use}\n\n  scope q\n    let v = {value}\n  end q\nend r\n\nr::q::v"
+
+
+_LATER_M = "scope Agent\n  def f() -> int = 1\n  var cnt: int = 0\nend Agent\n"
+_LATER_OWN_SCOPE = 'scope Agent\n  def h() -> text = "own"\nend Agent'
+_LATER_OWN_BINDINGS = 'scope Agent\n  let cnt: text = "own"\n  def f() -> text = "own"\nend Agent'
+_X_A = "scope X\n  def a() -> int = 1\nend X\n"
+_X_B = 'scope X\n  def b() -> text = "2"\nend X\n'
+_ALIASED_MODULE = f"{_USE_LIB}\nscope Deep\n  def d() -> int = 4\nend Deep\n"
 
 
 _SCENARIOS = {
@@ -795,6 +816,11 @@ _SCENARIOS = {
         header=("import e", "use e::Color as C\nuse e::Pt as R\nuse e::P as Q"),
         probes=_renamed_type_probes("use s::L as M"),
     ),
+    "a-one-segment-use-renames-a-type-like-a-braced-one": Scenario(
+        modules={"e": _RENAMED},
+        header=("import e::*", "use Color as C\nuse Pt as R\nuse P as Q"),
+        probes=_renamed_type_probes("use L as M", _ROOT_L, "L"),
+    ),
     "alias-segments": Scenario(
         modules={"e": _COLOR, "f": _SHADE},
         header=("import e", "import f", "use e::Color as C"),
@@ -1038,8 +1064,17 @@ _SCENARIOS = {
             "anchored-var": accepted("::x", "int"),
             "anchored-var-assignment": accepted("::x := 3\nx", "int"),
             "anchored-let": accepted("::y", "int"),
-            "anchored-let-assignment": rejected("::y := 3", ImmutableAssignmentError, "::y := 3"),
+            "anchored-let-assignment": rejected("::y := 3", AglTypeError, "::y", phase="typecheck"),
             "anchored-statement-binding": accepted("let z = true\n::z", "bool"),
+            "anchored-from-a-region-declaring-the-name": accepted(
+                "scope S\n  let y = true\n  def z() -> int = ::y\nend S\n\nS::z()", "int"
+            ),
+            "anchored-from-a-region-declaring-the-name-later": accepted(
+                "scope S\n  def z() = ::y\n  let y = true\nend S\n\nS::z()", "int"
+            ),
+            "bare-beside-a-lambda-parameter-of-the-name": accepted(
+                "def z() -> int = (fn(y: int) -> int => y)(5) + y\nz()", "int"
+            ),
             "anchored-before-its-binding": rejected("::z\nlet z = true", UnknownMemberError, "::z"),
             "binding-claiming-a-declared-name": rejected(
                 "def f() -> int = 1\nlet f = 2\nf", DuplicateDeclarationError, "let f = 2"
@@ -1059,19 +1094,278 @@ _SCENARIOS = {
             ),
         },
     ),
+    "an-assignment-target-reads-like-a-value": Scenario(
+        modules={"M": _COUNTED, "N": "scope Agent\n  var cnt: int = 0\nend Agent\n"},
+        header=("import M::*", "import N::*"),
+        probes={
+            "ambiguous-qualified": rejected(
+                "Agent::cnt := 2", AmbiguousQualificationError, "Agent::cnt"
+            ),
+            "ambiguous-bare": rejected(
+                "scope Agent\n  def f() -> unit =\n    cnt := 2\nend Agent",
+                AmbiguousQualificationError,
+                "cnt",
+            ),
+            "immutable-qualified": rejected(
+                "Agent::fixed := 2", AglTypeError, "Agent::fixed", phase="typecheck"
+            ),
+            "immutable-bare": rejected(
+                "scope Agent\n  def f() -> unit =\n    fixed := 2\nend Agent",
+                AglTypeError,
+                "fixed",
+                phase="typecheck",
+            ),
+            "missing-bare": rejected("nope := 2", AglScopeError, "nope"),
+            "type-qualified": rejected("Agent::Mode := 2", AglScopeError, "Agent::Mode"),
+            "routed-var": accepted("M::Agent::cnt := 2\nM::Agent::cnt", "int"),
+        },
+    ),
+    "segment-type-arguments-need-the-decided-owner": Scenario(
+        modules={"x/lib": _OPT, "y/two": "record Opt\n  w: int\n"},
+        header=("import x/lib::*", "record Opt\n  z: int"),
+        probes={
+            "own-owner-annotation": rejected(
+                "fn(p: Opt[int]::Som) => p.v", TypeArgumentsError, "Opt[int]"
+            ),
+            "own-owner-value": rejected("Opt[int]::Som(v = 1)", TypeArgumentsError, "Opt[int]"),
+            "own-owner-pattern": rejected(
+                "case lib::Opt::Som(v = 1) of\n  | Opt[int]::Som(v) => v",
+                TypeArgumentsError,
+                "Opt[int]",
+            ),
+            "member-path-without-arguments": accepted(
+                "Opt::Som(v = 1)", "record x/lib::Opt::Som[int]\n  v: int"
+            ),
+            "routed-owner": accepted(
+                "fn(p: lib::Opt[int]::Som) => p.v", "x/lib::Opt::Som[int] -> int"
+            ),
+        },
+    ),
+    "segment-type-arguments-on-an-ambiguous-owner": Scenario(
+        modules={"x/lib": _OPT, "y/two": "record Opt\n  w: int\n"},
+        header=("import x/lib::*", "import y/two::*"),
+        probes={
+            "annotation": rejected(
+                "fn(p: Opt[int]::Som) => p.v", AmbiguousQualificationError, "Opt[int]"
+            ),
+            "value": rejected("Opt[int]::Som(v = 1)", AmbiguousQualificationError, "Opt[int]"),
+            "member-path-without-arguments": accepted(
+                "Opt::Som(v = 1)", "record x/lib::Opt::Som[int]\n  v: int"
+            ),
+        },
+    ),
+    "a-receiver-reads-its-whole-declaring-path": Scenario(
+        modules={"x/lib": _NESTED_Y},
+        header=(
+            "import x/lib",
+            "scope S\n  use lib::G::*\nend S",
+            "record Z\n  c: int\nenum Tone\n  | Hi\n  | Lo",
+        ),
+        probes={
+            "written-in-the-region": accepted(
+                f"scope S\n  def Y::m(self) -> int = self.b\nend S\n{_NESTED_Y_CALL}", "int"
+            ),
+            "declaring-path-at-the-root": accepted(
+                f"def S::Y::m(self) -> int = self.b\n{_NESTED_Y_CALL}", "int"
+            ),
+            "nested-regions": accepted(
+                "scope S\n\n  scope Y\n    def m(self) -> int = self.b\n  end Y\nend S\n"
+                + _NESTED_Y_CALL,
+                "int",
+            ),
+            "path-region": accepted(
+                f"scope S::Y\n  def m(self) -> int = self.b\nend S::Y\n{_NESTED_Y_CALL}", "int"
+            ),
+            "region-import-in-the-region": accepted(
+                "scope T\n  import x/lib::*\n  def G::Y::m(self) -> int = self.b\nend T\n"
+                + _NESTED_Y_CALL,
+                "int",
+            ),
+            "region-import-at-the-root": accepted(
+                "scope T\n  import x/lib::*\nend T\n\ndef T::G::Y::m(self) -> int = self.b\n"
+                + _NESTED_Y_CALL,
+                "int",
+            ),
+            "region-import-nested-regions": accepted(
+                "scope T\n  import x/lib::*\n  scope G::Y\n    def m(self) -> int = self.b\n"
+                f"  end G::Y\nend T\n{_NESTED_Y_CALL}",
+                "int",
+            ),
+            "root-type-is-no-region-path": rejected(
+                "scope S\n  def Z::m(self) -> int = self.c\nend S", AglScopeError, "self"
+            ),
+            "injected-member-at-the-root": accepted("def Hi::m(self) -> int = 1\nHi.m()", "int"),
+            "injected-member-is-no-region-path": rejected(
+                "scope S\n  def Hi::m(self) -> int = 1\nend S", AglScopeError, "self"
+            ),
+            "region-without-a-type": rejected(
+                "scope Q\n  def m(self) -> int = 1\nend Q", AglScopeError, "self"
+            ),
+            "nested-region-without-a-type": rejected(
+                "scope S\n\n  scope Q\n    def m(self) -> int = 1\n  end Q\nend S",
+                AglScopeError,
+                "self",
+            ),
+            "written-path-without-a-type": rejected(
+                "def S::Q::m(self) -> int = 1", UnknownMemberError, "S::Q"
+            ),
+            "annotated-written-path-without-a-type": accepted(
+                "def S::Q::m(self: Z) -> int = self.c\nS::Q::m(Z(c = 1))", "int"
+            ),
+        },
+    ),
+    "a-use-of-a-record-exposes-its-own-spelling-as-a-constructor-only": Scenario(
+        modules={"e": "record Pt\n  x: int\nrecord Pt::In\n  y: int\n"},
+        header=("import e",),
+        probes={
+            "constructor": accepted(
+                _in_region("use e::Pt::*", "Pt(x = 1)"), "record e::Pt\n  x: int"
+            ),
+            "no-type": rejected(
+                _in_region("use e::Pt::*", "fn(p: Pt) => p"),
+                AglTypeError,
+                "p: Pt",
+                phase="typecheck",
+            ),
+            "nested-type": accepted(
+                _in_region("use e::Pt::*", "fn(p: In) => p"), "e::Pt::In -> e::Pt::In"
+            ),
+        },
+    ),
+    "a-tail-item-makes-its-qualifier-visible": Scenario(
+        modules={"M": "scope Agent\n  def f() -> int = 1\n  def g() -> int = 2\nend Agent\n"},
+        header=("import M",),
+        probes={
+            "selected": accepted(_in_region("use M::{Agent::f}", "Agent::f()"), "int"),
+            "unselected": rejected(
+                _in_region("use M::{Agent::f}", "Agent::g()"), UnknownMemberError, "Agent::g"
+            ),
+        },
+    ),
+    "an-injected-member-yields-only-to-a-record-the-use-exposes": Scenario(
+        modules={
+            "lib1": "scope X\n  enum E\n    | Red\n    | Blue\nend X\n",
+            "lib2": "scope X\n  def Red() -> int = 1\nend X\n",
+            "lib3": "record Pt\n  x: int\n\nscope X\n  type Red = Pt\nend X\n",
+            "lib4": "scope X\n  record Red\n    x: int\nend X\n",
+        },
+        header=("import lib1::*",),
+        probes={
+            "beside-a-function": rejected(
+                _in_region("import lib2::*\n  use X::*", "Red"), AmbiguousQualificationError, "Red"
+            ),
+            "beside-an-alias": rejected(
+                _in_region("import lib3::*\n  use X::*", "Red"), AmbiguousConstructorError, "Red"
+            ),
+            "beside-a-record": accepted(
+                _in_region("import lib4::*\n  use X::*", "Red"), "int -> lib4::X::Red"
+            ),
+            "another-member": accepted(
+                _in_region("import lib4::*\n  use X::*", "Blue"), "record lib1::X::E::Blue"
+            ),
+        },
+    ),
+    "a-receiver-path-a-hiding-removed": Scenario(
+        modules={"tl": _TL, "sc": "scope S\n  record T\n    y: int\nend S\n"},
+        header=("import tl::* hiding Geo::Inner", "import sc::* hiding S::T"),
+        probes={
+            "nested-type": rejected(
+                "def Geo::Inner::m(self) -> int = 1", HiddenMemberError, "Geo::Inner"
+            ),
+            "scoped-type": rejected("def S::T::m(self) -> int = 1", HiddenMemberError, "S::T"),
+        },
+    ),
     "receiver-in-own-region-of-type-name": Scenario(
         header=("enum Geo\n  | A\n  | B",),
         probes={
             "region-path-is-the-receiver": rejected(
                 "scope r\n\n  scope Geo\n    def m(self) -> int = 1\n  end Geo\nend r",
-                UnknownMemberError,
-                "r\n\n  scope Geo",
+                AglScopeError,
+                "self",
             ),
             "region-prefix-is-part-of-the-path": rejected(
                 "scope r\n  def helper() -> int = 1\nend r\n\ndef r::Geo::m(self) -> int = 1",
                 UnknownMemberError,
                 "r::Geo",
             ),
+        },
+    ),
+    "a-use-reads-an-own-scope-declared-after-it": Scenario(
+        modules={"M": _LATER_M},
+        # One entry: a REPL use replaces an earlier one of the same target.
+        header=("import M::*", "use Agent as A\nuse Agent::*", _LATER_OWN_SCOPE),
+        probes={
+            "alias-own": accepted("A::h()", "text"),
+            "alias-imported": accepted("A::f()", "int"),
+            "own": accepted("h()", "text"),
+            "imported": accepted("f()", "int"),
+        },
+    ),
+    "a-use-reads-own-bindings-declared-after-it": Scenario(
+        modules={"M": _LATER_M},
+        header=("import M::*", "use Agent::*", _LATER_OWN_BINDINGS),
+        probes={
+            "own-function-wins": accepted("f()", "text"),
+            "own-binding-wins": accepted("cnt", "text"),
+            "own-immutable-binding-wins-a-write": rejected(
+                'cnt := "x"', AglTypeError, "cnt", phase="typecheck"
+            ),
+        },
+    ),
+    "a-use-reads-the-scope-a-nearer-use-exposes": Scenario(
+        modules={"lib1": _X_A, "lib2": _X_B},
+        header=(
+            "import lib1",
+            "import lib2",
+            "use lib1::{X}",
+            "scope S\n  use lib2::{X}\n  use X::*\n"
+            "  def g() -> int = a()\n  def k() -> text = b()\nend S",
+        ),
+        probes={
+            "from-the-enclosing-use": accepted("S::g()", "int"),
+            "from-the-nearer-use": accepted("S::k()", "text"),
+            "root-use-alone-at-the-root": accepted("X::a()", "int"),
+            "nearer-use-stays-in-its-region": rejected("X::b()", UnknownMemberError, "X::b"),
+        },
+    ),
+    "a-module-alias-combines-with-an-own-scope-of-its-name": Scenario(
+        modules={"m": _ALIASED_MODULE},
+        header=("import m as lib", _USE_OWN_LIB),
+        probes={
+            "routed": accepted("lib::f()", "int"),
+            "routed-nested-scope": accepted("lib::Deep::d()", "int"),
+            "own": accepted("lib::g()", "int"),
+            "own-wins-its-path": accepted("lib::both()", "bool"),
+            "used": accepted(_in_region("use lib::*", "f() + g()"), "int"),
+            "used-own-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
+            "neither": rejected("lib::nope()", UnknownMemberError, "lib::nope"),
+        },
+    ),
+    "a-middle-step-decides-a-qualified-chain": Scenario(
+        modules={"M": "scope X\n  def f() -> bool = true\n  def k() -> bool = true\nend X\n"},
+        header=("import M::*", "def X::f() -> int = 1", 'def S1::X::f() -> text = "m"'),
+        probes={
+            "middle-step": accepted(
+                "scope S1::S2\n  let v = X::f()\nend S1::S2\n\nS1::S2::v", "text"
+            ),
+            "outer-step-when-the-middle-misses": accepted(
+                "scope S1::S2\n  let v = X::k()\nend S1::S2\n\nS1::S2::v", "bool"
+            ),
+            "root-step": accepted("X::f()", "int"),
+        },
+    ),
+    "a-hiding-at-an-enclosing-step-holds-in-a-nested-region": Scenario(
+        modules={"M": "scope Agent\n  def f() -> int = 1\n  def g() -> int = 2\nend Agent\n"},
+        header=("import M",),
+        probes={
+            "bare": rejected(_in_nested("use M::Agent::* hiding f", "f()"), AglScopeError, "f"),
+            "bare-kept": accepted(_in_nested("use M::Agent::* hiding f", "g()"), "int"),
+            "qualified": rejected(
+                _in_nested("use M::* hiding Agent::f", "Agent::f()"),
+                HiddenMemberError,
+                "Agent::f",
+            ),
+            "qualified-kept": accepted(_in_nested("use M::* hiding Agent::f", "Agent::g()"), "int"),
         },
     ),
 }

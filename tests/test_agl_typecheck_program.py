@@ -349,7 +349,7 @@ def test_nested_value_construction_below_a_root_local_owner_resolves_over_a_def_
                 "record Geo\n  x: int\n\n"
                 "record Geo::Inner\n  y: int\n\n"
                 "scope r\n"
-                "  def Geo::m(self) -> int = 1\n\n"
+                "  def Geo::m(p: int) -> int = p\n\n"
                 "  let q = Geo::Inner(y = 1)\n"
                 "end r"
             ),
@@ -361,7 +361,7 @@ def test_nested_value_construction_below_a_root_local_owner_resolves_over_a_def_
 def test_nested_structural_alias_below_a_root_local_owner_is_not_a_constructor(
     tmp_path: Path,
 ) -> None:
-    """A method path ``def Geo::m`` leaves ``Geo::Inner`` naming the nested alias.
+    """A def path ``def Geo::m`` in a region leaves ``Geo::Inner`` naming the nested alias.
 
     ``type Geo::Inner = int`` qualifies no constructor, so the value
     spelling is a type name, exactly as it is without the method.
@@ -374,7 +374,7 @@ def test_nested_structural_alias_below_a_root_local_owner_is_not_a_constructor(
                     "record Geo\n  x: int\n\n"
                     "type Geo::Inner = int\n\n"
                     "scope r\n"
-                    "  def Geo::m(self) -> int = 1\n\n"
+                    "  def Geo::m(p: int) -> int = p\n\n"
                     "  let q = Geo::Inner\n"
                     "end r"
                 ),

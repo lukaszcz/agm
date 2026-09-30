@@ -592,7 +592,7 @@ class AstBuilder(Transformer):
         """Return the positional type-variable slots bound by an applied receiver.
 
         Any applied head (``Box[T]``) contributes its bare-name arguments;
-        whether it is a real builtin receiver is typecheck's concern.
+        whether it is a real builtin receiver is scope's concern.
         """
         if isinstance(receiver, ArrayT):
             children: tuple[TypeExpr, ...] = (receiver.elem,)

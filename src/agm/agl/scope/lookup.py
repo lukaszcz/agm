@@ -217,12 +217,17 @@ class PathSources(Protocol):
         """The enum member module qualifier *chain*'s surface injects as *member*."""
         ...
 
-    def inline_arity(self, owner: DeclarationKey, member: str) -> int | None:
-        """The type parameters type *owner* takes when *member* is one of its inline members.
+    def inline_arity(self, owner: DeclarationKey, member: str, written: str) -> int | None:
+        """The type parameters type *owner*, spelled *written*, takes when it owns *member* inline.
 
-        An alias's inline members are those of its target it reaches.
-        ``None`` when *member* is none.
+        A type owns its inline enum members inline, and a record's or
+        exception's own constructor spellings (``Box::Box``). An alias's
+        are those of its target it reaches. ``None`` when *member* is none.
         """
+        ...
+
+    def applies(self, key: DeclarationKey) -> bool:
+        """Whether type *key* is an alias applying its target to type arguments of its own."""
         ...
 
     def hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
@@ -239,6 +244,13 @@ class PathSources(Protocol):
 
     def identity(self, key: DeclarationKey) -> DeclarationKey:
         """The declaration *key* names: a renaming alias's is its target's."""
+        ...
+
+    def denotes(self, key: DeclarationKey) -> object:
+        """What *key* names in an ambiguity: its :meth:`identity`, or the type an alias denotes.
+
+        Two aliases denoting one type are one, whatever their declarations.
+        """
         ...
 
     def aliases(self, key: DeclarationKey) -> bool:
@@ -545,7 +557,7 @@ class _Walk:
             self._reading(step, kind, injects=True, owners_within=len(self._names))
         )
         self._refusals.extend(reading.refusals)
-        selected = _decided(reading.candidates, self._sources.identity)
+        selected = _decided(reading.candidates, self._sources.denotes)
         chain = self._chain
         if selected is None:
             return None
@@ -619,44 +631,50 @@ class _Walk:
         that as an inline member (an alias's projected member is declared
         beneath the alias). A segment carries type arguments only when the
         type its full path selects (own first, else the one contributed; two
-        are ambiguous) owns what follows, as many as it takes.
+        are ambiguous) owns what follows, as many as it takes. A segment
+        selecting an alias that applies its target carries that alias's.
         """
         segments = chain.segments
         owner: DeclarationKey | None = None
         for index in range(step.start, len(segments)):
             segment = segments[index]
             last = index == len(segments) - 1
-            if segment.type_args is None and not last:
-                continue
             prefix = (*step.path, *self._names[: index + 1])
+            owners = self._kept(step.owners(prefix)).candidates
+            selected = _decided(owners, self._sources.denotes)
+            applied = segment.type_args is not None or (
+                isinstance(selected, Candidate)
+                and selected.target.key is not None
+                and self._sources.applies(selected.target.key)
+            )
+            if not applied and not last:
+                continue
             member = self._names[index + 1]
             following = (
                 target
                 if last
                 else _decided(
                     self._kept(step.read((*prefix, member), LookupKind.TYPE)).candidates,
-                    self._sources.identity,
+                    self._sources.denotes,
                 )
             )
-            owners = self._kept(step.owners(prefix)).candidates
             owner, arity = next(
                 (
                     (key, arity)
                     for candidate in owners
                     if (key := candidate.target.key) is not None
                     and _is_beneath(following, key)
-                    and (arity := self._sources.inline_arity(key, member)) is not None
+                    and (arity := self._sources.inline_arity(key, member, segment.name)) is not None
                 ),
                 (None, None),
             )
-            if segment.type_args is None:
+            if not applied:
                 continue
-            selected = _decided(owners, self._sources.identity)
             if isinstance(selected, tuple):
                 return self._ambiguous(selected, self._names[step.start : index + 1], segment.span)
             if selected is None or selected.target.key != owner:
                 arity = None
-            if arity is None or arity != len(segment.type_args):
+            if arity is None or (segment.type_args is not None and arity != len(segment.type_args)):
                 return TypeArgumentsError(segment.name, arity, span=segment.span)
         return (
             target
@@ -715,20 +733,25 @@ def _reached_as(reading: Reading, owner: Candidate) -> Reading:
 
 
 def _decided(
-    candidates: Iterable[Candidate], identity: Callable[[DeclarationKey], DeclarationKey]
+    candidates: Iterable[Candidate], identity: Callable[[DeclarationKey], object]
 ) -> Candidate | tuple[QualificationOrigin, ...] | None:
     """The one candidate selected, own first; the origins when several distinct ones compete.
 
     Candidates are distinct when they name distinct declarations by
-    *identity*: an alias renaming a declaration is that declaration. A
+    *identity* (:meth:`PathSources.denotes`): an alias renaming a declaration
+    is that declaration, and aliases denoting one type are one. A
     declaration reached several ways is one candidate -- the one spelling it
     directly, else the first by path -- yet an ambiguity it takes part in
     names every way it was reached.
     """
     pool = list(candidates)
     own = [candidate for candidate in pool if candidate.layer is ContributionLayer.DECLARED]
+    competing = own or pool
+    if len(competing) == 1:
+        # A lone candidate is selected without reading what it names.
+        return competing[0]
     distinct: dict[object, list[Candidate]] = {}
-    for candidate in own or pool:
+    for candidate in competing:
         target = candidate.target
         key = target.constructor if target.key is None else identity(target.key)
         distinct.setdefault(key, []).append(candidate)

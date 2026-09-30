@@ -154,10 +154,9 @@ def owner_member_selection(owner: TypeOwner, member: str) -> MemberSelection:
     already-filtered reachable projection subtracted) and ``referenced``
     (names the enum only references). A nominal owner's own member hidden at
     the site is the caller's to decide, from what the site's contributions
-    select. A direct owner's referenced name declared at its own path
-    (``owner.own_path_referenced``) selects like a declared member instead;
-    an alias never carries that set (see :class:`~agm.agl.scope.symbols.TypeOwner`),
-    so the same name stays referenced through one.
+    select. A referenced name declared at the enum's own path
+    (``owner.own_path_referenced``) selects like a declared member instead,
+    through an alias too.
     """
     if member in owner.referenced:
         if member in owner.own_path_referenced:

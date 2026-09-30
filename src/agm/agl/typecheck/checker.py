@@ -5193,21 +5193,18 @@ class _Checker:
             span=span,
         )
 
-    def _local_qualified_enum(
+    def _local_qualified_owner(
         self, qualifier: QualifierChain, span: SourceSpan
-    ) -> tuple[str, EnumType, tuple[str, ...]] | None:
-        """Return the enum whose inline member *qualifier* selects, and its open parameters.
+    ) -> tuple[Type | None, tuple[str, ...]]:
+        """Return the type owning what *qualifier* selects inline, and its open parameters.
 
-        ``None`` when scope recorded no owner's inline member for *qualifier*.
+        An enum owns its inline members, a record its own constructor
+        spellings. No type when scope recorded no owner's inline member for
+        *qualifier*.
         """
-        owner = self._env.owner_type_for_qualifier(
+        return self._env.owner_type_for_qualifier(
             qualifier, span=span, type_vars=self._current_type_vars
-        )
-        if owner is None:
-            return None
-        owner_type, type_params = owner
-        # Only an enum, directly or through an alias, owns inline members.
-        return render_qualifier_path(qualifier), cast(EnumType, owner_type), type_params
+        ) or (None, ())
 
     # --- member access ---
 
@@ -6214,18 +6211,22 @@ class _Checker:
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._record_constructor_pattern_ref(pattern, subj_type)
             if pattern.qualifier is not None:
-                local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
+                local_owner, type_params = self._local_qualified_owner(
+                    pattern.qualifier, pattern.span
+                )
                 # A record merely nested beneath a type's path is no member:
                 # its own constructor, below, decides it.
-                if local_enum is not None:
-                    _local_owner, enum_type, type_params = local_enum
+                if isinstance(local_owner, EnumType):
                     if not self._env.type_table.record_matches_enum_member(
-                        enum_type, type_params, pattern.name, subj_type
+                        local_owner, type_params, pattern.name, subj_type
                     ):
-                        named = self._env.owner_inline_member(enum_type, pattern.name)
+                        named = self._env.owner_inline_member(local_owner, pattern.name)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
-                # A constructor scope resolved for this record already names it.
-                elif constructor_ref is None:
+                # A constructor scope resolved for this record already names it,
+                # at the type arguments a record's own spelling fixes.
+                elif constructor_ref is None or (
+                    local_owner is not None and not type_params and local_owner != subj_type
+                ):
                     raise AglTypeError(
                         f"Qualified constructor pattern '{pattern.name}' does not belong to "
                         f"'{subj_type!r}'.",
@@ -6435,10 +6436,11 @@ class _Checker:
         a local scope spelling naming no member of the scope.
         """
         if qualifier is not None and node_id not in self._resolved.scope_qualified_spellings:
-            owner = self._local_qualified_enum(qualifier, span)
-            if owner is not None:
-                local_owner, owner_type, _type_params = owner
-                return _enum_owner_mismatch(local_owner, owner_type, enum_type, span)
+            owner, _type_params = self._local_qualified_owner(qualifier, span)
+            if isinstance(owner, EnumType):
+                return _enum_owner_mismatch(
+                    render_qualifier_path(qualifier), owner, enum_type, span
+                )
         return self._constructor_outside_enum(variant, enum_type, candidates, span)
 
     @staticmethod

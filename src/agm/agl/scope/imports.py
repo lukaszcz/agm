@@ -214,6 +214,9 @@ class ImportEnv:
     spelling it contributes. ``decl_tail_beneath`` holds, per tailed
     declaration, each spelling a tail item naming a path beneath an exported
     alias exposes, with the items; scope reads the path beneath the target.
+    ``decl_withheld`` holds, per declaration, the declarations the imported
+    module's export ``hiding`` removes beneath each export it brings, by the
+    export's declaration.
     """
 
     contributions: Mapping[ModuleId, ModuleContribution]
@@ -236,6 +239,7 @@ class ImportEnv:
     decl_tail_beneath: Mapping[int, Mapping[NameAtom, frozenset[ItemDeclaration]]] = field(
         default_factory=dict
     )
+    decl_withheld: Mapping[int, Mapping[QName, frozenset[QName]]] = field(default_factory=dict)
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
@@ -492,12 +496,16 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
     )
 
 
+_NOTHING_WITHHELD: Mapping[ModuleId, Mapping[NameAtom, frozenset[QName]]] = MappingProxyType({})
+
+
 def build_import_env(
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
     exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
     scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
     aliases: Collection[QName] = (),
+    withheld: Mapping[ModuleId, Mapping[NameAtom, frozenset[QName]]] = _NOTHING_WITHHELD,
 ) -> ImportEnv:
     """Build route and implicit-tail contributions for import declarations.
 
@@ -505,6 +513,9 @@ def build_import_env(
     but its implicit tail's bare atoms are recorded in ``decl_bare`` so the
     scope pass can narrow them to that region. *aliases* are the program's
     type aliases, beneath whose exports a ``hiding`` item may name a path.
+    *withheld* holds, per module, what its export ``hiding`` removes beneath
+    each re-exported atom; a declaration reaching one export through several
+    atoms withholds only what each does.
     """
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
     root_bare: dict[NameAtom, dict[QName, set[int]]] = {}
@@ -516,6 +527,7 @@ def build_import_env(
     decl_hidden: dict[int, set[NameAtom]] = {}
     decl_hiding: dict[int, list[ItemDeclaration]] = {}
     decl_tail_beneath: dict[int, dict[NameAtom, set[ItemDeclaration]]] = {}
+    decl_withheld: dict[int, dict[QName, frozenset[QName]]] = {}
     root_hidden: set[QName] = set()
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     for decl in decls:
@@ -573,11 +585,15 @@ def build_import_env(
                 acc.aliases.add(decl.alias)
             route_hidden.update(hidden)
             route_decls.add(decl.node_id)
+            module_withheld = withheld.get(module, {})
+            reached_withheld = decl_withheld.setdefault(decl.node_id, {})
             for source, qname in module_exports.items():
                 if source not in hidden:
                     acc.members[source] = qname
                     route_members[source] = qname
                     route_member_decls.setdefault(source, set()).add(decl.node_id)
+                    kept = module_withheld.get(source, frozenset())
+                    reached_withheld[qname] = reached_withheld.get(qname, kept) & kept
             visible_scope_paths = tuple(
                 source for source in module_scopes if source not in hidden_scope_paths
             )
@@ -639,6 +655,10 @@ def build_import_env(
         decl_tail_beneath={
             node_id: {exposed: frozenset(items) for exposed, items in exposures.items()}
             for node_id, exposures in decl_tail_beneath.items()
+        },
+        decl_withheld={
+            node_id: {qname: removed for qname, removed in reached.items() if removed}
+            for node_id, reached in decl_withheld.items()
         },
         decl_bare={
             node_id: {atom: frozenset(qnames) for atom, qnames in members.items()}

@@ -427,26 +427,36 @@ _SCENARIOS = {
             ),
         },
     ),
-    "an-alias-of-an-imported-enum-declares-its-member-paths": Scenario(
+    "an-alias-of-an-imported-enum-declares-beside-its-member-paths": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{E}", "type C = E"),
         probes={
-            "scope-function": rejected(
-                "scope C\n  def Red() -> int = 1\nend C",
-                DuplicateDeclarationError,
-                "def Red() -> int = 1",
-            ),
+            f"{declared}-{form}-then-{used}": accepted(f"{declaration}\n\n{used}::{name}()", "text")
+            for declared in ("C", "E")
+            for used in ("C", "E")
+            for form, name, declaration in (
+                ("region", "Red", f'scope {declared}\n  def Red() -> text = "own"\nend {declared}'),
+                ("qualified", "Blue", f'def {declared}::Blue() -> text = "own"'),
+            )
+        }
+        | {
+            f"{declared}-type-then-{used}": accepted(
+                f"record {declared}::Red\n  q: bool\n{used}::Red(q = true)",
+                f"record {declared}::Red\n  q: bool",
+            )
+            for declared in ("C", "E")
+            for used in ("C", "E")
         },
     ),
     "an-alias-of-an-imported-enum-declared-after-its-member-path": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{E}",),
         probes={
-            "scope-function": rejected(
-                "scope C\n  def Red() -> int = 1\nend C\n\ntype C = E",
-                DuplicateDeclarationError,
-                "type C = E",
-            ),
+            f"then-{used}": accepted(
+                f'scope C\n  def Red() -> text = "own"\nend C\n\ntype C = E\n\n{used}::Red()',
+                "text",
+            )
+            for used in ("C", "E")
         },
     ),
     "hiding-an-enum-member-path-removes-its-bare-spelling": Scenario(
@@ -987,7 +997,25 @@ _SCENARIOS = {
                 TypeArgumentsError,
                 "Box[int]",
             ),
-            "record-own-spelling": rejected("Box[int]::Box(v = 1)", TypeArgumentsError, "Box[int]"),
+            "record-own-spelling": accepted("Box[int]::Box(v = 1)", "record Box[int]\n  v: int"),
+            "record-own-spelling-pattern": accepted(
+                "case Box(v = 1) of\n  | Box[int]::Box(v) => v", "int"
+            ),
+            "record-own-spelling-argument-mismatch": rejected(
+                'Box[int]::Box(v = "s")', AglTypeError, '"s"', phase="typecheck"
+            ),
+            "record-own-spelling-pattern-on-another-application": rejected(
+                'case Box(v = "s") of\n  | Box[int]::Box(v) => 1',
+                AglTypeError,
+                "Box[int]::Box(v)",
+                phase="typecheck",
+            ),
+            "record-own-spelling-wrong-arity": rejected(
+                "Box[int, int]::Box(v = 1)", TypeArgumentsError, "Box[int, int]"
+            ),
+            "non-generic-record-own-spelling": rejected(
+                "Col::Red[int]::Red", TypeArgumentsError, "Red[int]"
+            ),
             "record-under-generic-enum": rejected(
                 "E[int]::Inner(x = 1)", TypeArgumentsError, "E[int]"
             ),

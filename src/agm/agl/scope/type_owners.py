@@ -44,7 +44,7 @@ from agm.agl.syntax.nodes import (
     VariantRef,
     static_type_items,
 )
-from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.syntax.types import AppliedT, ArrayT, DictT, FuncT, NameT, TypeExpr
 
 __all__ = [
     "DeclaredBeneath",
@@ -77,6 +77,10 @@ A path is reached unless a ``hiding`` visible at the alias's site removed
 
 DeclaredBeneath = Callable[[QName], Collection[ScopePath]]
 """The paths, relative to type *qname*, of the declarations its module makes beneath it."""
+
+Denoted = tuple[object, ...] | TypeExpr
+"""A normalized denoted type (:meth:`TypeOwnerIndex.denotation`): a scalar type expression,
+or a tagged tuple of normalized parts."""
 
 AliasSelection = tuple[QName | None, NameT | AppliedT] | None
 """An alias's selected target declaration and its spelling.
@@ -125,6 +129,8 @@ class TypeOwnerIndex:
         self._owners: dict[QName, TypeOwner] = {}
         self._alias_targets: dict[QName, AliasSelection] = {}
         self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
+        # Aliases being resolved (:meth:`settled`).
+        self._resolving: set[QName] = set()
 
     def with_retained(
         self, module_id: ModuleId, retained: Mapping[ScopePath, TypeOwner]
@@ -140,6 +146,14 @@ class TypeOwnerIndex:
             retained_module=module_id,
             retained=retained,
         )
+
+    def forget(self, modules: Collection[ModuleId]) -> None:
+        """Forget what paths of *modules* select: their headers are prepared again."""
+        self._owners = {q: o for q, o in self._owners.items() if q[0] not in modules}
+        self._alias_targets = {q: t for q, t in self._alias_targets.items() if q[0] not in modules}
+        self._referenced_members = {
+            key: refs for key, refs in self._referenced_members.items() if key[0] not in modules
+        }
 
     def is_declared(self, qname: QName) -> bool:
         """Whether *qname* names a type or an inline enum member."""
@@ -342,6 +356,63 @@ class TypeOwnerIndex:
         named = self._named(qname)
         return qname if named is None else named[0]
 
+    def denotation(self, qname: QName) -> Denoted | None:
+        """The type the alias declared at *qname* denotes, unless it renames its target.
+
+        Normalized: each named head is the declaration it selects where it is
+        spelled, read through aliases with their parameters substituted
+        (``Box[path]`` is ``Box[text]``), and the alias's own parameters are
+        positions. ``None`` for any other path.
+        """
+        declaration = self._all_public_types.get(qname)
+        if not isinstance(declaration, TypeAlias) or renames_target(declaration):
+            return None
+        return self._denoted(qname, declaration, frozenset({qname}))
+
+    def _denoted(
+        self,
+        qname: QName,
+        alias: TypeAlias,
+        passed: frozenset[QName],
+        arguments: tuple[Denoted, ...] | None = None,
+    ) -> Denoted:
+        """What alias *alias* at *qname* denotes, applied to *arguments*.
+
+        Its own parameters' positions by default. A head naming nothing, or
+        an alias *passed* on the way (an ill-founded chain), is unresolved.
+        """
+        positions = tuple(("parameter", index) for index in range(len(alias.type_params)))
+        bound: dict[str, Denoted] = dict(
+            zip(alias.type_params, positions if arguments is None else arguments, strict=False)
+        )
+
+        def denoted(expr: TypeExpr) -> Denoted:
+            if isinstance(expr, NameT) and expr.qualifier is None and expr.name in bound:
+                return bound[expr.name]
+            if isinstance(expr, (NameT, AppliedT)):
+                args = tuple(map(denoted, expr.args)) if isinstance(expr, AppliedT) else ()
+                selection = self._decided_targets(qname, alias, expr)
+                head = None if selection is None else self.declared_path(selection)
+                target = None if head is None else self._all_public_types.get(head)
+                if head is None or head in passed:
+                    return ("unresolved", qname, expr)
+                if isinstance(target, TypeAlias):
+                    return self._denoted(head, target, passed | {head}, args)
+                return ("applied", head, args)
+            if isinstance(expr, ArrayT):
+                return ("array", denoted(expr.elem))
+            if isinstance(expr, DictT):
+                return ("dict", denoted(expr.key), denoted(expr.value))
+            if isinstance(expr, FuncT):
+                return ("function", tuple(map(denoted, expr.params)), denoted(expr.result))
+            return expr
+
+        return denoted(alias.type_expr)
+
+    def declaration(self, qname: QName) -> QName:
+        """Return the declaration full path *qname* names: its :meth:`path_target`'s identity."""
+        return self.identity(self.path_target(qname))
+
     def constructor_identity(self, constructor: ConstructorRef) -> ConstructorRef:
         """Return the constructor *constructor* names: a renaming alias's is its target's."""
         named = self._named(constructor.qname)
@@ -370,6 +441,16 @@ class TypeOwnerIndex:
             owner = self._resolve(qname, declaration)
             self._owners[qname] = owner
         return owner
+
+    def settled(self, qname: QName) -> bool:
+        """Whether reading *qname* now gives what it finally selects.
+
+        An alias being resolved is presumed, naming no target yet. While one
+        is, resolving another may read it: only one already resolved is read.
+        """
+        return qname not in self._resolving and (
+            not self._resolving or qname in self._owners or qname not in self._all_public_types
+        )
 
     def alias_constructor(self, alias: TypeAlias, qname: QName) -> ConstructorRef | None:
         """Return alias *qname*'s constructor, unless it denotes a structural type or an enum."""
@@ -423,9 +504,6 @@ class TypeOwnerIndex:
                 arity=arity,
             )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
-        # None of an alias's TypeOwner constructions below pass
-        # own_path_referenced, so it stays empty: an alias never selects a
-        # referenced member at its own path, only at its target's.
         # Typecheck judges a target scope selects no declaration for, so the
         # alias is presumed constructible; an alias cycle meets it that way.
         presumed = TypeOwner(
@@ -436,6 +514,16 @@ class TypeOwnerIndex:
             arity=arity,
         )
         self._owners[qname] = presumed
+        self._resolving.add(qname)
+        owner = self._resolve_alias(qname, declaration, presumed)
+        self._resolving.discard(qname)
+        return owner
+
+    def _resolve_alias(
+        self, qname: QName, declaration: TypeAlias, presumed: TypeOwner
+    ) -> TypeOwner:
+        """Return what alias *declaration* at *qname* selects, *presumed* meanwhile."""
+        constructor, arity = presumed.constructor, presumed.arity
         selection = self._alias_selection(qname, declaration)
         if selection is None:
             return TypeOwner(None, declaration.node_id, alias=declaration, arity=arity)
@@ -453,6 +541,7 @@ class TypeOwnerIndex:
             declaration,
             hidden=hidden,
             target=TypeTarget(target_qname, target.decl_node_id),
+            own_path_referenced=target.own_path_referenced,
             arity=arity,
         )
 

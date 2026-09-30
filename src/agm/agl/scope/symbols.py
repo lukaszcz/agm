@@ -86,17 +86,31 @@ BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class BuiltinMethodReceiver:
+    """A builtin method receiver and the receiver type parameter(s) its head binds.
+
+    ``key_type_parameter`` is set only for a bare-key ``dict[K, V]`` receiver;
+    a ``dict[text, V]`` receiver leaves it unset, matching only text-keyed dicts.
+    """
+
+    name: str
+    type_parameter: str | None = None
+    key_type_parameter: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ReceiverOwner:
     """The nominal declaration or builtin scope a method receiver extends.
 
     ``module_id`` and ``scope_path`` identify a nominal receiver type where it
-    was declared, or a builtin receiver scope in the method's declaring module.
-    The method itself remains keyed by its declaring module and scope path in
-    ``method_declarations``.
+    was declared, or a builtin receiver scope in the method's declaring module;
+    ``builtin`` is set exactly for the latter. The method itself remains keyed
+    by its declaring module and scope path in ``method_declarations``.
     """
 
     module_id: ModuleId
     scope_path: ScopePath
+    builtin: BuiltinMethodReceiver | None = None
 
 
 BareRoute: TypingTypeAlias = tuple[ModuleId, ScopePath]
@@ -498,11 +512,10 @@ class TypeOwner:
     with a nominal target, the target's identity (:class:`TypeTarget`): what a
     REPL entry retains and never re-selects, however later entries redeclare
     or import around it. ``own_path_referenced`` holds, for
-    a direct (non-alias) enum owner only, each of ``referenced``'s names that
-    is declared directly beneath the owner's own path (``enum Box = ... |
-    Box::Item``): such a name selects like a declared member wherever the
-    owner is spelled, not only locally; an alias never carries this set, so
-    it stays a referenced-member error through one. ``arity`` is the number of
+    an enum target, each of ``referenced``'s names that is declared directly
+    beneath the enum's own path (``enum Box = ... | Box::Item``): such a name
+    selects like a declared member wherever the enum is spelled, through an
+    alias too (``B::Item`` with ``type B = Box``). ``arity`` is the number of
     type parameters the declaration itself takes.
     """
 
@@ -1376,10 +1389,13 @@ class UnknownMemberError(AglScopeError):
 class TypeArgumentsError(AglScopeError):
     """A qualifier segment carrying type arguments its full path does not take.
 
-    A segment takes type arguments only when it selects a generic type whose
-    inline member the next segment selects, and exactly as many as that type
-    declares. *segment* is the segment as spelled; *arity* the owner's type
-    parameter count, ``None`` when the segment selects no such owner.
+    A segment carries them written (``Box[int]``) or by selecting an applied
+    alias (``IntBox``). It takes them only when it selects a generic type
+    whose inline member the next segment selects, and exactly as many as that
+    type declares; a declaration's path takes none, but a builtin receiver's
+    bare generic head. *segment* is the segment as spelled; *arity* the
+    owner's type parameter count, ``None`` when the segment selects no such
+    owner.
     """
 
     def __init__(self, segment: str, arity: int | None, *, span: SourceSpan) -> None:

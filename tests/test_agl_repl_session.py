@@ -2494,34 +2494,6 @@ def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
         s.type_of("fn(x: Stored[int]::Saved) => 1")
 
 
-def test_an_aliased_owners_own_path_referenced_member_stays_referenced_through_the_alias() -> None:
-    """A referenced member declared at its enum's own path selects directly
-    through that owner's own spelling, but an alias never carries that
-    exception: the same member stays rejected as referenced through an
-    alias, in every position."""
-    s = ReplSession()
-    for decl in (
-        "record Box::Item\n  n: int",
-        "enum Box = Empty | Box::Item",
-        "type B = Box",
-    ):
-        assert s.eval_entry(decl).ok
-
-    assert s.eval_entry("Box::Item(n = 1)").ok
-
-    bare = s.eval_entry("B::Item")
-    assert bare.kind != "type"
-    assert not bare.ok
-    for probe in (
-        "B::Item(n = 1)",
-        "case (Box::Item(n = 1)) of\n  | B::Item => 1\n  | _ => 2",
-        "(Box::Item(n = 1)) is B::Item",
-        "fn(x: B::Item) => 1",
-    ):
-        with pytest.raises(ReferencedMemberError):
-            s.type_of(probe)
-
-
 @pytest.mark.parametrize(
     "use",
     (

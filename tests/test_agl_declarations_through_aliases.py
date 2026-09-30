@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.scope.symbols import DuplicateDeclarationError
+from agm.agl.scope.symbols import AglScopeError, DuplicateDeclarationError, TypeArgumentsError
 from tests.agl.qualifier_support import (
     Probe,
     Scenario,
@@ -29,6 +29,7 @@ from tests.agl.qualifier_support import (
     info,
     rejected,
     scenario_params,
+    type_positions,
 )
 
 _BASE = "record Base\n  x: int\nrecord Base::Inner\n  y: int\ndef Base::f() -> int = 1\n"
@@ -38,6 +39,7 @@ _MODULES = {"base": _BASE, "al": _ALIASING}
 
 _OWN_ALIAS = ("import base::*", "type Geo = Base")
 _IMPORTED_ALIAS = ("import al::*",)
+_ROUTED_ALIAS = ("import base", "import base::*", "type Geo = base::Base")
 _LOCAL_TARGET = ("record Base\n  x: int\nrecord Base::Inner\n  y: int", "type Geo = Base")
 
 
@@ -89,6 +91,33 @@ def _duplicate_probes(first: str, second: str) -> dict[str, Probe]:
     }
 
 
+def _beside_imported_probes(nested: str) -> dict[str, Probe]:
+    """What :func:`_beside_imported` declares, reached through both spellings.
+
+    *nested* renders the own nested record's type.
+    """
+    return {
+        f"{spelling}-{position}": probe
+        for spelling in ("Base", "Geo")
+        for position, probe in {
+            "static": accepted(f"{spelling}::f()", "text"),
+            "static-value": accepted(f"{spelling}::f", "() -> text"),
+            "region": accepted(f"{spelling}::h()", "text"),
+            "nested-value": accepted(f"{spelling}::Inner(q = true)", f"record {nested}\n  q: bool"),
+            **type_positions("nested", f"{spelling}::Inner", nested),
+        }.items()
+    }
+
+
+def _beside_imported(spelling: str) -> str:
+    """Own declarations beneath *spelling* at paths ``base`` declares beneath ``Base`` too."""
+    return (
+        f'def {spelling}::f() -> text = "own"\n'
+        f'scope {spelling}\n  def h() -> text = "own"\nend {spelling}\n'
+        f"record {spelling}::Inner\n  q: bool"
+    )
+
+
 _SCENARIOS = (
     {
         f"declared-through-{spelling}-{name}": Scenario(
@@ -101,6 +130,46 @@ _SCENARIOS = (
             ("an-own-alias", _OWN_ALIAS, "base::Base"),
             ("an-imported-alias", _IMPORTED_ALIAS, "base::Base"),
             ("an-alias-of-an-own-type", _LOCAL_TARGET, "Base"),
+        )
+    }
+    | {
+        f"declared-through-{spelling}-beside-an-imported-declaration-{name}": Scenario(
+            modules={**_MODULES, "base": _BASE + "def Base::h() -> int = 3\n"},
+            header=(*header, _beside_imported(spelling)),
+            probes=_beside_imported_probes(f"{spelling}::Inner"),
+        )
+        for spelling in ("Base", "Geo")
+        for name, header in (("an-own-alias", _OWN_ALIAS), ("an-imported-alias", _IMPORTED_ALIAS))
+    }
+    | {
+        f"declared-beneath-an-alias-of-a-path-through-{name}": Scenario(
+            modules=_MODULES,
+            header=(
+                *header,
+                "record Base::Inner\n  q: bool",
+                "type Nested = Geo::Inner",
+                'def Nested::Sub::k() -> text = "k"',
+            ),
+            probes={
+                **{
+                    f"{spelling}-nested": accepted(f"{spelling}::Sub::k()", "text")
+                    for spelling in ("Base::Inner", "Geo::Inner", "Nested")
+                },
+                "value": accepted("Nested(q = true)", "record Base::Inner\n  q: bool"),
+                **type_positions("alias", "Nested", "Base::Inner"),
+            },
+        )
+        for name, header in (
+            ("an-own-alias", _OWN_ALIAS),
+            ("an-imported-alias", _IMPORTED_ALIAS),
+            ("an-alias-of-a-routed-target", _ROUTED_ALIAS),
+        )
+    }
+    | {
+        "declared-through-an-alias-of-a-routed-target": Scenario(
+            modules=_MODULES,
+            header=(*_ROUTED_ALIAS, _declarations("Geo")),
+            probes=_reached_probes("base::Base"),
         )
     }
     | {
@@ -140,6 +209,73 @@ _SCENARIOS = (
         )
     }
 )
+
+_APPLIED_MODULES = {"gen": "record Box[T]\n  v: T\nrecord Box::In\n  w: int\n"}
+_APPLIED = ("import gen::*", "type IntBox = Box[int]", "type IB2 = IntBox")
+"""Applied aliases of ``gen``'s ``Box[int]``, directly and through an alias."""
+
+
+def _applied_head_probes(spelling: str) -> dict[str, Probe]:
+    """Every declaration beneath *spelling*, a type application, is rejected at *spelling*.
+
+    A written application heads only a ``def``'s one-segment path.
+    """
+    written = "[" in spelling
+    return {
+        f"{spelling}-{name}": rejected(text, TypeArgumentsError, spelling)
+        for name, text in {
+            "method": f"def {spelling}::m(self) -> int = 1",
+            "static": f"def {spelling}::f() -> int = 1",
+            **(
+                {}
+                if written
+                else {
+                    "nested": f"def {spelling}::In::f() -> int = 1",
+                    "record": f"record {spelling}::R\n  x: int",
+                }
+            ),
+        }.items()
+    }
+
+
+_SCENARIOS |= {
+    "declared-beneath-a-type-application": Scenario(
+        modules=_APPLIED_MODULES,
+        header=_APPLIED,
+        probes={
+            **_applied_head_probes("Box[int]"),
+            **_applied_head_probes("IntBox"),
+            **_applied_head_probes("IB2"),
+            "region": rejected(
+                "scope IntBox\n  def f() -> int = 1\nend IntBox", TypeArgumentsError, "IntBox"
+            ),
+            "generic-head-method": rejected(
+                "def Box[T]::m(self) -> int = 1", TypeArgumentsError, "Box[T]"
+            ),
+            "unknown-applied-head": rejected(
+                "def bytes[int]::m(self) -> int = 1", TypeArgumentsError, "bytes[int]"
+            ),
+            "builtin-generic-head-method": accepted(
+                "def array[E]::m2(self) -> int = 1\n[1].m2()", "int"
+            ),
+            "builtin-text-keyed-head-method": accepted(
+                'def dict[text, V]::m2(self) -> int = 1\n{"a": 1}.m2()', "int"
+            ),
+            "builtin-generic-head-static": rejected(
+                "def array[E]::f() -> int = 1", TypeArgumentsError, "array[E]"
+            ),
+            "builtin-applied-head-static": rejected(
+                "def array[int]::f() -> int = 1", TypeArgumentsError, "array[int]"
+            ),
+            "builtin-applied-head-method": rejected(
+                "def array[int]::m2(self) -> int = 1", AglScopeError, "array[int]"
+            ),
+            "builtin-bare-generic-head-method": rejected(
+                "def array::m2(self) -> int = 1", AglScopeError, "array"
+            ),
+        },
+    )
+}
 
 
 class TestDeclarationsThroughAliases:

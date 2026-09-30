@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import HiddenMemberError, ReferencedMemberError
+from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -2283,33 +2283,3 @@ def test_enum_variant_expansion_still_contributes_a_bare_constructor(
     """
     graph = make_graph_from_files(tmp_path, {"entry": entry, **modules})
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
-
-
-_BOX_ITEM_PRELUDE = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item\ntype B = Box\n"
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        pytest.param(_BOX_ITEM_PRELUDE + "let f = fn(x: B::Item) => 1\nf\n", id="type"),
-        pytest.param(_BOX_ITEM_PRELUDE + "let f = B::Item(n = 1)\nf\n", id="value"),
-        pytest.param(
-            _BOX_ITEM_PRELUDE
-            + "let v = Box::Item(n = 1)\nlet f = case v of\n  | B::Item => 1\n  | _ => 2\nf\n",
-            id="pattern",
-        ),
-        pytest.param(
-            _BOX_ITEM_PRELUDE + "let v = Box::Item(n = 1)\nlet f = v is B::Item\nf\n",
-            id="is",
-        ),
-    ],
-)
-def test_a_referenced_members_own_path_selection_does_not_carry_through_an_alias(
-    tmp_path: Path, entry: str
-) -> None:
-    """``Box::Item`` selects directly at its enum's own declaration path, but
-    an alias of that enum never carries this exception: ``B::Item`` stays a
-    referenced member, rejected in every position."""
-    graph = make_graph_from_files(tmp_path, {"entry": entry})
-    with pytest.raises(ReferencedMemberError):
-        check_program(resolve_program(graph), base_caps())

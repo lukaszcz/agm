@@ -1344,22 +1344,25 @@ class TypeEnvironment:
         An alias of an enum is its target, so ``Alias::Member`` selects the
         member of the alias's template, quantified over the alias's own type
         parameters. ``None`` when scope recorded no owner's inline member for
-        *qualifier* (:class:`OwnerMemberSelection`), or an unapplied enum
-        declared directly: the member's own declaration then resolves it.
+        *qualifier* (:class:`OwnerMemberSelection`), an unapplied enum
+        declared directly, or a record's own constructor spelling (no member):
+        the member's own declaration then resolves it.
         """
         selection = self._owner_selection(qualifier)
         if selection is None:
             return None
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, AppliedT):
-            # Scope selected an inline member of this generic owner, so it
-            # instantiates to an enum.
-            owner = cast(
-                EnumType, self._applied_owner(selection.owner, owner_expr, span, type_vars)
-            )
-            return OwnerMember(self.owner_inline_member(owner, member), ())
+            # Scope selected an inline member of this generic owner: an enum's,
+            # or a record's own constructor spelling (``Box[int]::Box``).
+            owner = self._applied_owner(selection.owner, owner_expr, span, type_vars)
+            if isinstance(owner, RecordType):
+                return None
+            return OwnerMember(self.owner_inline_member(cast(EnumType, owner), member), ())
         module_id, scope_path, name = selection.owner
         template = self.declared_type_template(module_id, name, scope_path=scope_path)
+        if isinstance(template.template, RecordType):
+            return None
         enum_template = cast(EnumType, template.template)
         if (enum_template.module_id, enum_template.scope_path, enum_template.name) == (
             selection.owner

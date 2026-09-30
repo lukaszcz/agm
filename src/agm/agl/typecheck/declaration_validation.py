@@ -8,7 +8,7 @@ from functools import partial
 from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
-from agm.agl.scope.symbols import BUILTIN_METHOD_RECEIVER_NAMES, ModuleResolution
+from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.type_table import (
     DeclId,
     TypeTable,
@@ -27,58 +27,10 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT, TextT
 from agm.agl.typecheck.env import AglTypeError
 
 SessionBuiltinDeclarations = Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
 """A REPL session's builtin identities from earlier, still-live entries, keyed by scoped name."""
-
-
-@dataclass(frozen=True, slots=True)
-class BuiltinMethodReceiver:
-    """A validated builtin method receiver and its optional binding parameter(s).
-
-    ``key_type_parameter`` is set only for a bare-key ``dict[K, V]`` receiver;
-    a concrete ``dict[text, V]`` receiver leaves it unset, matching only
-    text-keyed dicts.
-    """
-
-    name: str
-    type_parameter: str | None = None
-    key_type_parameter: str | None = None
-
-
-def builtin_method_receiver_for(
-    function: FuncDef, owner_path: tuple[str, ...]
-) -> BuiltinMethodReceiver | None:
-    """Resolve a builtin receiver spelling, rejecting unsupported applied forms."""
-    receiver = function.receiver_type
-    if isinstance(receiver, ArrayT):
-        if not isinstance(receiver.elem, NameT):
-            raise AglTypeError(
-                "Builtin method receivers must use their bare generic form.", span=receiver.span
-            )
-        return BuiltinMethodReceiver("array", receiver.elem.name)
-    if isinstance(receiver, DictT):
-        if not isinstance(receiver.value, NameT) or not isinstance(receiver.key, (NameT, TextT)):
-            raise AglTypeError(
-                "Builtin method receivers must use their bare generic form.", span=receiver.span
-            )
-        if isinstance(receiver.key, NameT):
-            return BuiltinMethodReceiver("dict", receiver.value.name, receiver.key.name)
-        return BuiltinMethodReceiver("dict", receiver.value.name)
-    if isinstance(receiver, AppliedT):
-        raise AglTypeError("Unknown builtin method receiver.", span=receiver.span)
-    if receiver is None and len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_RECEIVER_NAMES:
-        if owner_path[0] in ("array", "dict"):
-            # A generic receiver binds its type parameters only in applied form.
-            raise AglTypeError(
-                "Builtin method receivers must use their bare generic form "
-                "(array[T] or dict[K, V]).",
-                span=function.span,
-            )
-        return BuiltinMethodReceiver(owner_path[0])
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +123,7 @@ def _member_declarations(
                     )
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
-            if (
-                owner_path is None
-                or builtin_method_receiver_for(function, owner_path.scope_path) is not None
-            ):
+            if owner_path is None or owner_path.builtin is not None:
                 continue
             method_owner_id = owner_ids.get((owner_path.module_id, owner_path.scope_path))
             if method_owner_id is None:

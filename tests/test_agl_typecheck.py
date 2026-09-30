@@ -8167,9 +8167,11 @@ class TestBareConstructorTypeApply:
         option_type = checked.type_env.instantiate_nominal("Option", (IntType(),))
         assert binding_type == option_type
 
-    def test_owner_apply_requires_an_enum_owner(self) -> None:
-        """A record owner has no inline members: scope rejects its type arguments."""
-        error = reject_type("record Box[T]\n  value: T\nBox[int]::Box")
+    def test_owner_apply_on_a_record_selects_only_its_own_constructor(self) -> None:
+        """A record owner's only inline member is its own constructor spelling."""
+        box = "record Box[T]\n  value: T\nrecord Box::In\n  x: int\n"
+        accept_type(box + "Box[int]::Box(value = 1)")
+        error = reject_type(box + "Box[int]::In(x = 1)")
         assert isinstance(error, TypeArgumentsError)
 
     def test_applied_unknown_owner_member_is_rejected(self) -> None:

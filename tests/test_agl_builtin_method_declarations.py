@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
 from agm.agl.pipeline import PreparedProgram
 from agm.agl.semantics.types import ArrayType, DictType, IntType, TextType, TypeVarType
 from agm.agl.syntax import FuncDef
@@ -168,19 +168,23 @@ def test_builtin_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_path:
     assert signature.params[0].type == ArrayType(TypeVarType(type_parameter))
 
 
-def test_unknown_applied_receiver_uses_its_head_name_as_its_scope(tmp_path: Path) -> None:
+def test_unknown_applied_receiver_uses_its_head_name_as_its_scope() -> None:
+    (declaration,) = parse_program("def bytes[E]::copy(self) -> unit = ()\n").body.items
+    assert isinstance(declaration, FuncDef)
+
+    assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
+
+
+def test_unknown_applied_receiver_is_rejected_at_its_head(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,
         "std/array",
         "def bytes[E]::copy(self) -> unit = ()\n",
     )
 
-    assert prepared.resolved is not None, prepared.diagnostics
-    resolved_module = prepared.resolved.modules[ModuleId.from_path("std/array")]
-    (declaration,) = resolved_module.resolved.program.body.items
-    assert isinstance(declaration, FuncDef)
-
-    assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
+    assert prepared.resolved is None
+    (diagnostic,) = prepared.diagnostics
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 5, 13)
 
 
 def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:

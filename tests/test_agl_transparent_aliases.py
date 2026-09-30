@@ -30,6 +30,7 @@ from agm.agl.scope.symbols import (
     NoVisibleConstructorError,
     TypeArgumentsError,
     UnknownMemberError,
+    UnknownQualifierError,
 )
 from tests.agl.qualifier_support import (
     Probe,
@@ -70,11 +71,28 @@ _EXPORTING_THROUGH = (
 """Re-exports paths written through ``al``'s aliases."""
 _HIDING_THROUGH = "import al\nexport al hiding Geo::Inner\n"
 _MODULES = {"base": _BASE, "al": _EXPORTING}
+_ROUTES = "import ex::*\nimport ex"
+"""Imports ``ex``'s exports bare and by its route, in one entry."""
+_CYCLING = (
+    "import base\nimport ex\nexport base::{Base, Color}\ntype Geo = base::Base\ntype J = ex::I\n"
+    "def mk(p: ex::I) -> int = p.y\nrecord Holder\n  i: ex::I\n"
+)
+"""Aliases ``base``'s ``Base``, and reads ``ex``'s export of a path through that alias."""
+_CYCLED = "import al\nexport al::{Geo::Inner as I, Geo::Shape as S}\nexport al hiding Geo::f\n"
+"""Re-exports paths through ``al``'s alias, and ``al`` less a path through it."""
+
+
+def _export_hiding(item: str) -> dict[str, str]:
+    """The modules, with ``ex`` re-exporting ``al`` less *item*."""
+    return {**_MODULES, "ex": f"import al\nexport al hiding {item}\n"}
+
 
 _RECORD = "record base::Base\n  x: int"
 _INNER = "record base::Base::Inner\n  y: int"
 _GREEN = "record base::Color::Green"
 _BASE_CASE = "fn(p: base::Base) => case p of\n    | Geo(x) => x"
+_BASE_PATTERN = "fn(p: base::Base) => case p of\n  | Geo(x) => x"
+"""Matches ``base``'s ``Base`` by ``Geo``."""
 """Matches ``base``'s ``Base`` by ``Geo`` in a region (see :func:`_in_region`)."""
 
 
@@ -171,11 +189,7 @@ _SCENARIOS = {
         header=("import al::* hiding Base", "import base"),
         probes={
             "alias-value": rejected("Geo(x = 1)", AglScopeError, "Geo"),
-            "alias-pattern": rejected(
-                "fn(p: base::Base) => case p of\n  | Geo(x) => x",
-                NoVisibleConstructorError,
-                "Geo(x)",
-            ),
+            "alias-pattern": rejected(_BASE_PATTERN, NoVisibleConstructorError, "Geo(x)"),
             "alias-annot": rejected("fn(p: Geo) => p", AglTypeError, "p: Geo", phase="typecheck"),
             "alias-alias": rejected("type AA = Geo\nfn(p: AA) => p", AglTypeError, "type AA = Geo"),
             "alias-tyarg": rejected(
@@ -365,9 +379,88 @@ _SCENARIOS = {
         header=("import ex::*",),
         probes={
             **_hidden_probes("Base::Inner"),
+            **_hidden_probes("Geo::Inner"),
             "routed": rejected("ex::Base::Inner(y = 1)", HiddenMemberError, "ex::Base::Inner"),
             "target": accepted("Base(x = 1)", _RECORD),
             "sibling": accepted("Base::f", "() -> int"),
+        },
+    ),
+    "an-export-hiding-a-target-path-hides-it-through-the-module-aliases": Scenario(
+        modules=_export_hiding("Base::Inner"),
+        header=(_ROUTES,),
+        probes={
+            **_hidden_probes("Geo::Inner"),
+            **_hidden_probes("Base::Inner"),
+            "routed": rejected("ex::Geo::Inner(y = 1)", HiddenMemberError, "ex::Geo::Inner"),
+            "alias": accepted("Geo(x = 1)", _RECORD),
+            "sibling": accepted("Geo::f", "() -> int"),
+        },
+    ),
+    "an-export-hiding-a-function-path-hides-it-in-every-spelling": Scenario(
+        modules=_export_hiding("Geo::f"),
+        header=(_ROUTES,),
+        probes={
+            "target": rejected("Base::f", HiddenMemberError, "Base::f"),
+            "alias": rejected("Geo::f", HiddenMemberError, "Geo::f"),
+            "routed-target": rejected("ex::Base::f", HiddenMemberError, "ex::Base::f"),
+            "routed-alias": rejected("ex::Geo::f", HiddenMemberError, "ex::Geo::f"),
+            "sibling": accepted("Geo::Inner(y = 1)", _INNER),
+        },
+    ),
+    **{
+        f"an-export-hiding-{name}-removes-every-spelling-of-its-declaration": Scenario(
+            modules=_export_hiding(item),
+            header=(_ROUTES, "import base"),
+            probes={
+                "target-value": rejected("Base(x = 1)", AglScopeError, "Base"),
+                "alias-value": rejected("Geo(x = 1)", AglScopeError, "Geo"),
+                "alias-pattern": rejected(_BASE_PATTERN, NoVisibleConstructorError, "Geo(x)"),
+                "alias-annot": rejected(
+                    "fn(p: Geo) => p", AglTypeError, "p: Geo", phase="typecheck"
+                ),
+                "beneath-the-target": rejected(
+                    "Base::Inner(y = 1)", UnknownQualifierError, "Base::Inner"
+                ),
+                "beneath-the-alias": rejected("Geo::f", UnknownQualifierError, "Geo::f"),
+                "routed-alias": rejected("ex::Geo(x = 1)", UnknownMemberError, "ex::Geo"),
+                "beneath-it-through-another-alias": rejected(
+                    "fn(p: Sh) => p", AglTypeError, "p: Sh", phase="typecheck"
+                ),
+                "unrelated-alias": accepted("fn(p: Uh) => p", "base::Oops -> base::Oops"),
+                "other-import": accepted("base::Base::Inner(y = 1)", _INNER),
+            },
+        )
+        for name, item in (("a-target", "Base"), ("an-alias", "Geo"))
+    },
+    "a-cycle-reads-its-final-exports-through-aliases": Scenario(
+        modules={"base": _BASE, "al": _CYCLING, "ex": _CYCLED},
+        header=(f"{_ROUTES}\nimport al",),
+        probes={
+            **type_positions("through-item", "I", "base::Base::Inner"),
+            "through-item-value": accepted("I(y = 1)", _INNER),
+            "alias-of-a-through-item": accepted("J(y = 1)", _INNER),
+            "routed-alias-of-a-through-item": accepted("al::J(y = 1)", _INNER),
+            "signature-through-item": accepted("al::mk(I(y = 2))", "int"),
+            "field-through-item": accepted("al::Holder(i = J(y = 1)).i.y", "int"),
+            "beneath-a-through-item": accepted("S::Ci", "record base::Base::Shape::Ci"),
+            "hidden-through-the-alias": rejected("Geo::f", HiddenMemberError, "Geo::f"),
+            "hidden-at-the-target": rejected("Base::f", HiddenMemberError, "Base::f"),
+            "other-import": accepted("al::Geo::f", "() -> int"),
+        },
+    ),
+    "a-module-importing-itself-reads-its-final-exports-through-its-aliases": Scenario(
+        modules={
+            "base": _BASE,
+            "me": (
+                "import base\nimport me\nexport base::{Base}\nexport me::{Geo::Inner as I}\n"
+                "type Geo = base::Base\ntype K = me::I\n"
+            ),
+        },
+        header=("import me::*\nimport me",),
+        probes={
+            "through-item": accepted("I(y = 1)", _INNER),
+            "alias-of-a-through-item": accepted("K(y = 1)", _INNER),
+            "routed-alias-of-a-through-item": accepted("me::K(y = 1)", _INNER),
         },
     ),
     "an-alias-spelling-reads-as-its-target-in-every-position": Scenario(
@@ -401,6 +494,154 @@ _SCENARIOS = {
         },
     ),
 }
+
+_REFERENCING = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item"
+"""An enum referencing a record declared beneath the enum's own path."""
+
+
+def _referenced_at_its_enum_path_probes(box: str) -> dict[str, Probe]:
+    """``Box::Item`` through ``Box`` and its alias ``B``; *box* renders the enum's type."""
+    return {
+        f"{spelling}-{position}": probe
+        for spelling in ("Box", "B")
+        for position, probe in {
+            "value": accepted(f"{spelling}::Item(n = 1)", f"record {box}::Item\n  n: int"),
+            **type_positions("item", f"{spelling}::Item", f"{box}::Item"),
+            "pattern": accepted(
+                f"fn(p: Box) => case p of\n  | {spelling}::Item => 1\n  | _ => 2", f"{box} -> int"
+            ),
+            "is": accepted(f"fn(p: Box) => p is {spelling}::Item", f"{box} -> bool"),
+        }.items()
+    }
+
+
+_SCENARIOS |= {
+    f"an-alias-reaches-a-referenced-member-at-its-enum-path-{name}": Scenario(
+        modules={"box": f"{_REFERENCING}\ntype B = Box\n"},
+        header=header,
+        probes=_referenced_at_its_enum_path_probes(box),
+    )
+    for name, header, box in (
+        ("own", (_REFERENCING, "type B = Box"), "Box"),
+        ("an-own-alias-of-an-imported-enum", ("import box::{Box}", "type B = Box"), "box::Box"),
+        ("imported", ("import box::*",), "box::Box"),
+    )
+}
+
+
+_GENERIC = (
+    "record Box[T]\n  v: T\nrecord Box::In\n  w: int\ndef Box::g() -> int = 1\n"
+    "def Box::m[T](self) -> int = 1\nenum Opt[T]\n  | Some(v: T)\n  | Non\n"
+)
+_APPLYING = (
+    "import gen::*",
+    "type IntBox = Box[int]",
+    "type IB2 = IntBox",
+    "type B2[T] = Box[T]",
+    "type X = B2[int]",
+    "type IntOpt = Opt[int]",
+)
+"""Applied aliases of ``Box[int]``: direct, through an alias, and through a generic alias."""
+_INT_BOX = "record gen::Box[int]\n  v: int"
+
+
+def _applied_probes(spelling: str) -> dict[str, Probe]:
+    """*spelling* of ``Box[int]`` reads a path beneath it as ``Box[int]`` does."""
+    return {
+        f"{spelling}-{name}": probe
+        for name, probe in {
+            "own-constructor": accepted(f"{spelling}::Box(v = 1)", _INT_BOX),
+            "own-constructor-argument-mismatch": rejected(
+                f'{spelling}::Box(v = "s")', AglTypeError, '"s"', phase="typecheck"
+            ),
+            "own-constructor-pattern": accepted(
+                f"case Box(v = 1) of\n  | {spelling}::Box(v) => v", "int"
+            ),
+            "own-constructor-pattern-on-another-application": rejected(
+                f'case Box(v = "s") of\n  | {spelling}::Box(v) => 1',
+                AglTypeError,
+                f"{spelling}::Box(v)",
+                phase="typecheck",
+            ),
+            "own-constructor-is-no-type": rejected(
+                f"fn(p: {spelling}::Box) => p.v",
+                AglTypeError,
+                f"p: {spelling}::Box",
+                phase="typecheck",
+            ),
+            "nested-record": rejected(f"{spelling}::In(w = 1)", TypeArgumentsError, spelling),
+            "nested-record-annotation": rejected(
+                f"fn(p: {spelling}::In) => 1", TypeArgumentsError, spelling
+            ),
+            "static-function": rejected(f"{spelling}::g()", TypeArgumentsError, spelling),
+            "method": rejected(f"{spelling}::m", TypeArgumentsError, spelling),
+        }.items()
+    }
+
+
+_SCENARIOS["an-applied-alias-reads-paths-as-its-applied-target"] = Scenario(
+    modules={"gen": _GENERIC},
+    header=_APPLYING,
+    probes={
+        **{
+            key: probe
+            for spelling in ("Box[int]", "IntBox", "IB2", "X")
+            for key, probe in _applied_probes(spelling).items()
+        },
+        "own-alias-spelling": accepted("IntBox::IntBox(v = 1)", _INT_BOX),
+        "generic-alias-nested-record": accepted("B2::In(w = 1)", "record gen::Box::In\n  w: int"),
+        "generic-alias-static-function": accepted("B2::g()", "int"),
+        "enum-member": accepted("IntOpt::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
+        "enum-member-argument-mismatch": rejected(
+            'IntOpt::Some(v = "s")', AglTypeError, '"s"', phase="typecheck"
+        ),
+        "enum-member-pattern": accepted(
+            "fn(p: Opt[int]) => case p of\n  | IntOpt::Some(v) => v\n  | _ => 0",
+            "gen::Opt[int] -> int",
+        ),
+    },
+)
+
+
+_DENOTING_A = (
+    "import gen::*\ntype IntBox = Box[int]\ntype F = int -> bool\ntype P = Box[path]\n"
+    "type IntOpt = Opt[int]\ntype Arr = array[int]\ntype G[T] = Box[array[T]]\n"
+    "type Txt = text\ntype Pair = dict[text, int]\ntype Bx = Box[int]\ntype R = Box[int]\n"
+)
+_DENOTING_B = (
+    "import gen::*\ntype B2[T] = Box[T]\ntype IntBox = B2[int]\ntype F = int -> bool\n"
+    "type P = Box[text]\ntype IntOpt = Opt[int]\ntype Arr = array[int]\n"
+    "type G[U] = Box[array[U]]\ntype Txt = path\ntype Pair = dict[text, bool]\n"
+    "type Bx[T] = Box[T]\nrecord R\n  v: int\n"
+)
+"""Same-named aliases: most denote one type (through a generic alias, ``path`` = ``text``,
+parameters renamed), ``Pair``, ``Bx`` and ``R`` distinct ones."""
+
+_SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
+    modules={"gen": _GENERIC, "a": _DENOTING_A, "b": _DENOTING_B},
+    header=("import gen::*", "import a::*", "import b::*"),
+    probes={
+        **type_positions("applied", "IntBox", "gen::Box[int]"),
+        "applied-constructor": accepted("IntBox(v = 1)", _INT_BOX),
+        "applied-pattern": accepted("case Box(v = 1) of\n  | IntBox(v) => v", "int"),
+        "applied-own-constructor-path": accepted("IntBox::Box(v = 1)", _INT_BOX),
+        "applied-alias-of-it": accepted(
+            "type IB = IntBox\nfn(p: IB) => p.v", "gen::Box[int] -> int"
+        ),
+        "function": accepted("fn(f: F) => f(1)", "(int -> bool) -> bool"),
+        "builtin-alias-argument": accepted("fn(p: P) => p.v", "gen::Box[text] -> text"),
+        "enum": accepted("fn(p: IntOpt) => p", "gen::Opt[int] -> gen::Opt[int]"),
+        "enum-member": accepted("IntOpt::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
+        "array": accepted("fn(p: Arr) => p", "array[int] -> array[int]"),
+        "generic": accepted("fn(p: G[int]) => p.v", "gen::Box[array[int]] -> array[int]"),
+        "builtin-alias": accepted("fn(p: Txt) => p", "text -> text"),
+        "distinct-arguments-clash": rejected(
+            "fn(p: Pair) => p", AmbiguousQualificationError, "Pair"
+        ),
+        "applied-and-generic-clash": rejected("fn(p: Bx) => p", AmbiguousQualificationError, "Bx"),
+        "alias-and-declaration-clash": rejected("fn(p: R) => p", AmbiguousQualificationError, "R"),
+    },
+)
 
 
 class TestTransparentAliases:

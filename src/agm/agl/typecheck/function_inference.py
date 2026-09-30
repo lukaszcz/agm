@@ -50,7 +50,6 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck.declaration_validation import builtin_method_receiver_for
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
 from agm.util.graph import sccs
 
@@ -805,8 +804,8 @@ def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
 
 
 def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type, int, str] | None:
-    """Build the semantic type for a previously validated builtin receiver."""
-    receiver = builtin_method_receiver_for(node, owner.scope_path)
+    """Build the semantic type for a builtin receiver scope classified."""
+    receiver = owner.builtin
     if receiver is None:
         return None
     if receiver.name == "array":

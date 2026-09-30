@@ -148,9 +148,16 @@ def applied_owner_member(
     type_vars: frozenset[str],
     span: SourceSpan,
 ) -> RecordType | None:
-    """Return the member ``Owner[A]::member`` selects when *qualifier* applies its owner."""
+    """Return the member ``Owner[A]::member`` selects when *qualifier* applies its owner.
+
+    A record's own constructor spelling (``Box[int]::Box``) selects the record
+    at those arguments.
+    """
     if not applies_owner(qualifier):
         return None
+    owner = env.owner_type_for_qualifier(qualifier, span=span, type_vars=type_vars)
+    if owner is not None and isinstance(owner[0], RecordType):
+        return owner[0]
     selected = env.select_owner_inline_member(qualifier, member, type_vars=type_vars, span=span)
     return None if selected is None else selected.member
 

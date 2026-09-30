@@ -23,6 +23,7 @@ from agm.agl import PipelineDriver, artifact_serialization
 from agm.agl.constraints import ConstraintKind
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
+from agm.agl.scope.symbols import TypeArgumentsError
 from agm.agl.syntax.nodes import Constraint, FuncDef
 from agm.agl.syntax.visitor import walk
 from tests.agl.module_graph import resolve_inline_entry
@@ -238,25 +239,25 @@ class TestConstraintScopeValidation:
         assert span is not None
         assert (span.start_line, span.start_col, span.end_line, span.end_col) == (1, 20, 1, 24)
 
-    def test_invalid_receiver_scope_accepts_constraint_on_its_applied_argument(self) -> None:
-        """An explicit-type-argument receiver on a nominal record is scope-valid.
+    def test_invalid_receiver_is_rejected_at_its_head_not_its_constraint(self) -> None:
+        """An explicit-type-argument receiver on a nominal record is rejected at the receiver.
 
-        Whether it names a real builtin receiver is typecheck's concern, so
-        constraint validation must not preempt it with a "not a type
+        Constraint validation must not preempt it with a "not a type
         parameter" error once the receiver's own applied argument covers the
         constrained name.
         """
-        parse_and_resolve(
+        err = reject_scope(
             "record Box[T]\n  value: T\ndef Box[T]::get{Eq T}(self) -> T = self.value\n()\n"
         )
+        assert isinstance(err, TypeArgumentsError)
+        span = err.span
+        assert span is not None
+        assert (span.start_line, span.start_col, span.end_col) == (3, 5, 11)
 
     def test_invalid_receiver_reports_receiver_error_not_constraint_error(self) -> None:
         """End to end, the pipeline reports the receiver error, not a constraint one.
 
-        Scope alone accepts the declaration (previous test); typecheck then
-        rejects the applied receiver itself, and that is the diagnostic a
-        caller sees -- never a stale "not a type parameter" scope error. The
-        location pins it to "Box[T]" (the receiver), not "Eq T" (the
+        The location pins it to "Box[T]" (the receiver), not "Eq T" (the
         constraint clause, which would be reported at a later column).
         """
         source = (

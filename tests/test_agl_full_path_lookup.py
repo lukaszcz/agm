@@ -41,6 +41,7 @@ from agm.agl.syntax.types import NameT
 from agm.agl.syntax.visitor import walk
 from tests.agl.module_graph import resolve_inline_entry
 from tests.agl.qualifier_support import (
+    Probe,
     Scenario,
     accepted,
     assert_file_resolves_like_inline_entry,
@@ -77,7 +78,7 @@ _GENERIC = "record Outer\n  a: int\nenum Outer::Inner[T]\n  | A(v: T)\n  | B\n"
 _NESTED_UNDER_GENERICS = (
     "record Box[T]\n  v: T\nrecord Box::Inner\n  x: int\n"
     "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int\n"
-    "type Al[T] = Box[T]\nrecord Al::Inner\n  x: int\n"
+    "type Al[T] = Box[T]\nrecord Al::Own\n  x: int\n"
     "enum Col\n  | Red\n  | Blue\nenum Two[A, B]\n  | L(l: A)\n  | R(r: B)"
 )
 _GEO_REGION = "scope Geo\n  record Point\n    x: int\nend Geo"
@@ -120,6 +121,112 @@ _OWN_ALIASED_ENUM = ("scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S", 
 _REFERENCED_R = "record R\n  x: int\nenum A\n  | ::R\n  | B\n"
 _TWICE_REFERENCED_P = "record P\n  x: int\nenum A\n  | ::P\n  | Q\nenum B\n  | ::P\n  | Z\n"
 _USES_X = "use A::*\n  use B::*\n  use X::*"
+
+
+_ALIASED_BASE = (
+    "record Base\n  x: int\nrecord Base::Inner\n  y: int\nrecord Base::Inner::Deep\n  z: int\n"
+    "def Base::f() -> int = 1\ndef Base::m(self) -> int = self.x\n"
+    "\n"
+    "scope Base\n  let b = 5\nend Base\n\nenum Base::Shape\n  | Sq\n  | Ci\n"
+    "record Other\n  w: int\nrecord Other::X\n  v: int\ntype Base::Al = Other\n"
+    "type Geo = Base\n"
+)
+_INNER = "record al::Base::Inner\n  y: int"
+_DEEP = "record al::Base::Inner::Deep\n  z: int"
+_OTHER_X = "record al::Other::X\n  v: int"
+_OWN_BASE = "record Base\n  x: int\nrecord Base::Inner\n  y: int\ndef Base::f() -> int = 1"
+_GENERIC_BASE = "record Box[T]\n  v: T\nrecord Box::Inner\n  x: int\ntype Al[T] = Box[T]\n"
+
+
+def _beneath_alias_probes(alias: str) -> dict[str, Probe]:
+    """*alias* of ``al``'s ``Base`` reaching every path beneath ``Base``, in every position."""
+    return {
+        "nested-value": accepted(f"{alias}::Inner(y = 1)", _INNER),
+        **type_positions("nested", f"{alias}::Inner", "al::Base::Inner"),
+        "nested-pattern": accepted(
+            f"case al::Base::Inner(y = 1) of\n  | {alias}::Inner(y) => y", "int"
+        ),
+        "member-is": accepted(
+            f"fn(p: al::Base::Shape) => p is {alias}::Shape::Sq", "al::Base::Shape -> bool"
+        ),
+        "member-narrow": accepted(
+            f"fn(p: al::Base::Shape) => p as? {alias}::Shape::Sq",
+            "al::Base::Shape -> std/option::Option[al::Base::Shape::Sq]",
+        ),
+        "member-pattern": accepted(
+            f"fn(p: al::Base::Shape) => case p of\n  | {alias}::Shape::Sq => 1\n  | _ => 2",
+            "al::Base::Shape -> int",
+        ),
+        "deeper-value": accepted(f"{alias}::Inner::Deep(z = 1)", _DEEP),
+        **type_positions("deeper", f"{alias}::Inner::Deep", "al::Base::Inner::Deep"),
+        "function": accepted(f"{alias}::f", "() -> int"),
+        "method": accepted(f"{alias}::m", "al::Base -> int"),
+        "binding": accepted(f"{alias}::b", "int"),
+        "through-a-nested-alias": accepted(f"{alias}::Al::X(v = 1)", _OTHER_X),
+        **type_positions("through-a-nested-alias", f"{alias}::Al::X", "al::Other::X"),
+        "unknown-member": rejected(f"{alias}::Nope(y = 1)", UnknownMemberError, f"{alias}::Nope"),
+        "unknown-nested-member": rejected(
+            f"{alias}::Inner::Nope(y = 1)", UnknownMemberError, f"{alias}::Inner::Nope"
+        ),
+        "type-arguments-on-a-plain-alias": rejected(
+            f"{alias}[int]::Inner(y = 1)", TypeArgumentsError, f"{alias}[int]"
+        ),
+    }
+
+
+_RENAMED = _COLOR + "record Pt\n  x: int\nrecord Pt::In\n  y: int\ntype P = Pt\n"
+_LOCAL_L = "scope s\n  record L\n    x: int\n  record L::In\n    y: int\nend s\n\n"
+
+
+def _renamed_type_probes(local_use: str) -> dict[str, Probe]:
+    """``C``, ``R`` and ``Q`` renaming ``e``'s ``Color``, ``Pt`` and alias ``P``; *local_use*
+    renames the own ``s::L`` to ``M`` inside a region."""
+    in_t = "scope t\n  {use}\n  let v = {value}\nend t\n\nt::v"
+    return {
+        **type_positions("enum", "C", "e::Color"),
+        "enum-not-a-value": rejected(
+            "C", AglTypeError, "C", type_entry="enum e::Color\n  | Red\n  | Green"
+        ),
+        "enum-member": accepted("C::Red", "record e::Color::Red"),
+        "enum-pattern": accepted(
+            "fn(p: e::Color) => case p of\n  | C::Red => 1\n  | _ => 2", "e::Color -> int"
+        ),
+        "enum-is": accepted("fn(p: e::Color) => p is C::Red", "e::Color -> bool"),
+        "enum-in-a-region": accepted(
+            "scope r\n  use e::Color as K\n  let v: K = K::Red\nend r\n\nr::v",
+            "enum e::Color\n  | Red\n  | Green",
+        ),
+        **type_positions("record", "R", "e::Pt"),
+        "record-constructor": accepted("R(x = 1)", "record e::Pt\n  x: int"),
+        "record-own-spelling": accepted("R::R(x = 1)", "record e::Pt\n  x: int"),
+        "record-own-spelling-pattern": accepted(
+            "fn(p: e::Pt) => case p of\n  | R::R(x) => x", "e::Pt -> int"
+        ),
+        "record-nested": accepted("R::In(y = 1)", "record e::Pt::In\n  y: int"),
+        **type_positions("record-nested", "R::In", "e::Pt::In"),
+        "record-unknown-member": rejected("R::Nope", UnknownMemberError, "R::Nope"),
+        **type_positions("alias", "Q", "e::Pt"),
+        "alias-own-spelling": accepted("Q::Q(x = 1)", "record e::Pt\n  x: int"),
+        "alias-own-spelling-pattern": accepted(
+            "fn(p: e::Pt) => case p of\n  | Q::Q(x) => x", "e::Pt -> int"
+        ),
+        "alias-nested": accepted("Q::In(y = 1)", "record e::Pt::In\n  y: int"),
+        "local-constructor": accepted(
+            _LOCAL_L + in_t.format(use=local_use, value="M(x = 1)"), "record s::L\n  x: int"
+        ),
+        "local-nested": accepted(
+            _LOCAL_L + in_t.format(use=local_use, value="M::In(y = 1)"),
+            "record s::L::In\n  y: int",
+        ),
+        "local-annotation": accepted(
+            _LOCAL_L + in_t.format(use=local_use, value="fn(p: M) => p"), "s::L -> s::L"
+        ),
+        "info-enum": info(
+            "C", "C is an enum type.\nType:\n  enum e::Color\n    | Red\n    | Green"
+        ),
+        "info-record": info("R", "R is a constructor.\nSignature:\n  R(x: int) -> e::Pt"),
+        "info-alias": info("Q", "Q is a type alias.\nType:\n  type Q = Pt"),
+    }
 
 
 _OWN_ROOT_X = "scope X\n  def f() -> int = 1\n  def h() -> int = 1\nend X"
@@ -565,6 +672,129 @@ _SCENARIOS = {
             **type_positions_rejected("own-root-ignores-route", "::lib::Y", UnknownMemberError),
         },
     ),
+    "an-alias-segment-stands-for-every-path-beneath-its-target": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al::*",),
+        probes={
+            **_beneath_alias_probes("Geo"),
+            "literal-nested-alias": accepted("Base::Al::X(v = 1)", _OTHER_X),
+            "routed": accepted("al::Geo::Inner(y = 1)", _INNER),
+            "routed-deeper": accepted("al::Geo::Inner::Deep(z = 1)", _DEEP),
+            "own-spelling": accepted("Geo::Geo(x = 1)", "record al::Base\n  x: int"),
+            "info-nested": info(
+                "Geo::Inner",
+                "Geo::Inner is a constructor.\nSignature:\n  Geo::Inner(y: int) -> al::Base::Inner",
+            ),
+            "info-function": info(
+                "Geo::f", "Geo::f is a function.\nSignature:\n  def Geo::f() -> int"
+            ),
+            "info-binding": info(
+                "Geo::b", "Geo::b is a binding.\nBinding:\n  let Geo::b\nType:\n  int\nValue:\n  5"
+            ),
+            "info-nested-enum": info(
+                "Geo::Shape",
+                "Geo::Shape is an enum type.\nType:\n  enum al::Base::Shape\n    | Sq\n    | Ci",
+            ),
+        },
+    ),
+    "an-alias-chain-stands-for-the-paths-beneath-its-last-target": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al::*", "type H = Geo"),
+        probes=_beneath_alias_probes("H"),
+    ),
+    "an-own-alias-segment-stands-for-an-imported-target-path": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al", "type G = al::Base"),
+        probes=_beneath_alias_probes("G"),
+    ),
+    "an-own-alias-segment-stands-for-an-own-target-path": Scenario(
+        header=(_OWN_BASE, "type G = Base"),
+        probes={
+            "nested-value": accepted("G::Inner(y = 1)", "record Base::Inner\n  y: int"),
+            **type_positions("nested", "G::Inner", "Base::Inner"),
+            "function": accepted("G::f", "() -> int"),
+            "own-path-beside-the-target-paths": accepted(
+                "record G::Own\n  o: int\nG::Own(o = 1)", "record G::Own\n  o: int"
+            ),
+        },
+    ),
+    "a-generic-alias-segment-takes-type-arguments-only-for-an-inline-member": Scenario(
+        modules={"lib": _GENERIC_BASE},
+        header=("import lib::*",),
+        probes={
+            "unapplied-value": accepted("Al::Inner(x = 1)", "record lib::Box::Inner\n  x: int"),
+            **type_positions("unapplied", "Al::Inner", "lib::Box::Inner"),
+            "applied-value": rejected("Al[int]::Inner(x = 1)", TypeArgumentsError, "Al[int]"),
+            **type_positions_rejected("applied", "Al[int]::Inner", TypeArgumentsError, "Al[int]"),
+        },
+    ),
+    "hiding-a-target-path-hides-it-through-an-alias-declared-beside-the-import": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al::* hiding Base::Inner, Base::f", "type G = Base"),
+        probes={
+            "hidden-value": rejected("G::Inner(y = 1)", HiddenMemberError, "G::Inner"),
+            **type_positions_rejected("hidden", "G::Inner", HiddenMemberError),
+            "hidden-deeper": rejected("G::Inner::Deep(z = 1)", HiddenMemberError, "G::Inner::Deep"),
+            "hidden-function": rejected("G::f", HiddenMemberError, "G::f"),
+            "unhidden-binding": accepted("G::b", "int"),
+            "unhidden-method": accepted("G::m", "al::Base -> int"),
+        },
+    ),
+    "an-alias-declares-every-path-beneath-its-target-once": Scenario(
+        header=(_OWN_BASE, "type G = Base"),
+        probes={
+            "nested-type": rejected(
+                "record G::Inner\n  q: int", DuplicateDeclarationError, "record G::Inner\n  q: int"
+            ),
+            "function": rejected(
+                "def G::f() -> int = 2", DuplicateDeclarationError, "def G::f() -> int = 2"
+            ),
+            "scope-function": rejected(
+                "scope G\n  def f() -> int = 2\nend G",
+                DuplicateDeclarationError,
+                "def f() -> int = 2",
+            ),
+            "another-name": accepted("def G::g() -> int = 2\nG::g", "() -> int"),
+        },
+    ),
+    "hiding-a-deeper-target-path-hides-only-it-through-an-alias": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al::* hiding Base::Inner::Deep", "type G = Base"),
+        probes={
+            "nested": accepted("G::Inner(y = 1)", _INNER),
+            "deeper-value": rejected("G::Inner::Deep(z = 1)", HiddenMemberError, "G::Inner::Deep"),
+            **type_positions_rejected("deeper", "G::Inner::Deep", HiddenMemberError),
+        },
+    ),
+    "an-alias-cycle-stands-for-no-path": Scenario(
+        header=(),
+        probes={
+            "value": rejected("type C = D\ntype D = C\nC::y", UnknownMemberError, "C::y"),
+            "annotation": rejected(
+                "type C = D\ntype D = C\nfn(p: C::y) => 1", UnknownMemberError, "C::y"
+            ),
+        },
+    ),
+    "a-hidden-target-path-leaves-its-alias-path-free": Scenario(
+        modules={"al": _ALIASED_BASE},
+        header=("import al::* hiding Base::Inner", "type G = Base"),
+        probes={
+            "own-declaration": accepted(
+                "record G::Inner\n  q: int\nG::Inner(q = 1)", "record G::Inner\n  q: int"
+            ),
+        },
+    ),
+    "a-braced-use-renames-a-type": Scenario(
+        modules={"e": _RENAMED},
+        header=("import e", "use e::{Color as C, Pt as R, P as Q}"),
+        probes=_renamed_type_probes("use s::{L as M}"),
+    ),
+    "an-unbraced-use-renames-a-type-like-a-braced-one": Scenario(
+        modules={"e": _RENAMED},
+        # One entry: a REPL entry using a module supersedes its earlier uses.
+        header=("import e", "use e::Color as C\nuse e::Pt as R\nuse e::P as Q"),
+        probes=_renamed_type_probes("use s::L as M"),
+    ),
     "alias-segments": Scenario(
         modules={"e": _COLOR, "f": _SHADE},
         header=("import e", "import f", "use e::Color as C"),
@@ -725,7 +955,7 @@ _SCENARIOS = {
                 "E[int]::Inner(x = 1)", TypeArgumentsError, "E[int]"
             ),
             "record-under-generic-alias": rejected(
-                "Al[int]::Inner(x = 1)", TypeArgumentsError, "Al[int]"
+                "Al[int]::Own(x = 1)", TypeArgumentsError, "Al[int]"
             ),
             "non-generic-owner-is": rejected(
                 "Col::Red is Col[int]::Red", TypeArgumentsError, "Col[int]"

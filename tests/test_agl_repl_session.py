@@ -2598,6 +2598,47 @@ def test_a_bare_query_through_a_narrowed_alias_chain_matches_type_ofs_class(
         s.type_of("C::A")
 
 
+_RETAINED_BASE = (
+    "scope s\n  record Base\n    x: int\n  record Base::Inner\n    y: int\n"
+    "  record Base::Inner::Deep\n    z: int\n  def Base::f() -> int = 1\n"
+    "\n"
+    "  scope Base\n    let b = 2\n  end Base\nend s"
+)
+
+
+@pytest.mark.parametrize(
+    "use",
+    ("G::Inner(y = 1)", "fn(x: G::Inner) => 1", "G::Inner::Deep(z = 1)", "G::f()", "G::b"),
+    ids=("nested-value", "nested-type", "deeper", "function", "binding"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_a_narrowing_local_use_hides_every_path_beneath_a_retained_alias_target(
+    sizes: tuple[int, ...], use: str
+) -> None:
+    """An alias of a type an earlier entry declared stands for every path
+    beneath it, so a later local ``use ... hiding`` removing those paths hides
+    them through the alias too, while the alias itself still constructs."""
+    s = ReplSession()
+    _eval_grouped(
+        s,
+        (
+            _RETAINED_BASE,
+            "use s::*",
+            "type G = Base",
+            "use s::* hiding Base::Inner, Base::f, Base::b\nlet d: G = G(x = 1)",
+        ),
+        sizes,
+    )
+
+    assert str(s.type_of("G(x = 1)")) == "record s::Base\n  x: int"
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+
+
 def test_a_bare_query_for_a_hidden_member_through_a_scoped_alias_matches_type_ofs_class(
     tmp_path: Path,
 ) -> None:

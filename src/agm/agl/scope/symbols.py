@@ -491,10 +491,11 @@ class TypeOwner:
     none of them, but spelling one is a focused error rather than an unknown
     name. ``alias`` is an alias path's declaration. ``injected`` holds, for an
     enum declaration only, its referenced members' record constructors, whose
-    names a root enum injects bare. ``hidden`` holds the names of the inline
-    members an alias's target spelling cannot reach where the alias is
-    declared, since a ``hiding`` removed their paths: they are left out of
-    ``members``. ``target`` holds, for an alias
+    names a root enum injects bare. ``hidden`` holds, relative to an alias's
+    target, the paths of the declarations beneath it that the alias's target
+    spelling cannot reach where the alias is declared, since a ``hiding``
+    removed them: an inline member's is its name alone, and hidden members
+    are left out of ``members``. ``target`` holds, for an alias
     with a nominal target, the target's identity (:class:`TypeTarget`): what a
     REPL entry retains and never re-selects, however later entries redeclare
     or import around it. ``own_path_referenced`` holds, for
@@ -513,7 +514,7 @@ class TypeOwner:
     referenced: frozenset[str] = frozenset()
     alias: TypeAlias | None = None
     injected: tuple[ConstructorRef, ...] = ()
-    hidden: frozenset[str] = frozenset()
+    hidden: frozenset[ScopePath] = frozenset()
     target: TypeTarget | None = None
     own_path_referenced: frozenset[str] = frozenset()
     arity: int = 0

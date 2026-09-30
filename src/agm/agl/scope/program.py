@@ -26,7 +26,7 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -680,6 +680,16 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
 _DeclInfo = dict[QName, DeclInfo]
 
 
+def _declarations_beneath(decl_info: _DeclInfo) -> Callable[[QName], tuple[ScopePath, ...]]:
+    """Return, for a path, the paths relative to it of every declaration beneath it."""
+    beneath: dict[QName, list[ScopePath]] = {}
+    for module_id, atom in decl_info:
+        path = _path(atom)
+        for end in range(1, len(path)):
+            beneath.setdefault((module_id, _atom(path[:end])), []).append(path[end:])
+    return lambda qname: tuple(beneath.get(qname, ()))
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -874,15 +884,24 @@ def resolve_program(
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     resolvers: dict[ModuleId, _Resolver] = {}
 
-    def reached_members(
-        qname: QName, spelling: NameT | AppliedT, members: Collection[str]
-    ) -> frozenset[str]:
+    declared_in_program = _declarations_beneath(decl_info)
+
+    def declared_beneath(qname: QName) -> Collection[ScopePath]:
+        resolver = resolvers.get(qname[0])
+        if resolver is None:
+            return declared_in_program(qname)
+        return resolver.retained_paths_beneath(_path(qname[1])).union(declared_in_program(qname))
+
+    def reached_paths(
+        qname: QName, spelling: NameT | AppliedT, paths: Collection[ScopePath]
+    ) -> frozenset[ScopePath]:
         module_id, atom = qname
         path = _path(atom)
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.members_reached_at(path[:-1], spelling, members)
-        return frozenset(resolved_modules[module_id].resolved.type_owners[path].members)
+            return resolver.paths_reached_at(path[:-1], spelling, paths)
+        hidden = resolved_modules[module_id].resolved.type_owners[path].hidden
+        return frozenset(paths).difference(hidden)
 
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
@@ -910,7 +929,8 @@ def resolve_program(
         all_public_types=all_public_types,
         constructor_refs=cross_module_constructor_refs,
         alias_targets=alias_target,
-        reached_members=reached_members,
+        declared_beneath=declared_beneath,
+        reached_paths=reached_paths,
         current_selection=current_selection,
     )
 

@@ -154,10 +154,13 @@ class PathSources(Protocol):
         layer: ContributionLayer,
         rest: ScopePath,
         chain: QualifierChain,
+        kind: LookupKind,
     ) -> Reading:
-        """What type *owner*, made visible by *layer*, selects for *rest* by its own member table.
+        """What type *owner*, made visible by *layer*, selects for *rest* in a position of *kind*.
 
-        *rest* is the tail of *chain*'s names after the owner's.
+        *rest* is the tail of *chain*'s names after the owner's. The owner's
+        own member table decides, and an alias's target path stands beneath
+        an alias.
         """
         ...
 
@@ -281,14 +284,11 @@ def lookup_qualified(
     if anchor.hidden(names):
         return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
 
-    def names_value(prefix: QualifierChain) -> bool:
+    def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
         written = names[: len(prefix.segments) + 1]
-        return (
-            _Walk(sources, anchor, prefix, written, local_to, span).find(LookupKind.VALUE)
-            is not None
-        )
+        return _Walk(sources, anchor, prefix, written, local_to, span).find(kind)
 
-    return _unknown(chain, names, anchor.visible, names_value)
+    return _unknown(chain, names, anchor.visible, selects)
 
 
 def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
@@ -387,7 +387,7 @@ class _Walk:
         if chain is not None:
             reading = sum(
                 (
-                    self._sources.projected(key, owner.layer, full[end:], chain)
+                    self._sources.projected(key, owner.layer, full[end:], chain, kind)
                     for end in range(len(step.path) + step.start + 1, len(full))
                     for owner in step.owners(full[:end]).candidates
                     if (key := owner.target.key) is not None
@@ -472,20 +472,23 @@ def _unknown(
     chain: QualifierChain,
     names: ScopePath,
     visible: Callable[[ScopePath], bool],
-    names_value: Callable[[QualifierChain], bool],
+    selects: Callable[[QualifierChain, LookupKind], QualifiedTarget | AglError | None],
 ) -> AglScopeError:
-    """An unknown member of the longest *visible* qualifier prefix, else an unknown qualifier.
+    """An unknown member of the longest prefix naming something, else an unknown qualifier.
 
-    A prefix naming a value but no qualifier ends the search: a function,
-    binding or injected enum member is never a qualifier.
+    A prefix names something when it is *visible*, or *selects* a type as
+    written: through an alias, the path it stands for. A prefix naming a
+    value but no qualifier ends the search: a function, binding or injected
+    enum member is never a qualifier.
     """
     for length in range(len(chain.segments), 0, -1):
-        if visible(names[:length]):
+        prefix = replace(chain, segments=chain.segments[: length - 1])
+        if visible(names[:length]) or isinstance(selects(prefix, LookupKind.TYPE), QualifiedTarget):
             written = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
                 render_qualified_name(written, names[length]), span=chain.span
             )
-        if names_value(replace(chain, segments=chain.segments[: length - 1])):
+        if selects(prefix, LookupKind.VALUE) is not None:
             break
     return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 

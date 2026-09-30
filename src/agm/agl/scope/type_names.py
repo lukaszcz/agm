@@ -1,8 +1,8 @@
 """Type-name spellings shared by scope and the type-owner index.
 
-:func:`member_chain` spells an alias's member path ``<target>::member`` as
-its target is written, so the one whole-path lookup at the alias's site
-decides which of the target's members the alias reaches.
+:func:`member_chain` spells a path beneath an alias's target
+``<target>::path`` as its target is written, so the one whole-path lookup at
+the alias's site decides which of the target's paths the alias reaches.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TypeGuard
 
-from agm.agl.scope.symbols import TypeOwner
+from agm.agl.scope.symbols import ScopePath, TypeOwner
 from agm.agl.syntax.nodes import QualifierChain, QualifierSegment, VariantRef
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
@@ -52,22 +52,28 @@ def selection_node_id(spelling: NameT | AppliedT | VariantRef) -> int:
     return spelling.node_id if qualifier is None else qualifier.node_id
 
 
-def member_chain(owner: NameT | AppliedT, member: str) -> QualifierChain:
-    """Return the chain spelling ``owner::member``, *owner* as written.
+def member_chain(owner: NameT | AppliedT, path: ScopePath) -> QualifierChain:
+    """Return the chain spelling ``owner::path``, *owner* as written.
 
-    The inverse of :func:`owner_type_expr`.
+    The inverse of :func:`owner_type_expr` for a one-name *path*.
     """
     qualifier = owner.qualifier
-    segment = QualifierSegment(
-        owner.name,
-        owner.args if isinstance(owner, AppliedT) else None,
-        span=owner.span,
-        node_id=owner.node_id,
+    segments = (
+        QualifierSegment(
+            owner.name,
+            owner.args if isinstance(owner, AppliedT) else None,
+            span=owner.span,
+            node_id=owner.node_id,
+        ),
+        *(
+            QualifierSegment(name, None, span=owner.span, node_id=owner.node_id)
+            for name in path[:-1]
+        ),
     )
     return QualifierChain(
         anchor=None if qualifier is None else qualifier.anchor,
-        segments=(*(() if qualifier is None else qualifier.segments), segment),
-        member=member,
+        segments=(*(() if qualifier is None else qualifier.segments), *segments),
+        member=path[-1],
         span=owner.span,
         node_id=owner.node_id,
     )
@@ -141,6 +147,6 @@ def owner_member_selection(owner: TypeOwner, member: str) -> MemberSelection:
         if member in owner.own_path_referenced:
             return None
         return MemberReferenced()
-    if member in owner.hidden:
+    if (member,) in owner.hidden:
         return MemberHidden()
     return None

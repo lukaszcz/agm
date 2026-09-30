@@ -358,10 +358,8 @@ _SCENARIOS = {
             "def Geo::f() -> int = 1",
         ),
         probes={
-            "alias-inner-val": rejected("Geo::Inner(y = 1)", UnknownMemberError, "Geo::Inner"),
-            "alias-inner-annot": rejected(
-                "fn(p: Geo::Inner) => 1", UnknownMemberError, "Geo::Inner"
-            ),
+            "alias-inner-val": accepted("Geo::Inner(y = 1)", "record al::Base::Inner\n  y: int"),
+            "alias-inner-annot": accepted("fn(p: Geo::Inner) => 1", "al::Base::Inner -> int"),
             "alias-nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
             "alias-nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
             "alias-f": accepted("Geo::f()", "int"),

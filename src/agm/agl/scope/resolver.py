@@ -877,20 +877,28 @@ class _Resolver:
     def _validate_alias_member_paths(self, owners: Mapping[ScopePath, TypeOwner]) -> None:
         """Reject a declaration at a path an own alias already declares.
 
-        An alias's members are its target's (``type C = E`` declares
-        ``C::Red``), so an ordinary or type declaration of this entry beneath
-        the alias's path declares that path twice, as one beneath the enum
-        itself would. The later of the two is reported; a retained alias is
-        the earlier.
+        An alias segment stands for its target's path (``type C = E``
+        declares ``C::Red``, and every other path beneath ``E``), so an
+        ordinary or type declaration of this entry at a path beneath the
+        alias that its target declares too declares that path twice, as one
+        beneath the target itself would. The later of the two is reported; a
+        retained alias is the earlier.
         """
         declared_here = {id(declaration) for declaration, _path in self._type_declarations}
         for path, owner in owners.items():
             alias = owner.alias
             if alias is None:
                 continue
-            for member in owner.members:
-                key = (self._module_id, path, member)
-                if self._scope_entity_kinds.get(key) not in {"ordinary", "type"}:
+            for key, entity in self._scope_entity_kinds.items():
+                _module, declared_path, name = key
+                if entity not in {"ordinary", "type"} or declared_path[: len(path)] != path:
+                    continue
+                beneath = self._alias_target_path(
+                    (self._module_id, _bare_atom(path)),
+                    owner,
+                    (*declared_path[len(path) :], name),
+                )
+                if beneath is None or beneath[1] or not self._declares(beneath[0]):
                     continue
                 duplicate = self._declaration_items[key]
                 if (
@@ -898,7 +906,14 @@ class _Resolver:
                     and alias.span.start_offset > duplicate.span.start_offset
                 ):
                     duplicate = alias
-                raise DuplicateDeclarationError(member, span=duplicate.span)
+                raise DuplicateDeclarationError(name, span=duplicate.span)
+
+    def _declares(self, qname: QName) -> bool:
+        """Whether a declaration of any kind stands at full path *qname*."""
+        return any(
+            self._declared_at(qname, ContributionLayer.DECLARED, kind).candidates
+            for kind in LookupKind
+        )
 
     def _reachable_declarations(self) -> frozenset[DeclarationKey]:
         """Return local, imported, and retained declaration identities."""
@@ -2242,24 +2257,30 @@ class _Resolver:
             scope = scope.parent
 
     def _resolve_use_target(self, decl: UseDecl) -> _UseTargetResolution:
-        """Gather every local and imported route reachable through a use target."""
+        """Gather every local and imported route reachable through a use target.
+
+        ``use P::m as A`` ending at a declaration -- an ordinary member or a
+        type -- is the single-item rename ``use P::{m as A}``; ending at a
+        scope alone, it is a whole-target alias.
+        """
         if decl.alias is not None and len(decl.target) >= 2:
             parent_decl = replace(decl, target=decl.target[:-1], alias=None)
             parent = self._resolve_use_target(parent_decl)
             member = decl.target[-1].name
             local_member = any(
-                (*local, member) not in self._scope_nodes
-                and (
-                    member in self._scope_nodes[local].members
-                    or (*local, member) in self._ordered_binding_paths
+                (*local, member) in self._type_paths
+                or (
+                    (*local, member) not in self._scope_nodes
+                    and (
+                        member in self._scope_nodes[local].members
+                        or (*local, member) in self._ordered_binding_paths
+                    )
                 )
                 for tier in parent.local
                 for local in tier
             )
             imported_member = any(
-                (qname := members.get(member)) is not None
-                and qname not in self._cross_module_type_owners
-                for _route, members in parent.imported
+                members.get(member) is not None for _route, members in parent.imported
             )
             if local_member or imported_member:
                 segment = decl.target[-1]
@@ -3956,6 +3977,7 @@ class _Resolver:
         layer: ContributionLayer,
         rest: ScopePath,
         chain: QualifierChain,
+        kind: LookupKind,
     ) -> Reading:
         """What type *owner*, made visible by *layer*, selects for *rest* by its own member table.
 
@@ -3965,7 +3987,9 @@ class _Resolver:
         hidden member is refused, and so is a type it declares (an inline enum
         member or a nested type), which only a contribution reaching its full
         path selects -- so a ``hiding`` removes exactly that path. An
-        alias's projection, or a record's own spelling, selects.
+        alias's projection, or a record's own spelling, selects. Any other
+        path beneath an alias is its target's (:meth:`_beneath_alias`), read
+        as a declaration of *kind*.
         """
         segments = chain.segments
         start = len(segments) + 1 - len(rest)
@@ -3979,6 +4003,13 @@ class _Resolver:
             error = self._owner_member_error(table, spelling, name, chain.span)
             if error is not None:
                 return Reading(refusals=(error,))
+            if table.target is not None and not (
+                index == len(segments)
+                and (name in table.members or table.select(name, segments[-1].name) is not None)
+            ):
+                return self._beneath_alias(
+                    current, table, rest[index - start :], layer, chain, kind
+                )
             current = (current[0], _bare_atom((*_bare_path(current[1]), name)))
         if (table.alias is None and name in table.members) or self._type_owners.is_declared(
             current
@@ -3990,6 +4021,76 @@ class _Resolver:
         key = self._qname_decl_key(current)
         origin = contribution_origin(current, layer)
         return Reading((Candidate(QualifiedTarget(key, None, constructor), layer, origin),))
+
+    def _beneath_alias(
+        self,
+        alias: QName,
+        table: TypeOwner,
+        path: ScopePath,
+        layer: ContributionLayer,
+        chain: QualifierChain,
+        kind: LookupKind,
+    ) -> Reading:
+        """What *path* beneath *alias* (whose owner is *table*) selects as a declaration of *kind*.
+
+        An alias segment stands for its target's path; a path a ``hiding``
+        at the alias's site removed is refused.
+        """
+        beneath = self._alias_target_path(alias, table, path)
+        if beneath is None:
+            return Reading()
+        qname, hidden = beneath
+        if hidden:
+            spelling = render_qualifier_path(chain)
+            return Reading(refusals=(HiddenMemberError(spelling, path[-1], span=chain.span),))
+        return self._declared_at(qname, layer, kind)
+
+    def _alias_target_path(
+        self, alias: QName, table: TypeOwner, path: ScopePath
+    ) -> tuple[QName, bool] | None:
+        """Return the full path *path* beneath *alias* stands for, and whether it is hidden.
+
+        *table* is *alias*'s owner. *path* is read beneath the type the alias
+        chain ends at, and a prefix of it there naming another alias stands
+        for that alias's target in turn. It is hidden when a ``hiding`` at
+        one of those aliases' sites removed it or a prefix of it. ``None``
+        when an alias names no nominal target.
+        """
+        hidden = False
+        while True:
+            hidden = hidden or any(path[:end] in table.hidden for end in range(1, len(path) + 1))
+            final = self._type_owners.final_target(alias)
+            if final is None:
+                return None
+            module_id, atom = final
+            base = _bare_path(atom)
+            for end in range(1, len(path)):
+                inner = (module_id, _bare_atom((*base, *path[:end])))
+                inner_table = self._type_owners.owner(inner)
+                if inner_table is not None and inner_table.alias is not None:
+                    alias, table, path = inner, inner_table, path[end:]
+                    break
+            else:
+                return (module_id, _bare_atom((*base, *path))), hidden
+
+    def _declared_at(self, qname: QName, layer: ContributionLayer, kind: LookupKind) -> Reading:
+        """The declaration at full path *qname*, as one of *kind*, made visible by *layer*."""
+        module_id, atom = qname
+        targets: Iterable[QualifiedTarget]
+        if module_id == self._module_id:
+            targets = (
+                candidate.target for candidate in self.own_at(_bare_path(atom), kind).candidates
+            )
+        elif qname in self._decl_info:
+            targets = (self._contributed_target(self._cross_module_binding_ref(qname), ()),)
+        else:
+            targets = ()
+        origin = contribution_origin(qname, layer)
+        return Reading(
+            tuple(
+                Candidate(target, layer, origin) for target in targets if self._fits(target, kind)
+            )
+        )
 
     def inline_arity(self, owner: DeclarationKey, member: str) -> int | None:
         """The type parameters type *owner* takes when *member* is one of its inline members."""
@@ -4724,21 +4825,40 @@ class _Resolver:
         owner = self._type_owners.owner(qname)
         return owner if owner is not None and owner.constructs else None
 
-    def members_reached_at(
-        self, scope_path: ScopePath, spelling: NameT | AppliedT, members: Collection[str]
-    ) -> frozenset[str]:
-        """Return the names among *members* ``<spelling>::name``, at *scope_path*, reaches.
+    def retained_paths_beneath(self, path: ScopePath) -> frozenset[ScopePath]:
+        """Return, relative to own *path*, the paths of the declarations earlier REPL entries
+        retain beneath it: types, their inline members and ordinary members."""
+        retained = {
+            *self._repl_session_type_paths,
+            *(
+                (*owner_path, member)
+                for owner_path, owner in self._repl_session_type_paths.items()
+                if owner.alias is None
+                for member in owner.members
+            ),
+            *self._repl_session_ordinary_member_paths,
+        }
+        return frozenset(
+            declared[len(path) :]
+            for declared in retained
+            if len(declared) > len(path) and declared[: len(path)] == path
+        )
 
-        A name is left out when its whole-path type lookup (:mod:`lookup`)
+    def paths_reached_at(
+        self, scope_path: ScopePath, spelling: NameT | AppliedT, paths: Collection[ScopePath]
+    ) -> frozenset[ScopePath]:
+        """Return the paths among *paths* ``<spelling>::path``, at *scope_path*, reaches.
+
+        A path is left out when its whole-path type lookup (:mod:`lookup`)
         finds it hidden: a ``hiding`` removed the path and nothing else
         reaches it. Another declaration at that path hides nothing.
         """
         with self._named_scope(scope_path):
             return frozenset(
-                name
-                for name in members
+                path
+                for path in paths
                 if not isinstance(
-                    self._type_target(member_chain(spelling, name), name, spelling.span),
+                    self._type_target(member_chain(spelling, path), path[-1], spelling.span),
                     HiddenMemberError,
                 )
             )

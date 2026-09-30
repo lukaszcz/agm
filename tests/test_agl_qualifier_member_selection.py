@@ -484,31 +484,3 @@ class TestScalarAliasOwnerMissingMember:
                 span_texts={key: "Geo::Nope" for key in probes},
             ),
         )
-
-
-_RECORD_ALIAS_LIB = {"al": "record Base\n  x: int\nrecord Base::Inner\n  y: int\ntype Geo = Base\n"}
-_RECORD_ALIAS_HEADER = ("import al::*", "def Geo::f() -> int = 1")
-
-
-class TestRecordAliasOwnerProjectsOnlyItsTargetMembers:
-    """``Geo::Inner`` through ``type Geo = Base`` names no member: nested paths do not project."""
-
-    @pytest.mark.parametrize("groupings", grouping_batches(3))
-    def test_rejected(self, tmp_path: Path, groupings: Groupings) -> None:
-        probes = {
-            "value": "Geo::Inner(y = 1)",
-            "pattern": "case al::Base::Inner(y = 1) of\n  | Geo::Inner(y) => y",
-            "is": "1 is Geo::Inner",
-            "cast": "1 as? Geo::Inner",
-        }
-        assert_verdicts(
-            tmp_path,
-            _RECORD_ALIAS_LIB,
-            _RECORD_ALIAS_HEADER,
-            probe_table(
-                probes,
-                {key: _rejected(UnknownMemberError) for key in probes},
-                span_texts={key: "Geo::Inner" for key in probes},
-            ),
-            groupings=groupings,
-        )

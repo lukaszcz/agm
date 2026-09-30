@@ -45,7 +45,8 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.types import AppliedT, NameT
 
 __all__ = [
-    "ReachedMembers",
+    "DeclaredBeneath",
+    "ReachedPaths",
     "TypeOwnerIndex",
     "beneath",
     "declared_member_scopes",
@@ -65,12 +66,15 @@ CurrentTypeSelection = Callable[
 ]
 """What a type name or member reference spelled in one module scope selects now, if anything."""
 
-ReachedMembers = Callable[[QName, NameT | AppliedT, Collection[str]], frozenset[str]]
-"""The names among *members* alias *qname*'s target *spelling* reaches where declared.
+ReachedPaths = Callable[[QName, NameT | AppliedT, Collection[ScopePath]], frozenset[ScopePath]]
+"""The paths among *paths* beneath alias *qname*'s target *spelling* reaches where declared.
 
-A member is reached unless a ``hiding`` visible at the alias's site removed
-``<spelling>::name``'s whole path.
+A path is reached unless a ``hiding`` visible at the alias's site removed
+``<spelling>::path``'s whole path.
 """
+
+DeclaredBeneath = Callable[[QName], Collection[ScopePath]]
+"""The paths, relative to type *qname*, of the declarations its module makes beneath it."""
 
 AliasSelection = tuple[QName | None, NameT | AppliedT] | None
 """An alias's selected target declaration and its spelling.
@@ -88,7 +92,8 @@ class TypeOwnerIndex:
     declares, a referenced member staying at its own path; an alias path owns
     its own constructor and selects through the owner of its target.
     *alias_targets* answers scope's decision for an alias's target;
-    *reached_members* which target members the alias reaches;
+    *declared_beneath* which declarations lie beneath a type's path and
+    *reached_paths* which of them an alias of it reaches;
     *current_selection* what a retained alias's spelling or an enum's member
     reference selects now. *retained* supplies the owners
     of *retained_module*'s paths that earlier REPL entries declared, already
@@ -101,7 +106,8 @@ class TypeOwnerIndex:
         all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
         constructor_refs: Mapping[QName, ConstructorRef],
         alias_targets: AliasTargets,
-        reached_members: ReachedMembers,
+        declared_beneath: DeclaredBeneath,
+        reached_paths: ReachedPaths,
         current_selection: CurrentTypeSelection,
         retained_module: ModuleId | None = None,
         retained: Mapping[ScopePath, TypeOwner] | None = None,
@@ -109,7 +115,8 @@ class TypeOwnerIndex:
         self._all_public_types = all_public_types
         self._constructor_refs = constructor_refs
         self._decided_targets = alias_targets
-        self._reached_members = reached_members
+        self._declared_beneath = declared_beneath
+        self._reached_paths = reached_paths
         self._current_selection = current_selection
         self._retained_module = retained_module
         self._retained = retained or {}
@@ -125,7 +132,8 @@ class TypeOwnerIndex:
             all_public_types=self._all_public_types,
             constructor_refs=self._constructor_refs,
             alias_targets=self._decided_targets,
-            reached_members=self._reached_members,
+            declared_beneath=self._declared_beneath,
+            reached_paths=self._reached_paths,
             current_selection=self._current_selection,
             retained_module=module_id,
             retained=retained,
@@ -224,21 +232,53 @@ class TypeOwnerIndex:
             or self.declared_path(selection) != target.qname
         ):
             return retained
-        reachable, hidden = self._projection(qname, spelling, current)
+        reachable, hidden = self._projection(qname, spelling, target.qname, current)
         return replace(retained, members=reachable, hidden=hidden)
 
     def _projection(
-        self, qname: QName, spelling: NameT | AppliedT, target_owner: TypeOwner
-    ) -> tuple[Mapping[str, ConstructorRef], frozenset[str]]:
-        """Return alias *qname*'s reachable ``members``/``hidden``, projected from *target_owner*.
+        self,
+        qname: QName,
+        spelling: NameT | AppliedT,
+        target_qname: QName,
+        target_owner: TypeOwner,
+    ) -> tuple[Mapping[str, ConstructorRef], frozenset[ScopePath]]:
+        """Return alias *qname*'s reachable ``members``/``hidden``, projected from its target.
 
-        Keeps the target members *spelling* -- the alias's own nominal target
-        spelling -- reaches where the alias is declared (*reached_members*).
+        *target_owner* is what the target, at *target_qname*, selects. Keeps
+        the paths beneath the target that *spelling* -- the alias's own
+        nominal target spelling -- reaches where the alias is declared
+        (*reached_paths*); a path the target itself cannot reach stays hidden.
         """
-        members = target_owner.members
-        reached = self._reached_members(qname, spelling, members.keys())
-        reachable = {name: member for name, member in members.items() if name in reached}
-        return reachable, target_owner.hidden | (members.keys() - reached)
+        final = self.final_target(target_qname)
+        beneath = () if final is None else self._declared_beneath(final)
+        candidates = [path for path in beneath if path not in target_owner.hidden]
+        reached = self._reached_paths(qname, spelling, candidates)
+        hidden = target_owner.hidden | frozenset(candidates).difference(reached)
+        reachable = {
+            name: member for name, member in target_owner.members.items() if (name,) not in hidden
+        }
+        return reachable, hidden
+
+    def final_target(self, qname: QName) -> QName | None:
+        """Return the type path *qname*'s alias chain ends at: *qname* itself when no alias.
+
+        ``None`` when *qname* names no type, or an alias on the chain has no
+        nominal target or a target a later REPL entry redeclared (a retained
+        alias's frozen target); a cycle of retained targets included.
+        """
+        seen: set[QName] = set()
+        current, expected = qname, None
+        while current not in seen:
+            seen.add(current)
+            owner = self.owner(current)
+            if owner is None or (expected is not None and owner.decl_node_id != expected):
+                return None
+            if owner.alias is None:
+                return current
+            if owner.target is None:
+                return None
+            current, expected = owner.target.qname, owner.target.decl_node_id
+        return None
 
     def declared_owner(
         self, qname: QName, declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias
@@ -322,7 +362,7 @@ class TypeOwnerIndex:
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
             return presumed
-        reachable, hidden = self._projection(qname, type_expr, target)
+        reachable, hidden = self._projection(qname, type_expr, target_qname, target)
         return TypeOwner(
             constructor,
             declaration.node_id,

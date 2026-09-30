@@ -4049,6 +4049,39 @@ class TestProgramArgumentsDynamicHelp:
         assert "--debug-mode" not in out
         assert "internal" not in out
 
+    def test_help_omits_the_doc_of_a_hidden_positional_parameter(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '    @doc("Visible one.") shown: text,\n'
+            '    @opt-hidden @doc("Secret one.") secret: text,\n'
+            ") -> unit = print shown\n",
+        )
+
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
+
+        out = capsys.readouterr().out
+        assert "Visible one." in out
+        assert "Secret one." not in out
+
+    def test_help_documents_a_standard_parameter_once(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            '@doc("Greet.")\n'
+            'program def main(@doc("Who to greet.") @arg-std name: text = "you") -> unit ='
+            " print name\n",
+        )
+
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
+
+        assert capsys.readouterr().out.count("Who to greet.") == 1
+
     def test_help_spells_a_short_flag_and_a_metavar(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

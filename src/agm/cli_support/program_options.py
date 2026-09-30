@@ -1865,6 +1865,8 @@ def build_program_command(
             (param.cli.metavar or param.cli.name, keep_indented_paragraphs(param.cli.doc))
             for param in positional
             if param.cli.doc is not None
+            and not param.cli.hidden
+            and (param.kind is ParamZone.POSITIONAL_ONLY or param.cli.cli_positional)
         ),
         parameter_sections=tuple(
             (section, tuple(section_params)) for section, section_params in sections.items()

@@ -16,9 +16,9 @@ from agm.agent.spec import (
 
 __all__ = ["AgentShorthandError", "agent_spec_shape", "parse_agent_shorthand"]
 
-# Provider and effort characters; a model may also contain ``:``, ``[`` and ``]``
-# (``opus[1m]``).
-_SEGMENT = re.compile(r"[A-Za-z0-9._@+-]+")
+# Provider and effort characters, starting alphanumeric so ``./agent`` and ``../agent`` stay
+# commands; a model may also contain ``:``, ``[`` and ``]`` (``opus[1m]``).
+_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]*")
 _MODEL = re.compile(r"[A-Za-z0-9._@+:\[\]-]+")
 
 
@@ -86,7 +86,7 @@ def parse_agent_shorthand(text: str) -> AgentSpec | None:
     Forms: ``claude[/MODEL][:EFFORT]``, ``codex[/MODEL][:EFFORT]``,
     ``pi[/PROVIDER[/MODEL]][:EFFORT]``, and any other ``PROVIDER/MODEL[:EFFORT]``
     (Pi). Omitted native names and effort are ``""``. The effort follows the final
-    colon and is opaque to AGM. Provider and effort are ``[A-Za-z0-9._@+-]+``; the
+    colon and is opaque to AGM. Provider and effort are ``[A-Za-z0-9][A-Za-z0-9._@+-]*``; the
     model also admits ``:``, ``[`` and ``]``. Native text is stripped text starting
     with a native name (ASCII, any case) followed by its end, ``/`` or ``:``; native
     text breaking its form -- surrounding whitespace included -- raises

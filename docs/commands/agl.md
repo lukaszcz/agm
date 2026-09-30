@@ -260,8 +260,8 @@ order (a config value may instead be a native TOML table, read directly as the t
 
 In shorthand the effort follows the last `:`. An omitted name or effort is `""`, filled at
 dispatch from the [agent defaults](#agent-defaults): bare `claude` is `AgentClaude()`,
-`claude:high` sets only the effort, and `pi/anthropic` only the provider. Provider and effort use
-`[A-Za-z0-9._@+-]`; a model may also contain `:`, `[`, and `]` (`claude/opus[1m]:high`), so a
+`claude:high` sets only the effort, and `pi/anthropic` only the provider. Provider and effort start with a letter or
+digit and continue with `[A-Za-z0-9._@+-]`, so `./agent` stays a command; a model may also contain `:`, `[`, and `]` (`claude/opus[1m]:high`), so a
 model with a colon needs an explicit effort (`ollama/llama3:8b:high`) or the constructor form.
 Examples: `claude`, `codex:high`, `claude/sonnet:medium`, `pi/anthropic`, `pi/openai/gpt-5:low`,
 `openrouter/qwen3`.

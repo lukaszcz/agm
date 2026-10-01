@@ -80,8 +80,10 @@ declared there is an ordinary function.
 ### Parameters
 
 The selected program's value parameters are its **external inputs**. The
-parameter list defaults to the **named-only** zone: a plain `name: text`
-parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
+parameter list defaults to the **named-only** zone. On the command line a
+required `name: text` fills a positional slot, while a defaulted parameter —
+and a required `bool`, `Option[T]`, or `Optional[T]` — is addressed by
+`--name`. `@arg-pos` opens a positional slot;
 `@arg-std` accepts both. Presentation attributes (`@doc`, `@opt-name`,
 `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`) shape the flag; see
 [Attributes](attributes.md#host-parameter-attributes).

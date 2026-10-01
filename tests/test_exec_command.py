@@ -3981,6 +3981,136 @@ class TestProgramOptionAttributesCLI:
         assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=[flag, "x"])) is None
         assert capsys.readouterr().out == "x\n"
 
+    @pytest.mark.parametrize(
+        ("type_", "tokens", "expected"),
+        [
+            ("Option[text]", ["--x", "foo", "bar"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Option[text]", ["bar", "--x=foo"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Option[text]", ["--no-x", "bar"], "Option::None\nbar\n"),
+            ("Optional[text]", ["--x", "foo", "bar"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Optional[text]", ["--x", "default", "bar"], "Optional::Default\nbar\n"),
+            ("Optional[text]", ["--no-x", "bar"], "Option::None\nbar\n"),
+            ("bool", ["--x", "bar"], "true\nbar\n"),
+            ("bool", ["--no-x", "bar"], "false\nbar\n"),
+        ],
+    )
+    def test_a_required_unzoned_parameter_with_a_negative_polarity_stays_flag_addressed(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        type_: str,
+        tokens: list[str],
+        expected: str,
+    ) -> None:
+        """A positional slot cannot spell ``--no-x``, so these never become one."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f"program def main(x: {type_}, y: text)\n  print(x)\n  print(y)\n")
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=tokens)) is None
+        assert capsys.readouterr().out == expected
+
+    @pytest.mark.parametrize("type_", ["Option[text]", "Optional[text]", "bool"])
+    def test_a_required_unzoned_parameter_with_a_negative_polarity_fills_no_positional_slot(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], type_: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f"program def main(x: {type_}, y: text)\n  print(x)\n  print(y)\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["true", "bar"]))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [
+            (["Red", "foo"], 'Option::Some(value = Color::Red)\nOption::Some(value = "foo")\n'),
+            (["Red", "default"], "Option::Some(value = Color::Red)\nOptional::Default\n"),
+            (
+                ["Red", "--tag", "foo"],
+                'Option::Some(value = Color::Red)\nOption::Some(value = "foo")\n',
+            ),
+            (["Red", "--no-tag"], "Option::Some(value = Color::Red)\nOption::None\n"),
+            (["Red"], "Option::Some(value = Color::Red)\nOptional::Default\n"),
+        ],
+    )
+    def test_a_positional_token_for_an_optional_slot_supplies_some(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        tokens: list[str],
+        expected: str,
+    ) -> None:
+        """A positional token reads ``T`` exactly as the flag's value does."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Color\n  | Red\n  | Green\n\n"
+            "program def main(\n"
+            "  @arg-pos color: Option[Color], @arg-std tag: Optional[text] = Default\n"
+            ")\n  print(color)\n  print(tag)\n"
+        )
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=tokens)) is None
+        assert capsys.readouterr().out == expected
+
+    def test_a_positional_token_for_an_optional_slot_is_not_read_as_the_whole_option(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Color\n  | Red\n  | Green\n\n"
+            "program def main(@arg-pos color: Option[Color])\n  print(color)\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["Some(Red)"]))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize(
+        ("declaration", "prefix"),
+        [
+            ("@arg-pos mode: Mode", []),
+            ("@arg-pos mode: Option[Mode]", []),
+            ("@arg-pos mode: Optional[Mode]", []),
+            ("@arg-std mode: Option[Mode]", []),
+            ("@arg-std mode: Optional[Mode]", ["--mode"]),
+            ("mode: Mode", []),
+            ("mode: Option[Mode]", ["--mode"]),
+            ("mode: Optional[Mode]", ["--mode"]),
+            ("@arg-named mode: Option[Mode]", ["--mode"]),
+        ],
+    )
+    def test_every_completed_enum_value_is_accepted_where_it_was_offered(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        declaration: str,
+        prefix: list[str],
+    ) -> None:
+        """Completion and decoding agree on a slot's and a flag's value spellings."""
+        from typer._completion_classes import ZshComplete
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'enum Mode\n  | @name("fast") Fast\n  | Tuned(level: int)\n'
+            "  | Custom(level: int = 1)\n\n"
+            f"program def main({declaration})\n  print(mode)\n"
+        )
+        completer = ZshComplete(get_command(cli.app), {}, "agm", "_AGM_COMPLETE")
+
+        offered = [
+            item.value for item in completer.get_completions(["exec", str(agl_file), *prefix], "")
+        ]
+
+        assert offered == ["fast", "Custom"]
+        for value in offered:
+            arguments = _exec_args_no_trace(agl_file, argument_tokens=[*prefix, value])
+            assert exec_command.run(arguments) is None
+        assert capsys.readouterr().out.count("\n") == len(offered)
+
     def test_a_short_option_colliding_with_a_host_flag_is_a_host_diagnostic(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

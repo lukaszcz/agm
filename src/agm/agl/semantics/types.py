@@ -1058,6 +1058,20 @@ def is_standard_optional_enum(type_: Type) -> TypeGuard[EnumType]:
     return _is_standard_enum(type_, "Optional")
 
 
+def is_negatable_host_type(type_: Type) -> bool:
+    """Return whether a host spells *type_* with a negative polarity.
+
+    ``bool`` and the standard optional enums: the one test shared by the
+    CLI's ``--no-x`` projection and a program parameter's positional default,
+    since a positional slot cannot spell the negative.
+    """
+    return (
+        isinstance(type_, BoolType)
+        or is_standard_option_enum(type_)
+        or is_standard_optional_enum(type_)
+    )
+
+
 _OUTPUT_CONTRACT_TYPE = RecordType(
     name="OutputContract", module_id=RESERVED_ID, decl_id=_reserved_id("OutputContract")
 )

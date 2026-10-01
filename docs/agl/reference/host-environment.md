@@ -76,13 +76,17 @@ A positional-only or standard parameter accepts a positional CLI token; a
 standard or named-only parameter accepts `--name value`, `--name=value`, or,
 for `bool`, `Option[T]`, and `Optional[T]`, the negated form `--no-name`. An
 `Optional[T]` parameter additionally reads the exact value `default` as `Default`;
-other positive values become `Some`. A parameter given a
+other positive values become `Some`. A positional token is read as the same
+parameter's `--name` value is, so it too supplies `Some` or `Default`; a `bool`
+slot takes `true` or `false`. A parameter given a
 one-letter spelling by `@opt-short` also accepts `-n value` and `-nvalue`, and
 groups with other one-letter flags — `-abc` — where only the last letter of a
 group may take a value. A `program def`'s
 parameter list defaults to the **named-only** AgL zone. On the CLI, an unzoned
 required parameter such as `name: text` is positional-only unless it carries
-`@opt-name` or `@opt-short`, which keep it flag-addressed; an unzoned defaulted
+`@opt-name` or `@opt-short`, which keep it flag-addressed, or its type is
+`bool`, `Option[T]`, or `Optional[T]`, whose negated form a positional slot
+cannot spell; an unzoned defaulted
 parameter such as `name: text = "value"` remains named-only. An explicit
 `@arg-pos`, `@arg-std`, or `@arg-named` sets both the AgL and CLI zones.
 A bare `--` ends option parsing, so a later `--`-prefixed token is collected

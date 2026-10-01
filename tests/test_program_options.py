@@ -938,6 +938,30 @@ class TestParsePositional:
         with pytest.raises(ValueError):
             command.parse(["1", "x", "y"])
 
+    @pytest.mark.parametrize("zone", [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD])
+    def test_a_positional_option_token_is_boxed_like_a_flag_value(self, zone: ParamZone) -> None:
+        args = _command(_param("region", _option_type(TextType()), zone)).parse(["eu"])
+        assert args.positional == (OptionSome("eu"),)
+
+    def test_a_positional_optional_token_reads_the_default_shortcut(self) -> None:
+        command = _command(_param("file", _optional_type(TextType()), ParamZone.POSITIONAL_ONLY))
+        assert command.parse(["default"]).positional == ({"$case": "Default"},)
+        assert command.parse(["out.txt"]).positional == (OptionSome("out.txt"),)
+
+    def test_a_positional_option_token_routed_by_name_is_boxed(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("region", _option_type(TextType()), ParamZone.STANDARD),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--a", "1", "eu", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"a": "1", "region": OptionSome("eu"), "name": "Bob"}
+
+    def test_a_token_past_the_last_slot_stays_verbatim(self) -> None:
+        command = _command(_param("region", _option_type(TextType()), ParamZone.POSITIONAL_ONLY))
+        assert command.parse(["eu", "extra"]).positional == (OptionSome("eu"), "extra")
+
     def test_a_leading_dash_option_value_is_spelled_inline_or_as_the_next_token(self) -> None:
         param = _param("n", IntType())
         assert _command(param).parse(["--n=-5"]).named == {"n": "-5"}

@@ -121,7 +121,9 @@ a direct `agm repl` entry is a static error.
 
 The selected `program def`'s value parameters project onto the CLI through AgL's
 positional/standard/named-only zones. Without zone attributes, a required `x: T` fills a
-positional CLI slot and a defaulted `x: T = VALUE` becomes `--x`. An `@arg-pos` parameter is
+positional CLI slot and a defaulted `x: T = VALUE` becomes `--x`. A required `bool`,
+`Option[T]`, or `Optional[T]` stays `--x` / `--no-x`: a positional slot cannot spell the
+negative. An `@arg-pos` parameter is
 never addressable by name; `@arg-std` accepts a positional token or `--x`, and `@arg-named`
 requires `--x`. A positional token skips an `@arg-std` slot already given as `--x` when a later
 required slot can be reached only by position. AgL calls retain their declared parameter zones.
@@ -145,13 +147,14 @@ filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for it
 under `agm exec FILE` and a registered package command alike.
 
 A parameter of an `enum` type — or `Option[E]` / `Optional[E]` of one — completes its value
-spellings (a member's `@name` when present) after `--x`, `-x`, and `--x=`, under `agm exec FILE`
-and a registered package command alike.
+spellings (a member's `@name` when present) after `--x`, `-x`, and `--x=`, and in its positional
+slot, under `agm exec FILE` and a registered package command alike.
 
-A positional slot has no `--no-x`, so `Option[T]` and `Optional[T]` get no special treatment
-there: `text` is verbatim, `Agent` uses host syntax, and every other type is strict JSON or
-value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Some("hi")'` for
-`Option[text]`).
+A positional token is read exactly as the same parameter's `--x VALUE` is: for an `@arg-pos` or
+`@arg-std` slot of `Option[T]` or `Optional[T]` it is a `T` and supplies `Some` (`hi` for
+`Option[text]`), and `default` supplies `Optional`'s `Default`. A positional slot has no
+`--no-x`, so `None` comes from `--no-x` on an `@arg-std` parameter or from an omitted
+parameter's declared default; a `bool` slot takes `true` or `false`.
 
 An omitted argument resolves as `CLI > @opt-env variable > qualified program table (see
 [Configuration](#configuration)) > signature default > required error`; errors are reported

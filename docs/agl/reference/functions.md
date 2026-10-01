@@ -203,7 +203,8 @@ parameter list with no zone attribute has all parameters in the standard zone
 (positional or named). A method receiver `self` is the exception: it is always
 positional-only. A `program def`'s parameter list defaults to the **named-only**
 AgL zone instead. Its CLI projects an unzoned required parameter to a
-positional-only slot and a defaulted parameter to `--name`
+positional-only slot — unless its type is `bool`, `Option[T]`, or
+`Optional[T]` — and every other unzoned parameter to `--name`
 ([Host environment](host-environment.md#program-arguments)). Explicit zone
 attributes govern both AgL calls and CLI slots.
 

@@ -61,14 +61,15 @@ end-of-options marker visible to it across Click's own parse.
 Nested optional handling
 ------------------------
 
-Only the outermost type gets special CLI treatment. A non-optional flag's
-``VALUE`` token passes through verbatim, exactly like a positional token:
+Only the outermost type gets special CLI treatment, and a ``VALUE`` token is
+read the same way whether it follows a flag or fills a positional slot. A
+non-optional token passes through verbatim:
 ``decode_param_value`` already reads a raw string against the parameter's
 own decoder (host Agent syntax, strict JSON, or AgL value syntax alike), so
 reading it again here would duplicate that step and lose its diagnostic,
 anchored at the parameter's declaration, on a malformed value.
 
-An ``Option[T]`` or ``Optional[T]`` flag is the one boxing exception. Its raw value is an
+An ``Option[T]`` or ``Optional[T]`` token is the one boxing exception. Its raw value is an
 :class:`~agm.agl.runtime.arguments.OptionSome` box around the token, built by
 :func:`option_some_raw` — ``decode_param_value``'s deferred-decode path reads
 a boxed ``Some`` payload against ``T``'s own field schema (host-text dispatch
@@ -103,6 +104,7 @@ from agm.agl.semantics.types import (
     BoolType,
     JsonType,
     TextType,
+    is_negatable_host_type,
     is_standard_agent_enum,
     is_standard_option_enum,
     is_standard_optional_enum,
@@ -346,10 +348,9 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
         inner_form = _bare_value_form(inner)
     else:
         form = _bare_value_form(type_)
-    negated = form is ValueForm.BOOL or _is_nullable_value_form(form)
     return ProjectedOption(
         flag=f"--{name}",
-        negative_flag=f"--no-{name}" if negated else None,
+        negative_flag=f"--no-{name}" if is_negatable_host_type(type_) else None,
         value_form=form,
         option_inner=inner if _is_nullable_value_form(form) else None,
         option_inner_form=inner_form,
@@ -765,7 +766,7 @@ def option_some_raw(value: object) -> OptionSome:
     """Box one raw ``Option[T]`` "Some" value for ``decode_param_value`` to decode.
 
     The single place this box is built — shared by :func:`_positive_raw`,
-    for a CLI flag's raw ``VALUE`` token, and by the config-table path
+    for a CLI raw ``VALUE`` token, and by the config-table path
     (``commands.exec_program``), for an already-native TOML/JSON value read
     from a program's qualified table. Decoding *value* (host-text dispatch
     when it is a string, as is otherwise) and wrapping it into the enum's
@@ -814,16 +815,16 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
 
 
 def _positive_raw(projected: ProjectedOption, token: str) -> object:
-    """Build the raw value for one value-taking flag's ``VALUE`` token.
+    """Build the raw value for one ``VALUE`` token: a flag's, or a positional slot's.
 
-    Only value-taking forms reach here —
-    the caller (:meth:`ProgramCommand.parse`) never calls this for a ``BOOL``
-    form, whose ``takes_value`` is ``False``. Every non-optional form takes
-    its token verbatim: ``decode_param_value`` reads a string raw value
-    through the shared host-text dispatch, so parsing it here would duplicate
-    that step and lose its diagnostic. An optional token is boxed for the same
-    deferred decode against ``T``'s own field type, except for ``Optional``'s
-    exact ``default`` shortcut.
+    The one reading of a value token, so a parameter's flag, its ``@opt-env``
+    variable and its positional slot accept the same spellings. Every
+    non-optional form takes its token verbatim: ``decode_param_value`` reads a
+    string raw value through the shared host-text dispatch, so parsing it
+    here would duplicate that step and lose its diagnostic. An optional token
+    is boxed for the same deferred decode against ``T``'s own field type,
+    except for ``Optional``'s exact ``default`` shortcut. A ``bool`` flag
+    takes no token and never reaches here; a ``bool`` slot's token is verbatim.
     """
     if projected.value_form is ValueForm.OPTIONAL and token == "default":
         return optional_default_raw()
@@ -1379,8 +1380,9 @@ class ProgramCommand:
     parameters in declaration order; and
     ``options`` pairs every AgL name-addressable parameter (``STANDARD``,
     ``NAMED_ONLY``) with its projected value form. An unzoned required
-    parameter also appears in ``positional``; its Click option exists only
-    for an environment fallback, when declared.
+    parameter whose type has no negative polarity also appears in
+    ``positional``; its Click option exists only for an environment
+    fallback, when declared.
 
     ``options`` also carries the external↔declared correspondence: each entry
     holds the parameter's declared name and the external name its flags were
@@ -1405,7 +1407,8 @@ class ProgramCommand:
         Click owns the token conventions: short options and their bundles,
         attached and ``--x=V`` values, the ``--`` end-of-options marker, and
         an option's value being whatever token follows it. Every non-option
-        token lands in the catch-all positional slot unconditionally. An
+        token lands in the catch-all positional slot unconditionally, and one
+        that fills a slot is read as that parameter's flag value would be. An
         implicit positional CLI value is mapped to its AgL named parameter;
         the shared zone binder diagnoses any excess positional arguments, except
         a surplus after tokens routed by name, which it would misreport.
@@ -1472,9 +1475,13 @@ class ProgramCommand:
             )
             if value is not _NOT_SUPPLIED:
                 named[param.name] = value
-        positional: list[str] = []
-        for value, (slot, by_name) in zip(cli_tokens, slots, strict=True):
-            if slot is not None and by_name:
+        positional: list[object] = []
+        for token, (slot, by_name) in zip(cli_tokens, slots, strict=True):
+            if slot is None:
+                positional.append(token)
+                continue
+            value = _positive_raw(project_option(slot.cli.name, slot.type), token)
+            if by_name:
                 named[slot.name] = value
             else:
                 positional.append(value)

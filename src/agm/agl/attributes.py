@@ -257,7 +257,8 @@ class ProgramOptionSpec:
     unless an attribute supplies them. ``cli_positional`` marks an unzoned,
     required program parameter without ``@opt-name`` or ``@opt-short``, whose
     CLI default is positional-only even though its AgL call zone remains
-    named-only.
+    named-only. Scope recognition sets it from the declaration alone; the
+    host-facing parameter info clears it for a type with a negative polarity.
     """
 
     name: str

@@ -1991,6 +1991,20 @@ class TestExecCommandShellComplete:
         assert "--verbose" in result
         assert "--no-verbose" in result
 
+    def test_file_program_offers_both_polarities_of_a_required_negatable_parameter(
+        self, tmp_path: Path
+    ) -> None:
+        """A required ``bool`` or optional-enum parameter keeps its flag pair."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "program def main(tag: Option[text], dry: bool, name: text) -> unit = print name\n"
+        )
+
+        result = self._complete(["exec", str(agl_file)], "--")
+
+        assert {"--tag", "--no-tag", "--dry", "--no-dry"} <= set(result)
+        assert "--name" not in result
+
     def test_command_flag_source_offers_program_value_argument_flags(self) -> None:
         """``agm exec -c 'program def ...' --<TAB>`` discovers value-argument flags too."""
         result = self._complete(

@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agent.spec_defaults import AgentSpecResolver
+    from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
@@ -1789,7 +1790,10 @@ def _program_param_infos(
             type=param_spec.type,
             has_default=param_spec.has_default,
             span=ast_param.span,
-            cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
+            cli=_typed_option_spec(
+                checked_module.resolved.attributes.program_options[ast_param.node_id],
+                param_spec.type,
+            ),
             is_path=_annotates_path(
                 checked, module_id, scope_path, ast_param.type_expr, param_spec.type, aliases
             ),
@@ -1797,6 +1801,20 @@ def _program_param_infos(
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
     )
+
+
+def _typed_option_spec(spec: "ProgramOptionSpec", type_: "Type") -> "ProgramOptionSpec":
+    """Return *spec* with its positional CLI default settled against the checked type.
+
+    Scope recognition marks every unzoned required parameter. One whose type
+    has a negative polarity stays flag-addressed: a positional slot cannot
+    spell ``--no-x``.
+    """
+    from agm.agl.semantics.types import is_negatable_host_type
+
+    if spec.cli_positional and is_negatable_host_type(type_):
+        return replace(spec, cli_positional=False)
+    return spec
 
 
 def _enum_completion_values(type_: "Type", type_table: "TypeTable") -> tuple[str, ...]:

@@ -1,0 +1,140 @@
+{
+  "scenarios": [
+    {
+      "name": "block_member_decoded_with_every_field",
+      "params": {
+        "mode": "shapes",
+        "size": 2
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Rect\", \"width\": 3, \"height\": 5}"
+        ]
+      },
+      "expect": {
+        "stdout": "Shape::Rect(width = 3, height = 5)\n15\n12\nShape::Rect(width = 2, height = 4)\n12\nShape::Rect(width = 2, height = 1)\n-1\n",
+        "calls": {
+          "worker": 1
+        }
+      }
+    },
+    {
+      "name": "single_field_block_member_decoded",
+      "params": {
+        "mode": "shapes",
+        "size": 3
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Circle\", \"radius\": 1}"
+        ]
+      },
+      "expect": {
+        "stdout": "Shape::Circle(radius = 1)\n3\n27\nShape::Rect(width = 3, height = 4)\n16\nShape::Rect(width = 3, height = 1)\n-1\n",
+        "calls": {
+          "worker": 1
+        }
+      }
+    },
+    {
+      "name": "fieldless_member_before_a_block_member_decoded",
+      "params": {
+        "mode": "shapes",
+        "size": 1
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Point\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Shape::Point\n0\n3\nShape::Rect(width = 1, height = 4)\n8\nShape::Rect(width = 1, height = 1)\n-1\n",
+        "calls": {
+          "worker": 1
+        }
+      }
+    },
+    {
+      "name": "parenthesized_member_after_a_block_member_decoded",
+      "params": {
+        "mode": "shapes",
+        "size": 1
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Label\", \"caption\": \"hi\"}"
+        ]
+      },
+      "expect": {
+        "stdout_contains": [
+          "Shape::Label(caption = \"hi\")\n-1\n3\n"
+        ],
+        "calls": {
+          "worker": 1
+        }
+      }
+    },
+    {
+      "name": "block_member_missing_a_required_field_is_a_parse_error",
+      "runtime": {"parse_error_retries": 0},
+      "params": {
+        "mode": "shapes",
+        "size": 1
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Circle\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {
+          "worker": 1
+        },
+        "raises": {
+          "type": "AgentParseError"
+        }
+      }
+    },
+    {
+      "name": "generic_mutable_block_member_in_an_indented_enum_body",
+      "params": {
+        "mode": "tree",
+        "size": 2
+      },
+      "expect": {
+        "stdout": "4\n22\nTree::Node(value = 20, left = Tree::Leaf, right = Tree::Node(value = 2, left = Tree::Leaf, right = Tree::Leaf))\n"
+      }
+    },
+    {
+      "name": "generic_mutable_block_member_with_another_seed",
+      "params": {
+        "mode": "tree",
+        "size": 5
+      },
+      "expect": {
+        "stdout": "7\n52\nTree::Node(value = 50, left = Tree::Leaf, right = Tree::Node(value = 2, left = Tree::Leaf, right = Tree::Leaf))\n"
+      }
+    },
+    {
+      "name": "scoped_block_members_with_a_defaulted_field",
+      "params": {
+        "mode": "net",
+        "size": 2
+      },
+      "expect": {
+        "stdout": "ok: net\nfailed 2: unknown\nNet::Reply::Failed(code = 2, reason = \"busy\")\n"
+      }
+    },
+    {
+      "name": "scoped_block_members_with_other_arguments",
+      "params": {
+        "mode": "down",
+        "size": 503
+      },
+      "expect": {
+        "stdout": "ok: down\nfailed 503: unknown\nNet::Reply::Failed(code = 503, reason = \"busy\")\n"
+      }
+    }
+  ]
+}

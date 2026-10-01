@@ -850,6 +850,82 @@ class TestDeclarations:
         assert en.members[0].name == "Empty"
         assert en.members[0].fields == ()
 
+    def test_enum_member_field_block(self) -> None:
+        en = first(
+            parse(
+                "enum Shape\n"
+                "  | Point\n"
+                "  | Circle\n"
+                "      radius: int\n"
+                "  | Rect\n"
+                "      var width: int\n"
+                "      height: int = 1\n"
+                "  | Label(caption: text)\n"
+                "let after = 1"
+            )
+        )
+        assert isinstance(en, EnumDef)
+        assert [member.name for member in en.members] == ["Point", "Circle", "Rect", "Label"]
+        assert [[field.name for field in member.fields] for member in en.members] == [
+            [],
+            ["radius"],
+            ["width", "height"],
+            ["caption"],
+        ]
+        rect = en.members[2]
+        assert tuple(field.mutable for field in rect.fields) == (True, False)
+        assert rect.fields[0].default is None
+        assert rect.fields[1].default is not None
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "enum E =\n  A\n    x: int\n  | B\n    y: text",
+            "enum E\n  | A\n      x: int\n  | B\n      y: text\n",
+            "enum E | A\n  x: int\n| B\n  y: text",
+            "scope S\n  enum E\n    | A\n        x: int\n    | B\n        y: text\nend S",
+        ],
+        ids=("indented-body", "flat", "inline-first-member", "scope-region"),
+    )
+    def test_enum_member_field_block_matches_the_parenthesized_form(self, source: str) -> None:
+        en = first(parse(source))
+        if isinstance(en, ScopeRegion):
+            en = en.items[0]
+        assert isinstance(en, EnumDef)
+        assert [
+            (member.name, [field.name for field in member.fields]) for member in en.members
+        ] == [
+            ("A", ["x"]),
+            ("B", ["y"]),
+        ]
+
+    def test_enum_member_field_block_attributes(self) -> None:
+        en = first(
+            parse(
+                "enum Opt\n"
+                '  | @doc("m") Some\n'
+                '      @doc("v")\n'
+                "      value: int\n"
+                "      @arg-named tag: text\n"
+                "      plain: bool"
+            )
+        )
+        assert isinstance(en, EnumDef)
+        assert attribute_names(en.members[0]) == ["doc"]
+        assert [attribute_names(field) for field in en.members[0].fields] == [
+            ["doc"],
+            ["arg-named"],
+            [],
+        ]
+
+    def test_enum_member_reference_rejects_a_field_block(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("enum RR\n  | ::R1\n      x: int")
+
+    def test_enum_member_field_block_takes_no_commas(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("enum E\n  | A\n      x: int,\n      y: int")
+
     def test_enum_member_references(self) -> None:
         en = first(
             parse(

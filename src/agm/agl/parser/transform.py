@@ -791,7 +791,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+        # Grammar: _field_block
         return tuple(a for a in args if isinstance(a, syntax.Param))
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
@@ -899,9 +899,8 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
         )
 
-    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: LPAR field_list? RPAR
-        return next((cast(tuple[syntax.Param, ...], a) for a in args if _is_field_tuple(a)), ())
+    variant_paren_payload = record_paren_body
+    variant_indent_payload = record_indent_body
 
     def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: field_inline (COMMA field_inline)* COMMA?

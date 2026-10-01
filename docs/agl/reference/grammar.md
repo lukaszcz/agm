@@ -258,6 +258,7 @@ first_enum_member ::= "|"? enum_member
 enum_member      ::= attributes? name member_payload? | qualifier_chain name member_type_args?
 member_type_args ::= "[" type_expr ("," type_expr)* "]"
 member_payload   ::= "(" field_list? ")"
+                   | NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
 field_list       ::= field_inline ("," field_inline)* ","?
 field_inline     ::= attributes? "var"? field_name ":" type_expr ("=" or_expr)?
 
@@ -299,7 +300,8 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 
 An enum member written as a bare `name` declares a record in the enum's scope;
 its optional field list is that record's field list, including optional `var`
-field markers. `var` is valid for records and enum-member records,
+field markers. The list is parenthesized, or an indented block under the
+member, one field per line. `var` is valid for records and enum-member records,
 but not exception fields. A qualified member is a
 reference to an existing record, so it has no field list. Qualification is the
 declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while

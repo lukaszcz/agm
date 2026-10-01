@@ -665,6 +665,23 @@ enum FixResult
   | Blocked(reason: text, recoverable: bool)
 ```
 
+A member's fields may instead be written in an indented block under the
+member, one per line without parentheses or commas, exactly as in a `record`
+declaration. An attribute may then sit on the line above its field. The two
+forms mix freely within one enum:
+
+```agl
+enum VerifyResult
+  | Verified
+  | Completed
+      @doc("absolute file path of the next unblocked task")
+      next-task-file: path
+  | Rejected(reason: text)
+  | Blocked
+      reason: text
+      recoverable: bool = false
+```
+
 A qualified member spelling instead references an existing record. The
 reference may apply the enum's type parameters, and aliases are transparent:
 

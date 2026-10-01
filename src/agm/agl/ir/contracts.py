@@ -62,6 +62,7 @@ __all__ = [
     "VariantDecode",
     "VariantEncode",
     "forwarded_encode_key",
+    "is_plain_enum",
     "resolve_schema_ref",
 ]
 
@@ -149,7 +150,7 @@ class RecordDecode:
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields.
+    """One enum member's terminal name, JSON tag, identity, display name, and fields.
 
     ``alias`` is the member's own ``@name`` spelling when it differs from
     ``name``, or ``None`` when the member carries no alias.
@@ -165,9 +166,9 @@ class VariantDecode:
 
 @dataclass(frozen=True, slots=True)
 class EnumDecode:
-    """Decode a JSON object (with a ``$case`` discriminator) into an enum.
+    """Decode an enum: a member's JSON tag string when plain, else a ``$case``-tagged object.
 
-    ``name`` is the enum's terminal declared name (unqualified, unlike
+    See :func:`is_plain_enum`. ``name`` is the enum's terminal declared name (unqualified, unlike
     ``display_name``). ``host_agent`` is ``True`` exactly for the standard
     library's ``Agent`` enum (see
     ``semantics.types.is_standard_agent_enum``); an enum has no ``@name``
@@ -278,7 +279,7 @@ class ExceptionEncode:
 
 @dataclass(frozen=True, slots=True)
 class VariantEncode:
-    """One enum member's terminal name, JSON ``$case`` tag, identity, and ordered field encoders."""
+    """One enum member's terminal name, JSON tag, identity, and ordered field encoders."""
 
     name: str
     json_name: str
@@ -288,7 +289,10 @@ class VariantEncode:
 
 @dataclass(frozen=True, slots=True)
 class EnumEncode:
-    """Encode an enum slot with its member-selected ``$case`` tag."""
+    """Encode an enum slot: the member's JSON tag string when plain, else a ``$case`` object.
+
+    See :func:`is_plain_enum`.
+    """
 
     nominal: NominalId
     variants: tuple[VariantEncode, ...]
@@ -351,6 +355,15 @@ class EncodePlan:
 
     root: EncodeSchema
     definitions: "tuple[EncodeDefinition, ...]" = ()
+
+
+def is_plain_enum(schema: "EnumDecode | EnumEncode") -> bool:
+    """Whether every member of *schema* is fieldless.
+
+    A plain enum crosses JSON as its member's tag string; any other enum as a
+    ``$case``-tagged object.
+    """
+    return not any(variant.fields for variant in schema.variants)
 
 
 def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:

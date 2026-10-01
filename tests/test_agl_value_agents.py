@@ -452,7 +452,7 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
     assert not run.ok
     assert run.error is not None
     assert run.error.type_name == "Problem"
-    assert run.error.fields["status"] == {"$case": "Closed"}
+    assert run.error.fields["status"] == "Closed"
 
 
 def test_nonzero_exit_message_includes_the_exit_code(

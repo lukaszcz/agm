@@ -15,10 +15,11 @@ oriented orchestration language whose core ideas are:
   result type drives the format instructions sent to the agent, the parsing
   and validation of its raw output, and the retry-or-abort behavior on
   malformed output.
-- **Structured outputs have one canonical wire format** — JSON, with a
-  reserved `"$case"` tag holding a member's effective JSON name (its terminal
-  name unless renamed) — parsed leniently by default and validated strictly,
-  always.
+- **Structured outputs have one canonical wire format** — JSON, in which an
+  enum member is named by its effective JSON name (its terminal name unless
+  renamed): as a bare string for an enum of fieldless members, under a
+  reserved `"$case"` tag otherwise — parsed leniently by default and
+  validated strictly, always.
 - **Everything is an expression.** There is no statement category: binders
   (`let`/`var`) scope over a continuation, side-effecting forms have type
   `unit` and return `()`, and `if`/`case`/`try` with matching branches yield

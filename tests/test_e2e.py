@@ -10056,7 +10056,7 @@ class TestExecCommand:
             'count=$((count + 1)); echo "$count" > "$COUNT_FILE"\n'
             'for arg in "$@"; do [[ "$arg" == @* ]] && cat "${arg#@}" >> "$PROMPT_LOG"; done\n'
             "if [[ $count -eq 1 ]]; then printf 'not json'; "
-            'else printf \'{"$case":"Pass"}\'; fi\n'
+            "else printf '\"Pass\"'; fi\n"
         )
         runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{bin_dir}:{env['PATH']}"

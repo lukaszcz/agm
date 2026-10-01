@@ -38,6 +38,7 @@ from agm.agl.ir.contracts import (
     TypeParameterEncode,
     VariantEncode,
     forwarded_encode_key,
+    is_plain_enum,
     resolve_schema_ref,
 )
 from agm.agl.semantics.cycles import (
@@ -103,8 +104,9 @@ def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
 def encode_value(plan: EncodePlan, value: Value) -> object:
     """Encode *value* through its lowering-derived JSON plan.
 
-    Plans select enum ``$case`` tags from the slot type rather than the runtime
-    value. A finite source's definitions take no parameters; a growing
+    Plans select an enum's shape (a plain enum's tag string, else a ``$case``
+    object) and its tags from the slot type rather than the runtime value. A
+    finite source's definitions take no parameters; a growing
     polymorphic-recursive source's definitions are generic templates whose
     parameters each reference binds (see :class:`RefEncode`).
     """
@@ -192,6 +194,8 @@ def _encode(
             active.discard(id(value))
     if isinstance(schema, EnumEncode):
         variant, fields = _variant_for_encode(schema, value)
+        if is_plain_enum(schema):
+            return variant.json_name
         active = enter_value(id(value), active)
         try:
             result: dict[str, object] = {"$case": variant.json_name}

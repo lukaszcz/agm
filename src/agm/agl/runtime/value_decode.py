@@ -38,6 +38,7 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarKind,
     VariantDecode,
+    is_plain_enum,
 )
 from agm.agl.runtime.convert import (
     StrictJsonParseError,
@@ -254,7 +255,7 @@ def _match_variant(node: CtorNode, schema: EnumDecode) -> VariantDecode | None:
     return variant
 
 
-def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> dict[str, object]:
+def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> object:
     if not isinstance(node, CtorNode):
         raise ValueDecodeError(
             f"expected {schema.display_name}, got {_node_kind(node)}", node.start
@@ -265,6 +266,8 @@ def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> dict[st
             f"{node.name!r} does not name a member of {schema.display_name!r}", node.start
         )
     payload = _convert_ctor_args(node, variant.fields, variant.display_name, defs)
+    if is_plain_enum(schema):
+        return variant.json_name
     return {"$case": variant.json_name, **payload}
 
 

@@ -141,7 +141,7 @@ the declared AgL name ([Python FFI](ffi.md#declarations-and-companions)).
 
 Placement: a field of a record, exception, or enum member; an inline enum
 member; or a record declaration (a record's own `@name`/`@json-name` doubles
-as its `$case` tag wherever it is an enum member). Not legal on an enum or
+as its JSON tag wherever it is an enum member). Not legal on an enum or
 exception declaration, a parameter, a binding, a function, or a `type` alias.
 
 `@name("…")` takes an AgL identifier that is not a hard keyword; a soft
@@ -154,7 +154,7 @@ declared name and any `@name` untouched everywhere else.
 
 Effective JSON name: `@json-name` if present, else `@name`, else the
 declared name. This is the object key a record or exception field encodes
-and decodes under, and the `$case` tag a record uses wherever it inhabits an
+and decodes under, and the JSON tag naming a record wherever it inhabits an
 enum, wherever a value crosses JSON: agent structured output, `as`/`as?`
 casts, and program parameters. Rendering (`print`, string interpolation, …)
 always uses the declared name.

@@ -116,11 +116,8 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
         (
             empty,
             RecordValue(NominalId(empty_member.decl_id), {}),
-            _wire(
-                '{"oneOf": [{"type": "object", "additionalProperties": false, ',
-                '"required": ["$case"], "properties": {"$case": {"const": "None"}}}]}',
-            ),
-            '{"$case": "None"}',
+            '{"enum": ["None"]}',
+            '"None"',
         ),
         (
             option,

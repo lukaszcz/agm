@@ -941,10 +941,12 @@ class TestContractTypeTree:
         assert _display(program, root) == "Team"
         schema = _schema(root)
         assert isinstance(schema, dict)
-        assert [variant["properties"]["$case"] for variant in schema["oneOf"]] == [
-            {"const": "billing"},
-            {"const": "Technical"},
-        ]
+        assert schema == {
+            "oneOf": [
+                {"const": "billing", "description": "Invoices and refunds."},
+                {"const": "Technical"},
+            ]
+        }
         assert [tag for tag, _member in root.members] == ["billing", "Technical"]
         (_, billing), (_, technical) = root.members
         assert (billing.kind, billing.doc) == (TypeNodeKind.MEMBER, "Invoices and refunds.")

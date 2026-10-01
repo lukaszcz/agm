@@ -220,7 +220,7 @@ class TypeDef:
                    created by an inline enum member. Its inhabitation is
                    determined by its enclosing enum rather than independently.
     ``external_name`` — a record's own ``@name``/``@json-name`` spellings
-                   (its value-syntax name and its ``$case`` tag as an enum
+                   (its value-syntax name and its JSON tag as an enum
                    member); unused for enums and exceptions.
     ``field_external_names`` — ``(field_name, ExternalName)`` pairs for the
                    OWN fields carrying ``@name``/``@json-name``, in
@@ -1448,8 +1448,8 @@ class TypeTable:
         """Return ``True`` if *handle* has a JSON representation.
 
         A record and an exception convert to a JSON object of their fields, an
-        enum to ``{"$case": variant, …fields}``, so the only obstacle is a
-        non-data leaf somewhere inside — exactly
+        enum to its member's tag (with the member's fields, if any has one), so
+        the only obstacle is a non-data leaf somewhere inside — exactly
         :meth:`nominal_reaches_non_data`, negated.
         """
         return not self.nominal_reaches_non_data(handle)
@@ -1953,8 +1953,8 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
     The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
     directly; an ``array``/``dict`` converts iff its element/value type does;
     a record or exception converts to a JSON object of its fields and an enum
-    to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
-    type is reachable from its declaration
+    to its member's tag (with the member's fields, if any has one), so a
+    nominal converts iff no non-data type is reachable from its declaration
     (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
     ``unit``, ``agent``, and function types — have no representation at all.
 

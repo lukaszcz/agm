@@ -509,25 +509,46 @@ rules:
    [`@name`/`@json-name`](attributes.md#name-and-json-name)). A field with a
    declared [default](types.md#record-types) may be omitted; it then fills
    from that default.
-4. Enums are JSON objects with a reserved **`"$case"`** tag naming the
-   member's effective JSON tag, plus that member record's fields, each keyed
-   by its effective JSON name, with the same default-omission rule as a
-   record field. `"$case"` is reserved; `@json-name` rejects `"$case"` as a
-   field's JSON name, so a user field can never collide with it. A
-   record-typed slot for the same value is a plain object with no `"$case"`
-   tag.
-5. Unknown fields are rejected.
-6. Missing fields without a declared default are rejected.
+4. A **plain enum** — one whose every member is fieldless — is the JSON
+   string of the member's effective JSON tag (declared name unless overridden
+   by [`@name`/`@json-name`](attributes.md#name-and-json-name)). No other
+   shape names a member: a `"$case"` object is rejected.
+5. Any other enum is a JSON object with a reserved **`"$case"`** tag naming
+   the member's effective JSON tag, plus that member record's fields, each
+   keyed by its effective JSON name, with the same default-omission rule as a
+   record field. Every member takes this shape, fieldless ones included.
+   `"$case"` is reserved; `@json-name` rejects `"$case"` as a field's JSON
+   name, so a user field can never collide with it.
+6. An enum's shape follows the slot's enum type, not the value. A record that
+   is a member of both a plain and a non-plain enum is a string in the first
+   slot and a tagged object in the second; in a record-typed slot it is a
+   plain object with no `"$case"` tag.
+7. Unknown fields are rejected.
+8. Missing fields without a declared default are rejected.
 
 Example — for
 
 ```agl
+enum Verdict
+  | Approve
+  | @json-name("needs-work") Revise
+
 enum Review
   | Pass(note: text = "ok")
   | Fail(issues: array[text])
 ```
 
-valid responses are:
+the valid `Verdict` responses are:
+
+```json
+"Approve"
+```
+
+```json
+"needs-work"
+```
+
+and valid `Review` responses are:
 
 ```json
 { "$case": "Pass" }
@@ -557,7 +578,8 @@ mechanically from the target type:
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
 | record | object schema: `additionalProperties: false`, `required` lists every field without a declared default, per-field `properties` keyed by effective JSON name |
-| enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
+| plain enum | `{"enum": [<tag>, …]}` listing the members' effective JSON tags; when any constructor carries `@doc`, instead `oneOf` of per-member `{"const": <tag>}` schemas, each with its constructor's `@doc` as `description` when present |
+| any other enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a
@@ -608,7 +630,11 @@ response, then validates it strictly:
 3. Otherwise the whole response undergoes the same repair, which strips
    surrounding prose such as `Here you go: {…}`.
 4. As a last resort, a single bare scalar embedded in prose is recovered —
-   but only when exactly one such token is present.
+   but only when exactly one such token is present. When the target is a
+   plain enum, the prose is instead searched for its member tags: a response
+   naming exactly one member — any number of times, as a whole word, in the
+   tag's exact spelling — recovers that member, so `The verdict is Approve.`
+   reads as `"Approve"`. Naming two or more different members is ambiguous.
 
 If the response contains two or more top-level JSON values, recovery fails
 as ambiguous. Schema validation is always strict regardless of lenient mode.

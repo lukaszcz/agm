@@ -1513,14 +1513,14 @@ class TestScopedExecutionFixtures:
             (
                 (
                     '{"name": "root", "children": [{"name": "ready", "children": []}]}',
-                    '{"$case": "completed"}',
+                    '"completed"',
                 ),
                 "true\ncompleted\ntrue\n",
             ),
             (
                 (
                     '{"name": "root", "children": [{"name": "later", "children": []}]}',
-                    '{"$case": "waiting"}',
+                    '"waiting"',
                 ),
                 "false\nwaiting\nfalse\n",
             ),

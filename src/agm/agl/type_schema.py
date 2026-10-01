@@ -42,6 +42,11 @@ Derivation rules:
                 present, a ``"$case"`` const property (the member's effective
                 JSON tag), and any payload fields, JSON-keyed the same way and
                 carrying their own ``@doc`` as ``description`` when present.
+                A plain enum (every member fieldless) is instead its member's
+                tag string: ``{"enum": [tags]}``, or — when any member carries
+                a ``@doc`` — ``{"oneOf": [...]}`` of ``{"const": tag}``
+                alternatives, each with its member's ``@doc`` as
+                ``description``.
 
 Recursive types: both derivations expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
@@ -138,8 +143,13 @@ Instantiation = RecordType | EnumType | ExceptionType
 
 
 def _member_tag(member: RecordType, name: str, type_table: TypeTable) -> str:
-    """An enum member's effective JSON ``$case`` tag (``@json-name`` ?? ``@name`` ?? declared)."""
+    """An enum member's effective JSON tag (``@json-name`` ?? ``@name`` ?? declared)."""
     return type_table.external_name(member).json(name)
+
+
+def _is_plain_enum(typ: EnumType, type_table: TypeTable) -> bool:
+    """Whether every member of *typ* is fieldless (mirrors ``ir.contracts.is_plain_enum``)."""
+    return not any(type_table.record_fields(member) for member in type_table.enum_members(typ))
 
 
 def _emit_field_decodes(
@@ -375,13 +385,37 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     names, each dropped from ``required`` on the same terms as a record field
     (see :func:`_record_properties`). A documented member carries its
     ``@doc`` prose as the alternative's ``description`` annotation.
+
+    A plain enum's value is its member's tag string, so its alternatives are
+    ``const`` tags; with no documented member they collapse to one ``enum``
+    list.
     """
-    return {
-        "oneOf": [
-            _variant_schema(member, variant_name, type_table, plan)
-            for variant_name, member in type_table.enum_member_names(typ).items()
-        ]
-    }
+    members = type_table.enum_member_names(typ)
+    if not _is_plain_enum(typ, type_table):
+        return {
+            "oneOf": [
+                _variant_schema(member, variant_name, type_table, plan)
+                for variant_name, member in members.items()
+            ]
+        }
+    alternatives = [
+        _plain_variant_schema(member, variant_name, type_table)
+        for variant_name, member in members.items()
+    ]
+    if any("description" in alternative for alternative in alternatives):
+        return {"oneOf": alternatives}
+    return {"enum": [alternative["const"] for alternative in alternatives]}
+
+
+def _plain_variant_schema(
+    member: RecordType, variant_name: str, type_table: TypeTable
+) -> dict[str, object]:
+    """Emit one plain-enum member's alternative: its ``const`` tag, documented when it has a doc."""
+    schema: dict[str, object] = {"const": _member_tag(member, variant_name, type_table)}
+    doc = type_table.declaration_doc(member)
+    if doc is not None:
+        schema["description"] = doc
+    return schema
 
 
 def _variant_schema(
@@ -807,6 +841,7 @@ def _emit_tree_body(
             fields=_emit_tree_fields(typ, type_table, plan, memo),
         )
     if isinstance(typ, EnumType):
+        plain = _is_plain_enum(typ, type_table)
         return _nominal_tree_node(
             TypeNodeKind.ENUM,
             typ,
@@ -818,7 +853,11 @@ def _emit_tree_body(
                     _nominal_tree_node(
                         TypeNodeKind.MEMBER,
                         member,
-                        json.dumps(_variant_schema(member, name, type_table, plan)),
+                        json.dumps(
+                            _plain_variant_schema(member, name, type_table)
+                            if plain
+                            else _variant_schema(member, name, type_table, plan)
+                        ),
                         type_table,
                         fields=_emit_tree_fields(member, type_table, plan, memo),
                     ),

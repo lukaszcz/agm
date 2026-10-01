@@ -5,7 +5,7 @@
       "agents": {
         "reviewer": [
           "{\"name\": \"root\", \"children\": [{\"name\": \"ready\", \"children\": []}]}",
-          "{\"$case\": \"completed\"}"
+          "\"completed\""
         ]
       },
       "expect": {
@@ -47,8 +47,7 @@
             },
             "call": 1,
             "schema_contains": [
-              "oneOf",
-              "$case",
+              "enum",
               "waiting",
               "completed"
             ]
@@ -61,7 +60,7 @@
       "agents": {
         "reviewer": [
           "{\"name\": \"root\", \"children\": [{\"name\": \"later\", \"children\": []}]}",
-          "{\"$case\": \"waiting\"}"
+          "\"waiting\""
         ]
       },
       "expect": {
@@ -103,8 +102,7 @@
             },
             "call": 1,
             "schema_contains": [
-              "oneOf",
-              "$case",
+              "enum",
               "waiting",
               "completed"
             ]

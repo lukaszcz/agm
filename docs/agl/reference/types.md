@@ -754,8 +754,8 @@ enum Triple
 
 Construction, qualification, and ambiguity rules are covered in
 [Expressions](expressions.md); destructuring in
-[Pattern matching](pattern-matching.md); the JSON wire shape (the `"$case"`
-tag) in [Agent calls](agent-calls.md).
+[Pattern matching](pattern-matching.md); the JSON wire shape (a member tag
+string, or a `"$case"`-tagged object) in [Agent calls](agent-calls.md).
 
 `builtin enum` similarly declares a host-recognized nominal enum type. Its
 member names and fields must match the built-in shape exactly.
@@ -1242,10 +1242,17 @@ conversion:
 - **record** → a JSON object with one key per field, in declaration order,
   keyed by each field's effective JSON name (declared name unless overridden
   by [`@name`/`@json-name`](attributes.md#name-and-json-name)).
-- **enum** → a JSON object with a `"$case"` key holding the member's
-  effective JSON tag, plus one key per member-record field, each by its
-  effective JSON name. The same record in a record-typed slot has no
-  `"$case"` key.
+- **plain enum** (every member fieldless) → the JSON string of the member's
+  effective JSON tag: `"Pass"`.
+- **any other enum** → a JSON object with a `"$case"` key holding the
+  member's effective JSON tag, plus one key per member-record field, each by
+  its effective JSON name. A fieldless member of such an enum is the object
+  with only its `"$case"` key.
+
+  The shape follows the slot's enum type, not the value: a record that is a
+  member of both a plain and a non-plain enum is a string in the first slot
+  and a tagged object in the second, and in a record-typed slot it is the
+  record's own object, with no `"$case"` key.
 - **exception** → a JSON object with all fields in declaration order, each
   keyed by its effective JSON name.
 - **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by

@@ -30,6 +30,7 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     RecordDecode,
     RefDecode,
+    is_plain_enum,
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
@@ -323,7 +324,27 @@ def _scan_bare_scalar(text: str) -> str | None | object:
     return matches[0]
 
 
-def _extract_json_text(raw: str) -> str | None | object:
+def _scan_member_tag(text: str, member_tags: tuple[str, ...]) -> str | None | object:
+    """Recover the one plain-enum member tag named in prose.
+
+    The plain-enum counterpart of :func:`_scan_bare_scalar`: returns the JSON
+    string of the single distinct tag occurring as a whole word, the
+    ``_AMBIGUOUS_MULTI_VALUE`` sentinel for two or more distinct tags, and
+    ``None`` for none. ``-`` counts as a word character (identifiers are
+    kebab-case) and the longest tag wins at a position, so a tag is never
+    read out of a longer one.
+    """
+    longest_first = sorted(member_tags, key=len, reverse=True)
+    pattern = rf"(?<![\w-])(?:{'|'.join(re.escape(tag) for tag in longest_first)})(?![\w-])"
+    found = {m.group(0) for m in re.finditer(pattern, text)}
+    if not found:
+        return None
+    if len(found) >= 2:
+        return _AMBIGUOUS_MULTI_VALUE
+    return json.dumps(found.pop(), ensure_ascii=False)
+
+
+def _extract_json_text(raw: str, member_tags: tuple[str, ...] = ()) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
     Strategy (lenient mode):
@@ -336,7 +357,9 @@ def _extract_json_text(raw: str) -> str | None | object:
        try ``repair_json`` on the fenced content.
     2. Fall back to ``repair_json`` on the whole raw string (handles
        prose-wrapped JSON such as "Here you go:\\n{...}").
-    3. Return ``None`` if no JSON value could be extracted, or the
+    3. Scan the prose for a single bare scalar — or, when *member_tags*
+       (a plain-enum target's member tags) is given, for a single member tag.
+    4. Return ``None`` if no JSON value could be extracted, or the
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
        top-level values into an array.
 
@@ -379,7 +402,10 @@ def _extract_json_text(raw: str) -> str | None | object:
         return repaired_full
 
     # Step 3: recover a single bare scalar (bool/null/number) from prose that
-    # ``json-repair`` cannot extract (e.g. ``"The flag is:\nfalse"``).
+    # ``json-repair`` cannot extract (e.g. ``"The flag is:\nfalse"``); a
+    # plain-enum target instead recovers its single named member.
+    if member_tags:
+        return _scan_member_tag(stripped, member_tags)
     return _scan_bare_scalar(stripped)
 
 
@@ -483,6 +509,14 @@ def _find_enum_decode_at_path(
     return decode if isinstance(decode, EnumDecode) else None
 
 
+def _plain_enum_tags(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> tuple[str, ...]:
+    """Return *decode*'s member tags when it is a plain enum, else none."""
+    resolved = _resolve_ref(decode, defs)
+    if isinstance(resolved, EnumDecode) and is_plain_enum(resolved):
+        return tuple(variant.json_name for variant in resolved.variants)
+    return ()
+
+
 def _make_validation_error(
     error: object, decode_schema: DecodeSchema, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
 ) -> ValidationError:
@@ -511,7 +545,7 @@ def _make_validation_error(
         field_elem = error.path[-1] if error.path else None
         fname: str | None = field_elem if isinstance(field_elem, str) else None
         return ValidationError(category="wrong_type", message=message, path=path, field=fname)
-    if error.validator == "oneOf":
+    if error.validator in ("oneOf", "enum"):
         return _classify_enum_failure(error, path, decode_schema, defs)
     return ValidationError(category="wrong_type", message=message, path=path, field=None)
 
@@ -522,8 +556,21 @@ def _classify_enum_failure(
     decode_schema: DecodeSchema,
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ValidationError:
-    """Classify a oneOf enum validation failure using the typeless ``DecodeSchema``."""
+    """Classify an enum validation failure using the typeless ``DecodeSchema``.
+
+    Covers a tagged enum's ``oneOf`` and a plain enum's ``oneOf``/``enum``.
+    """
     instance = error.instance
+    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
+    if enum_decode is not None and is_plain_enum(enum_decode):
+        valid = ", ".join(v.json_name for v in enum_decode.variants)
+        return ValidationError(
+            category="bad_case",
+            message=f"Value does not name a member of enum {enum_decode.display_name!r}. "
+            f"Valid members: {valid}.",
+            path=path,
+            field=None,
+        )
     if not isinstance(instance, dict):
         return ValidationError(
             category="bad_case",
@@ -541,7 +588,6 @@ def _classify_enum_failure(
             field="$case",
         )
 
-    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
     if enum_decode is None:
         return ValidationError(
             category="bad_case",
@@ -616,7 +662,7 @@ def _parse_json_core(
             raw.strip(), parsed_obj, schema_dict, decode_schema, defs, default_resolver
         )
 
-    json_text = _extract_json_text(raw)
+    json_text = _extract_json_text(raw, _plain_enum_tags(decode_schema, defs))
     if json_text is _AMBIGUOUS_MULTI_VALUE:
         return ParseResult.failure(
             "Ambiguous agent response: multiple JSON values were found, but "

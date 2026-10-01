@@ -538,19 +538,10 @@ class TestDeriveSchema:
             "properties": {"x": {"type": "integer"}},
         }
 
-    def test_enum_schema_pass_only(self) -> None:
-        typ, typedef = enum_type("Status", {"Done": {}})
+    def test_plain_enum_schema_lists_member_tags(self) -> None:
+        typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
         schema = derive_schema(typ, type_table_for(typedef))
-        assert schema == {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["$case"],
-                    "properties": {"$case": {"const": "Done"}},
-                }
-            ]
-        }
+        assert schema == {"enum": ["Done", "Pending"]}
 
     def test_enum_schema_review(self) -> None:
         review_type = _make_review_type()
@@ -612,7 +603,7 @@ class TestDeriveSchema:
             "properties": {"val": {"type": "integer"}},
         }
 
-    def test_enum_schema_uses_member_external_name_as_case_const(self) -> None:
+    def test_plain_enum_schema_uses_member_external_name_as_tag(self) -> None:
         enum_id = next_decl_id()
         member_id = next_decl_id()
         member = RecordType(
@@ -631,16 +622,7 @@ class TestDeriveSchema:
         )
         typ = EnumType(name="Choice", decl_id=enum_id)
         schema = derive_schema(typ, type_table_for(member_def, choice_def))
-        assert schema == {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["$case"],
-                    "properties": {"$case": {"const": "uno"}},
-                }
-            ]
-        }
+        assert schema == {"enum": ["uno"]}
 
 
 # ---------------------------------------------------------------------------
@@ -2751,7 +2733,7 @@ class TestCaseDispatch:
 
     def test_bad_case_fails(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"$case": "Exploded"}', typ, strict_json=False, table=type_table_for(typedef)
         )
@@ -2759,21 +2741,116 @@ class TestCaseDispatch:
 
     def test_missing_case_tag_fails(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"done": true}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is False
 
-    def test_nullary_enum_no_extra_fields(self) -> None:
+    def test_nullary_member_of_tagged_enum_has_no_extra_fields(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.fields == {}
+
+
+class TestPlainEnum:
+    """A plain enum (every member fieldless) parses from its member's tag string."""
+
+    @staticmethod
+    def _parse(raw: str, *, strict_json: bool = False) -> tuple[ParseResult, TypeTable, EnumType]:
+        typ, typedef = enum_type("Verdict", {"Pass": {}, "Pass-with-notes": {}, "Fail": {}})
+        table = type_table_for(typedef)
+        return _parse_typed(JsonCodec(), raw, typ, strict_json=strict_json, table=table), table, typ
+
+    @pytest.mark.parametrize(
+        ("raw", "member"),
+        [
+            ('"Fail"', "Fail"),
+            ("Pass", "Pass"),
+            ("I would say Fail.", "Fail"),
+            ('The answer is "Pass".', "Pass"),
+            ("Pass-with-notes", "Pass-with-notes"),
+            ("Fail, and again: Fail", "Fail"),
+            ("3 issues, so Fail", "Fail"),
+            ("```\nPass\n```", "Pass"),
+        ],
+        ids=(
+            "quoted",
+            "bare",
+            "prose",
+            "quoted-in-prose",
+            "longest-tag",
+            "repeated",
+            "beside-a-number",
+            "fenced-bare",
+        ),
+    )
+    def test_lenient_recovers_the_one_named_member(self, raw: str, member: str) -> None:
+        result, table, typ = self._parse(raw)
+        assert result.ok is True
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)[member].decl_id)
+        assert result.value.fields == {}
+        assert result.normalized_raw == f'"{member}"'
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "Pass or Fail",
+            "Passing",
+            "bypass-Fail-safe",
+            "no verdict",
+            '{"$case": "Pass"}',
+            '"Maybe"',
+            "3",
+        ],
+        ids=(
+            "two-members",
+            "tag-inside-a-word",
+            "tag-inside-a-kebab-word",
+            "no-member",
+            "tag-object",
+            "unknown-member",
+            "number",
+        ),
+    )
+    def test_lenient_rejects_anything_else(self, raw: str) -> None:
+        result, _table, _typ = self._parse(raw)
+        assert result.ok is False
+
+    @pytest.mark.parametrize("raw", ["Pass", "I would say Fail.", '```json\n"Pass"\n```'])
+    def test_strict_accepts_only_the_quoted_tag(self, raw: str) -> None:
+        assert self._parse(raw, strict_json=True)[0].ok is False
+        assert self._parse('"Pass"', strict_json=True)[0].ok is True
+
+    @pytest.mark.parametrize("raw", ['"Maybe"', '{"$case": "Pass"}', "3"])
+    def test_wrong_value_is_a_bad_case(self, raw: str) -> None:
+        result, _table, _typ = self._parse(raw)
+        assert [error.category for error in result.errors] == ["bad_case"]
+        assert [error.path for error in result.errors] == ["$"]
+
+    def test_nested_plain_enum_failure_is_located(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"verdicts": ArrayType(verdict)})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"verdicts": ["Pass", "Maybe"]}',
+            report,
+            table=type_table_for(report_def, verdict_def),
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.verdicts[1]")
+        ]
+
+    def test_member_tag_scan_does_not_apply_to_a_tagged_enum(self) -> None:
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
+        result = _parse_typed(JsonCodec(), "Done", typ, table=type_table_for(typedef))
+        assert result.ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -2849,7 +2926,7 @@ program def main(issue: Issue) -> unit =
         codec = JsonCodec()
         typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
         table = type_table_for(typedef)
-        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False, table=table)
+        result = _parse_typed(codec, '"Done"', typ, strict_json=False, table=table)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.nominal == NominalId(table.enum_member_names(typ)["Done"].decl_id)
@@ -3011,9 +3088,11 @@ class TestDecodeValueRejectsMismatchedPayloads:
             (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), {1: "val"}, "Dict key"),
             (_R_DECODE, [1, 2], "record"),
             (_R_DECODE, {}, "Missing field"),
-            (_E_DECODE, "oops", "object for enum"),
-            (_E_DECODE, {}, r"\$case"),
-            (_E_DECODE, {"$case": "X"}, "Unknown enum variant"),
+            (_E_DECODE, {"$case": "A"}, "string for enum"),
+            (_E_DECODE, "X", "Unknown enum variant"),
+            (_E_PAYLOAD_DECODE, "oops", "object for enum"),
+            (_E_PAYLOAD_DECODE, {}, r"\$case"),
+            (_E_PAYLOAD_DECODE, {"$case": "X"}, "Unknown enum variant"),
             (_E_PAYLOAD_DECODE, {"$case": "B"}, "missing field"),
         ],
         ids=(
@@ -3028,6 +3107,8 @@ class TestDecodeValueRejectsMismatchedPayloads:
             "dict-with-non-text-key",
             "record-from-array",
             "record-missing-field",
+            "plain-enum-from-object",
+            "plain-enum-unknown-member",
             "enum-from-text",
             "enum-without-case-tag",
             "enum-unknown-variant",

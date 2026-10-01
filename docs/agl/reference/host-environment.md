@@ -350,8 +350,9 @@ call. An omitted field of a defaulted-field constructor — such as `Sandbox`'s
 `memory`, `swap`, `settings`, and `patch` — fills from that field's own
 declared default, so `Sandbox`, `Sandbox()`, and `Sandbox(memory =
 Some("8G"))` all decode. A config-table entry may also spell such a value as
-a native TOML table instead of a quoted string, tagging its own and any
-nested constructor's kind with the same `"$case"` key its JSON form uses.
+a native TOML table instead of a quoted string, shaped exactly as its [JSON
+form](agent-calls.md#the-json-wire-format): a `"$case"` key names the
+constructor, and each nested value takes its own JSON shape.
 
 ### Precedence
 

@@ -506,7 +506,7 @@ Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
 functions, rendered, and explicitly converted **to** `json`. JSON conversion
 uses the expression's static type, so enum-typed positions retain their member
-`"$case"` tags. Only the schema-needing boundaries reject it. A non-generic recursive type,
+tags. Only the schema-needing boundaries reject it. A non-generic recursive type,
 or a generic recursive type whose reachable instantiations close, crosses
 these boundaries normally. The [derived JSON
 Schema](agent-calls.md#derived-json-schema) for a recursive type uses

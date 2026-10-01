@@ -8,7 +8,7 @@
       },
       "agents": {
         "tosser": [
-          "{\"$case\": \"Tails\"}"
+          "\"Tails\""
         ]
       },
       "expect": {
@@ -37,7 +37,7 @@
       },
       "agents": {
         "tosser": [
-          "{\"$case\": \"Heads\"}"
+          "\"Heads\""
         ]
       },
       "expect": {
@@ -55,7 +55,7 @@
       },
       "agents": {
         "tosser": [
-          "{\"$case\": \"Heads\"}"
+          "\"Heads\""
         ]
       },
       "expect": {

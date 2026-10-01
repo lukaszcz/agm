@@ -43,6 +43,8 @@ from agm.agl.ir.contracts import (
     RefDecode,
     ScalarDecode,
     ScalarKind,
+    VariantDecode,
+    is_plain_enum,
     resolve_schema_ref,
 )
 from agm.agl.ir.ids import NominalId
@@ -299,18 +301,17 @@ def decode_value(
                     rfield.schema, obj[rfield.json_name], defs, default_resolver=default_resolver
                 )
             return RecordValue(nominal=nominal, fields=record_fields)
-        case EnumDecode(display_name=display_name, variants=variants):
+        case EnumDecode():
+            if is_plain_enum(schema):
+                if not isinstance(obj, str):
+                    raise ValueError(f"Expected string for enum, got {type(obj).__name__}")
+                return RecordValue(nominal=_enum_variant(schema, obj).nominal, fields={})
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
             case_val = obj.get("$case")
             if not isinstance(case_val, str):
                 raise ValueError("Enum object must have a string '$case' field")
-            variant = next((v for v in variants if v.json_name == case_val), None)
-            if variant is None:
-                raise ValueError(
-                    f"Unknown enum variant {case_val!r} for {display_name!r}. "
-                    f"Valid variants: {[v.json_name for v in variants]}"
-                )
+            variant = _enum_variant(schema, case_val)
             payload: dict[str, Value] = {}
             for vfield in variant.fields:
                 if vfield.json_name not in obj:
@@ -326,6 +327,17 @@ def decode_value(
             return RecordValue(nominal=variant.nominal, fields=payload)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _enum_variant(schema: EnumDecode, tag: str) -> VariantDecode:
+    """Return *schema*'s member whose JSON tag is *tag*."""
+    variant = next((v for v in schema.variants if v.json_name == tag), None)
+    if variant is None:
+        raise ValueError(
+            f"Unknown enum variant {tag!r} for {schema.display_name!r}. "
+            f"Valid variants: {[v.json_name for v in schema.variants]}"
+        )
+    return variant
 
 
 def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:

@@ -163,7 +163,7 @@ let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as array[Foo]
 def test_text_to_enum_agrees() -> None:
     source = """\
 enum Color | Red | Blue
-let x = "{\\"$case\\": \\"Red\\"}" as Color
+let x = "\\"Red\\"" as Color
 ()
 """
     evaluate_ir(source)
@@ -707,7 +707,7 @@ def test_decode_scalar_success_branches() -> None:
                 host_agent=False,
             ),
             5,
-            "Expected object for enum, got int",
+            "Expected string for enum, got int",
         ),
         (
             EnumDecode(
@@ -717,8 +717,8 @@ def test_decode_scalar_success_branches() -> None:
                 "Color",
                 host_agent=False,
             ),
-            {},
-            "Enum object must have a string '$case' field",
+            {"$case": "Red"},
+            "Expected string for enum, got dict",
         ),
         (
             EnumDecode(
@@ -728,7 +728,7 @@ def test_decode_scalar_success_branches() -> None:
                 "Color",
                 host_agent=False,
             ),
-            {"$case": "Purple"},
+            "Purple",
             "Unknown enum variant 'Purple' for 'Color'. Valid variants: ['Red']",
         ),
         (
@@ -790,7 +790,7 @@ def test_decode_nested_record_and_enum_success() -> None:
             "Color",
             host_agent=False,
         ),
-        {"$case": "Red"},
+        "Red",
     )
     assert enum_val == RecordValue(nominal=NominalId(999), fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])

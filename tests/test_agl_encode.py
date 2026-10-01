@@ -165,7 +165,25 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     enum = EncodePlan(
         EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
     )
-    assert encode_value(enum, RecordValue(nominal=NominalId(2), fields={})) == {"$case": "Member"}
+    member = RecordValue(nominal=NominalId(2), fields={})
+    assert encode_value(enum, member) == "Member"
+    # One fielded member makes every member of the enum a tagged object.
+    tagged = EncodePlan(
+        EnumEncode(
+            NominalId(1),
+            (
+                VariantEncode("Member", "Member", NominalId(2), ()),
+                VariantEncode(
+                    "Other", "Other", NominalId(3), (FieldEncode("x", "x", ScalarEncode()),)
+                ),
+            ),
+        )
+    )
+    assert encode_value(tagged, member) == {"$case": "Member"}
+    assert encode_value(tagged, RecordValue(nominal=NominalId(3), fields={"x": IntValue(1)})) == {
+        "$case": "Other",
+        "x": 1,
+    }
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
@@ -784,8 +802,8 @@ def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj()
     assert encode_value(plan, value) != value_to_json_obj(value)
 
 
-def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
-    """A renamed enum member's ``@name``/``@json-name`` becomes the ``$case`` tag."""
+def test_encode_plan_uses_member_external_name_as_tag() -> None:
+    """A renamed enum member's ``@name``/``@json-name`` becomes its JSON tag."""
     enum_id = next_decl_id()
     member_id = next_decl_id()
     member = RecordType(name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id)
@@ -806,7 +824,7 @@ def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
 
     plan = build_encode_plan(choice, table)
 
-    assert encode_value(plan, value) == {"$case": "uno"}
+    assert encode_value(plan, value) == "uno"
 
 
 def test_encode_plan_json_name_overrides_name_for_field() -> None:

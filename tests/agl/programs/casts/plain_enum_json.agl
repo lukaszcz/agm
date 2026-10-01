@@ -1,0 +1,73 @@
+# A plain enum (every member fieldless) crosses JSON as its member's JSON
+# name. An enum with any fielded member keeps the "$case" object for every
+# member, so the shape follows the slot's enum type, never the value.
+import std/json
+
+record Token
+
+enum Verdict
+  | Pass
+  | @name("fail") Fail
+  | @json-name("n/a") Unknown
+
+# A referenced fieldless record is a fieldless member like any other.
+enum Marker = ::Token | Blank
+
+enum Flag[T] = On | Off
+
+# Shares `Verdict`'s members but is not plain.
+enum Outcome
+  | Verdict::Pass
+  | Verdict::Fail
+  | Retry(after: int)
+
+record Report
+  verdict: Verdict
+  history: array[Verdict]
+  by-name: dict[text, Verdict]
+  marker: Marker
+  flag: Flag[int]
+  outcome: Outcome
+
+def describe(v: Verdict) -> text =
+  case v of
+    | Pass => "pass"
+    | Fail => "fail"
+    | Unknown => "unknown"
+
+program def main(verdict: Verdict, verdict-json: text, report-json: text) -> unit =
+  # Encoding.
+  print(verdict as json)
+  let all: array[Verdict] = [Pass, Fail, Unknown]
+  print(all as json)
+  let token: Marker = Token
+  print(token as json)
+  let flag: Flag[text] = Off
+  print(flag as json)
+
+  # The same member in a non-plain enum slot keeps its tag object, and in a
+  # record-typed slot it is the record's own (empty) object.
+  case verdict as? Outcome of
+    | Some(value) => print(value as json)
+    | None => print "not an outcome"
+  print(Token as json)
+
+  # Decoding: only the string names a member.
+  try
+    let parsed = json::parse(verdict-json) as Verdict
+    print "decoded %{describe(parsed)}"
+    print((parsed as json) as Verdict == parsed)
+  catch CastError as e =>
+    print "verdict invalid: %{e.source-type} -> %{e.target-type}"
+  catch JsonParseError as e =>
+    print "verdict is not json: %{e.raw}"
+
+  # Text casts read strict JSON or a value-syntax constructor.
+  print((verdict-json as? Verdict).is-some())
+
+  try
+    let report = report-json as Report
+    print describe(report.verdict)
+    print(report as json)
+  catch CastError as e =>
+    print "report invalid: %{e.source-type} -> %{e.target-type}"

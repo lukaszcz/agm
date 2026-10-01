@@ -304,11 +304,14 @@ class TestAgentCallRecord:
 
         assert result.ok
         assert capsys.readouterr().err == expected_stderr
-        outputs = [record for record in _load_jsonl(trace_path) if record["kind"] == "agent_output"]
-        expected_outputs = (
-            [("progress", "work\n"), ("stderr", "log\n"), ("final", "done")] if echo else []
-        )
-        assert [(record["phase"], record["text"]) for record in outputs] == expected_outputs
+        records = _load_jsonl(trace_path)
+        response = next(record for record in records if record["kind"] == "agent_response")
+        assert response["intermediate_output"] == [
+            {"phase": "progress", "text": "work\n"},
+            {"phase": "stderr", "text": "log\n"},
+        ]
+        assert response["content"] == "done"
+        assert all(record["kind"] != "agent_output" for record in records)
 
     def test_agent_output_is_echoed_when_tracing_is_off(
         self, capsys: pytest.CaptureFixture[str]
@@ -584,7 +587,9 @@ class TestRetryRecords:
 
         trace_path = tmp_path / "trace.jsonl"
 
-        def agent(_request: AgentRequest) -> AgentResponse:
+        def agent(request: AgentRequest) -> AgentResponse:
+            if request.output_callback is not None:
+                request.output_callback("progress", "started\n")
             raise AgentCallHostError(
                 cause="timeout", exit_code=9, stderr_tail="too slow", elapsed=1.5
             )
@@ -603,6 +608,7 @@ class TestRetryRecords:
         assert response["exit_code"] == 9
         assert response["elapsed"] == 1.5
         assert response["stderr_tail"] == "too slow"
+        assert response["intermediate_output"] == [{"phase": "progress", "text": "started\n"}]
 
     def test_successful_response_carries_sandboxed_and_permission_mode(
         self, tmp_path: Path
@@ -689,9 +695,10 @@ class TestRetryRecords:
         monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
 
         def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+            stdout = b'{"type":"result","result":"ok"}\n' if "stream-json" in cmd else b"ok"
             return ProcessCaptureResult(
                 returncode=0,
-                stdout=CapturedOutput(data=b"ok", truncated=False),
+                stdout=CapturedOutput(data=stdout, truncated=False),
                 stderr=CapturedOutput(data=b"", truncated=False),
                 elapsed=0.1,
                 timed_out=False,

@@ -106,6 +106,9 @@ class AgentRequest:
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
     output_callback: AgentOutputCallback | None = field(default=None, repr=False, compare=False)
+    intermediate_output: list[dict[str, str]] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
 
 @dataclass(slots=True)

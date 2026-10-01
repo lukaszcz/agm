@@ -254,18 +254,24 @@ class EffectHandlers:
             },
         }
 
-    def _agent_output_callback(self, attempt: int, span: Location) -> "AgentOutputCallback | None":
-        """Build a per-turn stream sink only when agent echoing is enabled."""
-        if not self._ctx._echo_agent_output:
+    def _agent_output_callback(
+        self, span: Location, intermediate_output: list[dict[str, str]]
+    ) -> "AgentOutputCallback | None":
+        """Build a stream sink for echoing or collecting output for the trace."""
+        echo = self._ctx._echo_agent_output
+        trace = self._ctx._trace.path is not None
+        if not echo and not trace:
             return None
 
         def emit(phase: Literal["progress", "final", "stderr"], text: str) -> None:
             if not text:
                 return
             with self._output_lock:
-                self._ctx._trace.agent_output(phase=phase, text=text, attempt=attempt, span=span)
-                sys.stderr.write(text)
-                sys.stderr.flush()
+                if trace and phase != "final":
+                    intermediate_output.append({"phase": phase, "text": text})
+                if echo:
+                    sys.stderr.write(text)
+                    sys.stderr.flush()
 
         return emit
 
@@ -667,7 +673,11 @@ class EffectHandlers:
                 call_info = {"exit_code": error.exit_code, "elapsed": error.elapsed}
             call_info["stderr_tail"] = error.stderr_tail
             self._ctx._trace.agent_response(
-                ok=False, cause=error.cause, call_info=call_info, span=node.location
+                ok=False,
+                cause=error.cause,
+                intermediate_output=request.intermediate_output,
+                call_info=call_info,
+                span=node.location,
             )
             self._raise_agent_call_error(
                 agent_value,
@@ -687,11 +697,20 @@ class EffectHandlers:
                 render_value(agent_value, self._descriptors()), "interrupted", span=node.location
             )
             self._ctx._trace.agent_response(
-                ok=False, cancelled=True, reason=cancelled.reason, span=node.location
+                ok=False,
+                cancelled=True,
+                reason=cancelled.reason,
+                intermediate_output=request.intermediate_output,
+                span=node.location,
             )
             raise cancelled from error
         self._ctx._trace.agent_response(
-            ok=True, content=raw, metadata=metadata, call_info=call_info, span=node.location
+            ok=True,
+            content=raw,
+            intermediate_output=request.intermediate_output,
+            metadata=metadata,
+            call_info=call_info,
+            span=node.location,
         )
         return raw
 
@@ -845,6 +864,7 @@ class EffectHandlers:
         last_errors: tuple[ReqValidationError, ...] = ()
 
         for attempt in range(max_attempts):
+            intermediate_output: list[dict[str, str]] = []
             request = AgentRequest(
                 agent=spec,
                 prompt=prompt,
@@ -855,7 +875,8 @@ class EffectHandlers:
                 output_contract=output_contract,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
-                output_callback=self._agent_output_callback(attempt, node.location),
+                output_callback=self._agent_output_callback(node.location, intermediate_output),
+                intermediate_output=intermediate_output,
             )
             request.prompt = self._compose_session_prompt(handle, request)
             raw = dispatch(request)

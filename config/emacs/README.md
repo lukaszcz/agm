@@ -108,13 +108,16 @@ diagnostic actions.
   column carried over from the line above: a `def`, `record`, `import`,
   or other module item returns to the root or scope region that encloses
   it, `until`, `done`, `catch`, and `else` align with the header they
-  name, and a bracket's closer returns to the line that opened it. A
-  line is re-indented as soon as typing settles which construct it is:
-  on the `@` or closing bracket that can start nothing else, on the
-  space that tells a declaration keyword from a name beginning with the
-  same letters, on the last letter of a branch marker, and — for a line
-  holding nothing but `builtin`, `extern`, or `program`, which no
-  separator ever follows — on the newline that ends it.
+  name, a bracket's closer returns to the line that opened it, and an
+  enum member's fields — an indented block or a parenthesized payload
+  opened at the end of its line — hang one level under the member
+  rather than under its `|`. A line is re-indented as soon as typing
+  settles which construct it is: on the `@` or closing bracket that can
+  start nothing else, on the space that tells a declaration keyword from
+  a name beginning with the same letters, on the last letter of a branch
+  marker, and — for a line holding nothing but `builtin`, `extern`, or
+  `program`, which no separator ever follows — on the newline that ends
+  it.
 
 ## Tests
 

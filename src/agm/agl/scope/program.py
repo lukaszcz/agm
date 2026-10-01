@@ -1470,7 +1470,8 @@ def resolve_program(
         """Prepare *members* over their exports and re-resolve them.
 
         Returns where the first member whose exports changed links into its
-        cycle -- its first export or import -- or ``None`` when none changed.
+        cycle -- its first export, or else its first real declaration -- or
+        ``None`` when none changed.
         """
         read = [(export_maps[mid], scope_export_maps[mid], withheld[mid]) for mid in members]
         for mid in members:
@@ -1485,8 +1486,10 @@ def resolve_program(
             return None
         type_owners.forget(members)
         loaded = graph.modules[changed[0]]
-        # A cycle's member links into it through an export or an import.
-        return loaded.export_decls[0].span if loaded.export_decls else loaded.imports[0].span
+        if loaded.export_decls:
+            return loaded.export_decls[0].span
+        first = next((item.span for item, _atom in _declaration_atoms(loaded.program)), None)
+        return first if first is not None else loaded.imports[0].span
 
     # ------------------------------------------------------------------
     # Step 5: Per strongly-connected component, dependencies first: prepare
@@ -1513,7 +1516,18 @@ def resolve_program(
                 validate=False,
             )
             settling.update(members)
-            _converge(partial(settle, members), _export_count(graph, members))
+            # The pre-pass above never resolves an alias, so a component's
+            # own first settling round always differs from it -- reading an
+            # own alias for the first time, never a cyclic re-export change.
+            # That one priming round is never counted against how many more
+            # a genuine cyclic re-export chain can still take: a monotone
+            # measure over the component's own declared atoms, which bounds
+            # how many of them a further round can still redirect.
+            settle(members)
+            _converge(
+                partial(settle, members),
+                _export_count(graph, members) + sum(len(local_atoms[mid]) for mid in members),
+            )
             settling.difference_update(members)
             # Its items name what its modules export once those settle.
             for mid in members:
@@ -1547,6 +1561,13 @@ def resolve_program(
                 all_public_funcs, all_public_types
             )
             declared_in_program = _declarations_beneath(decl_info)
+            # Export maps refresh over the rebuilt tables before anything
+            # forgets or re-prepares, so a member importing another one in
+            # this same component builds its import environment over the
+            # final keyed exports, never a stale pre-keying one; hiding is
+            # not validated yet, since that reads the type owners forgetting
+            # and re-preparing are about to rebuild over the keyed programs.
+            reexport(members, validate=False)
             type_owners.forget(members)
             for mid in members:
                 prepare(mid)

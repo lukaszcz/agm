@@ -3710,6 +3710,67 @@ class TestExportDecl:
         ):
             resolve_program(graph)
 
+    @pytest.mark.parametrize(
+        ("b_source", "query"),
+        [
+            pytest.param(
+                "import a::*\ntype G = Base\n\ndef G::h() -> int = 2\n", "b::G::h()", id="alias"
+            ),
+            pytest.param(
+                "import a\ntype G = a::Base\n\ndef G::h() -> int = 2\n",
+                "b::G::h()",
+                id="routed-alias-target",
+            ),
+            pytest.param("import a\ndef a::Base::h() -> int = 2\n", "b::Base::h()", id="direct"),
+            pytest.param(
+                "import a::*\ntype G = Base\n\nrecord G::R\n  v: int\ndef r() -> int = G::R(v=2).v",
+                "b::r()",
+                id="nested-record",
+            ),
+        ],
+    )
+    def test_import_cycle_with_no_export_declarations_converges(
+        self, tmp_path: Path, b_source: str, query: str
+    ) -> None:
+        """A cycle keys declarations through an alias as part of its own fixpoint."""
+        result = evaluate_ir_graph(
+            f"import b\nlet result = {query}",
+            {"a": "import b\nrecord Base\n  x: int\n", "b": b_source},
+            tmp_path,
+        )
+        assert result["result"] == IntValue(2)
+
+    @pytest.mark.parametrize(
+        ("af_source", "h_decl"),
+        [
+            pytest.param(
+                "def af() -> int = Base::h()", "def G::h() -> int = 2\n", id="declared-spelling"
+            ),
+            pytest.param(
+                "def af() -> int = G::h()", "def G::h() -> int = 2\n", id="alias-spelling"
+            ),
+            pytest.param(
+                "def af(receiver: Base) -> int = receiver.h()",
+                "def G::h(self) -> int = 2\n",
+                id="method-call",
+            ),
+        ],
+    )
+    def test_import_cycle_builds_the_importer_env_over_final_keyed_exports(
+        self, tmp_path: Path, af_source: str, h_decl: str
+    ) -> None:
+        """A cycle's importer environment reads the keyed exports, not a stale pass."""
+        call = "a::af(a::Base(x = 1))" if "receiver" in af_source else "a::af()"
+        result = evaluate_ir_graph(
+            f"import a\nlet result = {call}",
+            {
+                "a": f"import b::*\nexport b::{{G}}\nrecord Base\n  x: int\n\n{af_source}\n",
+                "b": f"import a::*\ntype G = Base\n\n{h_decl}",
+            },
+            tmp_path,
+        )
+        assert result["result"] == IntValue(2)
+
     def test_reexport_chain_multi_hop(self, tmp_path: Path) -> None:
         """A re-exports from B which re-exports from C — A's consumers get C's origin."""
         graph = _make_graph_from_files(

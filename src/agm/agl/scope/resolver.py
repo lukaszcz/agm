@@ -343,11 +343,6 @@ def _nested_misplacement(item: Item) -> AglScopeError | None:
     return AglScopeError(message, span=item.span)
 
 
-def _source_order_key(span: SourceSpan) -> int:
-    """Order spans by where they start."""
-    return span.start_offset
-
-
 def _constraints_related(a: ConstraintKind, b: ConstraintKind) -> bool:
     """True if *a* and *b* are the same kind or one implies the other."""
     return a in close_constraints(frozenset({b})) or b in close_constraints(frozenset({a}))
@@ -711,7 +706,6 @@ class _Resolver(ModuleSources):
             for path in {**self._repl_session_type_paths, **type_owners}
             if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
         }
-        self._declare_scope_paths_once()
         # A tail or ``hiding`` item written through an alias must name a
         # declaration whether or not anything reads it.
         for node_id in self._import_env.decl_hiding:
@@ -789,59 +783,18 @@ class _Resolver(ModuleSources):
     def declared_paths(self) -> dict[BareAtom, QName]:
         """Map each own declaration declared otherwise than spelled to its full path there.
 
-        See :meth:`~agm.agl.scope.sources.ModuleSources.declared_path`.
+        Every declaration item, not only those a static-root module installs
+        early (:meth:`_register_static_binding_declaration`'s non-static-root
+        case): a REPL-walked scoped ``let``/``var`` is keyed exactly like one
+        a file declares. See
+        :meth:`~agm.agl.scope.sources.ModuleSources.declared_path`.
         """
         found: dict[BareAtom, QName] = {}
-        for _module_id, path, name in self._declarations:
+        for _module_id, path, name in self._declaration_items:
             declared = self.declared_path((*path, name))
             if declared is not None:
                 found[_bare_atom((*path, name))] = declared
         return found
-
-    def _declare_scope_paths_once(self) -> None:
-        """Reject a name declared twice beneath own scope paths declaring one path."""
-        for (module_id, atom), paths in self._declaring().items():
-            spelled = _bare_path(atom)
-            if module_id == self._module_id and spelled in self._scope_nodes:
-                paths = (spelled, *paths)
-            if len(paths) > 1:
-                self._declare_once_beneath(paths)
-
-    def _declare_once_beneath(self, paths: tuple[ScopePath, ...]) -> None:
-        """Reject a name declared twice beneath *paths*, which declare one path.
-
-        A retained REPL entry's declaration beneath one of them counts, unless
-        this entry redeclares it at its own spelling. The later declaration of
-        this entry, or an alias of this entry making *paths* one after both,
-        is reported.
-        """
-        aliases = [
-            item.span
-            for path in paths
-            for index in range(len(path))
-            if isinstance(
-                item := self._declaration_items.get((self._module_id, path[:index], path[index])),
-                TypeAlias,
-            )
-        ]
-        declared: dict[str, dict[ScopePath, str]] = {}
-        for member_path in self._repl_session_ordinary_member_paths:
-            if member_path[:-1] in paths:
-                declared.setdefault(member_path[-1], {})[member_path[:-1]] = "ordinary"
-        for (_module_id, path, name), entity in self._scope_entity_kinds.items():
-            if path in paths:
-                retained_type = entity == "scope" and (*path, name) in self._type_paths
-                declared.setdefault(name, {})[path] = "type" if retained_type else entity
-        for name, entities in declared.items():
-            kinds = list(entities.values())
-            if len(kinds) > 1 and ("ordinary" in kinds or kinds.count("type") > 1):
-                spans = (
-                    self._declaration_items[key].span
-                    for path in entities
-                    if (key := (self._module_id, path, name)) in self._declaration_items
-                )
-                later = max((*spans, *aliases), key=_source_order_key)
-                raise DuplicateDeclarationError(name, span=later)
 
     def _reachable_declarations(self) -> frozenset[DeclarationKey]:
         """Return local, imported, and retained declaration identities."""
@@ -2142,7 +2095,7 @@ class _Resolver(ModuleSources):
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
         self._reject_unhosted_head(self._scope.scope_path, (region.segment,))
-        path = self._scope.scope_path + (region.segment.name,)
+        path = self.declared_scope_path(self._scope.scope_path + (region.segment.name,))
         with self._named_scope(path):
             self._resolve_block_items(region.items)
 
@@ -2156,7 +2109,7 @@ class _Resolver(ModuleSources):
         """
         if node.scope_path:
             written_in = self._scope.scope_path
-            with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+            with self._named_scope(self._declared_scope(node)):
                 self._classify_function_head(node, written_in)
                 self._validate_qualifier_chains(node, node.type_params)
                 self._resolve_program_config(node)
@@ -2189,11 +2142,7 @@ class _Resolver(ModuleSources):
         # Type declarations do not otherwise participate in value resolution,
         # but their annotations still need qualifier validation in the actual
         # lexical owner layer.
-        path = (
-            tuple(segment.name for segment in node.scope_path)
-            if node.scope_path
-            else self._named_scope_path()
-        )
+        path = self._declared_scope(node) if node.scope_path else self._named_scope_path()
         self._reject_unhosted_head(
             self._scope.scope_path, node.scope_path[len(self._scope.scope_path) :]
         )
@@ -2268,7 +2217,7 @@ class _Resolver(ModuleSources):
         if not node.scope_path:
             yield
             return
-        with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+        with self._named_scope(self._declared_scope(node)):
             self._validate_qualifier_chains(node)
             yield
 

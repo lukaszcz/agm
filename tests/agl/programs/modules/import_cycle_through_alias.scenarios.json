@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "cycle_converges_and_reads_final_keyed_exports",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias"
+      ],
+      "expect": {
+        "stdout": "2\n",
+        "calls": {}
+      }
+    }
+  ]
+}

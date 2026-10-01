@@ -226,6 +226,7 @@ class ModuleSources(SourcesHost):
         self._declaring_paths: dict[QName, tuple[ScopePath, ...]] = {}
         self._undeclared_scope_paths: list[ScopePath] = []
         self._recording_scope_paths = False
+        self._scope_paths_settled = False
         # Once the tables the resolver collects are complete (:meth:`_keep_readings`),
         # the contributions at each full path, and the own types, by what they are read with.
         self._keeping_readings = False
@@ -257,8 +258,12 @@ class ModuleSources(SourcesHost):
         again, until a round changes nothing. A path beneath one not recorded
         yet waits for it; so does one selecting a type not
         :meth:`~TypeOwnerIndex.settled` yet, until a later lookup.
+
+        Own scope paths never change after collection, so once a round
+        leaves nothing waiting, the recorded tables are final: later calls
+        return at once rather than re-reading every own type again.
         """
-        if self._recording_scope_paths:
+        if self._recording_scope_paths or self._scope_paths_settled:
             return
         if not self._type_owners.resolving:
             # A lookup the round makes would resolve an own alias reading the
@@ -274,6 +279,7 @@ class ModuleSources(SourcesHost):
             declaring = {}
             self._record_scope_paths(declaring)
         self._recording_scope_paths = False
+        self._scope_paths_settled = not self._undeclared_scope_paths
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -333,6 +339,22 @@ class ModuleSources(SourcesHost):
                 module_id, atom = declared
                 return module_id, _bare_atom((*_bare_path(atom), *path[end:]))
         return None
+
+    def declared_scope_path(self, path: ScopePath) -> ScopePath:
+        """Canonicalize an own scope path through any alias prefix it is spelled otherwise by.
+
+        A step into a named scope region or a declaration's own body reads
+        the same declared path a declaration written there would
+        (:meth:`declared_path`): ``scope G`` with ``type G = Base`` steps
+        into ``Base``. Safe only once declarations are fully collected (every
+        own type is known), never mid-collection, which stays alias-agnostic
+        so a forward reference resolves regardless of source order. *path* is
+        never empty: its one caller always appends a region's own segment,
+        collected -- and so present here -- by the same pass that collects
+        *path*'s own parent.
+        """
+        self._declare_scope_paths()
+        return _bare_path(self._declared_paths[path][1])
 
     def _declaring(self) -> Mapping[QName, tuple[ScopePath, ...]]:
         """Map each full path that own scope paths spelled otherwise declare to those paths."""
@@ -913,22 +935,30 @@ class ModuleSources(SourcesHost):
     ) -> Reading:
         """The declarations at full path *qname*, as ones of *kind*, made visible by *layer*.
 
-        Another module's: the one it declares there, however spelled, and
-        the one each of *sites* writes declared there (:meth:`declared_path`).
+        This module's own declaration at *qname* wins, whether *qname* names
+        its own type or an imported one. Failing that: another module's --
+        the one it declares there, however spelled, and the one each of
+        *sites* writes declared there (:meth:`declared_path`), including a
+        foreign module writing a member beneath a type this module owns.
         """
         module_id, atom = qname
         if module_id == self._module_id:
-            return Reading(
+            own = Reading(
                 tuple(
                     replace(candidate, layer=layer, origin=contribution_origin(qname, layer))
                     for candidate in self.own_at(_bare_path(atom), kind).candidates
                 )
             )
+            if own.candidates or not sites:
+                return own
         declared = [qname] if qname in self._decl_info else []
         for site in (module_id, *sorted(set(sites).difference({module_id}), key=str)):
             written = self._type_owners.declared_at(site, qname)
+            # *site* writes a declaration at *qname*'s path, however it is
+            # spelled there; ``decl_info`` keys it at that one declared path
+            # in *site*'s own module, never its written spelling.
             if site != self._module_id and written is not None:
-                declared.append(written)
+                declared.append((site, qname[1]))
         candidates = (
             Candidate(
                 self._contributed_target(self._cross_module_binding_ref(declaration), ()),

@@ -1,0 +1,7 @@
+# Modules: an import cycle keys a declaration written through an alias as
+# part of its own export fixpoint and builds the importer's environment over
+# the final keyed exports, never a stale un-keyed pass.
+import a
+
+program def main() -> unit =
+  print(a::af())

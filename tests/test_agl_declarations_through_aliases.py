@@ -544,6 +544,26 @@ _SCENARIOS["declared-before-an-alias-hosting-nothing"] = Scenario(
     },
 )
 
+_SCENARIOS |= {
+    "let-declared-through-an-own-alias": Scenario(
+        header=("record Base\n  x: int", "type Geo = Base", "let Geo::v = 1"),
+        probes={
+            "base-read": accepted("Base::v", "int"),
+            "geo-read": accepted("Geo::v", "int"),
+        },
+    ),
+    "scope-regions-bare-member-through-an-own-alias-reaches-its-own-keyed-sibling": Scenario(
+        header=(
+            "record Base\n  x: int",
+            "type Geo = Base",
+            "scope Geo\n  def g() -> int = 2\n  def h() -> int = g() + 1\nend Geo",
+        ),
+        probes={
+            f"{spelling}-h": accepted(f"{spelling}::h()", "int") for spelling in ("Base", "Geo")
+        },
+    ),
+}
+
 
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, the file part and every REPL grouping."""

@@ -183,6 +183,57 @@ def test_os_metadata_matches_the_subprocess_identity(tmp_path: Path, env: dict[s
 
 
 # ---------------------------------------------------------------------------
+# std/os::canonicalize
+# ---------------------------------------------------------------------------
+
+
+def test_os_canonicalize_resolves_existing_symlinks_and_normalizes_missing_suffixes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    physical = tmp_path / "physical"
+    (physical / "nested").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(physical, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = _run(
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        '  print(os::canonicalize("alias/nested/.."))\n'
+        '  print(os::canonicalize("alias/missing/../new/file"))\n'
+        '  print(os::canonicalize("missing/../other"))\n'
+    )
+
+    assert result.ok
+    assert capsys.readouterr().out.splitlines() == [
+        str(physical),
+        str(physical / "new" / "file"),
+        str(tmp_path / "other"),
+    ]
+
+
+def test_os_canonicalize_raises_encoding_error_when_the_resolved_path_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realpath = os.path.realpath
+
+    def fake_realpath(path: str | os.PathLike[str], *, strict: object = False) -> str:
+        if path == "path":
+            return "/tmp/h\udcffome"
+        return realpath(path)
+
+    monkeypatch.setattr(os.path, "realpath", fake_realpath)
+
+    result = _run(
+        'import std/os\nprogram def main() -> unit =\n  let _ = os::canonicalize("path")\n'
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "EncodingError"
+    assert result.error.fields["raw"] == "/tmp/h\\udcffome"
+
+
+# ---------------------------------------------------------------------------
 # std/os::temp-dir
 # ---------------------------------------------------------------------------
 

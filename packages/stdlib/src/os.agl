@@ -5,6 +5,9 @@ import std/option::Option
 import std/path::path
 
 extern def exit(code: int = 0) -> unit
+# Returns an absolute path, resolving existing symlinks and normalizing any
+# missing suffix. Raises `EncodingError` if the resolved path is not valid Unicode.
+extern def canonicalize(path: path) -> path
 # Raises `std/fs::FsError(path = ".", operation = "cwd")` if the working
 # directory no longer exists, or `EncodingError` if it is not valid Unicode.
 extern def cwd() -> path

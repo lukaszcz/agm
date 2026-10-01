@@ -45,6 +45,11 @@ def exit(code: int = 0) -> None:
     raise SystemExit(code)
 
 
+def canonicalize(path: str) -> str:
+    """Return an absolute path with existing symlinks resolved and missing suffixes normalized."""
+    return scalar_host_text(os.path.realpath(path, strict=os.path.ALLOW_MISSING), EncodingError)
+
+
 def cwd() -> str:
     """Return the current working directory; raise `FsError` if it no longer exists."""
     return scalar_host_text(run_fs_action(FsError, ".", "cwd", os.getcwd), EncodingError)
@@ -206,6 +211,7 @@ def user() -> object:
 
 
 __all__ = [
+    "canonicalize",
     "chdir",
     "cpu_count",
     "cwd",

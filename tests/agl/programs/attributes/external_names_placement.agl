@@ -11,8 +11,11 @@ record Job
   shape: Shape
 
 enum Shape
-  | @name("sq") @json-name("square_shape") Square(side: int)
-  | Rect(@json-name("w") width: int, @json-name("h") height: int)
+  | @name("sq") @json-name("square_shape") Square
+      side: int
+  | Rect
+      @json-name("w") width: int
+      @json-name("h") height: int
   | ::LateCircle
 
 @name("circle")

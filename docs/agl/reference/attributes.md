@@ -171,8 +171,11 @@ a constructor call the same way it would bind a declared name.
 
 ```agl
 enum Shape
-  | @name("sq") Square(side: int)
-  | Rect(@json-name("w") width: int, @json-name("h") height: int)
+  | @name("sq") Square
+      side: int
+  | Rect
+      @json-name("w") width: int
+      @json-name("h") height: int
   | Circle
 
 record Job

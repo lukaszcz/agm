@@ -1073,7 +1073,9 @@ class TestContractTypeTree:
     def test_inline_member_fields_carry_docs(self, tmp_path: Path) -> None:
         program = _lower(
             _QUERY + "enum Shape\n"
-            '  | Circle(@doc("The radius.") radius: decimal, label: text)\n'
+            "  | Circle\n"
+            '      @doc("The radius.") radius: decimal\n'
+            "      label: text\n"
             "  | Dot\n"
             'let shape: Shape = query("q")\n0',
             tmp_path,

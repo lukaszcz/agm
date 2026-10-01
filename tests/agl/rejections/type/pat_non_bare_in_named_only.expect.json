@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 7,
+    "line": 9,
     "message_contains": [
       "positional"
     ]

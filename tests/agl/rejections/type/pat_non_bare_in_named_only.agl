@@ -1,5 +1,7 @@
 enum Pair
-  | P(@arg-named a: int, @arg-named b: int)
+  | P
+      @arg-named a: int
+      @arg-named b: int
 
 program def main() -> unit =
   let p: Pair = P(a = 1, b = 2)

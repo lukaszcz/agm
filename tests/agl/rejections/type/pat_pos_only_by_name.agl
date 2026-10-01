@@ -1,5 +1,7 @@
 enum E
-  | V(@arg-pos a: int, b: int)
+  | V
+      @arg-pos a: int
+      b: int
 
 program def main() -> unit =
   let e: E = V(1, 2)

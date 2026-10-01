@@ -7,8 +7,10 @@ about layout alone -- none changes what a program means:
 ``fields``
     A record or exception declares its fields in the indented block form, one
     per line with its attributes, and one with no fields of its own has no body
-    at all. Rewrites parenthesized, inline, and empty ``()`` field lists; the
-    modules in ``FIELDS_EXEMPT`` exercise those forms on purpose.
+    at all. An enum's members all do the same once one of them has more than
+    three fields, an attributed field, or a field block. Rewrites
+    parenthesized, inline, and empty ``()`` field lists; the modules in
+    ``FIELDS_EXEMPT`` exercise those forms on purpose.
 ``indent``
     A scope region's items sit one level (two spaces) in from their ``scope``
     header, and the ``end`` closer returns to the header's own column.
@@ -322,24 +324,35 @@ def _apply_blank_lines(lines: list[str], structure: Structure) -> list[Violation
 # ---------------------------------------------------------------------------
 
 _DECLARATION_TYPES = frozenset({"record", "exception"})
+_ENUM_TYPE = "enum"
+# The most fields an enum member may still list in parentheses.
+MEMBER_FIELD_LIMIT = 3
 _OPENER_TYPES = frozenset(
     {"LPAR", "LSQB", "INDEX_LSQB", "TYPEARG_LSQB", "DO_LSQB", "LBRACE", "CALL_LBRACE"}
 )
 _CLOSER_TYPES = frozenset({"RPAR", "RSQB", "RBRACE"})
 _LINE_END_TYPES = frozenset({"_NEWLINE", "_DEDENT"})
-_INLINE_END_TYPES = _LINE_END_TYPES | {"_INDENT", "SEMICOLON"}
+_ITEM_END_TYPES = _LINE_END_TYPES | {"SEMICOLON"}
+_INLINE_END_TYPES = _ITEM_END_TYPES | {"_INDENT"}
+_LAYOUT_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+_BLOCK_MESSAGE = "fields belong in the indented block form, one per line"
+_MEMBER_MESSAGE = (
+    f"an enum with a member of more than {MEMBER_FIELD_LIMIT} fields, an attributed field, "
+    "or a field block declares every member's fields in the indented block form"
+)
 
 
 @dataclass(frozen=True)
 class FieldList:
-    """A record or exception declaration whose fields are not in the block form."""
+    """A record, exception, or enum member whose fields belong in the block form."""
 
-    keyword: int  # token index of `record`/`exception`
+    anchor: int  # token index the block hangs one level under
     head_end: int  # token index of the head's last token
     body_end: int  # token index of the list's last token
     fields: tuple[tuple[int, int], ...]  # inclusive token-index span of each field
     punctuation: frozenset[int]  # the `=`, parentheses, and separating commas
-    restylable: bool  # whether the declaration's line ends with the list
+    restylable: bool  # whether the list can be moved off its line mechanically
+    message: str  # what the rule asks of a list that has fields
 
 
 def _start(tok: Token) -> int:
@@ -411,10 +424,25 @@ def _field_list_at(tokens: Sequence[Token], keyword: int) -> FieldList | None:
                 depth -= 1
             stop += 1
         after = stop
+    fields = _split_fields(tokens, index, stop, punctuation)
+    return FieldList(
+        _line_opener(tokens, keyword),
+        head_end,
+        after - 1,
+        fields,
+        frozenset(punctuation),
+        _ends_line(tokens, after - 1),
+        _BLOCK_MESSAGE,
+    )
+
+
+def _split_fields(
+    tokens: Sequence[Token], start: int, stop: int, punctuation: set[int]
+) -> tuple[tuple[int, int], ...]:
+    """The fields in ``tokens[start:stop]``, adding their separating commas to *punctuation*."""
     fields: list[tuple[int, int]] = []
-    start = index
     depth = 0
-    for position in range(index, stop + 1):
+    for position in range(start, stop + 1):
         kind = tokens[position].type if position < stop else "COMMA"
         if kind in _OPENER_TYPES:
             depth += 1
@@ -426,14 +454,101 @@ def _field_list_at(tokens: Sequence[Token], keyword: int) -> FieldList | None:
             if position > start:
                 fields.append((start, position - 1))
             start = position + 1
-    return FieldList(
-        keyword,
-        head_end,
-        after - 1,
-        tuple(fields),
-        frozenset(punctuation),
-        after >= len(tokens) or tokens[after].type in _LINE_END_TYPES,
+    return tuple(fields)
+
+
+def _ends_line(tokens: Sequence[Token], index: int) -> bool:
+    """Whether the token at *index* is the last on its line."""
+    after = index + 1
+    return (
+        after >= len(tokens)
+        or tokens[after].type in _LINE_END_TYPES
+        or tokens[after].line != tokens[index].line
     )
+
+
+def _line_opener(tokens: Sequence[Token], index: int) -> int:
+    """The index of the first token on the line *index* is on."""
+    line = tokens[index].line
+    while (
+        index > 0 and tokens[index - 1].type not in _LAYOUT_TYPES and tokens[index - 1].line == line
+    ):
+        index -= 1
+    return index
+
+
+def _after_attribute(tokens: Sequence[Token], index: int) -> int:
+    """The index just past the one attribute starting at *index*."""
+    index += 2
+    if index < len(tokens) and tokens[index].type == "LPAR":
+        index = _after_group(tokens, index)
+    if index < len(tokens) and tokens[index].type == "_NEWLINE":
+        index += 1
+    return index
+
+
+def _after_attributes(tokens: Sequence[Token], index: int) -> int:
+    """The index just past the attributes starting at *index*."""
+    while index < len(tokens) and tokens[index].type == "AT":
+        index = _after_attribute(tokens, index)
+    return index
+
+
+def _member_field_lists(tokens: Sequence[Token], keyword: int) -> list[FieldList]:
+    """The parenthesized member field lists of the enum at *keyword* that belong in a block.
+
+    That is every one of them once any member has more than
+    ``MEMBER_FIELD_LIMIT`` fields, an attributed field, or a field block.
+    """
+    index = _after_name(tokens, keyword + 1)
+    if index < len(tokens) and tokens[index].type in _OPENER_TYPES:
+        index = _after_group(tokens, index)
+    for skipped in ("EQ", "_INDENT"):
+        if index < len(tokens) and tokens[index].type == skipped:
+            index += 1
+    found: list[FieldList] = []
+    block = False
+    while index < len(tokens) and tokens[index].type not in _ITEM_END_TYPES:
+        start = index
+        if tokens[index].type == "PIPE":
+            index += 1
+        anchor = index
+        index = _after_name(tokens, _after_attributes(tokens, index))
+        payload = tokens[index].type if index < len(tokens) else ""
+        if payload == "_INDENT":
+            block = True
+        elif payload == "LPAR":
+            stop = _after_group(tokens, index) - 1
+            punctuation = {index, stop}
+            fields = _split_fields(tokens, index + 1, stop, punctuation)
+            if fields:
+                block = (
+                    block
+                    or len(fields) > MEMBER_FIELD_LIMIT
+                    or any(tokens[first].type == "AT" for first, _ in fields)
+                )
+                found.append(
+                    FieldList(
+                        anchor,
+                        index - 1,
+                        stop,
+                        fields,
+                        frozenset(punctuation),
+                        _line_opener(tokens, start) == start and _ends_line(tokens, stop),
+                        _MEMBER_MESSAGE,
+                    )
+                )
+        # On to the next member's `|`, past this one's field block or type arguments.
+        depth = 0
+        while index < len(tokens) and (
+            depth or tokens[index].type not in _ITEM_END_TYPES | {"PIPE"}
+        ):
+            kind = tokens[index].type
+            depth += (kind in _OPENER_TYPES or kind == "_INDENT") - (
+                kind in _CLOSER_TYPES or kind == "_DEDENT"
+            )
+            index += 1
+    return found if block else []
 
 
 def _starts_item(tokens: Sequence[Token], index: int) -> bool:
@@ -461,18 +576,30 @@ def _starts_item(tokens: Sequence[Token], index: int) -> bool:
 
 
 def field_lists(tokens: Sequence[Token]) -> list[FieldList]:
-    """Every record/exception declaration in *tokens* not in the block form."""
-    found = (
-        _field_list_at(tokens, index)
-        for index, tok in enumerate(tokens)
-        if tok.type in _DECLARATION_TYPES and _starts_item(tokens, index)
-    )
-    return [field_list for field_list in found if field_list is not None]
+    """Every field list in *tokens* that belongs in the block form, in source order."""
+    found: list[FieldList] = []
+    for index, tok in enumerate(tokens):
+        if tok.type not in _DECLARATION_TYPES | {_ENUM_TYPE} or not _starts_item(tokens, index):
+            continue
+        if tok.type == _ENUM_TYPE:
+            found.extend(_member_field_lists(tokens, index))
+        elif (field_list := _field_list_at(tokens, index)) is not None:
+            found.append(field_list)
+    return found
 
 
-def _field_text(source: str, tokens: Sequence[Token], span: tuple[int, int]) -> str | None:
-    """One field's tokens on a single line, or None if they cannot share one."""
-    parts: list[str] = []
+def _field_lines(source: str, tokens: Sequence[Token], span: tuple[int, int]) -> list[str] | None:
+    """One field's tokens as block lines, or None if a token itself spans lines.
+
+    The field shares one line, except that an attribute written on a line of
+    its own stays there.
+    """
+    after_attribute: set[int] = set()
+    index = span[0]
+    while tokens[index].type == "AT":
+        index = _after_attribute(tokens, index)
+        after_attribute.add(index)
+    lines = [""]
     for index in range(span[0], span[1] + 1):
         tok = tokens[index]
         text = source[_start(tok) : _end(tok)]
@@ -480,9 +607,14 @@ def _field_text(source: str, tokens: Sequence[Token], span: tuple[int, int]) -> 
             return None
         if index > span[0]:
             gap = source[_end(tokens[index - 1]) : _start(tok)]
-            parts.append(" " if "\n" in gap else gap)
-        parts.append(text)
-    return "".join(parts)
+            if "\n" not in gap:
+                lines[-1] += gap
+            elif index in after_attribute:
+                lines.append("")
+            else:
+                lines[-1] += " "
+        lines[-1] += text
+    return lines
 
 
 def _block_lines(
@@ -496,9 +628,9 @@ def _block_lines(
     A comment trailing a field's line stays on that field's line; any other
     comment in the list gets its own line ahead of the field that follows it.
     """
-    texts: list[str] = []
+    texts: list[list[str]] = []
     for span in field_list.fields:
-        text = _field_text(source, tokens, span)
+        text = _field_lines(source, tokens, span)
         if text is None:
             return None
         texts.append(text)
@@ -517,25 +649,25 @@ def _block_lines(
         previous = max(index for index, tok in enumerate(tokens) if _end(tok) <= comment_start)
         before = sum(1 for first, _ in field_list.fields if first <= previous)
         if before and "\n" not in source[_end(tokens[previous]) : comment_start]:
-            texts[before - 1] += " " + comment
+            texts[before - 1][-1] += " " + comment
         else:
             leading[before].append(comment)
     lines: list[str] = []
     for comments_ahead, text in zip(leading, [*texts, None]):
         lines.extend(comments_ahead)
         if text is not None:
-            lines.append(text)
+            lines.extend(text)
     return lines
 
 
 def _apply_fields(source: str, tokens: Sequence[Token]) -> tuple[str, list[Violation]]:
     """Rewrite each non-block field list into the block form, or drop an empty one."""
-    lines = source.split("\n")
     comments = lex_comment_spans(source)
     violations: list[Violation] = []
     edits: list[tuple[int, int, str]] = []
     for field_list in field_lists(tokens):
-        line = _start_line(tokens[field_list.keyword])
+        anchor = tokens[field_list.anchor]
+        line = _start_line(anchor)
         block = _block_lines(source, tokens, field_list, comments)
         if not field_list.restylable or block is None:
             violations.append(
@@ -547,15 +679,14 @@ def _apply_fields(source: str, tokens: Sequence[Token]) -> tuple[str, list[Viola
                 )
             )
             continue
-        margin = " " * (_indent_of(lines[line]) + INDENT_WIDTH)
+        assert anchor.column is not None
+        margin = " " * (anchor.column - 1 + INDENT_WIDTH)
         violations.append(
             Violation(
                 Path(),
                 line + 1,
                 "fields",
-                "fields belong in the indented block form, one per line"
-                if block
-                else "a declaration without fields has no `()`",
+                field_list.message if block else "a declaration without fields has no `()`",
             )
         )
         # A comment trailing the whole list describes the declaration: it stays
@@ -584,9 +715,6 @@ def _apply_fields(source: str, tokens: Sequence[Token]) -> tuple[str, list[Viola
 # ---------------------------------------------------------------------------
 # Restyling one AgL text
 # ---------------------------------------------------------------------------
-
-
-_LAYOUT_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
 
 def _meaning(source: str) -> Program | list[tuple[str, str]] | None:
@@ -892,7 +1020,7 @@ def _looks_like_agl(value: str) -> bool:
     """
     if "\n" in value and _REGION.search(value) is not None:
         return structure_of(value) is not None
-    if not any(keyword in value for keyword in _DECLARATION_TYPES):
+    if not any(keyword in value for keyword in _DECLARATION_TYPES | {_ENUM_TYPE}):
         return False
     source = textwrap.dedent(value)
     try:

@@ -1843,10 +1843,18 @@ class TestScopedBuiltinTypes:
         this the same way a field type or name mismatch is caught."""
         err = reject_type(
             "builtin enum Agent =\n"
-            "  | AgentCommand(@arg-named command: text)\n"
-            '  | AgentClaude(model: text = "", thinking: text = "")\n'
-            '  | AgentCodex(model: text = "", thinking: text = "")\n'
-            '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
+            "  | AgentCommand\n"
+            "      @arg-named command: text\n"
+            "  | AgentClaude\n"
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
+            "  | AgentCodex\n"
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
+            "  | AgentPi\n"
+            '      provider: text = ""\n'
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
             "()\n",
             default_stdlib=False,
         )
@@ -8194,7 +8202,9 @@ class TestConstructorRefDispatch:
         assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_named_only_variant_nonbare_positional_rejected(self) -> None:
-        err = reject_type("enum E\n  | F(@arg-named x: int, @arg-named y: int)\nF(1, 2)")
+        err = reject_type(
+            "enum E\n  | F\n      @arg-named x: int\n      @arg-named y: int\nF(1, 2)"
+        )
         assert "named-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_get_constructor_field_kinds_no_graph_table(self) -> None:

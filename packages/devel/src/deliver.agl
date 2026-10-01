@@ -6,8 +6,11 @@ import std/fs
 import devel/review
 
 enum VerifyResult
-  | Complete(@doc("file path of next unblocked task, or None if all tasks finished") next-task-file: Option[path])
-  | Incomplete(reason: text)
+  | Complete
+      @doc("file path of next unblocked task, or None if all tasks finished")
+      next-task-file: Option[path]
+  | Incomplete
+      reason: text
 
 def make-tasks-prompt(plan-file: path, tasks-dir: path) -> text =
   """

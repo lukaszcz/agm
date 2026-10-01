@@ -72,6 +72,25 @@ bind an argument.
   exception AuthError extends ApiError
   ```
 
+- Write an enum's member fields in one form throughout. Use the indented block
+  form, one field per line under the member, for every member once any member
+  has more than three fields or an attributed field. Otherwise keep the
+  parenthesized lists:
+
+  ```agl
+  enum FixResult
+    | Complete(output: text)
+    | Blocked(reason: text, recoverable: bool)
+
+  enum VerifyResult
+    | Verified
+    | Rejected
+        reason: text
+    | Completed
+        @doc("absolute file path of the next unblocked task")
+        next-task-file: path
+  ```
+
 ## Companion Python
 
 Python companions follow Python naming and formatting conventions, not the AgL style from this file.

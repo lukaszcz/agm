@@ -667,8 +667,8 @@ enum FixResult
 
 A member's fields may instead be written in an indented block under the
 member, one per line without parentheses or commas, exactly as in a `record`
-declaration. An attribute may then sit on the line above its field. The two
-forms mix freely within one enum:
+declaration. An attribute may then sit on the line above its field. Both
+forms are legal within one enum, which by convention uses one throughout:
 
 ```agl
 enum VerifyResult
@@ -676,7 +676,8 @@ enum VerifyResult
   | Completed
       @doc("absolute file path of the next unblocked task")
       next-task-file: path
-  | Rejected(reason: text)
+  | Rejected
+      reason: text
   | Blocked
       reason: text
       recoverable: bool = false

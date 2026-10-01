@@ -1,8 +1,8 @@
 # An enum member's fields written as an indented block under the member, one
-# per line without parentheses or commas: beside fieldless and parenthesized
-# members, with attributes, defaults, `var` markers, generics, the indented
-# enum body, and a scope region; decoded from an agent reply, constructed,
-# matched, mutated, and updated like any other member record.
+# per line without parentheses or commas: beside fieldless members, with
+# attributes, defaults, `var` markers, generics, the indented enum body, and a
+# scope region; decoded from an agent reply, constructed, matched, mutated, and
+# updated like any other member record.
 enum Shape
   | Point
   | Circle
@@ -12,7 +12,8 @@ enum Shape
       width: int
       # A comment between two fields is not a field.
       @arg-named height: int = 1
-  | Label(caption: text)
+  | Label
+      caption: text
 
 enum Tree[T] =
   Leaf

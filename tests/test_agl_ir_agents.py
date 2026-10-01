@@ -2685,7 +2685,8 @@ def test_enum_missing_renamed_field_reports_json_key() -> None:
     source = """\
 enum Status
   | Ok
-  | Err(@json-name("msg-text") msg: text)
+  | Err
+      @json-name("msg-text") msg: text
 
 let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker, parse-error-retries = 0)

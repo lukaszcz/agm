@@ -238,7 +238,9 @@ def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
             ],
         },
     )
-    backend = open_backend(timeout=0.2)
+    # A backstop against waiting for a settle event that never comes; generous
+    # enough that the stub child's startup never consumes it.
+    backend = open_backend(timeout=5)
 
     assert backend.ask(SessionAskRequest("handled command")).content == ""
     backend.compact("")

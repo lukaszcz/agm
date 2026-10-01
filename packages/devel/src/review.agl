@@ -5,7 +5,7 @@ import std/fs
 import std/log
 import devel/utils
 
-enum Severity = LOW | MEDIUM | HIGH | CRITICAL
+enum Severity = NIT | LOW | MEDIUM | HIGH | CRITICAL
 
 record Issue
   severity: Severity
@@ -24,7 +24,7 @@ def Agent::review(self, scope: text, aspects: text) -> Review =
   let prompt: text = """
   Review %{scope} for %{aspects}.
 
-  Reply with a list of issues classified by severity: LOW, MEDIUM, HIGH, CRITICAL.
+  Reply with a list of issues classified by severity: NIT, LOW, MEDIUM, HIGH, CRITICAL.
   """
   self.ask prompt
 

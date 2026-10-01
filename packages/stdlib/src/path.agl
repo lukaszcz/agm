@@ -30,3 +30,9 @@ extern def parts(path: path) -> array[text]
 extern def common-prefix(paths: array[path]) -> Option[path]
 # Raises `EncodingError` if `HOME` (or the passwd entry) is not valid Unicode.
 extern def home() -> path
+
+def relative-if-under(path: path, base: path) -> path =
+  if is-under(path, base) =>
+    relative(path, base)
+  else =>
+    path

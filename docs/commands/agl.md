@@ -475,10 +475,15 @@ text: a native TOML string for any parameter type other than `json` or `Option[j
 same way a CLI token is (verbatim for `text`, else strict JSON or value syntax); a native TOML
 string for a `json`- or `Option[json]`-typed parameter is instead the parameter's own JSON
 *string* value, never re-read as JSON source or value syntax, and a native TOML table or array
-crosses as the matching JSON object or array directly. Its nested strings are therefore JSON
-values, not value syntax: inside one, a member of an enum of fieldless members is spelled by its
-JSON name (`levels = ["debug"]`), where the same parameter's top-level string also reads a
-declared name or `@name` (`level = "Debug"`).
+crosses as the matching JSON object or array. A string nested inside one is read exactly as a
+top-level string of that position's type is, so `levels = ["Debug", "Info"]`,
+`points = ["Point(1, 2)", { x = 3, y = 4 }]`, and `workers = ["claude/opus:high", "codex"]` all
+decode; a string in a nested `json` position stays a JSON string.
+
+A CLI token, `@opt-env` value, or config string for an enum whose members are all fieldless names
+a member by its declared name, its `@name`, or its JSON name — `--level Debug` and `--level debug`
+alike for `@json-name("debug") Debug`. Where one spelling is one member's JSON name and another's
+declared name, the JSON name wins.
 
 #### Source-level engine settings (`std/config`)
 

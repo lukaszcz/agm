@@ -17,6 +17,9 @@ it: a ``text`` target is taken verbatim, the standard ``Agent`` enum reads
 its own text conventions (a tagged JSON object, an ``Agent`` member
 constructor call, shorthand, or -- optionally -- a verbatim command), and
 every other target reads strict JSON, falling back to value syntax.
+:func:`host_param_text_to_json` is its host parameter/config form, and
+:func:`host_data_to_json` reads native config data by applying that form to
+every string nested in it.
 """
 
 from __future__ import annotations
@@ -68,6 +71,8 @@ from agm.agl.value_syntax.reader import read_ctor_head, read_value
 
 __all__ = [
     "ValueDecodeError",
+    "host_data_to_json",
+    "host_param_text_to_json",
     "host_text_to_json",
     "option_some_field_schema",
     "option_some_json_name",
@@ -408,6 +413,63 @@ def host_text_to_json(
     except ValueSyntaxError as exc:
         raise ValueDecodeError(f"{exc.message}; as JSON: {json_error}", exc.start) from exc
     return value_node_to_json(node, resolved, defs)
+
+
+def host_param_text_to_json(text: str, schema: DecodeSchema, defs: DefsMap = _EMPTY_DEFS) -> object:
+    """Decode one host parameter or config string into a JSON-native object per *schema*.
+
+    :func:`host_text_to_json` with the ``Agent`` command fallback, plus one
+    reading of its own: a plain enum also takes a member's bare JSON name.
+    """
+    resolved = _resolve(schema, defs)
+    if (
+        isinstance(resolved, EnumDecode)
+        and is_plain_enum(resolved)
+        and any(text == variant.json_name for variant in resolved.variants)
+    ):
+        return text
+    return host_text_to_json(text, resolved, defs, agent_command_fallback=True)
+
+
+def host_data_to_json(value: object, schema: DecodeSchema, defs: DefsMap = _EMPTY_DEFS) -> object:
+    """Read every string nested in JSON-native host config data as its slot's host text.
+
+    A native config array or table is JSON data, except that a string inside
+    it reads exactly as a top-level config string of that slot's type does
+    (:func:`host_param_text_to_json`). A ``json`` slot keeps its data as is,
+    and data matching no slot is returned unchanged for validation to reject.
+    """
+    resolved = _resolve(schema, defs)
+    if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.JSON:
+        return value
+    if isinstance(value, str):
+        return host_param_text_to_json(value, resolved, defs)
+    if isinstance(value, list) and isinstance(resolved, ArrayDecode):
+        return [host_data_to_json(item, resolved.elem, defs) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return _host_entries_to_json(value, resolved, defs)
+
+
+def _host_entries_to_json(
+    data: Mapping[str, object], schema: DecodeSchema, defs: DefsMap
+) -> Mapping[str, object]:
+    """Read each entry of the table *data* as host data for the slot *schema* gives its key."""
+    match schema:
+        case DictDecode(value=item_schema):
+            return {key: host_data_to_json(item, item_schema, defs) for key, item in data.items()}
+        case RecordDecode(fields=record_fields):
+            fields = record_fields
+        case EnumDecode(variants=variants):
+            tag = data.get("$case")
+            fields = next((v.fields for v in variants if v.json_name == tag), ())
+        case _:
+            return data
+    slots = {field.json_name: field.schema for field in fields}
+    return {
+        key: host_data_to_json(item, slots[key], defs) if key in slots else item
+        for key, item in data.items()
+    }
 
 
 def _agent_ctor_probe(text: str, schema: EnumDecode) -> bool:

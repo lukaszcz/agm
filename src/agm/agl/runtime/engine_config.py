@@ -251,11 +251,11 @@ def convert_host_value(
     host engine-setting values (CLI flags, config-file entries) through it.
 
     ``text`` values are taken verbatim; a JSON-compatible Python value (not a
-    string) crosses the canonical JSON boundary directly. A raw string is read
-    through the shared strict-JSON-or-value-syntax dispatch
-    (:func:`~agm.agl.runtime.value_decode.host_text_to_json`): strict JSON
-    first, then one AgL value-syntax literal — no repair of user typos either
-    way. *raw* may instead be an
+    string) crosses the canonical JSON boundary, its nested strings read as a
+    raw string is. A raw string is read through the shared host-text dispatch
+    (:func:`~agm.agl.runtime.value_decode.host_param_text_to_json`): strict
+    JSON first, then one AgL value-syntax literal — no repair of user typos
+    either way. *raw* may instead be an
     :class:`~agm.agl.runtime.arguments.OptionSome` box, for an ``Option[T]``
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and
     is wrapped into the enum's ``Some`` shape, exactly as a program's own

@@ -119,6 +119,15 @@ that parses as strict JSON is read as JSON; any other token is read as one
 ([Agents](#agents) above) instead reads a JSON object, then an `Agent`
 member constructor call, then compact shorthand (`claude/opus:high`), and
 otherwise falls back to a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
+A value for a plain enum — one whose every member is fieldless — may also be
+a member's bare JSON name, which takes precedence over another member's
+declared name of the same spelling.
+
+A config table may instead give a structured value natively, as an array or
+table in the value's [JSON shape](agent-calls.md#the-json-wire-format). A
+string nested inside it is read exactly as a top-level config string of that
+position's type is, so a string means the same at every depth; a string in a
+`json` position stays a JSON string.
 
 A CLI token, an `@opt-env` variable's value, and a qualified config-table
 string ([Config-file schema](#config-file-schema) below) must all be valid

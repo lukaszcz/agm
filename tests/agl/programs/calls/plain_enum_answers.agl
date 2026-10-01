@@ -1,6 +1,6 @@
 # A plain-enum answer is the member's JSON name as a JSON string. Lenient
-# parsing also accepts a response naming exactly one member as a whole word;
-# strict parsing accepts the quoted string only.
+# parsing also accepts a response naming exactly one member as a whole word,
+# in prose or inside other JSON; strict parsing accepts the quoted string only.
 enum Verdict
   | Pass
   | @json-name("Pass-with-notes") Conditional

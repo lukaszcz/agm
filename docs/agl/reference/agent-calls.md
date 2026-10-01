@@ -630,14 +630,18 @@ response, then validates it strictly:
 3. Otherwise the whole response undergoes the same repair, which strips
    surrounding prose such as `Here you go: {…}`.
 4. As a last resort, a single bare scalar embedded in prose is recovered —
-   but only when exactly one such token is present. When the target is a
-   plain enum, the prose is instead searched for its member tags: a response
-   naming exactly one member — any number of times, as a whole word, in the
-   tag's exact spelling — recovers that member, so `The verdict is Approve.`
-   reads as `"Approve"`. Naming two or more different members is ambiguous.
+   but only when exactly one such token is present.
 
 If the response contains two or more top-level JSON values, recovery fails
 as ambiguous. Schema validation is always strict regardless of lenient mode.
+
+When the target is a plain enum and the value recovered above is not one of
+its members, the whole response is searched for its member tags. A response
+naming exactly one member — any number of times, as a whole word, in the
+tag's exact spelling — recovers that member, so `The verdict is Approve.` and
+`{"verdict": "Approve"}` both read as `"Approve"`. Naming two or more
+different members is ambiguous. Only the target itself is searched for: a
+plain enum nested in a record or array takes its exact string.
 
 ### Strict parsing
 

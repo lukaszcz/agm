@@ -1225,8 +1225,9 @@ parsing, which uses lenient recovery by default. A cast to `Agent` from
 `text` accepts the same JSON object, member constructor call, or shorthand a
 host `Agent` parameter reads, but never falls back to a verbatim command; a
 cast to `Agent` from `json` validates a tagged member object the same way any
-other enum does. `parse`/`try-parse` apply the same rule under a different
-exception — see [Parsing values](#parsing-values) above.
+other enum with a fielded member does. `parse`/`try-parse` apply the same
+rule under a different exception — see [Parsing values](#parsing-values)
+above.
 
 ### `decimal as int` integrality
 

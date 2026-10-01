@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import json
 from collections.abc import Callable, Mapping
 from decimal import Decimal
 
@@ -2778,6 +2779,11 @@ class TestPlainEnum:
             ("Fail, and again: Fail", "Fail"),
             ("3 issues, so Fail", "Fail"),
             ("```\nPass\n```", "Pass"),
+            ("Fail [1]", "Fail"),
+            ('{"verdict": "Fail", "issues": 2}', "Fail"),
+            ('{"$case": "Pass"}', "Pass"),
+            ('"I would say Pass"', "Pass"),
+            ('I considered Fail, but:\n```json\n"Pass"\n```', "Pass"),
         ],
         ids=(
             "quoted",
@@ -2788,6 +2794,11 @@ class TestPlainEnum:
             "repeated",
             "beside-a-number",
             "fenced-bare",
+            "beside-a-json-array",
+            "inside-a-json-object",
+            "tag-object",
+            "inside-a-json-string",
+            "fenced-member-wins-over-prose",
         ),
     )
     def test_lenient_recovers_the_one_named_member(self, raw: str, member: str) -> None:
@@ -2805,7 +2816,7 @@ class TestPlainEnum:
             "Passing",
             "bypass-Fail-safe",
             "no verdict",
-            '{"$case": "Pass"}',
+            '["Pass", "Fail"]',
             '"Maybe"',
             "3",
         ],
@@ -2814,7 +2825,7 @@ class TestPlainEnum:
             "tag-inside-a-word",
             "tag-inside-a-kebab-word",
             "no-member",
-            "tag-object",
+            "two-members-in-json",
             "unknown-member",
             "number",
         ),
@@ -2823,14 +2834,62 @@ class TestPlainEnum:
         result, _table, _typ = self._parse(raw)
         assert result.ok is False
 
-    @pytest.mark.parametrize("raw", ["Pass", "I would say Fail.", '```json\n"Pass"\n```'])
+    @pytest.mark.parametrize("raw", ["Pass or Fail", '["Pass", "Fail"]'])
+    def test_two_named_members_are_ambiguous_not_a_validation_failure(self, raw: str) -> None:
+        result, _table, _typ = self._parse(raw)
+        assert result.ok is False
+        assert result.errors == ()
+        assert result.normalized_raw is None
+
+    @pytest.mark.parametrize(
+        ("raw", "member"),
+        [
+            ("it needs work", "needs work"),
+            ("it needs a lot", "needs"),
+            ("rated n/a", "n/a"),
+            ("written in C++.", "C++"),
+            ("2", "2"),
+            ("I rate it 2.", "2"),
+            ("true", "true"),
+            ('say "hi" twice', 'say "hi"'),
+            ("c'est très bien", "très bien"),
+        ],
+        ids=(
+            "longest-spaced-tag",
+            "prefix-tag",
+            "slash",
+            "regex-metacharacters",
+            "bare-number-tag",
+            "number-tag-in-prose",
+            "keyword-tag",
+            "quotes",
+            "non-ascii",
+        ),
+    )
+    def test_lenient_recovers_tags_that_are_not_identifiers(self, raw: str, member: str) -> None:
+        tags = ("needs", "needs work", "n/a", "C++", "1", "2", "true", 'say "hi"', "très bien")
+        typ, typedef = enum_type("Rating", {tag: {} for tag in tags})
+        table = type_table_for(typedef)
+        result = _parse_typed(JsonCodec(), raw, typ, table=table)
+        assert result.ok is True
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)[member].decl_id)
+        assert result.normalized_raw == json.dumps(member, ensure_ascii=False)
+
+    @pytest.mark.parametrize(
+        "raw", ["Pass", "I would say Fail.", '```json\n"Pass"\n```', '{"$case": "Pass"}']
+    )
     def test_strict_accepts_only_the_quoted_tag(self, raw: str) -> None:
         assert self._parse(raw, strict_json=True)[0].ok is False
         assert self._parse('"Pass"', strict_json=True)[0].ok is True
 
-    @pytest.mark.parametrize("raw", ['"Maybe"', '{"$case": "Pass"}', "3"])
-    def test_wrong_value_is_a_bad_case(self, raw: str) -> None:
-        result, _table, _typ = self._parse(raw)
+    @pytest.mark.parametrize(
+        ("raw", "strict_json"),
+        [('"Maybe"', False), ("3", False), ('{"$case": "Pass"}', True)],
+        ids=("unknown-member", "number", "strict-tag-object"),
+    )
+    def test_wrong_value_is_a_bad_case(self, raw: str, strict_json: bool) -> None:
+        result, _table, _typ = self._parse(raw, strict_json=strict_json)
         assert [error.category for error in result.errors] == ["bad_case"]
         assert [error.path for error in result.errors] == ["$"]
 
@@ -2847,10 +2906,37 @@ class TestPlainEnum:
             ("bad_case", "$.verdicts[1]")
         ]
 
+    def test_shared_plain_enum_failure_is_located(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"first": verdict, "second": verdict})
+        table = type_table_for(report_def, verdict_def)
+        assert "$defs" in derive_schema(report, table)
+        result = _parse_typed(
+            JsonCodec(), '{"first": "Pass", "second": "Maybe"}', report, table=table
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.second")
+        ]
+
+    def test_nested_plain_enum_is_never_read_out_of_prose(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"verdict": verdict})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"verdict": "it is a Pass"}',
+            report,
+            table=type_table_for(report_def, verdict_def),
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.verdict")
+        ]
+
     def test_member_tag_scan_does_not_apply_to_a_tagged_enum(self) -> None:
         typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(JsonCodec(), "Done", typ, table=type_table_for(typedef))
         assert result.ok is False
+        assert result.errors == ()
+        assert result.normalized_raw is None
 
 
 # ---------------------------------------------------------------------------

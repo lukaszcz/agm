@@ -48,7 +48,7 @@
       }
     },
     {
-      "name": "lenient_prefers_the_longest_member_and_ignores_numbers",
+      "name": "lenient_reads_a_tag_containing_another_tag_whole",
       "agents": {
         "judge": [
           "Pass-with-notes",
@@ -95,11 +95,25 @@
       }
     },
     {
-      "name": "tag_object_and_unknown_member_are_retried",
+      "name": "lenient_reads_the_one_member_out_of_other_json",
+      "agents": {
+        "judge": [
+          "Fail [1]",
+          "{\"priority\": \"Low\", \"confidence\": 0.9}",
+          "\"Pass\"",
+          "{\"verdict\": \"Pass\", \"priority\": \"Low\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Fail\nPriority::Low\nVerdict::Pass\nTriage(verdict = Verdict::Pass, priority = Priority::Low)\n",
+        "calls": {"judge": 4}
+      }
+    },
+    {
+      "name": "unknown_member_and_nested_tag_object_are_retried",
       "agents": {
         "judge": [
           "{\"$case\": \"Pass\"}",
-          "\"Pass\"",
           "\"Urgent\"",
           "\"High\"",
           "\"Pass\"",
@@ -109,7 +123,7 @@
       },
       "expect": {
         "stdout": "Verdict::Pass\nPriority::High\nVerdict::Pass\nTriage(verdict = Verdict::Pass, priority = Priority::High)\n",
-        "calls": {"judge": 7}
+        "calls": {"judge": 6}
       }
     },
     {

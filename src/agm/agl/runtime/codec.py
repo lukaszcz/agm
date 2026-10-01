@@ -324,27 +324,18 @@ def _scan_bare_scalar(text: str) -> str | None | object:
     return matches[0]
 
 
-def _scan_member_tag(text: str, member_tags: tuple[str, ...]) -> str | None | object:
-    """Recover the one plain-enum member tag named in prose.
+def _scan_member_tags(text: str, member_tags: tuple[str, ...]) -> set[str]:
+    """Return the distinct plain-enum member tags *text* names as whole words.
 
-    The plain-enum counterpart of :func:`_scan_bare_scalar`: returns the JSON
-    string of the single distinct tag occurring as a whole word, the
-    ``_AMBIGUOUS_MULTI_VALUE`` sentinel for two or more distinct tags, and
-    ``None`` for none. ``-`` counts as a word character (identifiers are
-    kebab-case) and the longest tag wins at a position, so a tag is never
-    read out of a longer one.
+    ``-`` counts as a word character (identifiers are kebab-case) and the
+    longest tag wins at a position, so a tag is never read out of a longer one.
     """
     longest_first = sorted(member_tags, key=len, reverse=True)
     pattern = rf"(?<![\w-])(?:{'|'.join(re.escape(tag) for tag in longest_first)})(?![\w-])"
-    found = {m.group(0) for m in re.finditer(pattern, text)}
-    if not found:
-        return None
-    if len(found) >= 2:
-        return _AMBIGUOUS_MULTI_VALUE
-    return json.dumps(found.pop(), ensure_ascii=False)
+    return {m.group(0) for m in re.finditer(pattern, text)}
 
 
-def _extract_json_text(raw: str, member_tags: tuple[str, ...] = ()) -> str | None | object:
+def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
     Strategy (lenient mode):
@@ -357,8 +348,7 @@ def _extract_json_text(raw: str, member_tags: tuple[str, ...] = ()) -> str | Non
        try ``repair_json`` on the fenced content.
     2. Fall back to ``repair_json`` on the whole raw string (handles
        prose-wrapped JSON such as "Here you go:\\n{...}").
-    3. Scan the prose for a single bare scalar — or, when *member_tags*
-       (a plain-enum target's member tags) is given, for a single member tag.
+    3. Scan the prose for a single bare scalar.
     4. Return ``None`` if no JSON value could be extracted, or the
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
        top-level values into an array.
@@ -402,10 +392,7 @@ def _extract_json_text(raw: str, member_tags: tuple[str, ...] = ()) -> str | Non
         return repaired_full
 
     # Step 3: recover a single bare scalar (bool/null/number) from prose that
-    # ``json-repair`` cannot extract (e.g. ``"The flag is:\nfalse"``); a
-    # plain-enum target instead recovers its single named member.
-    if member_tags:
-        return _scan_member_tag(stripped, member_tags)
+    # ``json-repair`` cannot extract (e.g. ``"The flag is:\nfalse"``).
     return _scan_bare_scalar(stripped)
 
 
@@ -652,6 +639,9 @@ def _parse_json_core(
     *defs* is *decode_schema*'s ``$defs`` table for a recursive target type
     (empty for a non-recursive one). *default_resolver*, when given, fills an
     omitted defaulted field (see ``runtime.convert.decode_value``).
+
+    A lenient plain-enum target whose recovered JSON is not a member falls back
+    to the one member the response names anywhere in its text.
     """
     if strict:
         try:
@@ -662,7 +652,33 @@ def _parse_json_core(
             raw.strip(), parsed_obj, schema_dict, decode_schema, defs, default_resolver
         )
 
-    json_text = _extract_json_text(raw, _plain_enum_tags(decode_schema, defs))
+    result = _parse_recovered_json(raw, schema_dict, decode_schema, defs, default_resolver)
+    member_tags = _plain_enum_tags(decode_schema, defs)
+    if result.ok or not member_tags:
+        return result
+    named = _scan_member_tags(raw, member_tags)
+    if not named:
+        return result
+    if len(named) >= 2:
+        return ParseResult.failure(
+            "Ambiguous agent response: more than one enum member is named, but "
+            "exactly one is required."
+        )
+    (tag,) = named
+    return _validate_and_decode_core(
+        json.dumps(tag, ensure_ascii=False), tag, schema_dict, decode_schema, defs
+    )
+
+
+def _parse_recovered_json(
+    raw: str,
+    schema_dict: dict[str, object],
+    decode_schema: DecodeSchema,
+    defs: Mapping[str, DecodeSchema],
+    default_resolver: DefaultResolver | None,
+) -> ParseResult:
+    """Leniently recover one JSON value from *raw*, then validate and decode it."""
+    json_text = _extract_json_text(raw)
     if json_text is _AMBIGUOUS_MULTI_VALUE:
         return ParseResult.failure(
             "Ambiguous agent response: multiple JSON values were found, but "

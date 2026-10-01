@@ -1,7 +1,7 @@
 """Best-effort JSONL tracing for observable AgL runtime effects.
 
-Trace records contain an ISO-8601 offset-aware timestamp, the run identifier,
-and a kind-specific payload.  Run boundaries, stdout, agent requests and
+Trace records contain an ISO-8601 offset-aware timestamp, source coordinates,
+and a kind-specific payload. Run boundaries, stdout, agent requests and
 responses, shell execution, escaping exceptions, and a companion's own
 ``runtime.trace`` records are traced; ordinary expression evaluation is
 intentionally absent.
@@ -10,7 +10,6 @@ intentionally absent.
 from __future__ import annotations
 
 import sys
-import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -18,20 +17,21 @@ from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agm.agl.ir.ids import Location, SourceId
 from agm.agl.runtime.boundary import AglJson
 from agm.agl.runtime.serialize import dumps_exact
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, non_data_marker
+from agm.agl.syntax.spans import SourceSpan
 from agm.core.log import append_jsonl
 from agm.util.unicode import surrogate_index
 
 if TYPE_CHECKING:
-    from agm.agl.ir.ids import Location
-    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.ir.program import SourceFile
 
 #: Envelope keys :meth:`TraceStore.companion_record` writes itself; a
 #: companion's own payload may never contribute one, so its shape can never
 #: collide with the envelope it is embedded in.
-RESERVED_ENVELOPE_KEYS = frozenset({"ts", "run_id", "kind", "origin", "line", "col", "site"})
+RESERVED_ENVELOPE_KEYS = frozenset({"kind", "ts", "file", "line", "col", "origin", "site"})
 
 
 def _sanitize(value: object, active: frozenset[int]) -> object:
@@ -80,9 +80,14 @@ def _sanitize_mapping(payload: "Mapping[str, object]", active: frozenset[int]) -
 class TraceStore:
     """Write structured records for one AgL run without affecting its semantics."""
 
-    def __init__(self, path: Path | None) -> None:
+    def __init__(
+        self,
+        path: Path | None,
+        *,
+        sources: "Mapping[SourceId, SourceFile] | None" = None,
+    ) -> None:
         self._path = path
-        self._run_id = uuid.uuid4().hex
+        self._sources = {} if sources is None else dict(sources)
         self._disabled = False
         self._last_timestamp = ""
 
@@ -108,11 +113,16 @@ class TraceStore:
         """Whether an I/O failure, rather than settings, disabled this store."""
         return self._disabled
 
-    def _emit(self, kind: str, extra: dict[str, object]) -> None:
+    def _emit(
+        self,
+        kind: str,
+        extra: dict[str, object],
+        span: "SourceSpan | Location | None" = None,
+    ) -> None:
         """Append a record, disabling this best-effort service on I/O failure.
 
-        The envelope is emitted first in ``kind``/``ts``/``run_id`` order;
-        collisions from *extra* are omitted so its values always win.
+        Source identity and coordinates follow the timestamp in the stable
+        ``file``/``line``/``col`` order. Collisions from *extra* are omitted.
         """
         timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
         # Wall clocks may move backwards; preserve trace-file ordering as an
@@ -120,26 +130,47 @@ class TraceStore:
         if timestamp < self._last_timestamp:
             timestamp = self._last_timestamp
         self._last_timestamp = timestamp
-        record: dict[str, object] = {"kind": kind, "ts": timestamp, "run_id": self._run_id}
+        file: str | None = None
+        line: int | None = None
+        col: int | None = None
+        if isinstance(span, SourceSpan):
+            file = span.source.label
+            line = span.start_line
+            col = span.start_col
+        elif isinstance(span, Location):
+            source = self._sources.get(span.source_id)
+            if source is not None:
+                file = source.file_name or source.display_name
+            line = span.start_line
+            col = span.start_col
+        record: dict[str, object] = {
+            "kind": kind,
+            "ts": timestamp,
+            "file": file,
+            "line": line,
+            "col": col,
+        }
         record.update({key: value for key, value in extra.items() if key not in record})
         try:
             append_jsonl(self._path, record)
         except OSError as exc:
             self.disable(exc)
 
-    @staticmethod
-    def _with_span(
-        extra: dict[str, object], span: "SourceSpan | Location | None"
-    ) -> dict[str, object]:
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        return extra
-
-    def run_start(self) -> None:
+    def run_start(
+        self,
+        *,
+        command: str | None = None,
+        function: str | None = None,
+        span: "SourceSpan | Location | None" = None,
+    ) -> None:
         if self._path is None:
             return
-        self._emit("run_start", {})
+        extra: dict[str, object] = {}
+        if command is not None:
+            extra["command"] = command
+        if function is not None:
+            extra["function"] = function
+        self._emit("run_start", extra, span)
 
     def run_end(self, *, ok: bool) -> None:
         if self._path is None:
@@ -165,20 +196,18 @@ class TraceStore:
             return
         self._emit(
             "agent_request",
-            self._with_span(
-                {
-                    "agent": agent,
-                    "effective_agent": effective_agent,
-                    "attempt": attempt,
-                    "max_attempts": max_attempts,
-                    "prompt": prompt,
-                    "target_type": target_type,
-                    "codec": codec,
-                    "strict_json": strict_json,
-                    "json_schema": json_schema,
-                },
-                span,
-            ),
+            {
+                "agent": agent,
+                "effective_agent": effective_agent,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "prompt": prompt,
+                "target_type": target_type,
+                "codec": codec,
+                "strict_json": strict_json,
+                "json_schema": json_schema,
+            },
+            span,
         )
 
     def agent_response(
@@ -208,7 +237,7 @@ class TraceStore:
             extra["reason"] = reason
         if call_info:
             extra.update(call_info)
-        self._emit("agent_response", self._with_span(extra, span))
+        self._emit("agent_response", extra, span)
 
     def parse_result(
         self,
@@ -223,21 +252,19 @@ class TraceStore:
             return
         self._emit(
             "parse_result",
-            self._with_span(
-                {
-                    "ok": ok,
-                    "raw": raw,
-                    "normalized_raw": normalized_raw,
-                    "error_summary": error_summary,
-                },
-                span,
-            ),
+            {
+                "ok": ok,
+                "raw": raw,
+                "normalized_raw": normalized_raw,
+                "error_summary": error_summary,
+            },
+            span,
         )
 
     def print_stmt(self, *, rendered: str, span: "SourceSpan | Location | None" = None) -> None:
         if self._path is None:
             return
-        self._emit("print", self._with_span({"rendered": rendered}, span))
+        self._emit("print", {"rendered": rendered}, span)
 
     def exec_command(
         self,
@@ -254,17 +281,15 @@ class TraceStore:
             return
         self._emit(
             "exec_command",
-            self._with_span(
-                {
-                    "command": command,
-                    "exit_code": exit_code,
-                    "duration": duration,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "timed_out": timed_out,
-                },
-                span,
-            ),
+            {
+                "command": command,
+                "exit_code": exit_code,
+                "duration": duration,
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": timed_out,
+            },
+            span,
         )
 
     def exception(
@@ -277,10 +302,7 @@ class TraceStore:
         """Record an uncaught AgL exception that escapes the program."""
         if self._path is None:
             return
-        self._emit(
-            "exception",
-            self._with_span({"type_name": type_name, "message": message}, span),
-        )
+        self._emit("exception", {"type_name": type_name, "message": message}, span)
 
     def companion_record(
         self,
@@ -312,11 +334,11 @@ class TraceStore:
         reserved = RESERVED_ENVELOPE_KEYS & payload.keys()
         if reserved:
             raise ValueError(f"runtime.trace payload uses reserved key(s): {sorted(reserved)}")
-        extra = _sanitize_mapping(payload, frozenset({id(payload)}))
-        extra["origin"] = origin
+        extra: dict[str, object] = {"origin": origin}
         if site is not None:
             extra["site"] = site
-        self._emit(kind, self._with_span(extra, span))
+        extra.update(_sanitize_mapping(payload, frozenset({id(payload)})))
+        self._emit(kind, extra, span)
 
 
 def noop_trace() -> TraceStore:

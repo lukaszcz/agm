@@ -4680,9 +4680,9 @@ class TestTraceLogging:
         s.eval_entry('let x = ask """one"""')
         s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
-        run_ids = {rec["run_id"] for rec in records}
-        # Per-entry TraceStore → a fresh run_id per entry, all in one file.
-        assert len(run_ids) == 2
+        assert sum(rec["kind"] == "run_start" for rec in records) == 2
+        assert sum(rec["kind"] == "run_end" for rec in records) == 2
+        assert all("run_id" not in rec for rec in records)
 
     def test_cancelled_entry_records_run_end(self, tmp_path: Path) -> None:
         import json

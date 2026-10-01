@@ -902,6 +902,29 @@ class TestInlineSourceDiagnostics:
         assert exec_command.run(inline_args('program def main() -> unit =\n  print "hi"\n')) is None
         assert capsys.readouterr().out == "hi\n"
 
+    def test_trace_run_start_records_command_program_and_source(self, tmp_path: Path) -> None:
+        import json
+
+        entry = tmp_path / "prog.agl"
+        entry.write_text('program def main() -> unit =\n  print "hi"\n', encoding="utf-8")
+        trace = tmp_path / "trace.jsonl"
+        args = file_args(entry)
+        args.trace = True
+        args.no_trace = False
+        args.trace_file = str(trace)
+
+        assert exec_command.run(args) is None
+
+        records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        start = next(record for record in records if record["kind"] == "run_start")
+        assert list(start)[:5] == ["kind", "ts", "file", "line", "col"]
+        assert start["file"] == str(entry.resolve())
+        assert start["command"] == "exec"
+        assert start["function"] == "main"
+        printed = next(record for record in records if record["kind"] == "print")
+        assert list(printed)[:5] == ["kind", "ts", "file", "line", "col"]
+        assert printed["file"] == str(entry.resolve())
+
     def test_file_bare_expression_at_module_root_keeps_the_plain_message(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -2453,6 +2476,7 @@ class TestExecTimeoutAndLogFileFlags:
         from agm.agl.pipeline import PreparedProgram, RunResult
         from agm.agl.runtime.host_settings import HostSettingsPolicy
         from agm.agl.semantics.values import Value
+        from agm.agl.syntax.spans import SourceSpan
 
         captured: dict[str, object] = {}
 
@@ -2463,6 +2487,9 @@ class TestExecTimeoutAndLogFileFlags:
                 *,
                 check_only: bool = False,
                 trace_file: Path | None = None,
+                invoked_command: str | None = None,
+                program_function: str | None = None,
+                program_span: SourceSpan | None = None,
                 compiled: MatchCompiledProgram | None = None,
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
@@ -2478,6 +2505,9 @@ class TestExecTimeoutAndLogFileFlags:
                     prepared,
                     check_only=check_only,
                     trace_file=trace_file,
+                    invoked_command=invoked_command,
+                    program_function=program_function,
+                    program_span=program_span,
                     compiled=compiled,
                     executable=executable,
                     host_settings_policy=host_settings_policy,

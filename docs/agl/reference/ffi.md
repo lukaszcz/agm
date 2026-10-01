@@ -150,16 +150,16 @@ reference cycle, is replaced by a marker rather than failing the call.
 `runtime.tracing()` reports whether a record would be written, so a companion
 can skip building a payload that tracing, off by default, would discard.
 
-The record is `{ts, run_id, kind, origin, site, line, col, ...payload}`: `ts`
-and `run_id` identify the record's moment and run like every other trace
-record, `kind` is the hook's first argument, `origin` is the extern's own
-declaring module and never changes with the caller, `site` is the module
-owning the attributed `line`/`col` (a different module than `origin`
-whenever the call is attributed across a package boundary), and every
-payload field sits at the top level beside them. `site`, `line`, and `col`
-are absent when the call has no source location to attribute (a detached or
-host-issued call). A payload key of `ts`, `run_id`, `kind`, `origin`, `site`,
-`line`, or `col` collides with this envelope and raises `ValueError`.
+The record starts with `{kind, ts, file, line, col}`: `kind` is the hook's
+first argument, `ts` is its timestamp, and `file`/`line`/`col` identify the
+attributed source location. The location fields are `null` when the call has
+no source location to attribute. `origin` is the extern's own declaring
+module and never changes with the caller; `site` is the module owning the
+attributed location (a different module than `origin` whenever the call is
+attributed across a package boundary). `origin`, `site`, and every payload
+field sit at the top level after the location fields. A payload key of
+`kind`, `ts`, `file`, `line`, `col`, `origin`, or `site` collides with this
+envelope and raises `ValueError`.
 
 The attributed call site is the nearest one outside the extern's own mount
 (same leading module-path segment: a package name, `std`, or a loose module's

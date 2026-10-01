@@ -424,6 +424,7 @@ def run(
     *,
     entry_module_segments: tuple[str, ...] | None = None,
     reserved_flags: frozenset[str] = EXEC_RESERVED_FLAGS,
+    invoked_command: str = "exec",
 ) -> None:
     """Run an AgL program selected by an exec argument container.
 
@@ -786,6 +787,11 @@ def run(
         result = runtime.run_prepared(
             prepared,
             trace_file=trace_file,
+            invoked_command=invoked_command,
+            program_function=(
+                None if selected_program is None else selected_program.declaration_path
+            ),
+            program_span=None if selected_program is None else selected_program.span,
             compiled=discovery.compiled,
             executable=executable,
             host_settings_policy=policy,
@@ -921,4 +927,5 @@ def run_registered(
         ),
         entry_module_segments=target.module_id.segments,
         reserved_flags=(EXEC_RESERVED_FLAGS if command_path is None else REGISTERED_RESERVED_FLAGS),
+        invoked_command="exec" if command_path is None else command_path,
     )

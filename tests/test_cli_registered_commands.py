@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1041,7 +1042,12 @@ def test_registered_command_applies_exec_run_time_options(
 
     assert strict.stdout == "true\n"
     assert lenient.stdout == "false\n"
-    assert trace.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    start = next(record for record in records if record["kind"] == "run_start")
+    assert list(start)[:5] == ["kind", "ts", "file", "line", "col"]
+    assert str(start["file"]).endswith("main.agl")
+    assert start["command"] == "tools run"
+    assert start["function"] == "main"
     assert "--trace-file" in help_result.output
     assert "--no-timeout" in help_result.output
     assert "--module-path" not in help_result.output

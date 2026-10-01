@@ -226,10 +226,12 @@ class SourceFile:
 
     ``display_name``    — human-readable file name for error messages.
     ``normalized_text`` — the normalised UTF-8 source text (LF line endings).
+    ``file_name``      — source label used by trace records, or ``None`` when unknown.
     """
 
     display_name: str
     normalized_text: str
+    file_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

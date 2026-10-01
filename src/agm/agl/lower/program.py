@@ -344,6 +344,7 @@ def lower_program(
         link.sources[source_id] = SourceFile(
             display_name=display_name,
             normalized_text=normalized,
+            file_name=cm.resolved.program.span.source.label,
         )
         module_source_ids[mid] = source_id
 

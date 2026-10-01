@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import FuncDef, Program, TypeAlias
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
@@ -189,6 +190,9 @@ class RunOptions:
 
     check_only: bool = False
     trace_file: "Path | None" = None
+    invoked_command: str | None = None
+    program_function: str | None = None
+    program_span: "SourceSpan | None" = None
     host_settings_policy: "HostSettingsPolicy | None" = None
     builtin_host_settings: "Mapping[str, Value] | None" = None
     builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None
@@ -642,7 +646,7 @@ class PipelineDriver:
 
         # Create the trace store for this run.  When trace_file is None the
         # store is a no-op and no file is touched.
-        trace = TraceStore(path=options.trace_file)
+        trace = TraceStore(path=options.trace_file, sources=executable.sources)
         if options.trace_file is not None:
             from agm.core.fs import mkdir
 
@@ -650,7 +654,11 @@ class PipelineDriver:
                 mkdir(options.trace_file.parent, parents=True, exist_ok=True)
             except OSError as exc:
                 trace.disable(exc)
-        trace.run_start()
+        trace.run_start(
+            command=options.invoked_command,
+            function=options.program_function,
+            span=options.program_span,
+        )
 
         if options.host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
@@ -1200,6 +1208,9 @@ class PipelineDriver:
         *,
         check_only: bool = False,
         trace_file: "Path | None" = None,
+        invoked_command: str | None = None,
+        program_function: str | None = None,
+        program_span: "SourceSpan | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgram | None" = None,
         executable: "ExecutableProgram | None" = None,
@@ -1230,6 +1241,14 @@ class PipelineDriver:
             initializers have run, within the interpreter's managed execution
             boundary. ``None`` invokes no declared entry after initialization.
 
+        ``invoked_command``
+            CLI command spelling to include in ``run_start`` when supplied by
+            a host.
+
+        ``program_function`` and ``program_span``
+            Selected ``program def`` declaration name and source span for the
+            ``run_start`` record.
+
         ``arguments``
             *program_symbol*'s own bound value-parameter argument list, in
             declaration order (:meth:`preflight_arguments`) — this method
@@ -1255,6 +1274,9 @@ class PipelineDriver:
             RunOptions(
                 check_only=check_only,
                 trace_file=trace_file,
+                invoked_command=invoked_command,
+                program_function=program_function,
+                program_span=program_span,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
                 builtin_var_seeds=builtin_var_seeds,

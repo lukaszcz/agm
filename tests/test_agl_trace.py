@@ -896,17 +896,14 @@ class TestRunBoundaryRecords:
         end_idx = kinds.index("run_end")
         assert start_idx < end_idx
 
-    def test_all_records_share_run_id(self, tmp_path: Path) -> None:
-        """Every record in a trace file carries the same run_id."""
+    def test_records_do_not_include_run_id(self, tmp_path: Path) -> None:
+        """Run boundaries are represented by event order, not a generated id."""
         trace_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         _run_inline(rt, 'var x = 1\nx := 2\nprint "done"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         assert len(records) >= 3
-        run_ids = {r.get("run_id") for r in records}
-        assert len(run_ids) == 1
-        (run_id,) = run_ids
-        assert isinstance(run_id, str) and run_id
+        assert all("run_id" not in record for record in records)
 
     def test_every_record_has_an_ordered_offset_aware_timestamp(self, tmp_path: Path) -> None:
         from datetime import datetime
@@ -925,6 +922,7 @@ class TestRunBoundaryRecords:
         assert all(timestamp.utcoffset() is not None for timestamp in timestamps)
         assert timestamps == sorted(timestamps)
         assert all("trace_id" not in record for record in records)
+        assert all("run_id" not in record for record in records)
 
 
 # ---------------------------------------------------------------------------
@@ -1129,7 +1127,32 @@ class TestTraceStoreProperties:
         trace.print_stmt(rendered="hello", span=None)
 
         line = path.read_text(encoding="utf-8").strip()
-        assert list(json.loads(line)) == ["kind", "ts", "run_id", "rendered"]
+        assert list(json.loads(line)) == ["kind", "ts", "file", "line", "col", "rendered"]
+
+    def test_trace_jsonl_orders_source_location_after_timestamp(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.trace import TraceStore
+        from agm.agl.syntax.spans import SourceId, SourceSpan
+
+        path = tmp_path / "trace.jsonl"
+        trace = TraceStore(path)
+        trace.print_stmt(
+            rendered="hello",
+            span=SourceSpan(
+                start_line=3,
+                start_col=4,
+                end_line=3,
+                end_col=9,
+                start_offset=10,
+                end_offset=15,
+                source=SourceId("example.agl"),
+            ),
+        )
+
+        record = _load_jsonl(path)[0]
+        assert list(record) == ["kind", "ts", "file", "line", "col", "rendered"]
+        assert record["file"] == "example.agl"
+        assert record["line"] == 3
+        assert record["col"] == 4
 
     def test_activate_repoints_and_stops_writes(self, tmp_path: Path) -> None:
         """``activate`` routes later events to the new path; ``None`` stops writes."""
@@ -1199,18 +1222,17 @@ class TestTraceStoreProperties:
         ts = TraceStore(path=None)
         assert ts.path is None
 
-    def test_trace_store_run_id_in_records(self, tmp_path: Path) -> None:
+    def test_trace_store_omits_run_id(self, tmp_path: Path) -> None:
         from agm.agl.runtime.trace import TraceStore
 
         p = tmp_path / "t.jsonl"
         ts = TraceStore(path=p)
         ts.run_start()
         records = _load_jsonl(p)
-        run_id = records[0]["run_id"]
-        assert isinstance(run_id, str) and run_id
+        assert "run_id" not in records[0]
 
     def test_trace_store_records_without_span(self, tmp_path: Path) -> None:
-        """Methods called with span=None still emit valid JSONL (no line/col keys)."""
+        """Methods called with span=None still emit valid JSONL with null location fields."""
         import json as _json
 
         from agm.agl.runtime.trace import TraceStore
@@ -1247,10 +1269,11 @@ class TestTraceStoreProperties:
 
         lines = p.read_text(encoding="utf-8").splitlines()
         records = [_json.loads(ln) for ln in lines if ln.strip()]
-        # None of the records should carry "line" or "col" (span was None).
+        # The location slots remain stable even when no source span is known.
         for rec in records:
-            assert "line" not in rec
-            assert "col" not in rec
+            assert rec["file"] is None
+            assert rec["line"] is None
+            assert rec["col"] is None
 
     def test_clock_rollback_keeps_timestamps_non_decreasing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1316,7 +1339,9 @@ class TestTraceStoreProperties:
         rec = _json.loads(p.read_text(encoding="utf-8").strip())
         assert rec["origin"] == "lib/logger"
         assert "site" not in rec
-        assert "line" not in rec
+        assert rec["file"] is None
+        assert rec["line"] is None
+        assert rec["col"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1444,7 +1469,7 @@ class TestPrepareTraceLogTruncates:
 
         trace_path = tmp_path / "trace.jsonl"
         # Pre-create the file with stale content from a previous run.
-        trace_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
+        trace_path.write_text('{"kind": "run_start", "marker": "old"}\n', encoding="utf-8")
         assert trace_path.read_text(encoding="utf-8").strip(), (
             "pre-condition: file must be non-empty"
         )
@@ -1462,18 +1487,18 @@ class TestPrepareTraceLogTruncates:
 
         trace_path = tmp_path / "trace.jsonl"
         # Simulate a previous run by pre-populating the file.
-        trace_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
+        trace_path.write_text('{"kind": "run_start", "marker": "old"}\n', encoding="utf-8")
 
         prepare_trace_log(command_name="exec", enabled=True, trace_file=str(trace_path))
         # Append a single record as the new run would.
-        append_jsonl(trace_path, {"kind": "run_start", "run_id": "new"})
+        append_jsonl(trace_path, {"kind": "run_start", "marker": "new"})
 
         import json as _json
 
         lines = [ln for ln in trace_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(lines) == 1, f"Only the new record must be present; got {len(lines)} lines"
         rec = _json.loads(lines[0])
-        assert rec.get("run_id") == "new"
+        assert rec.get("marker") == "new"
 
 
 # ---------------------------------------------------------------------------
@@ -1717,12 +1742,16 @@ class TestCompanionTraceHook:
 
         assert flag_path.read_text() == "False"
 
-    def test_companion_trace_reserved_key_raises_a_value_error(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("key", ["kind", "file"])
+    def test_companion_trace_reserved_key_raises_a_value_error(
+        self, tmp_path: Path, key: str
+    ) -> None:
         """A payload key colliding with the envelope is a companion programmer error."""
         trace_path = tmp_path / "trace.jsonl"
         source = "extern def emit() -> unit\nemit()\n()\n"
         companion = (
-            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'kind': 'x'})\n"
+            "from agl import runtime\n\ndef emit():\n"
+            f"    runtime.trace('probe', {{{key!r}: 'x'}})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_code(

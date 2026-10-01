@@ -333,9 +333,9 @@ class ReplSession:
         self._current: dict[str, Value] = dict(self._engine_seed)
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
-        # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
-        # file. The COMMAND validates/creates the path up front; the session assumes it
-        # is writable but the no-op store tolerates failure (it disables itself).
+        # ``TraceStore`` appending JSONL records to this one file. The COMMAND
+        # validates/creates the path up front; the session assumes it is writable
+        # but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
         self._initial_trace_path = trace_path
 

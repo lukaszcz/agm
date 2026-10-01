@@ -652,8 +652,8 @@ class EntryPipeline:
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
         host_contracts, _ = materialize_ir_contracts(lowered.program, host_env.codecs)
-        trace = TraceStore(path=self._ctx._trace_path)
-        trace.run_start()
+        trace = TraceStore(path=self._ctx._trace_path, sources=lowered.program.sources)
+        trace.run_start(command="repl", span=orig_program.span)
         if self._ctx._host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 

@@ -484,6 +484,69 @@ _SCENARIOS = {
     ),
 }
 
+_HUE = "enum Color\n  | Red\n  | Blue\n"
+"""An enum named like ``base``'s ``Color``, sharing its member ``Red``."""
+_HUE_RED = "record hue::Color::Red"
+
+_SCENARIOS["an-own-alias-wins-the-paths-beneath-it-over-an-import"] = Scenario(
+    modules={**_MODULES, "hue": _HUE},
+    header=("import base::*", "import hue", "type Color = hue::Color"),
+    probes={
+        **type_positions("alias", "Color", "hue::Color"),
+        "member": accepted("Color::Red", _HUE_RED),
+        "member-only-the-target-declares": accepted("Color::Blue", "record hue::Color::Blue"),
+        "pattern": accepted(
+            "fn(p: hue::Color) => case p of\n  | Color::Red => 1\n  | _ => 2",
+            "hue::Color -> int",
+        ),
+        "is": accepted("fn(p: hue::Color) => p is Color::Red", "hue::Color -> bool"),
+        **type_positions("member-type", "Color::Red", "hue::Color::Red"),
+    },
+)
+
+_DECLARING_BENEATH = (
+    "import base\nimport base::*\nexport base::{Base}\ntype Geo = base::Base\n"
+    "def Base::h() -> int = 3\ndef Geo::k() -> int = 4\n"
+    "type T2 = text\ntype U = text\ndef text::lt() -> int = 1\ndef T2::lu() -> int = 2\n"
+)
+"""Declares beneath ``base``'s ``Base`` and beneath ``text``, directly and through aliases."""
+
+
+def _beneath_hidden_alias_probes(error: type[AglScopeError], routed: str) -> dict[str, Probe]:
+    """What ``hiding Geo, T2`` removes beneath their targets, rejected with *error*.
+
+    *routed* spells a removed path through a module route.
+    """
+    return {
+        "direct": rejected("Base::h()", error, "Base::h"),
+        "through-the-alias": rejected("Base::k()", error, "Base::k"),
+        "routed": rejected(f"{routed}()", error, routed),
+        "beneath-a-builtin": rejected("text::lt()", error, "text::lt"),
+        "beneath-a-builtin-through-the-alias": rejected("text::lu()", error, "text::lu"),
+        "target": rejected("fn(x: Base) => x", AglTypeError, "Base"),
+        "builtin-alias": rejected("fn(x: U) => x", AglTypeError, "U"),
+        "builtin-kept": accepted('text::size("ab")', "int"),
+    }
+
+
+_SCENARIOS |= {
+    "hiding-an-alias-removes-what-its-module-declares-beneath-the-target": Scenario(
+        modules={"base": _BASE, "ad": _DECLARING_BENEATH},
+        header=("import ad::* hiding Geo, T2",),
+        probes=_beneath_hidden_alias_probes(HiddenMemberError, "ad::Base::h"),
+    ),
+    "an-export-hiding-an-alias-removes-what-its-module-declares-beneath-the-target": Scenario(
+        modules={
+            "base": _BASE,
+            "ad": _DECLARING_BENEATH,
+            "ex": "import ad\nexport ad hiding Geo, T2\n",
+        },
+        header=(_ROUTES,),
+        probes=_beneath_hidden_alias_probes(UnknownMemberError, "ex::Base::k"),
+    ),
+}
+
+
 _REFERENCING = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item"
 """An enum referencing a record declared beneath the enum's own path."""
 

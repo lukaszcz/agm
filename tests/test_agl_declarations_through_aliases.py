@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.scope.symbols import AglScopeError, DuplicateDeclarationError, TypeArgumentsError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    DuplicateDeclarationError,
+    TypeArgumentsError,
+    UnknownMemberError,
+)
 from tests.agl.qualifier_support import (
     Probe,
     Scenario,
@@ -65,6 +70,11 @@ def _reached_probes(record: str) -> dict[str, Probe]:
             f"{spelling}-region": accepted(f"{spelling}::h()", "int"),
             f"{spelling}-nested": accepted(f"{spelling}::Inner::k()", "int"),
         }
+    probes |= {
+        "anchored-static": accepted("::Base::g()", "int"),
+        "anchored-region": accepted("::Base::h()", "int"),
+        "anchored-nested": accepted("::Base::Inner::k()", "int"),
+    }
     return probes
 
 
@@ -89,12 +99,13 @@ def _duplicate_probes(first: str, second: str) -> dict[str, Probe]:
     }
 
 
-def _beside_imported_probes(nested: str) -> dict[str, Probe]:
+def _beside_imported_probes(nested: str, routes: tuple[str, ...]) -> dict[str, Probe]:
     """What :func:`_beside_imported` declares, reached through both spellings.
 
-    *nested* renders the own nested record's type.
+    *nested* renders the own nested record's type. Through each of *routes*,
+    module routes or anchored, only the routed module's declarations are reached.
     """
-    return {
+    own = {
         f"{spelling}-{position}": probe
         for spelling in ("Base", "Geo")
         for position, probe in {
@@ -103,6 +114,18 @@ def _beside_imported_probes(nested: str) -> dict[str, Probe]:
             "region": accepted(f"{spelling}::h()", "text"),
             "nested-value": accepted(f"{spelling}::Inner(q = true)", f"record {nested}\n  q: bool"),
             **type_positions("nested", f"{spelling}::Inner", nested),
+        }.items()
+    }
+    return own | {
+        f"{anchor}{route}-{position}": probe
+        for route in routes
+        for anchor in ("", "/")
+        for position, probe in {
+            "static": accepted(f"{anchor}{route}::f()", "int"),
+            "region": accepted(f"{anchor}{route}::h()", "int"),
+            "nested-value": accepted(
+                f"{anchor}{route}::Inner(y = 1)", "record base::Base::Inner\n  y: int"
+            ),
         }.items()
     }
 
@@ -134,10 +157,13 @@ _SCENARIOS = (
         f"declared-through-{spelling}-beside-an-imported-declaration-{name}": Scenario(
             modules={**_MODULES, "base": _BASE + "def Base::h() -> int = 3\n"},
             header=(*header, _beside_imported(spelling)),
-            probes=_beside_imported_probes(f"{spelling}::Inner"),
+            probes=_beside_imported_probes(f"{spelling}::Inner", routes),
         )
         for spelling in ("Base", "Geo")
-        for name, header in (("an-own-alias", _OWN_ALIAS), ("an-imported-alias", _IMPORTED_ALIAS))
+        for name, header, routes in (
+            ("an-own-alias", _OWN_ALIAS, ("base::Base",)),
+            ("an-imported-alias", _IMPORTED_ALIAS, ("al::Base", "al::Geo")),
+        )
     }
     | {
         f"declared-beneath-an-alias-of-a-path-through-{name}": Scenario(
@@ -374,6 +400,72 @@ _SCENARIOS |= {
     )
     for name, owner in (("before-the-path-beneath-it", "A"), ("after-the-path-beneath-it", "X"))
 }
+
+
+def _through(spelling: str) -> str:
+    """A module aliasing ``base``'s ``Base`` as ``Geo``, declaring beneath *spelling*."""
+    record = f"record {spelling}::R\n  z: int\n"
+    return f"import base::*\ntype Geo = Base\n{_declarations(spelling)}\n{record}"
+
+
+def _declared_elsewhere_probes(spelling: str) -> dict[str, Probe]:
+    """What ``thr`` declares beneath ``base``'s ``Base``, reached through *spelling*."""
+    return {
+        f"{spelling}-call": accepted(f"{spelling}::m(Base(x = 1))", "int"),
+        f"{spelling}-static": accepted(f"{spelling}::g()", "int"),
+        f"{spelling}-region": accepted(f"{spelling}::h()", "int"),
+        f"{spelling}-nested": accepted(f"{spelling}::Inner::k()", "int"),
+        f"{spelling}-record": accepted(f"{spelling}::R(z = 1).z", "int"),
+        f"{spelling}-record-type": accepted(
+            f"(fn(p: {spelling}::R) => p.z)(Base::R(z = 1))", "int"
+        ),
+    }
+
+
+_SCENARIOS |= {
+    f"declared-elsewhere-through-{spelling}": Scenario(
+        modules={**_MODULES, "thr": _through(spelling)},
+        header=("import thr::*\nimport thr", "import base::*"),
+        probes={
+            "dot": accepted("Base(x = 1).m()", "int"),
+            **{
+                key: probe
+                for reached in ("Base", "Geo", "thr::Base", "thr::Geo", "/thr::Geo")
+                for key, probe in _declared_elsewhere_probes(reached).items()
+            },
+        },
+    )
+    for spelling in ("Base", "Geo")
+}
+
+_SCENARIOS["a-route-spelling-a-tail-path-reaches-own-declarations"] = Scenario(
+    modules={
+        "other": "record Base\n  x: int\ndef Base::h() -> int = 1\ndef f() -> int = 2\n",
+        "via": "scope other\n  import other\n  export other\nend other\n",
+    },
+    header=("import via::*", "import other", 'type G = other::Base\ndef G::h() -> text = "own"'),
+    probes={
+        "value": accepted("other::f()", "int"),
+        "own-wins": accepted("other::Base::h()", "text"),
+    },
+)
+
+_BUILTIN_THROUGH = "type T2 = text\ndef T2::via() -> int = 1\ndef text::direct() -> int = 2\n"
+"""Declares beneath ``text`` through an alias of it and directly."""
+
+_SCENARIOS["declared-elsewhere-beneath-an-alias-of-a-builtin-type"] = Scenario(
+    modules={"bt": _BUILTIN_THROUGH},
+    header=("import bt::*\nimport bt", 'def text::own() -> text = "own"'),
+    probes={
+        **{
+            f"{spelling}-{name}": accepted(f"{spelling}::{name}()", "int")
+            for spelling in ("text", "T2", "bt::text", "bt::T2")
+            for name in ("via", "direct")
+        },
+        "own-through-the-imported-alias": accepted("T2::own()", "text"),
+        "own-is-not-routed": rejected("bt::T2::own()", UnknownMemberError, "bt::T2::own"),
+    },
+)
 
 
 class TestDeclarationsThroughAliases:

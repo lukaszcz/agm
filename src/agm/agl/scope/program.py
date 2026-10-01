@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.artifact_cache import (
     retain_resolved_modules,
@@ -493,8 +493,22 @@ their paths relative to it; none when the path lies beneath no exported
 alias or the alias's module is not resolved yet.
 """
 
-Declaration = Callable[[QName], QName]
-"""The declaration a full path names (:meth:`TypeOwnerIndex.declaration`)."""
+
+class Placements(Protocol):
+    """What declaration a full path names, and where (:class:`TypeOwnerIndex`)."""
+
+    def declaration(self, qname: QName) -> QName:
+        """The declaration full path *qname* names."""
+        ...
+
+    def placement(self, qname: QName) -> QName:
+        """The full path the declaration at *qname* is declared at."""
+        ...
+
+    def scopes_of(self, qname: QName) -> frozenset[QName]:
+        """The scopes type *qname* stands for beside its path: an alias of a built-in type's."""
+        ...
+
 
 Withheld = dict[ModuleId, dict[NameAtom, frozenset[QName]]]
 """Per module, the declarations each re-exported atom's export ``hiding`` removes beneath it.
@@ -508,9 +522,17 @@ def _reaches_nothing(_module: ModuleId, _path: PathAtom) -> Mapping[PathAtom, QN
     return {}
 
 
-def _names_itself(qname: QName) -> QName:
-    """A :data:`Declaration` before any alias is resolvable."""
-    return qname
+class _Unresolved:
+    """:class:`Placements` before any alias is resolvable: each path names itself."""
+
+    def declaration(self, qname: QName) -> QName:
+        return qname
+
+    def placement(self, qname: QName) -> QName:
+        return qname
+
+    def scopes_of(self, qname: QName) -> frozenset[QName]:
+        return frozenset()
 
 
 def _is_beneath_any(qname: QName, removed: Collection[QName]) -> bool:
@@ -532,7 +554,7 @@ def _resolve_reexports(
     graph: ModuleGraph,
     component: tuple[ModuleId, ...],
     through: Through,
-    declaration: Declaration,
+    placements: Placements,
     *,
     validate: bool,
 ) -> None:
@@ -545,9 +567,10 @@ def _resolve_reexports(
     their origin :data:`QName` preserved; an item written through an alias the
     target exports names the declarations *through* reaches beneath its
     target. When *validate*, an item naming nothing is then an error. What
-    each re-exported atom's export ``hiding`` removes, by *declaration*, is
-    recorded in *withheld*: an atom several export declarations forward
-    withholds only what each does, and a module's own (*local_atoms*) nothing.
+    each re-exported atom's export ``hiding`` removes, by *placements*, is
+    recorded in *withheld*:
+    an atom several export declarations forward withholds only what each
+    does, and a module's own (*local_atoms*) nothing.
 
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
@@ -571,7 +594,7 @@ def _resolve_reexports(
             scope_export_maps[target_mid],
             withheld[target_mid],
             lambda path: through(target_mid, path),
-            declaration,
+            placements,
             allow_missing=allow_missing,
         )
 
@@ -663,7 +686,7 @@ def _compute_reexport_additions(
     target_scopes: Mapping[NameAtom, ScopeOrigins],
     target_withheld: Mapping[NameAtom, frozenset[QName]],
     through: Callable[[PathAtom], Mapping[PathAtom, QName]],
-    declaration: Declaration,
+    placements: Placements,
     *,
     allow_missing: bool = False,
 ) -> _Additions:
@@ -672,15 +695,23 @@ def _compute_reexport_additions(
     An item matching nothing the target exports names what *through* reaches
     beneath an alias the target exports, less what the target withholds
     beneath it, and forwards it. A ``hiding`` item removes the declarations
-    it names (by *declaration*) and every one beneath them, whatever atom
-    spells them, and each forwarded atom withholds them beneath it too. With
-    *allow_missing*, a selected item matching nothing forwards nothing, and a
-    ``hiding`` item matching nothing withholds the whole export.
+    it names, every one beneath them and beneath the scopes an alias of a
+    built-in type among them stands for, whatever atom spells them or
+    wherever it is placed (by *placements*), and each
+    forwarded atom withholds them beneath it too. With *allow_missing*, a
+    selected item matching nothing forwards nothing, and a ``hiding`` item
+    matching nothing withholds the whole export.
     """
     result: dict[NameAtom, QName] = {}
     withheld_result: dict[NameAtom, frozenset[QName]] = {}
     scope_result: dict[NameAtom, ScopeOrigins] = {}
     region_prefix = tuple(segment.name for segment in decl.scope_path)
+
+    def beneath_any(origin: QName, removed: Collection[QName]) -> bool:
+        """Whether *origin*'s declaration, or where it is placed, is or lies beneath *removed*."""
+        return _is_beneath_any(placements.declaration(origin), removed) or _is_beneath_any(
+            placements.placement(origin), removed
+        )
 
     def withheld_through(prefix: PathAtom) -> frozenset[QName]:
         """What the target withholds beneath the exported alias a prefix of *prefix* spells."""
@@ -706,7 +737,7 @@ def _compute_reexport_additions(
             reached = {
                 relative: origin
                 for relative, origin in through(prefix).items()
-                if not _is_beneath_any(declaration(origin), withheld)
+                if not beneath_any(origin, withheld)
             }
         if not declarations and not scopes and not reached and not allow_missing:
             raise UnknownMemberError(
@@ -723,9 +754,10 @@ def _compute_reexport_additions(
         # final one, which a later pass reaches.
         return _Additions(result, withheld_result, scope_result)
     removed = frozenset(
-        declaration(origin)
+        path
         for declarations, _scopes, reached in hidden_items
         for origin in (*(target_exports[source] for source in declarations), *reached.values())
+        for path in (placements.declaration(origin), *placements.scopes_of(origin))
     )
     hidden_scopes = {source for _declarations, scopes, _named in hidden_items for source in scopes}
 
@@ -784,12 +816,10 @@ def _compute_reexport_additions(
 
     if not decl.items:
         for source, origin in target_exports.items():
-            if not _is_beneath_any(declaration(origin), removed):
+            if not beneath_any(origin, removed):
                 add(source, origin, target_withheld.get(source, frozenset()))
         for source, origins in target_scopes.items():
-            kept = frozenset(
-                origin for origin in origins if not _is_beneath_any(declaration(origin), removed)
-            )
+            kept = frozenset(origin for origin in origins if not beneath_any(origin, removed))
             if kept and source not in hidden_scopes:
                 rooted = rooted_atom(_path(source))
                 scope_result[rooted] = scope_result.get(rooted, frozenset()) | kept
@@ -1026,6 +1056,9 @@ def resolve_program(
     settling: set[ModuleId] = set()
 
     declared_in_program = _declarations_beneath(decl_info)
+    # Each module's declarations written beneath another path, with the full
+    # path each is declared at; recorded as its exports are (``reexport``).
+    declared_at: dict[ModuleId, Mapping[NameAtom, QName]] = {}
 
     def declared_beneath(qname: QName) -> Collection[ScopePath]:
         resolver = resolvers.get(qname[0])
@@ -1034,22 +1067,26 @@ def resolve_program(
         return resolver.retained_paths_beneath(_path(qname[1])).union(declared_in_program(qname))
 
     def reached_paths(
-        qname: QName, spelling: NameT | AppliedT, paths: Collection[ScopePath]
+        qname: QName,
+        spelling: NameT | AppliedT,
+        paths: Collection[ScopePath],
+        *,
+        every_use: bool,
     ) -> frozenset[ScopePath]:
         module_id, atom = qname
         path = _path(atom)
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.paths_reached_at(path[:-1], spelling, paths)
+            return resolver.paths_reached_at(path[:-1], spelling, paths, every_use=every_use)
         hidden = resolved_modules[module_id].resolved.type_owners[path].hidden
         return frozenset(paths).difference(hidden)
 
-    def builtin_scopes(qname: QName, name: str) -> frozenset[QName]:
+    def builtin_scopes(qname: QName, name: str, *, every_use: bool) -> frozenset[QName]:
         module_id, atom = qname
         path = _path(atom)
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.scopes_named_at(path[:-1], name)
+            return resolver.scopes_named_at(path[:-1], name, every_use=every_use)
         return resolved_modules[module_id].resolved.type_owners[path].scopes
 
     def alias_target(
@@ -1063,11 +1100,15 @@ def resolve_program(
         )
 
     def current_selection(
-        module_id: ModuleId, scope_path: ScopePath, spelling: NameT | AppliedT | VariantRef
+        module_id: ModuleId,
+        scope_path: ScopePath,
+        spelling: NameT | AppliedT | VariantRef,
+        *,
+        every_use: bool,
     ) -> TypeSelection | None:
         resolver = resolvers.get(module_id)
         if resolver is not None:
-            return resolver.type_name_selection_at(scope_path, spelling)
+            return resolver.type_name_selection_at(scope_path, spelling, every_use=every_use)
         return resolved_modules[module_id].resolved.owner_declarations.get(
             selection_node_id(spelling)
         )
@@ -1082,6 +1123,7 @@ def resolve_program(
         reached_paths=reached_paths,
         builtin_scopes=builtin_scopes,
         current_selection=current_selection,
+        declared_paths=lambda module_id: declared_at.get(module_id, {}),
     )
 
     # What earlier REPL entries retain stays current unless the entry
@@ -1169,10 +1211,26 @@ def resolve_program(
             ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
         )
 
+    def declared_paths(mid: ModuleId) -> Mapping[NameAtom, QName]:
+        resolver = resolvers.get(mid)
+        if resolver is None:
+            return resolved_modules[mid].resolved.declared_paths
+        return resolver.declared_paths()
+
     def reexport(members: tuple[ModuleId, ...], *, validate: bool) -> None:
-        """Resolve *members*' re-exports afresh through their prepared aliases."""
+        """Resolve *members*' re-exports afresh through their prepared aliases.
+
+        A module exports each own declaration at the path it is declared at
+        (``def Geo::m`` with ``type Geo = Base`` as ``Base::m``).
+        """
         for mid in members:
-            export_maps[mid] = dict(local_exports[mid])
+            declared = declared_paths(mid)
+            declared_at[mid] = declared
+            export_maps[mid] = {
+                (declared[atom][1] if atom in declared else atom): qname
+                for atom, qname in local_exports[mid].items()
+            }
+            local_atoms[mid] = frozenset(export_maps[mid])
             scope_export_maps[mid] = dict(local_scope_exports[mid])
             withheld[mid] = {}
         _resolve_reexports(
@@ -1185,7 +1243,7 @@ def resolve_program(
             graph,
             members,
             through,
-            type_owners.declaration,
+            type_owners,
             validate=validate,
         )
 
@@ -1221,7 +1279,7 @@ def resolve_program(
                 graph,
                 members,
                 _reaches_nothing,
-                _names_itself,
+                _Unresolved(),
                 validate=False,
             )
             settling.update(members)

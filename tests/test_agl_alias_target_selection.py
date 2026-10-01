@@ -23,6 +23,7 @@ from tests.agl.qualifier_support import (
     accepted,
     assert_repl_verdicts,
     assert_verdicts,
+    info,
     nonconstant_in_file,
     probe_table,
     verdict_parts,
@@ -174,6 +175,58 @@ class TestAliasKeepsItsTargetPastALaterDeclaration:
                 "alias-constructor": accepted("A(x = 1)", "record shapes::Geo::Point\n  x: int"),
                 "annotation": accepted("fn(p: Geo::Point) => p", "Geo::Point -> Geo::Point"),
                 "constructor": accepted('Geo::Point(y = "a")', "record Geo::Point\n  y: text"),
+            },
+        )
+
+
+_COLOR = "enum Color\n  | Red\n  | Green"
+_SCOPED_COLOR = {
+    "lib": "scope S\n  enum Color\n    | Red\n    | Green\nend S\n\ntype C = S::Color\n"
+}
+
+
+class TestUseSpelledThroughARetainedAlias:
+    """A retained ``use`` spelled through an alias exposes what the alias's target does.
+
+    A retained alias's target is read with only the uses written before the
+    alias, so a use spelled through the alias never reads itself.
+    """
+
+    @pytest.mark.parametrize(
+        ("modules", "entries", "red"),
+        [
+            pytest.param({}, (_COLOR, "type C = Color", "use C::*"), "Color", id="use-last"),
+            pytest.param(
+                _SCOPED_COLOR,
+                ("import lib::*", "use C::*", "type C = lib::S::Color"),
+                "lib::S::Color",
+                id="alias-declared-after-the-use",
+            ),
+        ],
+    )
+    def test_entries(
+        self, tmp_path: Path, modules: dict[str, str], entries: tuple[str, ...], red: str
+    ) -> None:
+        assert_repl_verdicts(
+            tmp_path,
+            modules,
+            entries,
+            {
+                "member": accepted("Red", f"record {red}::Red"),
+                "unrelated": accepted("1 + 1", "int"),
+                "alias": info("C", f"C is a type alias.\nType:\n  type C = {red}"),
+            },
+        )
+
+    def test_use_before_the_alias_in_one_entry(self, tmp_path: Path) -> None:
+        assert_verdicts(
+            tmp_path,
+            {},
+            (f"use C::*\n{_COLOR}\ntype C = Color",),
+            {
+                "member": accepted("Red", "record Color::Red"),
+                "unrelated": accepted("1 + 1", "int"),
+                "alias": info("C", "C is a type alias.\nType:\n  type C = Color"),
             },
         )
 

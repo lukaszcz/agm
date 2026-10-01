@@ -167,10 +167,16 @@ class UseReader:
             self._horizon, self._reads = horizon, reads
 
     @contextmanager
-    def full_view(self) -> Iterator[None]:
-        """Read with every use visible, as the type-owner index, which keeps its answers, asks."""
+    def view(self, every_use: bool) -> Iterator[None]:
+        """Read with every use visible, or, unless *every_use*, those the read in progress sees.
+
+        The type-owner index, which keeps its answers, reads a declaration's
+        with every use; a retained alias's current reach, which it does not
+        keep, as the read asking for it.
+        """
         horizon = self._horizon
-        self._horizon = None
+        if every_use:
+            self._horizon = None
         try:
             yield
         finally:

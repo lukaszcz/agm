@@ -99,6 +99,7 @@ from agm.agl.scope.symbols import (
     BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     AmbiguousConstructorError,
+    BareAtom,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -776,11 +777,27 @@ class _Resolver(ModuleSources):
             owner_declarations=dict(self._owner_declarations),
             use_targets=self._use_targets(),
             declared_segments=self.reader().declared,
+            declared_paths=self.declared_paths(),
         )
 
     # ------------------------------------------------------------------
     # Pre-passes
     # ------------------------------------------------------------------
+
+    def declared_paths(self) -> dict[BareAtom, QName]:
+        """Map each own declaration declared otherwise than spelled to its full path there.
+
+        See :meth:`~agm.agl.scope.sources.ModuleSources.declared_path`. Own
+        types resolve first, as in :meth:`resolve`: an alias resolved while
+        those paths are recorded would read them half recorded.
+        """
+        self._declared_type_owners()
+        found: dict[BareAtom, QName] = {}
+        for _module_id, path, name in self._declarations:
+            declared = self.declared_path((*path, name))
+            if declared is not None:
+                found[_bare_atom((*path, name))] = declared
+        return found
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -2154,7 +2171,7 @@ class _Resolver(ModuleSources):
         if validate:
             self._validate_alias(path, alias)
             return self._owner_declarations.get(selection_node_id(spelling))
-        with self._uses.full_view(), self._named_scope(path):
+        with self._uses.view(every_use=True), self._named_scope(path):
             found = self._type_name_target(spelling)
         return found.selection if isinstance(found, QualifiedTarget) else None
 
@@ -2165,7 +2182,7 @@ class _Resolver(ModuleSources):
         """
         if alias.node_id not in self._validated_aliases:
             self._validated_aliases.add(alias.node_id)
-            with self._uses.full_view(), self._named_scope(path):
+            with self._uses.view(every_use=True), self._named_scope(path):
                 self._validate_type_decl(alias)
 
     def _validate_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
@@ -2951,15 +2968,21 @@ class _Resolver(ModuleSources):
         )
 
     def paths_reached_at(
-        self, scope_path: ScopePath, spelling: NameT | AppliedT, paths: Collection[ScopePath]
+        self,
+        scope_path: ScopePath,
+        spelling: NameT | AppliedT,
+        paths: Collection[ScopePath],
+        *,
+        every_use: bool,
     ) -> frozenset[ScopePath]:
         """Return the paths among *paths* ``<spelling>::path``, at *scope_path*, reaches.
 
         A path is left out when its whole-path type lookup (:mod:`lookup`)
         finds it hidden: a ``hiding`` removed the path and nothing else
-        reaches it. Another declaration at that path hides nothing.
+        reaches it. Another declaration at that path hides nothing. Every use
+        is read when *every_use*; otherwise those the read in progress sees.
         """
-        with self._uses.full_view(), self._named_scope(scope_path):
+        with self._uses.view(every_use), self._named_scope(scope_path):
             return frozenset(
                 path
                 for path in paths
@@ -2969,22 +2992,32 @@ class _Resolver(ModuleSources):
                 )
             )
 
-    def scopes_named_at(self, scope_path: ScopePath, name: str) -> frozenset[QName]:
-        """Return the scope paths *name*, a qualifier at *scope_path*, names."""
+    def scopes_named_at(
+        self, scope_path: ScopePath, name: str, *, every_use: bool
+    ) -> frozenset[QName]:
+        """Return the scope paths *name*, a qualifier at *scope_path*, names.
+
+        Every use is read when *every_use*; otherwise those the read in progress sees.
+        """
         chain = QualifierChain(None, (), name, self._program.span, self._program.node_id)
-        with self._uses.full_view():
+        with self._uses.view(every_use):
             return lookup_origins(self, chain, scope_path)
 
     def type_name_selection_at(
-        self, scope_path: ScopePath, spelling: NameT | AppliedT | VariantRef
+        self,
+        scope_path: ScopePath,
+        spelling: NameT | AppliedT | VariantRef,
+        *,
+        every_use: bool,
     ) -> TypeSelection | None:
         """Return what type name or member reference *spelling*, at *scope_path*, selects now.
 
         Scope's own type-position decision (:meth:`_type_name_target`), read
         without recording it; ``None`` when the spelling selects no
-        declaration there, the decision's own rejections included.
+        declaration there, the decision's own rejections included. Every use
+        is read when *every_use*; otherwise those the read in progress sees.
         """
-        with self._uses.full_view(), self._named_scope(scope_path):
+        with self._uses.view(every_use), self._named_scope(scope_path):
             found = self._type_name_target(spelling)
         return found.selection if isinstance(found, QualifiedTarget) else None
 

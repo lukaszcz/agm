@@ -3677,6 +3677,22 @@ class TestExportDecl:
             "value",
         )
 
+    def test_reexport_cycle_keeps_a_hiding_of_a_module_outside_it(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import a\n()",
+                "a": "export c hiding secret\nexport b",
+                "b": "export a",
+                "c": "def value() -> int = 1\ndef secret() -> int = 2",
+            },
+        )
+
+        exports = resolve_program(graph).modules[ModuleId.from_path("b")].exports
+
+        assert "value" in exports
+        assert "secret" not in exports
+
     def test_cyclic_scoped_reexports_are_rejected_without_hanging(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

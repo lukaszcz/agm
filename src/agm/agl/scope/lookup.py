@@ -144,22 +144,35 @@ class DeclarationNames(Protocol):
         """
         ...
 
+    def placement(self, key: DeclarationKey) -> DeclarationKey:
+        """The full path *key*'s declaration is declared at.
+
+        One its module writes beneath another module's type, directly or
+        through an alias, is declared at that type's path there.
+        """
+        ...
+
+    def scopes_of(self, key: DeclarationKey) -> frozenset[DeclarationKey]:
+        """The scopes type *key* stands for beside its path: an alias of a built-in type's."""
+        ...
+
 
 def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> bool:
     """Whether every way of *hiding* removes the declaration *key* names, or one above it.
 
     *names* names it: an alias denoting the type a removed alias denotes is
-    removed too.
+    removed too, and so is a declaration placed beneath a removed type (or
+    a scope a removed alias of a built-in type stands for), however spelled.
     """
     if hiding == NOT_HIDDEN:
         return False
     named = names.identity(key)
-    module, path, name = named
-    full = (*path, name)
+    placed = names.placement(key)
     denoted = names.denotes(key)
     return all(
         any(
-            (hidden[0] == module and full[: len(hidden[1]) + 1] == (*hidden[1], hidden[2]))
+            _beneath(named, hidden)
+            or any(_beneath(placed, above) for above in (hidden, *names.scopes_of(hidden)))
             or (denoted != named and names.denotes(hidden) == denoted)
             for hidden in way
         )
@@ -167,18 +180,26 @@ def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> boo
     )
 
 
+def _beneath(key: DeclarationKey, above: DeclarationKey) -> bool:
+    """Whether declaration *key* is *above*, or lies beneath it."""
+    module, path, name = key
+    return above[0] == module and (*path, name)[: len(above[1]) + 1] == (*above[1], above[2])
+
+
 @dataclass(frozen=True, slots=True)
 class Candidate:
     """A declaration one source reaches, with the layer and origin that made it visible.
 
     ``hiding`` is what the ways that reached it hide; a path its owner table
-    selects beneath it is reached the same ways.
+    selects beneath it is reached the same ways. ``routed`` when only a
+    module route reached it: its member table is read as that module's alone.
     """
 
     target: QualifiedTarget
     layer: ContributionLayer
     origin: QualificationOrigin
     hiding: Hiding = NOT_HIDDEN
+    routed: bool = False
 
 
 def is_removed(candidate: Candidate, names: DeclarationNames) -> bool:
@@ -209,6 +230,15 @@ class PathSources(DeclarationNames, Protocol):
         """The module's own declarations of *kind* at full *path*."""
         ...
 
+    def own_root_at(self, path: ScopePath, kind: LookupKind) -> Reading:
+        """The module's own declarations of *kind* at *path* from its root (``::p``).
+
+        Those :meth:`own_at` reads, and those it declares at *path* beneath
+        another module's type (``def Geo::m`` with ``type Geo = Base``, at
+        ``::Base::m``).
+        """
+        ...
+
     def contributed_at(self, step: ScopePath, path: ScopePath, kind: LookupKind) -> Reading:
         """What contributions anchored at or above *step* reach at full *path*."""
         ...
@@ -224,12 +254,15 @@ class PathSources(DeclarationNames, Protocol):
         rest: ScopePath,
         chain: QualifierChain,
         kind: LookupKind,
+        *,
+        routed: bool,
     ) -> Reading:
         """What type *owner*, made visible by *layer*, selects for *rest* in a position of *kind*.
 
         *rest* is the tail of *chain*'s names after the owner's. The owner's
         own member table decides, and an alias's target path stands beneath
-        an alias.
+        an alias. An owner only a module route reached (*routed*) is read as
+        that module's alone.
         """
         ...
 
@@ -483,7 +516,9 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
             chain.leading_route,
         )
     if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
-        own = _Step((), sources.own_at, lambda path: sources.own_at(path, LookupKind.TYPE))
+        own = _Step(
+            (), sources.own_root_at, lambda path: sources.own_root_at(path, LookupKind.TYPE)
+        )
         return _Anchor((own,), _nowhere, sources.own_origins)
     steps = lookup_steps(scope_path)
     return _Anchor(
@@ -630,7 +665,10 @@ class _Walk:
         reading = sum(
             (
                 _reached_as(
-                    self._sources.projected(key, owner.layer, full[end:], chain, kind), owner
+                    self._sources.projected(
+                        key, owner.layer, full[end:], chain, kind, routed=owner.routed
+                    ),
+                    owner,
                 )
                 for end in range(len(step.path) + step.start + 1, len(full))
                 for owner in step.owners(full[:end]).candidates

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import replace
+from typing import Protocol
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
     QName,
 )
 from agm.agl.scope.symbols import (
+    BareAtom,
     ConstructorRef,
     DeclarationKey,
     DeclarationSelection,
@@ -73,23 +75,60 @@ AliasTargets = Callable[[QName, TypeAlias, NameT | AppliedT], TypeSelection | No
 ``None`` when scope selects none: a built-in type name.
 """
 
-CurrentTypeSelection = Callable[
-    [ModuleId, ScopePath, NameT | AppliedT | VariantRef], TypeSelection | None
-]
-"""What a type name or member reference spelled in one module scope selects now, if anything."""
 
-ReachedPaths = Callable[[QName, NameT | AppliedT, Collection[ScopePath]], frozenset[ScopePath]]
-"""The paths among *paths* beneath alias *qname*'s target *spelling* reaches where declared.
+class CurrentTypeSelection(Protocol):
+    """What a type name or member reference spelled in one module scope selects now, if anything.
 
-A path is reached unless a ``hiding`` visible at the alias's site removed
-``<spelling>::path``'s whole path.
-"""
+    Every use is read when *every_use*; otherwise those the read in progress sees.
+    """
+
+    def __call__(
+        self,
+        module_id: ModuleId,
+        scope_path: ScopePath,
+        spelling: NameT | AppliedT | VariantRef,
+        *,
+        every_use: bool,
+    ) -> TypeSelection | None: ...
+
+
+class ReachedPaths(Protocol):
+    """The paths among *paths* beneath alias *qname*'s target *spelling* reaches where declared.
+
+    A path is reached unless a ``hiding`` visible at the alias's site removed
+    ``<spelling>::path``'s whole path. Every use is read when *every_use*;
+    otherwise those the read in progress sees.
+    """
+
+    def __call__(
+        self,
+        qname: QName,
+        spelling: NameT | AppliedT,
+        paths: Collection[ScopePath],
+        *,
+        every_use: bool,
+    ) -> frozenset[ScopePath]: ...
+
 
 DeclaredBeneath = Callable[[QName], Collection[ScopePath]]
 """The paths, relative to type or scope *qname*, of the declarations its module makes beneath it."""
 
-BuiltinScopes = Callable[[QName, str], frozenset[QName]]
-"""The scope paths built-in type *name* names as a qualifier where alias *qname* is declared."""
+DeclaredPaths = Callable[[ModuleId], Mapping[BareAtom, QName]]
+"""Map each declaration module *module_id* writes beneath another path to the full path there.
+
+``def Geo::m`` with ``type Geo = Base`` (``Base`` another module's) is declared at ``Base``'s
+``Base::m``.
+"""
+
+
+class BuiltinScopes(Protocol):
+    """The scope paths built-in type *name* names as a qualifier where alias *qname* is declared.
+
+    Every use is read when *every_use*; otherwise those the read in progress sees.
+    """
+
+    def __call__(self, qname: QName, name: str, *, every_use: bool) -> frozenset[QName]: ...
+
 
 Denoted = tuple[object, ...] | TypeExpr
 """A normalized denoted type (:meth:`TypeOwnerIndex.denotation`): a scalar type expression,
@@ -115,9 +154,11 @@ class TypeOwnerIndex:
     *reached_paths* which of them an alias of it reaches; *builtin_scopes*
     the scopes an alias of a built-in type reads paths beneath;
     *current_selection* what a retained alias's spelling or an enum's member
-    reference selects now. *retained* supplies the owners
-    of *retained_module*'s paths that earlier REPL entries declared, already
-    resolved against the declarations they saw.
+    reference selects now; *declared_paths* the declarations a module
+    writes beneath another path, and the full paths they are declared at.
+    *retained* supplies the owners of *retained_module*'s paths that earlier
+    REPL entries declared, already resolved against the declarations they
+    saw.
     """
 
     def __init__(
@@ -130,6 +171,7 @@ class TypeOwnerIndex:
         reached_paths: ReachedPaths,
         builtin_scopes: BuiltinScopes,
         current_selection: CurrentTypeSelection,
+        declared_paths: DeclaredPaths,
         retained_module: ModuleId | None = None,
         retained: Mapping[ScopePath, TypeOwner] | None = None,
     ) -> None:
@@ -140,12 +182,13 @@ class TypeOwnerIndex:
         self._reached_paths = reached_paths
         self._builtin_scopes = builtin_scopes
         self._current_selection = current_selection
+        self._declared_paths = declared_paths
         self._retained_module = retained_module
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
         self._alias_targets: dict[QName, AliasSelection] = {}
         self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
-        # Aliases being resolved (:meth:`settled`).
+        # Aliases and enums being resolved (:meth:`settled`).
         self._resolving: set[QName] = set()
 
     def with_retained(
@@ -160,6 +203,7 @@ class TypeOwnerIndex:
             reached_paths=self._reached_paths,
             builtin_scopes=self._builtin_scopes,
             current_selection=self._current_selection,
+            declared_paths=self._declared_paths,
             retained_module=module_id,
             retained=retained,
         )
@@ -207,7 +251,9 @@ class TypeOwnerIndex:
         """
         key = (qname[0], member.node_id)
         if key not in self._referenced_members:
-            selection = self._current_selection(qname[0], _path(qname[1])[:-1], member)
+            selection = self._current_selection(
+                qname[0], _path(qname[1])[:-1], member, every_use=True
+            )
             target = None if selection is None else self.declared_path(selection)
             self._referenced_members[key] = (
                 () if target is None else self._constructors_through(target)
@@ -250,13 +296,15 @@ class TypeOwnerIndex:
         re-projected through that spelling; once the target is gone (a later
         entry retired or redeclared its path) or the spelling selects anything
         else (shadowed, ambiguous, or the route is gone), *retained* freezes
-        at its declaration-time members/hidden.
+        at its declaration-time members/hidden. The alias's site is read with
+        the uses the read asking for it sees: a use's own, only those written
+        before it.
         """
         alias, target = retained.alias, retained.target
         if alias is None:
             return retained
         if target is None:
-            return self._builtin_owner(qname, alias, retained)
+            return self._builtin_owner(qname, alias, retained, every_use=False)
         current = self.owner(target.qname)
         if current is None or current.decl_node_id != target.decl_node_id:
             return retained
@@ -264,11 +312,18 @@ class TypeOwnerIndex:
         module_id, atom = qname
         if (
             not is_nominal_type_expr(spelling, alias.type_params)
-            or (selection := self._current_selection(module_id, _path(atom)[:-1], spelling)) is None
+            or (
+                selection := self._current_selection(
+                    module_id, _path(atom)[:-1], spelling, every_use=False
+                )
+            )
+            is None
             or self.declared_path(selection) != target.qname
         ):
             return retained
-        reachable, hidden = self._projection(qname, spelling, target.qname, current)
+        reachable, hidden = self._projection(
+            qname, spelling, target.qname, current, every_use=False
+        )
         return replace(retained, members=reachable, hidden=hidden, scopes=current.scopes)
 
     def _projection(
@@ -277,18 +332,21 @@ class TypeOwnerIndex:
         spelling: NameT | AppliedT,
         target_qname: QName,
         target_owner: TypeOwner,
+        *,
+        every_use: bool,
     ) -> tuple[Mapping[str, ConstructorRef], frozenset[ScopePath]]:
         """Return alias *qname*'s reachable ``members``/``hidden``, projected from its target.
 
         *target_owner* is what the target, at *target_qname*, selects. Keeps
         the paths beneath the target that *spelling* -- the alias's own
         nominal target spelling -- reaches where the alias is declared
-        (*reached_paths*); a path the target itself cannot reach stays hidden.
+        (*reached_paths*, read with every use when *every_use*); a path the target itself cannot
+        reach stays hidden.
         """
         final = self.final_target(target_qname)
         beneath = () if final is None else self._declared_beneath(final)
         candidates = [path for path in beneath if path not in target_owner.hidden]
-        reached = self._reached_paths(qname, spelling, candidates)
+        reached = self._reached_paths(qname, spelling, candidates, every_use=every_use)
         hidden = target_owner.hidden | frozenset(candidates).difference(reached)
         reachable = {
             name: member for name, member in target_owner.members.items() if (name,) not in hidden
@@ -352,6 +410,39 @@ class TypeOwnerIndex:
                     break
             else:
                 return (module_id, _atom((*base, *path))), hidden
+
+    def declared_at(self, module_id: ModuleId, qname: QName) -> QName | None:
+        """Return the declaration *module_id* writes otherwise than *qname*, declared at *qname*.
+
+        ``def Geo::m`` with ``type Geo = Base`` is declared at ``Base::m``.
+        """
+        return next(
+            (
+                (module_id, spelled)
+                for spelled, declared in self._declared_paths(module_id).items()
+                if declared == qname
+            ),
+            None,
+        )
+
+    def placement(self, qname: QName) -> QName:
+        """Return the full path the declaration at *qname* is declared at (:meth:`declaration`).
+
+        One its module writes beneath another module's type, directly or
+        through an alias, is declared at that type's path there.
+        """
+        return self._declared_paths(qname[0]).get(qname[1]) or self.declaration(qname)
+
+    def scopes_of(self, qname: QName) -> frozenset[QName]:
+        """Return the scopes type *qname* stands for beside its path (:attr:`TypeOwner.scopes`)."""
+        owner = self.owner(qname)
+        return frozenset() if owner is None else owner.scopes
+
+    def alias_sites(self, qname: QName) -> frozenset[ModuleId]:
+        """Return the modules declaring the aliases along *qname*'s chain (:meth:`_alias_chain`)."""
+        return frozenset(
+            current[0] for current, owner in self._alias_chain(qname) if owner.alias is not None
+        )
 
     def path_target(self, qname: QName) -> QName:
         """Return the full path *qname* stands for: beneath an alias, its target's path there."""
@@ -464,14 +555,16 @@ class TypeOwnerIndex:
 
     @property
     def resolving(self) -> bool:
-        """Whether an alias is being resolved; reads made meanwhile presume it (:meth:`settled`)."""
+        """Whether a type is being resolved; reads made meanwhile presume it (:meth:`settled`)."""
         return bool(self._resolving)
 
     def settled(self, qname: QName) -> bool:
         """Whether reading *qname* now gives what it finally selects.
 
-        An alias being resolved is presumed, naming no target yet. While one
-        is, resolving another may read it: only one already resolved is read.
+        An alias being resolved is presumed, naming no target yet; an enum
+        whose member references are being selected, with its inline members
+        alone. While one is, resolving another may read it: only one already
+        resolved is read.
         """
         return qname not in self._resolving and (
             not self._resolving or qname in self._owners or qname not in self._all_public_types
@@ -500,11 +593,13 @@ class TypeOwnerIndex:
             # Selecting a member reference may read this enum's own path
             # (``E::Item``): it sees the inline members alone.
             self._owners[qname] = TypeOwner(None, declaration.node_id, members=members, arity=arity)
+            self._resolving.add(qname)
             referenced = [
                 (member, self.referenced_member_refs(qname, member))
                 for member in declaration.members
                 if isinstance(member, VariantRef)
             ]
+            self._resolving.discard(qname)
             return TypeOwner(
                 None,
                 declaration.node_id,
@@ -552,12 +647,12 @@ class TypeOwnerIndex:
         selection = self._alias_selection(qname, declaration)
         if selection is None:
             structural = TypeOwner(None, declaration.node_id, alias=declaration, arity=arity)
-            return self._builtin_owner(qname, declaration, structural)
+            return self._builtin_owner(qname, declaration, structural, every_use=True)
         target_qname, type_expr = selection
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
             return presumed
-        reachable, hidden = self._projection(qname, type_expr, target_qname, target)
+        reachable, hidden = self._projection(qname, type_expr, target_qname, target, every_use=True)
         return TypeOwner(
             constructor,
             declaration.node_id,
@@ -573,21 +668,26 @@ class TypeOwnerIndex:
             scopes=target.scopes,
         )
 
-    def _builtin_owner(self, qname: QName, alias: TypeAlias, owner: TypeOwner) -> TypeOwner:
+    def _builtin_owner(
+        self, qname: QName, alias: TypeAlias, owner: TypeOwner, *, every_use: bool
+    ) -> TypeOwner:
         """Return *owner* of alias *alias* at *qname*, with its scopes when it names a built-in.
 
         Those the built-in type's name names as a qualifier where the alias
-        is declared, and that module's own path spelled so, however its
-        declarations beneath are spelled; a path beneath them a ``hiding``
-        there removed is hidden. *owner* stands for any other target.
+        is declared, read with every use when *every_use*, and that module's own path spelled
+        so, however its declarations beneath are spelled; a path beneath them
+        a ``hiding`` there removed is hidden. *owner* stands for any other
+        target.
         """
         builtin = alias.type_expr
         spelling = named_builtin_type(builtin)
         if spelling is None:
             return owner
-        scopes = self._builtin_scopes(qname, spelling.name) | {(qname[0], _atom((spelling.name,)))}
+        scopes = self._builtin_scopes(qname, spelling.name, every_use=every_use) | {
+            (qname[0], _atom((spelling.name,)))
+        }
         beneath = {path for scope in scopes for path in self._declared_beneath(scope)}
-        reached = self._reached_paths(qname, spelling, beneath)
+        reached = self._reached_paths(qname, spelling, beneath, every_use=every_use)
         return replace(
             owner, builtin=builtin, scopes=scopes, hidden=frozenset(beneath).difference(reached)
         )

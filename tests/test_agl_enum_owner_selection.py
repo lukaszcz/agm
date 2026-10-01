@@ -99,6 +99,17 @@ _LOCAL = (
 )
 
 
+# An enum referencing a record beneath an own scope, read through an alias of it.
+_NESTED_REFERENCE = (
+    "scope Inner\n"
+    "  record Saved\n"
+    "    id: int\n"
+    "end Inner\n\n"
+    "enum Status = ::Inner::Saved | Fresh(n: int)\n"
+    "type Current = Status\n"
+)
+
+
 _ALIASED = (
     "record Shared\n  id: int\ntype Alias = Shared\nenum E = ::Alias | Own\n"
     "let aliased: E = Shared(id = 1)\n"
@@ -260,6 +271,14 @@ def _check(tmp_path: Path, entry: str, *, stdlib: bool = False) -> None:
         pytest.param(_LOCAL + "status is Status::Saved", "Saved", id="is-owner"),
         pytest.param(_ALIASED + "aliased is E::Shared", "Shared", id="is-alias-target"),
         pytest.param(_LOCAL + "status is Current::Saved", "Saved", id="is-alias"),
+        pytest.param(
+            _NESTED_REFERENCE + "def f(x: Current::Saved) -> int = 1",
+            "Saved",
+            id="type-alias-nested-reference",
+        ),
+        pytest.param(
+            _NESTED_REFERENCE + "Current::Saved(id = 1)", "Saved", id="value-alias-nested-reference"
+        ),
         pytest.param(_LOCAL + "stored is Stored[int]::Saved", "Saved", id="is-applied"),
         pytest.param(_LOCAL + "verdict is Verdict::Pass", "Pass", id="is-other-enum-inline"),
         pytest.param(

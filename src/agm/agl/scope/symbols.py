@@ -259,11 +259,6 @@ BUILTIN_TYPE_STATICS: dict[ScopePath, dict[str, BuiltinStaticKind]] = {
 }
 
 
-#: The scope paths of every nominal that owns built-in statics, for callers
-#: that have resolved a relative path but not yet its owning module.
-BUILTIN_TYPE_STATIC_OWNER_PATHS: frozenset[ScopePath] = frozenset(BUILTIN_TYPE_STATICS)
-
-
 def builtin_type_static_kind(
     owner_module_id: ModuleId, owner_path: ScopePath, name: str
 ) -> BuiltinStaticKind | None:
@@ -1063,11 +1058,10 @@ class ModuleResolution:
         (:class:`OwnerMemberSelection`); any other selection records the
         declaration (:class:`DeclarationSelection`). Typecheck and the REPL
         read every named type and owner from here, never re-resolving a name.
-    ``use_targets``
-        Maps each ``use`` declaration of the module's layers -- a REPL entry's
-        own and the retained ones it reads -- to the scopes and types its
-        target reaches where it is written. A REPL entry replaces a retained
-        use at the same scope path whose target reaches the same.
+    ``replaced_uses``
+        Maps each retained ``use`` a REPL entry replaces to the entry's uses
+        replacing it: those at the same scope path whose target reaches the
+        same scopes and types, unless spelled through the retained use's name.
     ``declared_segments``
         The segments of every path the module declares -- a REPL session's
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
@@ -1105,7 +1099,7 @@ class ModuleResolution:
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
-    use_targets: dict[int, frozenset[QName]] = field(default_factory=dict)
+    replaced_uses: dict[int, frozenset[int]] = field(default_factory=dict)
     declared_segments: frozenset[str] = frozenset()
     declared_paths: dict[BareAtom, QName] = field(default_factory=dict)
 

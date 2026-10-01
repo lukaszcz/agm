@@ -19,7 +19,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from typing import Protocol, TypeAlias
+from typing import NamedTuple, Protocol, TypeAlias
 
 from agm.agl.diagnostics import AglError, HiddenMemberError
 from agm.agl.modules.ids import Reader
@@ -42,7 +42,7 @@ from agm.agl.scope.symbols import (
     UnknownQualifierError,
     add_layers,
 )
-from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
+from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import render_qualified_name, render_qualifier_path
 
@@ -223,6 +223,13 @@ class Reading:
         return Reading(self.candidates + other.candidates, self.refusals + other.refusals)
 
 
+class Application(NamedTuple):
+    """The type an applied segment stands for, and the type arguments the segment takes."""
+
+    target: DeclarationKey
+    arity: int
+
+
 class PathSources(DeclarationNames, Protocol):
     """The declarations and contributions a lookup reads, by full path."""
 
@@ -289,6 +296,32 @@ class PathSources(DeclarationNames, Protocol):
 
     def applies(self, key: DeclarationKey) -> bool:
         """Whether type *key* is an alias applying its target to type arguments of its own."""
+        ...
+
+    def beneath_applied(
+        self,
+        applied: DeclarationKey,
+        layer: ContributionLayer,
+        rest: ScopePath,
+        chain: QualifierChain,
+        kind: LookupKind,
+        *,
+        routed: bool,
+    ) -> Reading:
+        """What type *applied*, an applied segment of *chain* stands for, selects for *rest*.
+
+        Read as beneath an alias of *applied* (:meth:`projected`).
+        """
+        ...
+
+    def application(
+        self, key: DeclarationKey, segment: QualifierSegment, site: ScopePath
+    ) -> Application | None:
+        """What *segment*, selecting type *key* and written in *site*, stands for applied.
+
+        An alias standing for one of its type parameters (``type Id[T] = T``)
+        stands for the type its argument there names. ``None`` for any other.
+        """
         ...
 
     def hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
@@ -377,7 +410,7 @@ def lookup_bare(
         _step(sources, step, injects=kind is LookupKind.VALUE, contributions=contributions)
         for step in lookup_steps(scope_path)
     )
-    walk = _Walk(sources, steps, (), None, (name,), span, constructors=constructors)
+    walk = _Walk(sources, scope_path, steps, (), None, (name,), span, constructors=constructors)
     return walk.find(kind)
 
 
@@ -404,7 +437,7 @@ def lookup_declared(
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
     parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
     step = replace(parent, path=path[: len(path) - len(names)])
-    walk = _Walk(sources, (step,), (), written, names, span)
+    walk = _Walk(sources, step.path, (step,), (), written, names, span)
     found = walk.find(kind)
     if found is not None or written is None:
         return found
@@ -439,7 +472,7 @@ def lookup_reached(
     """
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, chain.span)
+    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
     return walk.reached(kind, len(names) if owners_within is None else owners_within)
 
 
@@ -471,7 +504,7 @@ def lookup_qualified(
     """
     names = (*(segment.name for segment in chain.segments), member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, anchor.steps, anchor.route, chain, names, span)
+    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span)
     found = walk.find(kind)
     if found is not None:
         return found
@@ -479,7 +512,9 @@ def lookup_qualified(
     if refusal is not None:
         return refusal
     for other in _OTHER_KINDS[kind]:
-        misfit = _Walk(sources, anchor.steps, anchor.route, chain, names, span).find(other)
+        misfit = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span).find(
+            other
+        )
         if isinstance(misfit, QualifiedTarget):
             return Misfit(misfit)
         if misfit is not None:
@@ -491,7 +526,8 @@ def lookup_qualified(
 
     def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
         written = names[: len(prefix.segments) + 1]
-        return _Walk(sources, anchor.steps, anchor.route, prefix, written, span).find(kind)
+        walk = _Walk(sources, scope_path, anchor.steps, anchor.route, prefix, written, span)
+        return walk.find(kind)
 
     return _unknown(chain, names, anchor.visible, selects)
 
@@ -569,13 +605,15 @@ def _step(
 class _Walk:
     """One spelling's walk over its anchor's steps for one kind.
 
-    *route* is the module route the spelling leads with, if any;
-    *constructors*, when given, reports an ambiguity among constructors alone.
+    *site* is the scope the spelling is written in; *route* is the module
+    route it leads with, if any; *constructors*, when given, reports an
+    ambiguity among constructors alone.
     """
 
     def __init__(
         self,
         sources: PathSources,
+        site: ScopePath,
         steps: tuple[_Step, ...],
         route: tuple[str, ...],
         chain: QualifierChain | None,
@@ -585,6 +623,7 @@ class _Walk:
         constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
     ) -> None:
         self._sources = sources
+        self._site = site
         self._constructors = constructors
         self._steps = steps
         self._route = route
@@ -616,7 +655,7 @@ class _Walk:
         """
         for step in self._steps:
             reading = self._reading(step, kind, injects=False, owners_within=owners_within)
-            candidates = self._kept(reading).candidates
+            candidates = self._unremoved(reading).candidates
             if candidates:
                 own = tuple(
                     candidate
@@ -628,7 +667,7 @@ class _Walk:
 
     def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Decide the full path at *step*: own first, then one distinct contribution."""
-        reading = self._kept(
+        reading = self._unremoved(
             self._reading(step, kind, injects=True, owners_within=len(self._names))
         )
         self._refusals.extend(reading.refusals)
@@ -667,6 +706,10 @@ class _Walk:
                 _reached_as(
                     self._sources.projected(
                         key, owner.layer, full[end:], chain, kind, routed=owner.routed
+                    )
+                    if (applied := self._applied(chain, key, end - len(step.path) - 1)) is None
+                    else self._sources.beneath_applied(
+                        applied.target, owner.layer, full[end:], chain, kind, routed=owner.routed
                     ),
                     owner,
                 )
@@ -686,7 +729,19 @@ class _Walk:
             reading += self._sources.surface_injected(chain, self._names[-1])
         return reading
 
-    def _kept(self, reading: Reading) -> Reading:
+    def _applied(
+        self, chain: QualifierChain, key: DeclarationKey, index: int
+    ) -> Application | None:
+        """What *chain*'s segment *index*, selecting type *key*, stands for applied.
+
+        See :meth:`PathSources.application`.
+        """
+        segment = chain.segments[index]
+        if segment.type_args is None:
+            return None
+        return self._sources.application(key, segment, self._site)
+
+    def _unremoved(self, reading: Reading) -> Reading:
         """*reading* without the candidates every way that reached them removes.
 
         A qualified spelling reaching only removed ones is hidden.
@@ -721,7 +776,7 @@ class _Walk:
             segment = segments[index]
             last = index == len(segments) - 1
             prefix = (*step.path, *self._names[: index + 1])
-            owners = self._kept(step.owners(prefix)).candidates
+            owners = self._unremoved(step.owners(prefix)).candidates
             selected = _decided(owners, self._sources.denotes)
             applied = segment.type_args is not None or (
                 isinstance(selected, Candidate)
@@ -735,17 +790,25 @@ class _Walk:
                 target
                 if last
                 else _decided(
-                    self._kept(step.read((*prefix, member), LookupKind.TYPE)).candidates,
+                    self._unremoved(step.read((*prefix, member), LookupKind.TYPE)).candidates,
                     self._sources.denotes,
                 )
             )
             owner, arity = next(
                 (
-                    (key, arity)
+                    (key, arity if application is None else application.arity)
                     for candidate in owners
                     if (key := candidate.target.key) is not None
-                    and _is_beneath(following, key)
-                    and (arity := self._sources.inline_arity(key, member, segment.name)) is not None
+                    and _is_beneath(
+                        following,
+                        reached := (
+                            key
+                            if (application := self._applied(chain, key, index)) is None
+                            else application.target
+                        ),
+                    )
+                    and (arity := self._sources.inline_arity(reached, member, segment.name))
+                    is not None
                 ),
                 (None, None),
             )

@@ -8802,6 +8802,21 @@ class TestTypeDeclarations:
         err = reject_type("type A = B\ntype B = A\n1")
         assert "cycle" in str(err).lower()
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "type A = array[A]\n1",
+            "type A = int -> A\n1",
+            "type A = array[B]\ntype B = A\n1",
+            "type L[T] = array[L[T]]\nlet z: L[int] = []\nz",
+        ],
+        ids=["self", "function", "through-an-alias", "applied"],
+    )
+    def test_alias_expanding_to_itself_through_a_structural_type_is_rejected(
+        self, source: str
+    ) -> None:
+        assert isinstance(reject_type(source), AglTypeError)
+
     def test_record_not_json_shaped(self) -> None:
         err = reject_type("record R\n  x: int\nlet r: json = R(x = 1)\nr")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()

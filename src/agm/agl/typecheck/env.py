@@ -2304,17 +2304,21 @@ class TypeEnvironment:
             qualifier_anchored=qualifier_anchored,
         )
 
-    def _spelled_by_another_source(self, head: str, *, route: bool) -> bool:
-        """Whether an own path, or an import of the other kind, also spells *head*.
+    def _route_spelled_elsewhere(self, head: str) -> bool:
+        """Whether an own path or a bare imported name also spells module route *head*.
 
-        The other kind of a module route (*route*) is a bare imported name, and
-        of a bare imported name a module route. Such an owner spelling could
-        select another declaration, so a witness spells the owner through a
-        longer route instead: over-qualifying is harmless.
+        Such an owner spelling could select another declaration, so a witness
+        spells the owner through a longer route instead: over-qualifying is
+        harmless.
         """
-        env = self._import_env
-        other_kind = head in env.unqualified if route else (head,) in env.suffix_routes
-        return head in self._declared_segments or other_kind
+        return head in self._declared_segments or head in self._import_env.unqualified
+
+    def _name_spelled_elsewhere(self, head: str) -> bool:
+        """Whether an own path or a module route also spells bare imported name *head*.
+
+        As for :meth:`_route_spelled_elsewhere`.
+        """
+        return head in self._declared_segments or (head,) in self._import_env.suffix_routes
 
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
         """Enumerate finite checked owner forms writable in this environment.
@@ -2330,9 +2334,7 @@ class TypeEnvironment:
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
         for exposed_name, qnames in self._import_env.unqualified.items():
-            if not isinstance(exposed_name, str) or self._spelled_by_another_source(
-                exposed_name, route=False
-            ):
+            if not isinstance(exposed_name, str) or self._name_spelled_elsewhere(exposed_name):
                 continue
             type_qnames = tuple(qname for qname in qnames if self._is_program_type_candidate(qname))
             if len(type_qnames) == 1:
@@ -2353,7 +2355,7 @@ class TypeEnvironment:
                     qname[0], source_name, scope_path=source_scope_path
                 )
                 for qualifier, anchored in contribution_routes(contribution):
-                    if not anchored and self._spelled_by_another_source(qualifier[0], route=True):
+                    if not anchored and self._route_spelled_elsewhere(qualifier[0]):
                         continue
                     reached = qualifier_member_decls(
                         self._import_env, qualifier, exposed_name, anchored=anchored

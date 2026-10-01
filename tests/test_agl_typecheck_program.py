@@ -1600,9 +1600,7 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Pa
                     "let value = Alias::some(value = 1)\n"
                     "value"
                 ),
-                "lib": (
-                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some"
-                ),
+                "lib": ("enum Option\n  | some(value: int)\ntype Alias = Option"),
             },
         )
 
@@ -1622,9 +1620,7 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child_in_is_positi
                     "let result = value is Alias::some\n"
                     "result"
                 ),
-                "lib": (
-                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some"
-                ),
+                "lib": ("enum Option\n  | some(value: int)\ntype Alias = Option"),
             },
         )
 
@@ -1925,6 +1921,18 @@ def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) 
         )
 
 
+def test_cross_module_alias_expanding_to_itself_structurally_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = [])",
+                "zzz": "import yyy\ntype Alias = array[yyy::Alias]",
+                "yyy": "import zzz\ntype Alias = zzz::Alias",
+            },
+        )
+
+
 @pytest.mark.parametrize(
     "entry",
     ("import names::*\nlet x: text = Name", "import names\nlet x: text = names::Name"),
@@ -2167,17 +2175,26 @@ def test_imported_parameterized_alias_applies_to_its_template(tmp_path: Path) ->
     assert _binding_value_type(checked, ENTRY_ID, "v") == ArrayType(IntType())
 
 
-def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
-    """Lazy cross-module alias resolution rejects transparent alias cycles."""
-    with pytest.raises(AglTypeError, match="cycle"):
-        check_agl_program(
-            tmp_path,
-            {
-                "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = 1)",
-                "zzz": "import yyy\ntype Alias = yyy::Alias",
-                "yyy": "import zzz\ntype Alias = zzz::Alias",
-            },
-        )
+@pytest.mark.parametrize(
+    "entry",
+    ["import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = 1)", "import zzz\n1"],
+    ids=["read", "unread"],
+)
+def test_cross_module_alias_cycle_is_rejected_where_declared(tmp_path: Path, entry: str) -> None:
+    """The cycle is reported at an alias of it, in the module declaring that alias."""
+    declarations = {"zzz": "type Alias = yyy::Alias", "yyy": "type Alias = zzz::Alias"}
+    modules = {
+        "zzz": f"import yyy\n{declarations['zzz']}",
+        "yyy": f"import zzz\n\n{declarations['yyy']}",
+    }
+    with pytest.raises(AglScopeError) as raised:
+        check_agl_program(tmp_path, {"entry": entry, **modules})
+    span = raised.value.span
+    assert span is not None
+    assert any(
+        text[span.start_offset : span.end_offset] == declarations[name]
+        for name, text in modules.items()
+    )
 
 
 def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:

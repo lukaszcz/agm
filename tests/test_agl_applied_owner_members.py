@@ -51,11 +51,17 @@ _PLAIN_PROBES = {
     "pattern": "let i = E::Inner(x = 1)\ncase i of\n  | E::Inner(x) => x",
     "annotation": "fn(p: E::Inner) => p.x",
 }
-_PLAIN_IDENTITIES = {
-    "call": "record E::Inner\n  x: int",
-    "pattern": "int",
-    "annotation": "E::Inner -> int",
-}
+_DECLARED_OWNERS = {"enum": "E", "record": "E", "record-alias": "Box", "enum-alias": "F"}
+"""The type each owner's ``E::Inner`` is declared beneath."""
+
+
+def _plain_identities(owner: str) -> dict[str, str]:
+    declared = _DECLARED_OWNERS[owner]
+    return {
+        "call": f"record {declared}::Inner\n  x: int",
+        "pattern": "int",
+        "annotation": f"{declared}::Inner -> int",
+    }
 
 
 class TestNestedDeclarationBeneathAnAppliedOwner:
@@ -81,7 +87,9 @@ class TestNestedDeclarationBeneathAnAppliedOwner:
             {},
             (_OWNERS[owner],),
             probe_table(
-                _PLAIN_PROBES, dict.fromkeys(_PLAIN_PROBES, _ACCEPTED), identities=_PLAIN_IDENTITIES
+                _PLAIN_PROBES,
+                dict.fromkeys(_PLAIN_PROBES, _ACCEPTED),
+                identities=_plain_identities(owner),
             ),
         )
 

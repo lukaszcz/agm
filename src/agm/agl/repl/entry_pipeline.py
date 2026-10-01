@@ -345,6 +345,7 @@ class EntryPipeline:
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
+            entry_repl_session_placements=self._ctx._session_placements,
             cached_modules=self._ctx._retained_resolved_modules,
         )
 
@@ -689,7 +690,7 @@ class EntryPipeline:
             # entry that reached the interpreter.
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -710,7 +711,7 @@ class EntryPipeline:
             trace.run_end(ok=False)
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -795,7 +796,7 @@ class EntryPipeline:
         ) -> tuple[str, ...]:
             return self._ctx._promote_ir_state(
                 text=text,
-                program=orig_program,
+                program=checked.resolved.program,
                 checked=checked,
                 next_start_id=new_next_id,
                 partial=partial,
@@ -845,7 +846,7 @@ class EntryPipeline:
                 ),
             )
             retain_library_state(completed_module_ids)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -928,7 +929,7 @@ class EntryPipeline:
             if marker is not None and initializer_values is not None
             else None
         )
-        kind, name = self._ctx._classify(orig_program)
+        kind, name = self._ctx._classify(checked.resolved.program)
         value, value_type = self._ctx._echo_data_ir(orig_program, checked, captured)
         return EntryResult(
             kind=kind,

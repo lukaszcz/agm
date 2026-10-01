@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
+    from agm.agl.scope.imports import QName
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import (
         BindingRef,
@@ -389,6 +390,11 @@ class ReplSession:
         # Each retained type-owned path maps to the owner it resolved to when
         # declared, so a retained alias keeps its target across entries.
         self._session_type_paths: dict[tuple[str, ...], TypeOwner] = {}
+        # Each declaration an entry keyed beneath another module's path, by its
+        # full path, mapped to where it is placed there: decided when declared,
+        # whatever its spelling reaches later. One no longer retained places
+        # nothing: only a retained declaration is read at its path.
+        self._session_placements: dict[tuple[str, ...], QName] = {}
         # Builtin type and def identities of the current declarations, keyed by
         # scoped name to the declaring module and its enclosing scope path. A
         # REPL entry's own source cannot see an earlier entry's builtin
@@ -1051,7 +1057,7 @@ class ReplSession:
         expression entry is the checked node type of the expression; for a binding
         it is the declared binding type.
         """
-        kind, name = self._classify(program)
+        kind, name = self._classify(checked.resolved.program)
         return EntryResult(
             kind=kind,
             name=name,
@@ -1086,7 +1092,7 @@ class ReplSession:
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
         from agm.agl.parser import resolve_infix_fixity
-        from agm.agl.scope.symbols import ScopeNode
+        from agm.agl.scope.symbols import ScopeNode, to_bare_atom
         from agm.agl.scope.type_owners import beneath
         from agm.agl.syntax.nodes import (
             EnumDef,
@@ -1214,6 +1220,10 @@ class ReplSession:
             if declared_name is None:
                 continue
             self._session_builtin_declarations.pop(declared_name, None)
+            self._session_placements.pop(declared_name, None)
+            placement = checked.resolved.declared_paths.get(to_bare_atom(declared_name))
+            if placement is not None:
+                self._session_placements[declared_name] = placement
             if is_builtin_bare_declaration(item):
                 self._session_builtin_declarations[declared_name] = (
                     entry_module_id,
@@ -1303,16 +1313,13 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.register_member(name, ref)
-            # A use this entry writes replaces a retained one of its region
-            # naming the same target.
-            promoted_uses = [
-                use for use in node.uses if use.node_id in promoted_use_declaration_ids
-            ]
-            use_targets = checked.resolved.use_targets
-            replaced = {use_targets[use.node_id] for use in promoted_uses}
+            # A promoted use this entry writes replaces the retained ones scope decided.
+            replaced = checked.resolved.replaced_uses
             session_node.uses = [
-                use for use in session_node.uses if use_targets.get(use.node_id) not in replaced
-            ] + promoted_uses
+                use
+                for use in session_node.uses
+                if not replaced.get(use.node_id, frozenset()) & promoted_use_declaration_ids
+            ] + [use for use in node.uses if use.node_id in promoted_use_declaration_ids]
         self._session_type_paths.update(
             (type_path, checked.resolved.type_owners[type_path])
             for type_path in promoted_type_paths
@@ -1906,6 +1913,7 @@ class ReplSession:
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
+        self._session_placements = {}
         self._session_builtin_declarations = {}
         self._type_env = TypeEnvironment()
         self._type_env.seal()

@@ -37,6 +37,7 @@ __all__ = [
     "WildcardTarget",
     "alias_prefix",
     "build_import_env",
+    "validate_import_items",
     "contribution_routes",
     "matching_atoms",
     "qualifier_candidates",
@@ -332,32 +333,51 @@ def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tupl
 
 def _selected_public_atoms(
     items: tuple[ImportItem, ...],
-    module: ModuleId,
     exports: Mapping[NameAtom, QName],
     scope_exports: Mapping[NameAtom, ScopeOrigins],
-    span: SourceSpan,
-    aliases: Collection[QName],
 ) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
     """Expand selected declaration atoms and independent scope identities.
 
-    An item beneath one of the exported *aliases* selects nothing here: it
-    names a path beneath the alias's target, which scope reads.
+    An item naming nothing selects nothing (:func:`validate_import_items`).
     """
     matched_exports: dict[NameAtom, None] = {}
     matched_scopes: dict[NameAtom, None] = {}
     for item in items:
         prefix = _item_path(item)
-        declarations = matching_atoms(exports, prefix)
-        scopes = matching_atoms(scope_exports, prefix)
-        if not declarations and not scopes and alias_prefix(prefix, exports, aliases) is None:
-            raise UnknownMemberError(
-                spell_declaration(module, prefix), span=span, repair=MissRepair.NOT_EXPORTED
-            )
-        for atom in declarations:
+        for atom in matching_atoms(exports, prefix):
             matched_exports[atom] = None
-        for atom in scopes:
+        for atom in matching_atoms(scope_exports, prefix):
             matched_scopes[atom] = None
     return tuple(matched_exports), tuple(matched_scopes)
+
+
+def validate_import_items(
+    decls: tuple[ImportDecl, ...],
+    targets: Mapping[int, ImportTarget],
+    exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
+    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
+    aliases: Collection[QName],
+) -> None:
+    """Reject the first ``hiding`` or tail item of *decls* naming nothing its module exports.
+
+    An item beneath one of the exported *aliases* names a path beneath the
+    alias's target, which scope reads.
+    """
+    for decl in decls:
+        for module in _targets(targets[decl.node_id]):
+            module_exports = exports[module]
+            for item in (*decl.hidden, *(decl.tail or ())):
+                prefix = _item_path(item)
+                if (
+                    not matching_atoms(module_exports, prefix)
+                    and not matching_atoms(scope_exports[module], prefix)
+                    and alias_prefix(prefix, module_exports, aliases) is None
+                ):
+                    raise UnknownMemberError(
+                        spell_declaration(module, prefix),
+                        span=decl.span,
+                        repair=MissRepair.NOT_EXPORTED,
+                    )
 
 
 def alias_prefix(
@@ -489,7 +509,7 @@ def build_import_env(
             module_exports = exports[module]
             module_scopes = scope_exports[module]
             hidden_exports, hidden_scopes = _selected_public_atoms(
-                decl.hidden, module, module_exports, module_scopes, decl.span, aliases
+                decl.hidden, module_exports, module_scopes
             )
             named = _item_declarations(decl.hidden, module, module_exports, aliases, decl.span)
             if named:
@@ -502,7 +522,7 @@ def build_import_env(
                 selected_scopes = tuple(module_scopes)
             else:
                 selected_exports, selected_scopes = _selected_public_atoms(
-                    decl.tail, module, module_exports, module_scopes, decl.span, aliases
+                    decl.tail, module_exports, module_scopes
                 )
                 beneath = _tail_beneath_exposures(
                     decl.tail, module, module_exports, aliases, decl.span

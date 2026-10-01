@@ -308,15 +308,10 @@ def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
     )
 
 
-def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> None:
-    """A same-named scoped variant shadows a root nominal for a bare pattern.
-
-    Nearest-layer precedence is deliberate and deterministic: inside
-    ``scope A``, a bare ``Point`` pattern selects ``A``'s own ``E::Point``
-    variant candidate, never falling outward to the root ``Point`` record,
-    so matching it against a root-typed scrutinee is a genuine mismatch.
-    """
-    reject(
+def test_bare_pattern_in_a_region_reaches_a_root_record_beside_its_scoped_variant() -> None:
+    """A bare pattern's candidates are every step's: the root-typed scrutinee selects the root
+    ``Point`` record over ``A``'s own ``E::Point`` variant."""
+    checked = accept(
         "record Point\n"
         "  x: int\n"
         "\n"
@@ -330,6 +325,15 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
         "\n"
         "A::from-root(Point(x = 1))\n"
     )
+    region = checked.resolved.program.body.items[1]
+    from_root = next(item for item in region.items if isinstance(item, FuncDef))
+    case = from_root.body.items[0]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
+    assert selected is not None
+    assert (selected.owner_path, selected.owner_name) == ((), "Point")
 
 
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:

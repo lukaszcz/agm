@@ -55,6 +55,19 @@ def _use_target(decl: UseDecl) -> ScopePath:
     return tuple(segment.name for segment in decl.target)
 
 
+def spelled_through(decl: UseDecl, earlier: UseDecl) -> bool:
+    """Whether *decl* spells its target through the name *earlier* introduces.
+
+    Such a use reads its target through *earlier*, so it never replaces it.
+    """
+    return (
+        earlier.alias is not None
+        and not decl.anchored
+        and not decl.current_module
+        and decl.target[0].name == earlier.alias
+    )
+
+
 def _use_route(decl: UseDecl, names: ScopePath) -> tuple[str, ...] | None:
     """The module route *names*, beneath *decl*'s anchor, spell alone; ``None`` for a path."""
     if len(names) == 1 and not decl.current_module and (decl.anchored or "/" in names[0]):
@@ -187,7 +200,7 @@ class UseReader:
 
         Within a use's read, only those written before it. A use an earlier
         REPL entry retained yields to one this entry writes in the same
-        region naming the same target.
+        region naming the same target, unless spelled through it.
         """
         horizon = self._horizon
         for decl in layer.uses:
@@ -197,15 +210,38 @@ class UseReader:
                 yield decl
 
     def _use_replaced(self, site: ScopePath, decl: UseDecl) -> bool:
-        """Whether this entry writes a visible use in region *site* naming *decl*'s target."""
+        """Whether this entry writes a visible use in region *site* replacing *decl*."""
+        return bool(self._replacing(site, decl))
+
+    def _replacing(self, site: ScopePath, decl: UseDecl) -> frozenset[int]:
+        """The visible uses this entry writes in region *site* replacing *decl*.
+
+        Each names *decl*'s target, but not through *decl* (:func:`spelled_through`).
+        """
         horizon = self._horizon
-        replacing = [
+        written = [
             use
             for use in self._scope_nodes[site].uses
-            if use.node_id in self._entry_ids and (horizon is None or use.node_id < horizon)
+            if use.node_id in self._entry_ids
+            and (horizon is None or use.node_id < horizon)
+            and not spelled_through(use, decl)
         ]
-        return bool(replacing) and self.named_target(site, decl) in {
-            self.named_target(site, use) for use in replacing
+        if not written:
+            return frozenset()
+        target = self.named_target(site, decl)
+        return frozenset(use.node_id for use in written if self.named_target(site, use) == target)
+
+    def replacements(self, layers: Iterable[ScopeNode]) -> dict[int, frozenset[int]]:
+        """Each retained use of *layers* this entry replaces, with the uses replacing it.
+
+        A REPL session drops a retained use once one of them is promoted.
+        """
+        return {
+            decl.node_id: replacing
+            for layer in layers
+            for decl in layer.uses
+            if decl.node_id not in self._entry_ids
+            and (replacing := self._replacing(layer.scope_path, decl))
         }
 
     def named_target(self, site: ScopePath, decl: UseDecl) -> frozenset[QName]:

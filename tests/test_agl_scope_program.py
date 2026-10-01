@@ -2441,9 +2441,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("A", "Tree", "Node"), "extract"): ReceiverOwner(
-                shapes_id, ("Tree", "Node")
-            ),
+            (ENTRY_ID, ("Tree", "Node"), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
         }
 
     def test_use_exposes_an_imported_receiver(self, tmp_path: Path) -> None:
@@ -2460,7 +2458,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(
+            (ENTRY_ID, ("Geo", "Point"), "tag"): ReceiverOwner(
                 ModuleId.from_path("shapes"), ("Geo", "Point")
             )
         }
@@ -2481,7 +2479,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
         }
 
     def test_import_inside_receiver_scope_does_not_supply_its_owner(self, tmp_path: Path) -> None:
@@ -2686,7 +2684,9 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Actual",)),
+            (ENTRY_ID, ("Actual",), "tag"): ReceiverOwner(
+                ModuleId.from_path("shapes"), ("Actual",)
+            ),
         }
 
     def test_local_nested_alias_is_rejected_as_a_multi_segment_receiver(

@@ -1369,35 +1369,40 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
 
 
 @pytest.mark.parametrize(
-    ("import_line", "owner", "module_qualifier", "rendered"),
+    ("import_line", "owner", "module_qualifier", "qualification", "rendered"),
     [
         (
             "import library/remote::{Alias}",
             "Alias",
             None,
-            "Alias::item(value = _)",
+            None,
+            "item(value = _)",
         ),
         (
             "import library/remote::{Alias as A}",
             "A",
             None,
-            "A::item(value = _)",
+            None,
+            "item(value = _)",
         ),
         (
             "import library/remote as r",
             "Alias",
             ("r",),
+            EnumWitnessQualification("Alias", ("r",)),
             "r::Alias::item(value = _)",
         ),
     ],
 )
-def test_imported_transparent_alias_witness_uses_exposed_source_name(
+def test_imported_transparent_alias_witness_spells_what_the_import_exposes(
     tmp_path: Path,
     import_line: str,
     owner: str,
     module_qualifier: tuple[str, ...] | None,
+    qualification: EnumWitnessQualification | None,
     rendered: str,
 ) -> None:
+    """An import tail naming the alias brings its target's members bare."""
     prefix = "" if module_qualifier is None else f"{'.'.join(module_qualifier)}::"
     compiled = _compile_graph_case(
         tmp_path,
@@ -1414,7 +1419,7 @@ def test_imported_transparent_alias_witness_uses_exposed_source_name(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification(owner, module_qualifier)
+    assert witness.qualification == qualification
     assert render_witness(witness) == rendered
 
 
@@ -1683,7 +1688,7 @@ def test_imported_enum_witness_owner_yields_to_a_same_named_route(
     assert witness == f"lib::Owner::{missing}"
 
 
-def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:
+def test_reexported_alias_chain_brings_its_target_members_bare(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,
         {
@@ -1702,8 +1707,8 @@ def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Public", None)
-    assert render_witness(witness) == "Public::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_nested_witness_selects_alias_for_each_concrete_instantiation(
@@ -1755,18 +1760,19 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
                 "def make() -> Perfect[int] = Perfect::end\n"
             ),
             "entry": (
-                "import library/perfect::{Root, Nested as N, make}\n"
+                "import library/perfect::{Nested as N, make}\n"
+                "import library/perfect as p\n"
                 "let value = make()\n"
                 "case value of\n"
-                "  | Root::end => 0\n"
-                "  | Root::value(item = _) => 1\n"
-                "  | Root::next(value = N::end) => 2\n"
+                "  | p::Root::end => 0\n"
+                "  | p::Root::value(item = _) => 1\n"
+                "  | p::Root::next(value = N::end) => 2\n"
             ),
         },
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == "Root::next(value = N::value(item = _))"
+    assert render_witness(witness) == "p::Root::next(value = N::value(item = _))"
 
 
 def test_local_type_keeps_constructor_witnesses_unqualified_when_import_handle_conflicts(

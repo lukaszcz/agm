@@ -14,6 +14,7 @@ from agm.agl.scope.imports import (
     build_import_env,
     qualifier_member_decls,
     qualifier_members,
+    validate_import_items,
 )
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
@@ -197,4 +198,10 @@ def test_hiding_and_tail_atoms_must_name_public_members() -> None:
 
     for decl in (tail, hidden):
         with pytest.raises(AglScopeError):
-            _build([decl], {module: _exports("tools/text", "trim")})
+            validate_import_items(
+                (decl,),
+                {decl.node_id: SingleTarget(module)},
+                {module: _exports("tools/text", "trim")},
+                {module: {}},
+                (),
+            )

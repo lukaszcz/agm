@@ -869,8 +869,8 @@ class TestScopedConstructorCandidateUnion:
         owners = {(candidate.owner_path, candidate.owner_name) for candidate in candidates}
         assert owners == {(("Config",), "V"), (("Config", "E"), "V")}
 
-    def test_outward_walk_prefers_the_nearest_scope_layer(self) -> None:
-        """A nested scope's own same-named record shadows an ancestor's."""
+    def test_outward_walk_collects_every_scope_layer(self) -> None:
+        """A nested scope's own same-named record and an ancestor's are both candidates."""
         resolved = parse_and_resolve(
             "scope A\n"
             "  record Item\n"
@@ -896,7 +896,7 @@ class TestScopedConstructorCandidateUnion:
         assert isinstance(pattern, ConstructorPattern)
         candidates = resolved.pattern_constructor_candidates[pattern.node_id]
         owners = {candidate.owner_path for candidate in candidates}
-        assert owners == {("A", "B")}
+        assert owners == {("A",), ("A", "B")}
 
 
 class TestMissingLocalScopeMember:
@@ -2160,7 +2160,7 @@ class TestMethodReceiverClassification:
         resolved = parse_and_resolve(f"{source}\n()")
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Alias",), "value"): ReceiverOwner(ENTRY_ID, ("Target",)),
+            (ENTRY_ID, ("Target",), "value"): ReceiverOwner(ENTRY_ID, ("Target",)),
         }
 
     def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:

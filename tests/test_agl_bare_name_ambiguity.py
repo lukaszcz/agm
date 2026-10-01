@@ -182,7 +182,7 @@ class TestAmbiguousBareEnumMember:
 
     @pytest.mark.parametrize("part", verdict_parts(4))
     def test_alias_use_and_import_tail(self, tmp_path: Path, part: Part) -> None:
-        """A ``use`` of an enum alias contributes its target's members, as that target."""
+        """An import tail and a ``use`` of an enum alias contribute its target's members."""
         assert_verdicts(
             tmp_path,
             {"one": "enum E\n  | Red\ntype C = E\n", "two": "enum F\n  | Red\n"},
@@ -192,7 +192,7 @@ class TestAmbiguousBareEnumMember:
                 {"value": _CONSTRUCTOR},
                 span_texts={"value": "Red"},
                 origins={
-                    "value": _origins(ImportedModuleOrigin, "two::F::Red")
+                    "value": _origins(ImportedModuleOrigin, "two::F::Red", "one::E::Red")
                     | _origins(UseDeclarationOrigin, "one::E::Red")
                 },
             ),

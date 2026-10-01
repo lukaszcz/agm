@@ -41,12 +41,12 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.lookup import (
     NOT_HIDDEN,
+    Application,
     Candidate,
     Hiding,
     LookupKind,
     QualifiedTarget,
     Reading,
-    is_removed,
     lookup_declared,
     removes,
 )
@@ -64,8 +64,8 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     TypeOwner,
+    TypeSelection,
     UnknownMemberError,
-    add_layers,
     anchored_layers,
     atom_under_prefix,
     contribution_origin,
@@ -83,6 +83,7 @@ from agm.agl.scope.type_names import (
     MemberHidden,
     MemberReferenced,
     applies_target,
+    is_nominal_type_expr,
     owner_member_selection,
 )
 from agm.agl.scope.type_owners import TypeOwnerIndex
@@ -92,12 +93,16 @@ from agm.agl.syntax.nodes import (
     ExceptionDef,
     Program,
     QualifierChain,
+    QualifierSegment,
     RecordDef,
     TypeAlias,
     UseDecl,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
+    AppliedT,
+    NameT,
+    TypeExpr,
     render_qualified_name,
     render_qualifier_path,
 )
@@ -186,11 +191,25 @@ class SourcesHost(Protocol):
         """Map each root enum inline member one-segment route *chain* injects as *name*."""
         ...
 
+    def type_name_selection_at(
+        self, scope_path: ScopePath, spelling: NameT | AppliedT, *, every_use: bool
+    ) -> TypeSelection | None:
+        """Return what type name *spelling*, at *scope_path*, selects now."""
+        ...
+
 
 class ModuleSources(SourcesHost):
     """The one lookup's reads for one module, by full path (:class:`PathSources`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, placements: Mapping[DeclarationKey, QName]) -> None:
+        # Own declarations placed beneath another module's path, which their
+        # own path's spelling may not reach any more: decided where they were
+        # declared (an earlier REPL entry, or this module before its
+        # declarations were keyed by their declared paths).
+        self._placements = placements
+        self._placed: dict[QName, list[ScopePath]] = {}
+        for (_module_id, path, name), placement in placements.items():
+            self._placed.setdefault(placement, []).append((*path, name))
         # This module as diagnostics spell declarations for it (:meth:`reader`).
         self._reader: Reader | None = None
         # Every enum this module reads by the names of its members, built on
@@ -241,6 +260,10 @@ class ModuleSources(SourcesHost):
         """
         if self._recording_scope_paths:
             return
+        if not self._type_owners.resolving:
+            # A lookup the round makes would resolve an own alias reading the
+            # paths half recorded; while a type resolves, the round waits on it.
+            self._declared_type_owners()
         self._recording_scope_paths = True
         declaring = dict(self._declaring_paths)
         self._record_scope_paths(declaring)
@@ -251,6 +274,15 @@ class ModuleSources(SourcesHost):
             declaring = {}
             self._record_scope_paths(declaring)
         self._recording_scope_paths = False
+
+    def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
+        """Return the owner each type this module declares resolves to."""
+        return {
+            (*path, declaration.name): self._type_owners.declared_owner(
+                (self._module_id, _bare_atom((*path, declaration.name))), declaration
+            )
+            for declaration, path in self._type_declarations
+        }
 
     def _record_scope_paths(self, declaring: dict[QName, tuple[ScopePath, ...]]) -> None:
         """Record the waiting scope paths, adding those declared otherwise to *declaring*."""
@@ -289,7 +321,11 @@ class ModuleSources(SourcesHost):
 
         ``def Geo::m`` with ``type Geo = Base`` is declared at ``Base::m``, in
         ``Base``'s module. ``None`` for a declaration at its own spelling.
+        A declaration's recorded placement wins.
         """
+        placed = self._placements.get((self._module_id, path[:-1], path[-1]))
+        if placed is not None:
+            return placed
         self._declare_scope_paths()
         for end in range(len(path) - 1, 0, -1):
             declared = self._declared_paths.get(path[:end])
@@ -380,10 +416,11 @@ class ModuleSources(SourcesHost):
         return self._enum_member_index.get(name, {})
 
     def _build_enum_member_index(self) -> dict[str, dict[QName, ConstructorRef]]:
-        """Index every enum this module reads by the names of its members.
+        """Index every enum this module reads, and each alias renaming one, by its members' names.
 
         An inline member wins its name over an injected one; a current
-        declaration supersedes a retained enum at its path.
+        declaration supersedes a retained enum at its path. An alias's paths
+        are its target's, so it brings the target's members.
         """
         owners: dict[QName, TypeOwner] = {
             (self._module_id, _bare_atom(path)): retained
@@ -399,6 +436,12 @@ class ModuleSources(SourcesHost):
             if isinstance(item, EnumDef):
                 qname = (self._module_id, _bare_atom((*path, item.name)))
                 owners[qname] = self._type_owners.declared_owner(qname, item)
+        owners.update(
+            (qname, owners[target])
+            for qname, declaration in self._all_public_types.items()
+            if isinstance(declaration, TypeAlias)
+            and (target := self._type_owners.identity(qname)) in owners
+        )
         index: dict[str, dict[QName, ConstructorRef]] = {}
         for qname, owner in owners.items():
             for member_name, constructor in (
@@ -447,20 +490,18 @@ class ModuleSources(SourcesHost):
     def _keep_readings(self) -> None:
         """Keep what each full path's contributions and own types read from now on.
 
-        The resolver calls this once the tables it collects are complete and
-        its walk binds nothing a path read sees. A read made while a use's
-        own read is in progress, which sees only the uses written before it,
-        or while an alias is resolved, which it presumes, is not kept.
+        The resolver calls this once the tables it collects are complete, its
+        own types are resolved, and its walk binds nothing a path read sees.
+        A type's resolution reads only its declaring module, so no read from
+        now on presumes a type being resolved. A read made while a use's own
+        read is in progress, which sees only the uses written before it, is
+        not kept.
         """
         self._keeping_readings = True
 
     def _kept[K](self, kept: dict[K, Reading], key: K, read: Callable[[], Reading]) -> Reading:
         """Return what *read* reads, kept in *kept* under *key* when it is final."""
-        if not (
-            self._keeping_readings
-            and self._uses.reads_every_use
-            and not self._type_owners.resolving
-        ):
+        if not (self._keeping_readings and self._uses.reads_every_use):
             return read()
         found = kept.get(key)
         if found is None:
@@ -727,19 +768,26 @@ class ModuleSources(SourcesHost):
         as a declaration of *kind*.
 
         This module's own declarations beneath an owner another module
-        declares are read beneath every own scope path declaring its path
-        (``def Geo::m`` with ``Geo`` an alias of an imported ``Base``), and win
-        it, unless only a module route reached the owner (*routed*), which
-        reads that module's view alone; an own owner's spellings are own scope
-        paths, which :meth:`own_at` reads. What an own alias reaches is own
-        (*layer*), as its target's spelling there would be.
+        declares, or the type its alias chain ends at, are read beneath every
+        own scope path declaring its path (``def Geo::m`` with ``Geo`` an alias
+        of an imported ``Base``), and win it, unless only a module route
+        reached the owner (*routed*), which reads that module's view alone;
+        an own owner's spellings are own scope paths, which :meth:`own_at`
+        reads. What an own alias reaches is own (*layer*), as its target's
+        spelling there would be.
         """
-        declared = _key_qname(self.identity(owner))
+        identity = _key_qname(self.identity(owner))
+        declared = self._type_owners.final_target(identity) or identity
         if not routed and declared[0] != self._module_id:
+            module_id, atom = declared
+            placed = (module_id, _bare_atom((*_bare_path(atom), *rest)))
             own = sum(
                 (
-                    self.own_at((*spelling, *rest), kind)
-                    for spelling in self._declaring().get(declared, ())
+                    *(
+                        self.own_at((*spelling, *rest), kind)
+                        for spelling in self._declaring().get(declared, ())
+                    ),
+                    *(self._own_spelled_at(path, kind) for path in self._placed.get(placed, ())),
                 ),
                 Reading(),
             )
@@ -782,12 +830,19 @@ class ModuleSources(SourcesHost):
             current
         ):
             return Reading(refusals=(HiddenMemberError(spelling, name, span=chain.span),))
-        constructor = table.select(name, segments[-1].name)
+        return self._selected_constructor(table, current, layer, chain)
+
+    @staticmethod
+    def _selected_constructor(
+        table: TypeOwner, member: QName, layer: ContributionLayer, chain: QualifierChain
+    ) -> Reading:
+        """The constructor *table* selects for its member path *member*, which *chain* spells."""
+        constructor = table.select(_bare_path(member[1])[-1], chain.segments[-1].name)
         if constructor is None:
             return Reading()
-        key = _qname_decl_key(current)
-        origin = contribution_origin(current, layer)
-        return Reading((Candidate(QualifiedTarget(key, None, constructor), layer, origin),))
+        origin = contribution_origin(member, layer)
+        target = QualifiedTarget(_qname_decl_key(member), None, constructor)
+        return Reading((Candidate(target, layer, origin),))
 
     def _beneath_alias(
         self,
@@ -883,6 +938,68 @@ class ModuleSources(SourcesHost):
         ):
             return None
         return reached.arity
+
+    def beneath_applied(
+        self,
+        applied: DeclarationKey,
+        layer: ContributionLayer,
+        rest: ScopePath,
+        chain: QualifierChain,
+        kind: LookupKind,
+        *,
+        routed: bool,
+    ) -> Reading:
+        """What type *applied*, an applied segment of *chain* stands for, selects for *rest*.
+
+        See :meth:`~agm.agl.scope.lookup.PathSources.beneath_applied`.
+        """
+        qname = _key_qname(applied)
+        table = self._type_owners.owner(qname)
+        if table is not None and table.alias is not None:
+            return self.projected(applied, layer, rest, chain, kind, routed=routed)
+        module_id, atom = qname
+        path = (module_id, _bare_atom((*_bare_path(atom), *rest)))
+        declared = self._declared_at(path, layer, kind)
+        if table is None or declared.candidates or len(rest) > 1:
+            return declared
+        return self._selected_constructor(table, path, layer, chain)
+
+    def application(
+        self, key: DeclarationKey, segment: QualifierSegment, site: ScopePath
+    ) -> Application | None:
+        """What *segment*, selecting type *key* and written in *site*, stands for applied.
+
+        See :meth:`~agm.agl.scope.lookup.PathSources.application`.
+        """
+        owners = self._type_owners
+        qname, arguments, application = _key_qname(key), segment.type_args, None
+        while (
+            (parameter := owners.projected_parameter(qname)) is not None
+            and arguments is not None
+            and parameter[0] < len(arguments)
+            and is_nominal_type_expr(argument := arguments[parameter[0]], ())
+            and (selection := self.type_name_selection_at(site, argument, every_use=False))
+            is not None
+            and (projected := owners.declared_path(selection)) is not None
+        ):
+            qname = projected
+            arguments = argument.args if isinstance(argument, AppliedT) else None
+            arity = parameter[1] if application is None else application.arity
+            application = Application(_qname_decl_key(projected), arity)
+        return application
+
+    def structural(self, key: DeclarationKey) -> TypeExpr | None:
+        """The structural type type *key* is an alias of, if it is one; it hosts no paths."""
+        owners = self._type_owners
+        reached = owners.owner(owners.identity(_key_qname(key)))
+        if (
+            reached is None
+            or reached.alias is None
+            or reached.target is not None
+            or reached.builtin is not None
+        ):
+            return None
+        return reached.alias.type_expr
 
     def applies(self, key: DeclarationKey) -> bool:
         """Whether type *key* is an alias applying its target to type arguments of its own."""
@@ -1269,24 +1386,6 @@ class ModuleSources(SourcesHost):
                 ):
                     yield candidate, decl
 
-    def _contributed_bindings(
-        self, step: ScopePath, path: ScopePath, kind: LookupKind
-    ) -> dict[BindingRef, Layers]:
-        """Return what contributions anchored at or above *step* bind at full *path*, with layers.
-
-        *kind* is the position's, which decides what a ``use`` exposes. A
-        member only its type's own table selects binds as a variant.
-        """
-        bindings = self._imported_bindings(step, path)
-        exposed = (
-            self._value_binding(candidate.target, decl.span)
-            for candidate, decl in self._use_exposures(step, path, kind)
-            if not is_removed(candidate, self)
-        )
-        for ref in filter(None, exposed):
-            add_layers(bindings, ref, (ContributionLayer.USE,))
-        return bindings
-
     def _value_binding(self, target: QualifiedTarget, span: SourceSpan) -> BindingRef | None:
         """The binding *target*, selected at *span*, is read through, if any.
 
@@ -1296,19 +1395,6 @@ class ModuleSources(SourcesHost):
         if target.ref is not None or constructor is None:
             return target.ref
         return self.variant_binding_ref(constructor, span)
-
-    def _contributed_constructors(
-        self, step: ScopePath, path: ScopePath, kind: LookupKind
-    ) -> dict[ConstructorRef, Layers]:
-        """Return the constructor candidates layers anchored at or above *step* give full *path*.
-
-        *kind* is the position's, as for :meth:`_contributed_bindings`.
-        """
-        constructors: dict[ConstructorRef, Layers] = {}
-        for candidate, _decl in self._use_exposures(step, path, kind):
-            if candidate.target.constructor is not None and not is_removed(candidate, self):
-                add_layers(constructors, candidate.target.constructor, (ContributionLayer.USE,))
-        return constructors
 
     def fits(self, target: QualifiedTarget, kind: LookupKind) -> bool:
         """Whether *target* is a declaration of the kind a position takes.

@@ -3,9 +3,10 @@
 ``def Geo::m(self)``, ``def Geo::f()``, ``scope Geo`` and ``def
 Geo::Inner::k()`` with ``type Geo = Base`` declare beneath ``Base``: both
 spellings reach the declaration in every position, whichever spelling
-declared it, the alias own or imported and its target own or imported. Two
-declarations of one name beneath the two spellings are one path declared
-twice, in one REPL entry or across entries.
+declared it, the alias own or imported and its target own or imported. It is
+keyed, displayed and retained at that path: two declarations of one name
+beneath the two spellings are one path declared twice in one entry, and a
+later REPL entry declaring it beneath either spelling supersedes it.
 
 Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`).
@@ -102,8 +103,9 @@ def _duplicate_probes(first: str, second: str) -> dict[str, Probe]:
 def _beside_imported_probes(nested: str, routes: tuple[str, ...]) -> dict[str, Probe]:
     """What :func:`_beside_imported` declares, reached through both spellings.
 
-    *nested* renders the own nested record's type. Through each of *routes*,
-    module routes or anchored, only the routed module's declarations are reached.
+    *nested* renders the own nested record's type, at the path it is declared
+    at whichever spelling declared it. Through each of *routes*, module routes
+    or anchored, only the routed module's declarations are reached.
     """
     own = {
         f"{spelling}-{position}": probe
@@ -157,7 +159,7 @@ _SCENARIOS = (
         f"declared-through-{spelling}-beside-an-imported-declaration-{name}": Scenario(
             modules={**_MODULES, "base": _BASE + "def Base::h() -> int = 3\n"},
             header=(*header, _beside_imported(spelling)),
-            probes=_beside_imported_probes(f"{spelling}::Inner", routes),
+            probes=_beside_imported_probes("Base::Inner", routes),
         )
         for spelling in ("Base", "Geo")
         for name, header, routes in (
@@ -208,30 +210,6 @@ _SCENARIOS = (
             ("an-alias-of-an-own-type", _LOCAL_TARGET),
         )
     }
-    | {
-        f"redeclared-beneath-{second}-after-{first}-{name}": Scenario(
-            modules=_MODULES,
-            header=(*header, f"def {first}::g() -> int = 1\ndef {first}::m(self) -> int = 1"),
-            probes={
-                "static": rejected(
-                    f"def {second}::g() -> int = 2\n1",
-                    DuplicateDeclarationError,
-                    f"def {second}::g() -> int = 2",
-                ),
-                "method": rejected(
-                    f"def {second}::m(self) -> int = 2\n1",
-                    DuplicateDeclarationError,
-                    f"def {second}::m(self) -> int = 2",
-                ),
-            },
-        )
-        for first, second in (("Base", "Geo"), ("Geo", "Base"))
-        for name, header in (
-            ("an-own-alias", _OWN_ALIAS),
-            ("an-imported-alias", _IMPORTED_ALIAS),
-            ("an-alias-of-an-own-type", _LOCAL_TARGET),
-        )
-    }
 )
 
 _APPLIED_MODULES = {"gen": "record Box[T]\n  v: T\nrecord Box::In\n  w: int\n"}
@@ -270,6 +248,12 @@ _SCENARIOS |= {
             **_applied_head_probes("Box[int]"),
             **_applied_head_probes("IntBox"),
             **_applied_head_probes("IB2"),
+            **{
+                f"own-static-read-through-{spelling}": rejected(
+                    f"def Box::k() -> int = 1\n{spelling}::k()", TypeArgumentsError, spelling
+                )
+                for spelling in ("Box[int]", "IntBox", "IB2")
+            },
             "region": rejected(
                 "scope IntBox\n  def f() -> int = 1\nend IntBox", TypeArgumentsError, "IntBox"
             ),
@@ -450,6 +434,29 @@ _SCENARIOS["a-route-spelling-a-tail-path-reaches-own-declarations"] = Scenario(
     },
 )
 
+_SCENARIOS["declared-at-a-path-an-own-type-of-the-target-name-declares"] = Scenario(
+    modules={"other": "record Base\n  y: int\ndef Base::k() -> int = 1\n"},
+    header=("import other", "record Base\n  x: int", "type G = other::Base"),
+    probes={
+        "alias-then-own": rejected(
+            'def G::h() -> text = "g"\ndef Base::h() -> int = 1',
+            DuplicateDeclarationError,
+            "def Base::h() -> int = 1",
+        ),
+        "own-then-alias": rejected(
+            'def Base::h() -> int = 1\ndef G::h() -> text = "g"',
+            DuplicateDeclarationError,
+            'def G::h() -> text = "g"',
+        ),
+        "records": rejected(
+            "record G::R\nrecord Base::R", DuplicateDeclarationError, "record Base::R"
+        ),
+        "through-the-alias": accepted('def G::h() -> text = "g"\nG::h()', "text"),
+        "through-the-own-type": accepted('def G::h() -> text = "g"\nBase::h()', "text"),
+        "target-declaration": accepted("G::k()", "int"),
+    },
+)
+
 _BUILTIN_THROUGH = "type T2 = text\ndef T2::via() -> int = 1\ndef text::direct() -> int = 2\n"
 """Declares beneath ``text`` through an alias of it and directly."""
 
@@ -464,6 +471,54 @@ _SCENARIOS["declared-elsewhere-beneath-an-alias-of-a-builtin-type"] = Scenario(
         },
         "own-through-the-imported-alias": accepted("T2::own()", "text"),
         "own-is-not-routed": rejected("bt::T2::own()", UnknownMemberError, "bt::T2::own"),
+    },
+)
+
+_SCENARIOS["declared-beneath-a-structural-alias"] = Scenario(
+    modules={"funcs": "type G = int -> bool\n"},
+    header=("import funcs::*", "type F = int -> bool"),
+    probes={
+        f"{spelling}-{name}": rejected(text, AglScopeError, spelling)
+        for spelling in ("F", "G")
+        for name, text in {
+            "static": f"def {spelling}::m() -> int = 1",
+            "method": f"def {spelling}::m(self) -> int = 1",
+            "nested": f"def {spelling}::In::k() -> int = 1",
+            "record": f"record {spelling}::R\n  z: int",
+            "region": f"scope {spelling}\n  def z() -> int = 1\nend {spelling}",
+            "nested-region": f"scope {spelling}::In\n  def z() -> int = 1\nend {spelling}::In",
+        }.items()
+    },
+)
+
+_SCENARIOS["a-method-beneath-an-alias-dropping-its-parameter"] = Scenario(
+    modules={"ph": "record Box\n  v: int\ntype G[T] = Box\n"},
+    header=("import ph::*", "type F[T] = Box"),
+    probes={
+        spelling: rejected(f"def {spelling}::m(self) -> int = 1", AglScopeError, "self")
+        for spelling in ("F", "G")
+    },
+)
+
+_BENEATH_IB = {
+    "static": "def IB::z() -> int = 1",
+    "nested": "def IB::In::k() -> int = 1",
+    "region": "scope IB\n  def z() -> int = 1\nend IB",
+}
+"""Declarations beneath ``IB``, written before ``IB`` is declared."""
+_HOSTING_NOTHING = {
+    "applied": ("type IB = gen::Box[int]", TypeArgumentsError),
+    "structural": ("type IB = int -> int", AglScopeError),
+}
+"""Aliases ``IB`` beneath which nothing is declared, and the error a declaration there is."""
+
+_SCENARIOS["declared-before-an-alias-hosting-nothing"] = Scenario(
+    modules=_APPLIED_MODULES,
+    header=("import gen",),
+    probes={
+        f"{name}-{kind}": rejected(f"{beneath}\n{alias}", error, "IB")
+        for name, beneath in _BENEATH_IB.items()
+        for kind, (alias, error) in _HOSTING_NOTHING.items()
     },
 )
 
@@ -491,4 +546,83 @@ def test_info_describes_a_declaration_through_either_spelling(
                 "Location: <repl>:1:1",
             )
         },
+    )
+
+
+@pytest.mark.parametrize(("first", "second"), [("Base", "Geo"), ("Geo", "Base")])
+@pytest.mark.parametrize(
+    "header",
+    [_OWN_ALIAS, _IMPORTED_ALIAS, _LOCAL_TARGET],
+    ids=["an-own-alias", "an-imported-alias", "an-alias-of-an-own-type"],
+)
+def test_a_later_entry_beneath_the_other_spelling_supersedes(
+    tmp_path: Path, header: tuple[str, ...], first: str, second: str
+) -> None:
+    assert_repl_verdicts(
+        tmp_path,
+        _MODULES,
+        (
+            *header,
+            f"def {first}::g() -> int = 1\ndef {first}::m(self) -> int = 1\nrecord {first}::R",
+            f'def {second}::g() -> text = "2"\ndef {second}::m(self) -> text = "2"\n'
+            f"record {second}::R\n  z: int",
+        ),
+        {
+            **{
+                f"{spelling}-{position}": probe
+                for spelling in ("Base", "Geo")
+                for position, probe in {
+                    "static": accepted(f"{spelling}::g()", "text"),
+                    "method": accepted(f"{spelling}::m(Base(x = 1))", "text"),
+                    "record": accepted(f"{spelling}::R(z = 1)", "record Base::R\n  z: int"),
+                }.items()
+            },
+            "info": info(
+                "Geo::R",
+                "Geo::R is a record type.\nType:\n  record Base::R\n    z: int\n"
+                "Location: <repl>:3:1",
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "header",
+    [_OWN_ALIAS, _LOCAL_TARGET],
+    ids=["an-own-alias", "an-alias-of-an-own-type"],
+)
+def test_rebinding_the_alias_leaves_earlier_declarations_at_its_old_target(
+    tmp_path: Path, header: tuple[str, ...]
+) -> None:
+    assert_repl_verdicts(
+        tmp_path,
+        _MODULES,
+        (
+            *header,
+            "def Geo::g() -> int = 1\nrecord Geo::R",
+            "record Other\n  w: int",
+            "type Geo = Other",
+        ),
+        {
+            "static": accepted("Base::g()", "int"),
+            "record": accepted("Base::R()", "record Base::R"),
+            "through-the-new-target": rejected("Geo::g()", UnknownMemberError, "Geo::g"),
+            "info": info(
+                "Base::R",
+                "Base::R is a record type.\nType:\n  record Base::R\nLocation: <repl>:2:1",
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize("beneath", list(_BENEATH_IB.values()), ids=list(_BENEATH_IB))
+def test_an_alias_hosting_nothing_rejects_earlier_entries_beneath_its_path(
+    tmp_path: Path, beneath: str
+) -> None:
+    """Declarations an earlier entry made at its path are beneath it, as in one entry."""
+    assert_repl_verdicts(
+        tmp_path,
+        _APPLIED_MODULES,
+        ("import gen", beneath),
+        {kind: rejected(alias, error, alias) for kind, (alias, error) in _HOSTING_NOTHING.items()},
     )

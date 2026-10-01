@@ -91,6 +91,7 @@ def _export_hiding(item: str) -> dict[str, str]:
 _RECORD = "record base::Base\n  x: int"
 _INNER = "record base::Base::Inner\n  y: int"
 _GREEN = "record base::Color::Green"
+_RECORD_RED = "record base::Color::Red"
 _BASE_CASE = "fn(p: base::Base) => case p of\n    | Geo(x) => x"
 _BASE_PATTERN = "fn(p: base::Base) => case p of\n  | Geo(x) => x"
 """Matches ``base``'s ``Base`` by ``Geo``."""
@@ -437,6 +438,21 @@ _SCENARIOS = {
             "other-import": accepted("al::Geo::f", "() -> int"),
         },
     ),
+    **{
+        f"a-cycle-names-its-final-exports-in-an-import-{name}": Scenario(
+            modules={
+                "base": _BASE,
+                "ex": _CYCLED,
+                "al": (
+                    f"import base\nimport ex\n{imports}\nexport base::{{Base, Color}}\n"
+                    "type Geo = base::Base\ndef mk(p: ex::I) -> int = p.y\n"
+                ),
+            },
+            header=("import al\nimport ex",),
+            probes={"signature-through-item": accepted("al::mk(ex::I(y = 2))", "int")},
+        )
+        for name, imports in (("tail", "import ex::{I}"), ("hiding", "import ex::* hiding I"))
+    },
     "a-module-importing-itself-reads-its-final-exports-through-its-aliases": Scenario(
         modules={
             "base": _BASE,
@@ -501,6 +517,34 @@ _SCENARIOS["an-own-alias-wins-the-paths-beneath-it-over-an-import"] = Scenario(
         ),
         "is": accepted("fn(p: hue::Color) => p is Color::Red", "hue::Color -> bool"),
         **type_positions("member-type", "Color::Red", "hue::Color::Red"),
+    },
+)
+
+_SCOPED_HUE = "scope S\n  enum Color\n    | Red\n    | Green\n\n  type C = Color\nend S\n"
+"""An enum in a scope, beside an alias of it."""
+_SCOPED_RED = "record sh::S::Color::Red"
+
+_SCENARIOS["an-item-naming-an-alias-of-an-enum-injects-its-members"] = Scenario(
+    modules={**_MODULES, "sh": _SCOPED_HUE},
+    header=(),
+    probes={
+        "tail": accepted("import al::{Hue}\nRed", _RECORD_RED),
+        "tail-pattern": accepted(
+            "import al::{Hue}\nfn(p: Hue) => case p of\n  | Red => 1\n  | Green => 2",
+            "base::Color -> int",
+        ),
+        "tail-in-a-region": accepted(_in_region("import al::{Hue}", "Red"), _RECORD_RED),
+        "use-tail": accepted(f"import al\n{_in_region('use al::{Hue}', 'Red')}", _RECORD_RED),
+        "use-rename": accepted(f"import al\n{_in_region('use al::Hue as K', 'Red')}", _RECORD_RED),
+        "scoped-tail": accepted(
+            "import sh::{S::C}\n\nscope S\n  let v = Red\nend S\n\nS::v", _SCOPED_RED
+        ),
+        "scoped-use-tail": accepted(
+            f"import sh\n{_in_region('use sh::S::{C}', 'Red')}", _SCOPED_RED
+        ),
+        "scoped-use-rename": accepted(
+            f"import sh\n{_in_region('use sh::S::C as K', 'Red')}", _SCOPED_RED
+        ),
     },
 )
 
@@ -581,6 +625,42 @@ _SCENARIOS |= {
 }
 
 
+_REFERENCING_THROUGH_A_USE = (
+    "use Box as B\nrecord Box::Item\n  n: int\nenum Box = Empty | B::Item\n"
+    "def f() -> int = case B::Item(n = 3) of\n  | B::Item(n) => n"
+)
+"""An enum whose member reference reads the enum's own path through a use renaming it."""
+
+
+_SCENARIOS |= {
+    "a-member-reference-through-a-use-of-its-own-enum-reads-the-whole-enum": Scenario(
+        header=(_REFERENCING_THROUGH_A_USE,),
+        probes={
+            "value": accepted("B::Item(n = 1)", "record Box::Item\n  n: int"),
+            "member": accepted("B::Empty", "record Box::Empty"),
+            "injected": accepted("Item(n = 1)", "record Box::Item\n  n: int"),
+            "pattern": accepted(
+                "fn(p: Box) => case p of\n  | B::Item(n) => n\n  | Empty => 0", "Box -> int"
+            ),
+            "is": accepted("fn(p: Box) => p is B::Item", "Box -> bool"),
+            "function": accepted("f()", "int"),
+        },
+    ),
+    "a-member-reference-through-a-use-of-its-own-enum-reads-the-whole-imported-enum": Scenario(
+        modules={"box": _REFERENCING_THROUGH_A_USE},
+        header=("import box::*",),
+        probes={
+            "value": accepted("Box::Item(n = 1)", "record box::Box::Item\n  n: int"),
+            "injected": accepted("Item(n = 1)", "record box::Box::Item\n  n: int"),
+            "pattern": accepted(
+                "fn(p: Box) => case p of\n  | Item(n) => n\n  | Empty => 0", "box::Box -> int"
+            ),
+            "function": accepted("f()", "int"),
+        },
+    ),
+}
+
+
 _GENERIC = (
     "record Box[T]\n  v: T\nrecord Box::In\n  w: int\ndef Box::g() -> int = 1\n"
     "def Box::m[T](self) -> int = 1\nenum Opt[T]\n  | Some(v: T)\n  | Non\n"
@@ -593,9 +673,11 @@ _APPLYING: dict[str, tuple[str, ...]] = {
     "IntBox": (_IMPORT_GEN, _INT_BOX_ALIAS),
     "IB2": (_IMPORT_GEN, _INT_BOX_ALIAS, "type IB2 = IntBox"),
     "X": (_IMPORT_GEN, _GENERIC_ALIAS, "type X = B2[int]"),
+    "Y": (_IMPORT_GEN, "type Id[T] = T", "type Y = Id[Box[int]]"),
 }
-"""``Box[int]`` and its applied aliases -- direct, through an alias, and through a
-generic alias -- each with the declarations its spelling needs."""
+"""``Box[int]`` and its applied aliases -- direct, through an alias, through a
+generic alias, and through one standing for its parameter -- each with the
+declarations its spelling needs."""
 _INT_BOX = "record gen::Box[int]\n  v: int"
 
 
@@ -665,6 +747,44 @@ _SCENARIOS["an-applied-enum-alias-reads-members-as-its-applied-target"] = Scenar
             "fn(p: Opt[int]) => case p of\n  | IntOpt::Some(v) => v\n  | _ => 0",
             "gen::Opt[int] -> int",
         ),
+    },
+)
+
+_SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] = Scenario(
+    modules={"gen": _GENERIC},
+    header=(
+        _IMPORT_GEN,
+        "type Id[T] = T\ntype Id2[T] = Id[T]",
+        "type IO = Id[Opt[int]]\ntype IO2 = Id2[Id[Opt[int]]]",
+    ),
+    probes={
+        "enum-member": accepted("IO::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
+        "enum-member-pattern": accepted(
+            "fn(p: IO) => case p of\n  | IO::Some(v) => v\n  | _ => 0", "gen::Opt[int] -> int"
+        ),
+        "through-a-chain": accepted("IO2::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
+        "argument-mismatch": rejected('IO2::Some(v = "s")', AglTypeError, '"s"', phase="typecheck"),
+        "applied-in-place": accepted(
+            "Id[Opt[int]]::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"
+        ),
+        "applied-in-place-pattern": accepted(
+            "fn(p: IO) => case p of\n  | Id2[Opt[int]]::Some(v) => v\n  | _ => 0",
+            "gen::Opt[int] -> int",
+        ),
+        "applied-in-place-argument-mismatch": rejected(
+            'Id[Opt[int]]::Some(v = "s")', AglTypeError, '"s"', phase="typecheck"
+        ),
+        "applied-in-place-to-an-alias": accepted(
+            "Id[IO]::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"
+        ),
+        "applied-in-place-record": accepted("Id[Box[int]]::Box(v = 1)", _INT_BOX),
+        "applied-in-place-nested-record": rejected(
+            "Id[Box[int]]::In(w = 1)", TypeArgumentsError, "Id[Box[int]]"
+        ),
+        "applied-in-place-arity": rejected(
+            "Id[Opt[int], int]::Some(v = 1)", TypeArgumentsError, "Id[Opt[int], int]"
+        ),
+        "unapplied": rejected("Id::Some(v = 1)", UnknownMemberError, "Id::Some"),
     },
 )
 
@@ -872,3 +992,19 @@ def test_an_export_item_through_an_alias_naming_nothing_is_an_error_where_writte
     assert (phase, error) == ("scope", UnknownMemberError)
     assert span is not None and span.source.label.endswith("ex.agl")
     assert span_text(export, span) == export.splitlines()[1]
+
+
+@pytest.mark.parametrize(
+    "imports", ["import ex::{Nope}", "import ex::* hiding Nope"], ids=["tail", "hiding"]
+)
+def test_an_import_item_naming_nothing_in_a_cycle_is_an_error_where_written(
+    tmp_path: Path, imports: str
+) -> None:
+    cycling = f"import base\n{imports}\nexport base::{{Base}}\ntype Geo = base::Base\n"
+    phase, error, span, _identity = inline_verdict(
+        tmp_path, {"entry": "import al\n1", "base": _BASE, "al": cycling, "ex": _CYCLED}
+    )
+
+    assert (phase, error) == ("scope", UnknownMemberError)
+    assert span is not None and span.source.label.endswith("al.agl")
+    assert span_text(cycling, span) == imports

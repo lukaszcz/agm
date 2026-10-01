@@ -27,7 +27,7 @@ Design
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -60,12 +60,14 @@ from agm.agl.scope.imports import (
     build_import_env,
     declares_bare_constructor,
     matching_atoms,
+    validate_import_items,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
+    DeclarationKey,
     DeclInfo,
     DuplicateDeclarationError,
     MissRepair,
@@ -98,10 +100,12 @@ from agm.agl.syntax.nodes import (
     ExportItem,
     FuncDef,
     ImportDecl,
+    Item,
     LetDecl,
     Program,
     RecordDef,
     ScopeRegion,
+    ScopeSegment,
     TypeAlias,
     VarDecl,
     VariantDef,
@@ -110,6 +114,7 @@ from agm.agl.syntax.nodes import (
     static_binding_node_id,
     static_items,
 )
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
 
 
@@ -140,6 +145,9 @@ class ResolvedModule:
         Named-scope export map. Scope identities are separate from declaration
         exports because an empty scope is public without denoting a value.
         Re-exports preserve and merge the scope's original module/path origins.
+    ``loaded_program``
+        The program as loaded: ``resolved.program`` keys each declaration
+        written otherwise at the path it is declared at.
     """
 
     module_id: ModuleId
@@ -148,6 +156,7 @@ class ResolvedModule:
     exports: dict[NameAtom, QName]
     scope_exports: dict[NameAtom, ScopeOrigins]
     source_text: str
+    loaded_program: Program
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +260,29 @@ def _build_cross_module_constructor_candidates(
             seen_candidates.add(candidate)
             candidates.setdefault(name, []).append(ref)
 
+    def add_members(
+        exposed_name: str, key: QName, enum_qname: QName, enum: EnumDef, *, through_alias: bool
+    ) -> None:
+        """Add the members enum *enum* at *enum_qname*, exposed as *key*, injects bare."""
+        mid, src_name = enum_qname
+        for member in enum.members:
+            if isinstance(member, VariantRef):
+                for referenced_cref in type_owners.referenced_member_refs(enum_qname, member):
+                    if not hidden_here(referenced_cref) and not tail_removes(
+                        exposed_name, key, referenced_cref.qname
+                    ):
+                        add_candidate(referenced_cref.owner_name, referenced_cref)
+                continue
+            if declares_bare_constructor(
+                import_env.unqualified.get(member.name, ()), all_public_types
+            ):
+                continue
+            member_qname = (mid, _atom((*_path(src_name), member.name)))
+            if (through_alias or member_qname in exposed_qnames) and not tail_removes(
+                exposed_name, key, member_qname
+            ):
+                add_candidate(member.name, cross_module_constructor_refs[member_qname])
+
     for exposed_name, qnames in import_env.unqualified.items():
         if not isinstance(exposed_name, str):
             continue
@@ -264,35 +296,20 @@ def _build_cross_module_constructor_candidates(
                 if variant_ref is not None:
                     add_candidate(exposed_name, variant_ref)
                 continue
-            src_path = _path(src_name)
-            owner_path = src_path[:-1]
             if isinstance(decl, (RecordDef, ExceptionDef)):
                 cref = cross_module_constructor_refs[key]
                 add_candidate(exposed_name, cref)
-            elif (
-                isinstance(decl, TypeAlias)
-                and (alias_ref := type_owners.alias_constructor(decl, key)) is not None
-            ):
-                add_candidate(exposed_name, alias_ref)
-            elif isinstance(decl, EnumDef):
-                for member in decl.members:
-                    if isinstance(member, VariantRef):
-                        for referenced_cref in type_owners.referenced_member_refs(key, member):
-                            if not hidden_here(referenced_cref) and not tail_removes(
-                                exposed_name, key, referenced_cref.qname
-                            ):
-                                add_candidate(referenced_cref.owner_name, referenced_cref)
-                        continue
-                    if declares_bare_constructor(
-                        import_env.unqualified.get(member.name, ()), all_public_types
-                    ):
-                        continue
-                    member_atom = _atom((*owner_path, decl.name, member.name))
-                    member_qname = (mid, member_atom)
-                    if member_qname in exposed_qnames and not tail_removes(
-                        exposed_name, key, member_qname
-                    ):
-                        add_candidate(member.name, cross_module_constructor_refs[member_qname])
+            elif isinstance(decl, TypeAlias):
+                alias_ref = type_owners.alias_constructor(decl, key)
+                target = type_owners.identity(key)
+                enum = all_public_types[target]
+                if alias_ref is not None:
+                    add_candidate(exposed_name, alias_ref)
+                elif isinstance(enum, EnumDef):
+                    # The alias's paths are its target's: its members come with it.
+                    add_members(exposed_name, key, target, enum, through_alias=True)
+            else:
+                add_members(exposed_name, key, key, decl, through_alias=False)
     return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}
 
 
@@ -598,12 +615,12 @@ def _resolve_reexports(
             allow_missing=allow_missing,
         )
 
-    def propagate() -> tuple[bool, ExportDecl | None]:
-        changed = False
-        changed_decl: ExportDecl | None = None
+    def propagate() -> SourceSpan | None:
+        changed: SourceSpan | None = None
         for mid in component:
             removed: dict[NameAtom, frozenset[QName]] = dict.fromkeys(local_atoms[mid], frozenset())
-            for decl in graph.modules[mid].export_decls:
+            decls = graph.modules[mid].export_decls
+            for decl in decls:
                 for target_mid in targets(decl):
                     found = additions(decl, target_mid, allow_missing=True)
                     for exposed, qname in found.declarations.items():
@@ -612,8 +629,7 @@ def _resolve_reexports(
                         existing = export_maps[mid].get(exposed)
                         if existing is None:
                             export_maps[mid][exposed] = qname
-                            changed = True
-                            changed_decl = decl
+                            changed = decl.span
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
                         kept = found.withheld.get(exposed, frozenset())
@@ -626,13 +642,13 @@ def _resolve_reexports(
                         merged_origins = existing_origins | origins
                         if merged_origins != existing_origins:
                             scope_export_maps[mid][exposed] = merged_origins
-                            changed = True
-                            changed_decl = decl
+                            changed = decl.span
             recorded = {exposed: hidden for exposed, hidden in removed.items() if hidden}
             if recorded != withheld[mid]:
+                # Only *mid*'s exports withhold, so it has one.
                 withheld[mid] = recorded
-                changed = True
-        return changed, changed_decl
+                changed = decls[-1].span
+        return changed
 
     _converge(propagate, _export_count(graph, component))
 
@@ -651,24 +667,18 @@ def _export_count(graph: ModuleGraph, component: tuple[ModuleId, ...]) -> int:
     return sum(len(graph.modules[mid].export_decls) for mid in component)
 
 
-def _converge(step: Callable[[], tuple[bool, ExportDecl | None]], declarations: int) -> None:
+def _converge(step: Callable[[], SourceSpan | None], declarations: int) -> None:
     """Repeat *step* until it changes nothing.
 
-    *step* reports whether it changed anything, and the export declaration
-    it last changed through, if any. A cycle's *declarations* bound how
+    *step* returns the span of the declaration it last changed through, or
+    ``None`` when it changed nothing. A cycle's *declarations* bound how
     often a change can propagate; one further step observes convergence.
     """
-    last_changed: ExportDecl | None = None
     for _ in range(declarations + 1):
-        changed, changed_decl = step()
-        if changed_decl is not None:
-            last_changed = changed_decl
-        if not changed:
+        changed = step()
+        if changed is None:
             return
-    raise AglScopeError(
-        "cyclic re-export expansion does not converge",
-        span=last_changed.span if last_changed else None,
-    )
+    raise AglScopeError("cyclic re-export expansion does not converge", span=changed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -856,6 +866,112 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
     )
 
 
+def _declaration_atoms(
+    program: Program,
+) -> Iterator[
+    tuple[
+        FuncDef
+        | RecordDef
+        | EnumDef
+        | ExceptionDef
+        | TypeAlias
+        | BuiltinVarDecl
+        | LetDecl
+        | VarDecl,
+        NameAtom,
+    ]
+]:
+    """Yield every declaration of *program* that claims a path, with the path it is written at."""
+    for item in static_items(program.body.items):
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, BuiltinVarDecl)):
+            yield item, _item_atom(item)
+        elif isinstance(item, (LetDecl, VarDecl)):
+            atom = _static_binding_atom(item)
+            if atom is not None:
+                yield item, atom
+
+
+def _declared_keys(
+    module_id: ModuleId, program: Program, declared: Mapping[NameAtom, QName]
+) -> tuple[dict[int, ScopePath], dict[DeclarationKey, QName]]:
+    """Key *module_id*'s declarations by the paths they are declared at.
+
+    *declared* maps each declaration written otherwise than declared to the
+    full path it is declared at (``def Geo::m`` with ``type Geo = Base`` at
+    ``Base::m``, in ``Base``'s module). Returns the scope path, by node id,
+    each declaration of *program* written otherwise is keyed at, and where
+    each one keyed beneath another module's path is placed.
+    """
+
+    def keyed(atom: NameAtom) -> ScopePath:
+        placed_module, placed = declared[atom]
+        path = _path(placed)
+        if placed_module != module_id:
+            return path
+        # An own path is keyed where the longest declaration above it is.
+        for end in range(len(path) - 1, 0, -1):
+            prefix = _atom(path[:end])
+            if prefix in declared:
+                return (*keyed(prefix), *path[end:])
+        return path
+
+    scopes: dict[int, ScopePath] = {}
+    placements: dict[DeclarationKey, QName] = {}
+    for item, atom in _declaration_atoms(program):
+        if atom not in declared:
+            continue
+        path = keyed(atom)
+        if path != _path(atom):
+            scopes[item.node_id] = path[:-1]
+        if declared[atom][0] != module_id:
+            placements[module_id, path[:-1], path[-1]] = declared[atom]
+    return scopes, placements
+
+
+def _key_declarations(program: Program, scopes: Mapping[int, ScopePath]) -> Program:
+    """Return *program* with each declaration in *scopes* written at the scope path it maps to.
+
+    Regions keep their spelling: a region is where names are written, not a
+    declaration.
+    """
+
+    def keyed[I: Item](item: I) -> I:
+        if isinstance(item, ScopeRegion):
+            return replace(item, items=tuple(keyed(child) for child in item.items))
+        if (
+            not isinstance(
+                item,
+                (
+                    FuncDef,
+                    RecordDef,
+                    EnumDef,
+                    ExceptionDef,
+                    TypeAlias,
+                    BuiltinVarDecl,
+                    LetDecl,
+                    VarDecl,
+                ),
+            )
+            or item.node_id not in scopes
+        ):
+            return item
+        path = scopes[item.node_id]
+        written = item.scope_path
+        segments = tuple(
+            ScopeSegment(
+                name,
+                span=written[min(index, len(written) - 1)].span,
+                node_id=written[min(index, len(written) - 1)].node_id,
+            )
+            for index, name in enumerate(path)
+        )
+        return replace(item, scope_path=segments)
+
+    return replace(
+        program, body=replace(program.body, items=tuple(keyed(item) for item in program.body.items))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cross-module decl info type aliases
 # ---------------------------------------------------------------------------
@@ -863,6 +979,89 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
 # Maps (module_id, name) → DeclInfo, for building BindingRef values for
 # cross-module references.
 _DeclInfo = dict[QName, DeclInfo]
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleTables:
+    """One module's share of the whole-program tables, collected from its declarations."""
+
+    exports: dict[NameAtom, QName]
+    scope_exports: dict[NameAtom, ScopeOrigins]
+    type_origins: frozenset[QName]
+    alias_origins: frozenset[QName]
+    funcs: dict[QName, FuncDef]
+    types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
+    decl_info: _DeclInfo
+    type_owners: dict[QName, ReceiverOwner]
+    constructor_refs: dict[QName, ConstructorRef]
+
+
+def _module_tables(mid: ModuleId, program: Program) -> _ModuleTables:
+    """Collect *mid*'s exports, declarations and declaration metadata from *program*."""
+    funcs: dict[QName, FuncDef] = {}
+    types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
+    decl_info: _DeclInfo = {}
+    for item in static_items(program.body.items):
+        if isinstance(item, FuncDef):
+            if item.is_synthetic:
+                continue
+            key = (mid, _item_atom(item))
+            funcs[key] = item
+            decl_info[key] = DeclInfo(
+                decl_node_id=item.node_id,
+                decl_span=item.span,
+                kind=BinderKind.function_binding,
+                is_builtin=item.is_builtin,
+                is_method=item.is_method,
+            )
+        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            key = (mid, _item_atom(item))
+            types[key] = item
+            decl_info[key] = DeclInfo(
+                decl_node_id=item.node_id,
+                decl_span=item.span,
+                kind=BinderKind.constructor_binding,
+            )
+            if isinstance(item, EnumDef):
+                for member, member_atom in _inline_members(item, _path(key[1])):
+                    decl_info[(mid, member_atom)] = DeclInfo(
+                        decl_node_id=member.node_id,
+                        decl_span=member.span,
+                        kind=BinderKind.constructor_binding,
+                    )
+        elif isinstance(item, BuiltinVarDecl):
+            key = (mid, _item_atom(item))
+            decl_info[key] = DeclInfo(
+                decl_node_id=item.node_id,
+                decl_span=item.span,
+                kind=BinderKind.builtin_var_binding,
+            )
+        elif isinstance(item, (LetDecl, VarDecl)):
+            binding_atom = _static_binding_atom(item)
+            if binding_atom is not None:
+                decl_info[(mid, binding_atom)] = DeclInfo(
+                    decl_node_id=static_binding_node_id(item),
+                    decl_span=item.span,
+                    kind=(
+                        BinderKind.let_binding
+                        if isinstance(item, LetDecl)
+                        else BinderKind.var_binding
+                    ),
+                    is_param=is_param_declaration(item.attributes),
+                )
+    return _ModuleTables(
+        exports=_compute_local_exports(mid, program),
+        scope_exports=_compute_local_scope_exports(mid, program),
+        type_origins=frozenset(types),
+        alias_origins=frozenset(
+            qname for qname, item in types.items() if isinstance(item, TypeAlias)
+        ),
+        funcs=funcs,
+        types=types,
+        decl_info=decl_info,
+        type_owners=_public_type_owners(types),
+        constructor_refs=_member_record_constructor_refs(types),
+    )
 
 
 def _declarations_beneath(decl_info: _DeclInfo) -> Callable[[QName], tuple[ScopePath, ...]]:
@@ -891,7 +1090,7 @@ def _reusable(
     splice or a redeclaration produces a different node and misses.
     """
     cached = cached_modules.get(module_id) if cached_modules is not None else None
-    if cached is not None and cached.resolved.program is loaded.program:
+    if cached is not None and cached.loaded_program is loaded.program:
         return cached
     return None
 
@@ -902,6 +1101,7 @@ def resolve_program(
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
+    entry_repl_session_placements: Mapping[ScopePath, QName] | None = None,
     cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
@@ -922,6 +1122,10 @@ def resolve_program(
         :class:`~agm.agl.scope.symbols.TypeOwner` resolved when it was declared,
         so an alias keeps the target it resolved to then. The entry derives
         its retained constructors from these owners.
+    entry_repl_session_placements:
+        Each retained declaration keyed beneath another module's path, by
+        its full path, mapped to the full path it is placed at there, as
+        decided when it was declared.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -950,25 +1154,21 @@ def resolve_program(
         reusable.update(cached_modules)
     cached_modules = reusable
 
-    export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
-    scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]] = {}
-    type_origins: set[QName] = set()
-    alias_origins: set[QName] = set()
-    withheld: Withheld = {}
+    # Each module's declarations, keyed at their written paths until step 5
+    # keys a declaration written otherwise at its declared path.
+    # A reusable resolution brings its keyed declarations.
+    programs: dict[ModuleId, Program] = {}
     for mid, loaded in graph.modules.items():
-        export_maps[mid] = _compute_local_exports(mid, loaded.program)
-        scope_export_maps[mid] = _compute_local_scope_exports(mid, loaded.program)
-        withheld[mid] = {}
-        for item in static_items(loaded.program.body.items):
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                type_origins.add((mid, _item_atom(item)))
-            if isinstance(item, TypeAlias):
-                alias_origins.add((mid, _item_atom(item)))
-
+        cached = _reusable(cached_modules, mid, loaded)
+        programs[mid] = loaded.program if cached is None else cached.resolved.program
+    tables = {mid: _module_tables(mid, program) for mid, program in programs.items()}
+    export_maps = {mid: dict(table.exports) for mid, table in tables.items()}
+    scope_export_maps = {mid: dict(table.scope_exports) for mid, table in tables.items()}
+    withheld: Withheld = {mid: {} for mid in tables}
     # Every re-export resolution starts over from the modules' own exports.
-    local_exports = {mid: dict(exports) for mid, exports in export_maps.items()}
-    local_scope_exports = {mid: dict(scopes) for mid, scopes in scope_export_maps.items()}
-    local_atoms = {mid: frozenset(exports) for mid, exports in export_maps.items()}
+    local_exports = {mid: table.exports for mid, table in tables.items()}
+    local_scope_exports = {mid: table.scope_exports for mid, table in tables.items()}
+    local_atoms = {mid: frozenset(table.exports) for mid, table in tables.items()}
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
@@ -988,64 +1188,40 @@ def resolve_program(
     # ------------------------------------------------------------------
     all_public_funcs: dict[QName, FuncDef] = {}
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
-
     # decl_info: declaration metadata for building cross-module BindingRefs
     decl_info: _DeclInfo = {}
+    type_origins: set[QName] = set()
+    alias_origins: set[QName] = set()
+    cross_module_type_owners: dict[QName, ReceiverOwner] = {}
+    cross_module_constructor_refs: dict[QName, ConstructorRef] = {}
 
-    for mid, loaded in graph.modules.items():
-        for item in static_items(loaded.program.body.items):
-            if isinstance(item, FuncDef):
-                if item.is_synthetic:
-                    continue
-                key = (mid, _item_atom(item))
-                all_public_funcs[key] = item
-                decl_info[key] = DeclInfo(
-                    decl_node_id=item.node_id,
-                    decl_span=item.span,
-                    kind=BinderKind.function_binding,
-                    is_builtin=item.is_builtin,
-                    is_method=item.is_method,
-                )
-            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                key = (mid, _item_atom(item))
-                all_public_types[key] = item
-                decl_info[key] = DeclInfo(
-                    decl_node_id=item.node_id,
-                    decl_span=item.span,
-                    kind=BinderKind.constructor_binding,
-                )
-                if isinstance(item, EnumDef):
-                    for member, member_atom in _inline_members(item, _path(key[1])):
-                        decl_info[(mid, member_atom)] = DeclInfo(
-                            decl_node_id=member.node_id,
-                            decl_span=member.span,
-                            kind=BinderKind.constructor_binding,
-                        )
-            elif isinstance(item, BuiltinVarDecl):
-                key = (mid, _item_atom(item))
-                decl_info[key] = DeclInfo(
-                    decl_node_id=item.node_id,
-                    decl_span=item.span,
-                    kind=BinderKind.builtin_var_binding,
-                )
-            elif isinstance(item, (LetDecl, VarDecl)):
-                binding_atom = _static_binding_atom(item)
-                if binding_atom is not None:
-                    key = (mid, binding_atom)
-                    decl_info[key] = DeclInfo(
-                        decl_node_id=static_binding_node_id(item),
-                        decl_span=item.span,
-                        kind=(
-                            BinderKind.let_binding
-                            if isinstance(item, LetDecl)
-                            else BinderKind.var_binding
-                        ),
-                        is_param=is_param_declaration(item.attributes),
-                    )
+    def add_tables(table: _ModuleTables) -> None:
+        all_public_funcs.update(table.funcs)
+        all_public_types.update(table.types)
+        decl_info.update(table.decl_info)
+        type_origins.update(table.type_origins)
+        alias_origins.update(table.alias_origins)
+        cross_module_type_owners.update(table.type_owners)
+        cross_module_constructor_refs.update(table.constructor_refs)
+
+    def remove_tables(table: _ModuleTables) -> None:
+        for funcs_key in table.funcs:
+            del all_public_funcs[funcs_key]
+        for types_key in table.types:
+            del all_public_types[types_key]
+        for info_key in table.decl_info:
+            del decl_info[info_key]
+        type_origins.difference_update(table.type_origins)
+        alias_origins.difference_update(table.alias_origins)
+        for owner_key in table.type_owners:
+            del cross_module_type_owners[owner_key]
+        for constructor_key in table.constructor_refs:
+            del cross_module_constructor_refs[constructor_key]
+
+    for table in tables.values():
+        add_tables(table)
 
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
-    cross_module_type_owners = _public_type_owners(all_public_types)
-    cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
     # ------------------------------------------------------------------
     # Step 4: The type-owner index over every module's prepared headers.
     # ------------------------------------------------------------------
@@ -1162,6 +1338,22 @@ def resolve_program(
         return reached
 
     import_envs: dict[ModuleId, ImportEnv] = {}
+    # Step 5 keys a declaration written otherwise at the scope path it is
+    # declared at (by node id), and records where each one keyed beneath
+    # another module's path is placed.
+    declared_scopes: dict[ModuleId, Mapping[int, ScopePath]] = {}
+    placements: dict[ModuleId, Mapping[DeclarationKey, QName]] = {}
+
+    def retained_placements(program: Program) -> dict[DeclarationKey, QName]:
+        """Return what earlier REPL entries placed, but at paths *program* does not declare."""
+        declared = {_path(atom) for _item, atom in _declaration_atoms(program)}
+        return {
+            (graph.entry_id, path[:-1], path[-1]): placement
+            for path, placement in (entry_repl_session_placements or {}).items()
+            if path not in declared
+        }
+
+    placements[graph.entry_id] = retained_placements(programs[graph.entry_id])
 
     def prepare(mid: ModuleId) -> None:
         """Build *mid*'s import environment and resolver over the current exports."""
@@ -1186,6 +1378,8 @@ def resolve_program(
             alias_origins,
             withheld,
         )
+        if mid not in settling:
+            validate_imports(mid)
         is_entry = mid == graph.entry_id
         resolvers[mid] = _Resolver(
             loaded.program,
@@ -1209,6 +1403,14 @@ def resolve_program(
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
             ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
+            placements=placements.get(mid),
+            declared_scopes=declared_scopes.get(mid),
+        )
+
+    def validate_imports(mid: ModuleId) -> None:
+        """Reject an import item of *mid* naming nothing, over the exports as they now stand."""
+        validate_import_items(
+            graph.modules[mid].imports, all_targets, export_maps, scope_export_maps, alias_origins
         )
 
     def declared_paths(mid: ModuleId) -> Mapping[NameAtom, QName]:
@@ -1247,16 +1449,27 @@ def resolve_program(
             validate=validate,
         )
 
-    def settle(members: tuple[ModuleId, ...]) -> tuple[bool, None]:
-        """Prepare *members* over their exports and re-resolve them; whether those changed."""
+    def settle(members: tuple[ModuleId, ...]) -> SourceSpan | None:
+        """Prepare *members* over their exports and re-resolve them.
+
+        Returns where the first member whose exports changed links into its
+        cycle -- its first export or import -- or ``None`` when none changed.
+        """
         read = [(export_maps[mid], scope_export_maps[mid], withheld[mid]) for mid in members]
         for mid in members:
             prepare(mid)
         reexport(members, validate=False)
-        if [(export_maps[mid], scope_export_maps[mid], withheld[mid]) for mid in members] == read:
-            return False, None
+        changed = [
+            mid
+            for mid, before in zip(members, read, strict=True)
+            if (export_maps[mid], scope_export_maps[mid], withheld[mid]) != before
+        ]
+        if not changed:
+            return None
         type_owners.forget(members)
-        return True, None
+        loaded = graph.modules[changed[0]]
+        # A cycle's member links into it through an export or an import.
+        return loaded.export_decls[0].span if loaded.export_decls else loaded.imports[0].span
 
     # ------------------------------------------------------------------
     # Step 5: Per strongly-connected component, dependencies first: prepare
@@ -1285,9 +1498,42 @@ def resolve_program(
             settling.update(members)
             _converge(partial(settle, members), _export_count(graph, members))
             settling.difference_update(members)
+            # Its items name what its modules export once those settle.
+            for mid in members:
+                validate_imports(mid)
         else:
             prepare(members[0])
         reexport(members, validate=True)
+        # A declaration written otherwise is keyed at the path it is declared
+        # at, so every later reading -- exports, typecheck, display, REPL
+        # retention -- sees the one key. Each member keyed afresh is prepared
+        # again over its keyed declarations, as are its component's others,
+        # which read them.
+        for mid in members:
+            declared_scopes[mid], placed = _declared_keys(mid, programs[mid], declared_paths(mid))
+            if declared_scopes[mid]:
+                programs[mid] = _key_declarations(programs[mid], declared_scopes[mid])
+            placements[mid] = (
+                {**retained_placements(programs[mid]), **placed}
+                if mid == graph.entry_id
+                else placed
+            )
+        keyed = [mid for mid in members if declared_scopes[mid]]
+        if keyed:
+            for mid in keyed:
+                remove_tables(tables[mid])
+                tables[mid] = _module_tables(mid, programs[mid])
+                add_tables(tables[mid])
+                local_exports[mid] = tables[mid].exports
+                local_scope_exports[mid] = tables[mid].scope_exports
+            prelude_static_decl_node_ids = _builtin_static_decl_node_ids(
+                all_public_funcs, all_public_types
+            )
+            declared_in_program = _declarations_beneath(decl_info)
+            type_owners.forget(members)
+            for mid in members:
+                prepare(mid)
+            reexport(members, validate=True)
 
     # ------------------------------------------------------------------
     # Step 6: Resolve each prepared module's bodies against the type owners
@@ -1306,6 +1552,8 @@ def resolve_program(
             resolver.tail_removes,
         )
         resolved = resolver.resolve(ambient_constructor_candidates=cross_module_candidates or None)
+        if programs[mid] is not resolved.program:
+            resolved = replace(resolved, program=programs[mid])
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,
@@ -1313,6 +1561,7 @@ def resolve_program(
             exports=export_maps[mid],
             scope_exports=scope_export_maps[mid],
             source_text=graph.modules[mid].source_text,
+            loaded_program=graph.modules[mid].program,
         )
 
     resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}

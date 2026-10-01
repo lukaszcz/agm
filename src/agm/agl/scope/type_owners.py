@@ -372,6 +372,13 @@ class TypeOwnerIndex:
                 return
             current, expected = owner.target.qname, owner.target.decl_node_id
 
+    def cyclic(self, qname: QName) -> bool:
+        """Whether alias *qname*'s chain (:meth:`_alias_chain`) leads back to *qname*."""
+        last = None
+        for _current, last in self._alias_chain(qname):
+            pass
+        return last is not None and last.target is not None and last.target.qname == qname
+
     def final_target(self, qname: QName) -> QName | None:
         """Return the type path *qname*'s alias chain ends at: *qname* itself when no alias.
 
@@ -700,16 +707,46 @@ class TypeOwnerIndex:
         it denotes. See :data:`AliasSelection`.
         """
         if qname not in self._alias_targets:
-            spelling = alias.type_expr
-            if not is_nominal_type_expr(spelling, alias.type_params):
-                self._alias_targets[qname] = None
-            else:
-                selection = self._decided_targets(qname, alias, spelling)
-                self._alias_targets[qname] = (
-                    None if selection is None else self.declared_path(selection),
-                    spelling,
-                )
+            self._alias_targets[qname] = self._spelled_selection(qname, alias, alias.type_expr)
         return self._alias_targets[qname]
+
+    def _spelled_selection(
+        self, qname: QName, alias: TypeAlias, spelling: TypeExpr
+    ) -> AliasSelection:
+        """Return the declaration *spelling*, written in alias *alias* at *qname*, denotes.
+
+        An alias standing for one of its type parameters (``type Id[T] = T``),
+        applied to a type name, denotes what that name denotes there.
+        """
+        if not is_nominal_type_expr(spelling, alias.type_params):
+            return None
+        selection = self._decided_targets(qname, alias, spelling)
+        target = None if selection is None else self.declared_path(selection)
+        parameter = None if target is None else self.projected_parameter(target)
+        if (
+            parameter is not None
+            and isinstance(spelling, AppliedT)
+            and parameter[0] < len(spelling.args)
+            and is_nominal_type_expr(argument := spelling.args[parameter[0]], alias.type_params)
+        ):
+            return self._spelled_selection(qname, alias, argument)
+        return target, spelling
+
+    def projected_parameter(self, qname: QName) -> tuple[int, int] | None:
+        """The position of the type parameter alias *qname* stands for, and how many it takes.
+
+        ``None`` unless it stands for one: ``type Id[T] = T``, or another name
+        for such an alias.
+        """
+        owner = self.owner(self.identity(qname))
+        declaration = None if owner is None else owner.alias
+        if declaration is None:
+            return None
+        spelling = declaration.type_expr
+        if not isinstance(spelling, NameT) or spelling.qualifier is not None:
+            return None
+        params = declaration.type_params
+        return (params.index(spelling.name), len(params)) if spelling.name in params else None
 
     def declared_path(self, selection: TypeSelection) -> QName | None:
         """Return the declaration *selection* denotes: its own path, or an owner's inline member.

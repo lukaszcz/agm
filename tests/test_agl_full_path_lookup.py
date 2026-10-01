@@ -391,13 +391,28 @@ _SCENARIOS = {
                 ),
                 "selected-member": accepted(_in_region("use C::{Red}", "Red"), _ONE_RED),
                 "routed-alias": accepted(_in_region("use one::C::*", "Red"), _ONE_RED),
-                "hidden-member": rejected(
-                    _in_region("use C::* hiding Red", "Red"), AglScopeError, "Red"
+                "hiding-leaves-what-the-import-brings": accepted(
+                    _in_region("use C::* hiding Red", "Red"), _ONE_RED
                 ),
-                "outside-the-region": rejected(_OUTSIDE_THE_REGION, AglScopeError, "Red"),
+                "outside-the-region-the-import-brings-it": accepted(_OUTSIDE_THE_REGION, _ONE_RED),
             },
             ("member-pattern",),
         ),
+    ),
+    "a-use-of-a-routed-alias-brings-its-target-members-to-its-region": Scenario(
+        modules={"one": _ALIASED_ENUM},
+        header=("import one",),
+        probes={
+            "hidden-member": rejected(
+                _in_region("use one::C::* hiding Red", "Red"), AglScopeError, "Red"
+            ),
+            "kept-member": accepted(
+                _in_region("use one::C::* hiding Red", "Blue(v = 1)"), _ONE_BLUE
+            ),
+            "outside-the-region": rejected(
+                "scope r\n  use one::C::*\n  let v = Red\nend r\n\nRed", AglScopeError, "Red"
+            ),
+        },
     ),
     "a-use-of-an-alias-chain-reaches-its-last-target": Scenario(
         modules={"one": f"{_ALIASED_ENUM}type D = C\ntype N = int\n"},
@@ -453,9 +468,20 @@ _SCENARIOS = {
             "qualified-function": rejected(
                 "def C::Blue() -> int = 1", DuplicateDeclarationError, "def C::Blue() -> int = 1"
             ),
-            "qualified-type": rejected("record C::Red", DuplicateDeclarationError, "record C::Red"),
             "another-name": accepted(
                 "scope C\n  def Green() -> int = 1\nend C\n\nC::Green()", "int"
+            ),
+        },
+    ),
+    # A later REPL entry's ``record S::E::Red`` replaces the inline member, so
+    # the record through the alias shares one entry with the enum.
+    "an-alias-member-path-is-declared-once-by-a-record": Scenario(
+        header=(),
+        probes={
+            "qualified-type": rejected(
+                "\n".join((*_OWN_ALIASED_ENUM, "record C::Red")),
+                DuplicateDeclarationError,
+                "record C::Red",
             ),
         },
     ),
@@ -465,7 +491,7 @@ _SCENARIOS = {
             "scope-function": rejected(
                 "scope C\n  def Red() -> int = 1\nend C\n\ntype C = S::E",
                 DuplicateDeclarationError,
-                "type C = S::E",
+                "def Red() -> int = 1",
             ),
         },
     ),
@@ -484,7 +510,7 @@ _SCENARIOS = {
         | {
             f"{declared}-type-then-{used}": accepted(
                 f"record {declared}::Red\n  q: bool\n{used}::Red(q = true)",
-                f"record {declared}::Red\n  q: bool",
+                "record E::Red\n  q: bool",
             )
             for declared in ("C", "E")
             for used in ("C", "E")
@@ -538,6 +564,29 @@ _SCENARIOS = {
             "referenced-member": accepted("R(x = 1)", "record a::R\n  x: int"),
         },
     ),
+    **{
+        f"a-bare-pattern-reads-every-step-for-{name}-constructors": Scenario(
+            modules={"lib": "enum Color\n  | Red\n  | Blue\n"},
+            header=(color, "scope S\n  enum Shade\n    | Red\n    | Dark\nend S"),
+            probes={
+                "outer-step": accepted(
+                    "scope S\n  def f(c: Color) -> int = case c of\n    | Red => 1\n"
+                    "    | _ => 2\nend S\n\nS::f(Color::Red)",
+                    "int",
+                ),
+                "outer-step-is": accepted(
+                    "scope S\n  def f(c: Color) -> bool = c is Red\nend S\n\nS::f(Color::Blue)",
+                    "bool",
+                ),
+                "nearer-step": accepted(
+                    "scope S\n  def f(c: Shade) -> int = case c of\n    | Red => 1\n"
+                    "    | _ => 2\nend S\n\nS::f(S::Shade::Dark)",
+                    "int",
+                ),
+            },
+        )
+        for name, color in (("own", "enum Color\n  | Red\n  | Blue"), ("imported", "import lib::*"))
+    },
     "a-region-import-makes-a-record-a-bare-pattern-there": Scenario(
         modules={"lib": "record Point\n  x: int\n"},
         header=("import lib", "let p = lib::Point(x = 1)"),
@@ -849,7 +898,7 @@ _SCENARIOS = {
             **type_positions("nested", "G::Inner", "Base::Inner"),
             "function": accepted("G::f", "() -> int"),
             "own-path-beside-the-target-paths": accepted(
-                "record G::Own\n  o: int\nG::Own(o = 1)", "record G::Own\n  o: int"
+                "record G::Own\n  o: int\nG::Own(o = 1)", "record Base::Own\n  o: int"
             ),
         },
     ),
@@ -875,21 +924,24 @@ _SCENARIOS = {
             "unhidden-method": accepted("G::m", "al::Base -> int"),
         },
     ),
+    # A later REPL entry's declaration at one of the target's paths replaces
+    # it, so each declaration through the alias shares one entry with them.
     "an-alias-declares-every-path-beneath-its-target-once": Scenario(
-        header=(_OWN_BASE, "type G = Base"),
+        header=(),
         probes={
-            "nested-type": rejected(
-                "record G::Inner\n  q: int", DuplicateDeclarationError, "record G::Inner\n  q: int"
-            ),
-            "function": rejected(
-                "def G::f() -> int = 2", DuplicateDeclarationError, "def G::f() -> int = 2"
-            ),
-            "scope-function": rejected(
-                "scope G\n  def f() -> int = 2\nend G",
-                DuplicateDeclarationError,
-                "def f() -> int = 2",
-            ),
-            "another-name": accepted("def G::g() -> int = 2\nG::g", "() -> int"),
+            name: rejected(
+                f"{_OWN_BASE}\ntype G = Base\n{declaration}", DuplicateDeclarationError, span
+            )
+            for name, declaration, span in (
+                ("nested-type", "record G::Inner\n  q: int", "record G::Inner\n  q: int"),
+                ("function", "def G::f() -> int = 2", "def G::f() -> int = 2"),
+                ("scope-function", "scope G\n  def f() -> int = 2\nend G", "def f() -> int = 2"),
+            )
+        }
+        | {
+            "another-name": accepted(
+                f"{_OWN_BASE}\ntype G = Base\ndef G::g() -> int = 2\nG::g", "() -> int"
+            )
         },
     ),
     "hiding-a-deeper-target-path-hides-only-it-through-an-alias": Scenario(
@@ -901,12 +953,37 @@ _SCENARIOS = {
             **type_positions_rejected("deeper", "G::Inner::Deep", HiddenMemberError),
         },
     ),
-    "an-alias-cycle-stands-for-no-path": Scenario(
+    "an-alias-cycle-is-rejected-where-declared-before-any-reading": Scenario(
         header=(),
         probes={
-            "value": rejected("type C = D\ntype D = C\nC::y", UnknownMemberError, "C::y"),
+            "value": rejected("type C = D\ntype D = C\nC::y", AglScopeError, "type C = D"),
             "annotation": rejected(
-                "type C = D\ntype D = C\nfn(p: C::y) => 1", UnknownMemberError, "C::y"
+                "type C = D\ntype D = C\nfn(p: C::y) => 1", AglScopeError, "type C = D"
+            ),
+            "read-first": rejected(
+                "def f() -> int = C::y\ntype C = D\ntype D = C\nf()",
+                AglScopeError,
+                "type C = D",
+            ),
+            "unread": rejected("type C = D\ntype D = C\n1", AglScopeError, "type C = D"),
+            "self": rejected("type C = C\n1", AglScopeError, "type C = C"),
+            "applied": rejected(
+                "type C[T] = D[T]\ntype D[T] = C[T]\n1", AglScopeError, "type C[T] = D[T]"
+            ),
+        },
+    ),
+    "a-root-anchored-builtin-static-owner-is-read-like-any-qualifier": Scenario(
+        header=(),
+        probes={
+            "unknown-static": rejected("Session::bogus()", UnknownMemberError, "Session::bogus"),
+            "anchored-call": rejected(
+                "::Session::default()", UnknownQualifierError, "::Session::default"
+            ),
+            "anchored-unknown-call": rejected(
+                "::Session::bogus()", UnknownQualifierError, "::Session::bogus"
+            ),
+            "anchored-value": rejected(
+                "::Session::bogus", UnknownQualifierError, "::Session::bogus"
             ),
         },
     ),
@@ -915,7 +992,7 @@ _SCENARIOS = {
         header=("import al::* hiding Base::Inner", "type G = Base"),
         probes={
             "own-declaration": accepted(
-                "record G::Inner\n  q: int\nG::Inner(q = 1)", "record G::Inner\n  q: int"
+                "record G::Inner\n  q: int\nG::Inner(q = 1)", "record Base::Inner\n  q: int"
             ),
         },
     ),
@@ -1439,6 +1516,16 @@ _SCENARIOS = {
             "alias-imported": accepted("A::f()", "int"),
             "own": accepted("h()", "text"),
             "imported": accepted("f()", "int"),
+        },
+    ),
+    "a-use-spelled-through-an-earlier-use-keeps-it": Scenario(
+        modules={"lib": "scope S\n  def f() -> int = 1\n\n  def g() -> int = 2\nend S\n"},
+        header=("import lib", "use lib::S as T", "use T::* hiding f"),
+        probes={
+            "member": accepted("g()", "int"),
+            "through-the-earlier-use": accepted("T::g()", "int"),
+            "hidden-by-the-later-use-only": accepted("T::f()", "int"),
+            "hidden": rejected("f()", AglScopeError, "f"),
         },
     ),
     "a-use-reads-own-bindings-declared-after-it": Scenario(

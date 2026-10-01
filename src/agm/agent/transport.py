@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
+
+AgentOutputPhase: TypeAlias = Literal["progress", "final", "stderr"]
+AgentOutputCallback: TypeAlias = Callable[[AgentOutputPhase, str], None]
 
 AgentTransportFailureCause: TypeAlias = Literal[
     "spawn_failure", "timeout", "nonzero_exit", "interpolation_failure", "protocol_failure"

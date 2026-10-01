@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agm.agent.stream import ClaudeOutputStream, decode_claude_stream_json
 from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
@@ -33,6 +34,9 @@ def _run_request(
     *,
     delivery: "PromptDelivery",
     sandbox: "SandboxRun | None" = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stdout_finalizer: Callable[[], None] | None = None,
+    decode_stdout: Callable[[str], str] | None = None,
 ) -> AgentResponse:
     """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
@@ -54,7 +58,17 @@ def _run_request(
             delivery=delivery,
             sandbox=sandbox,
         )
-        result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
+        output_callback = request.output_callback
+        result = run_prepared_prompt_result(
+            prepared,
+            idle_timeout=idle_timeout,
+            stdout_callback=stdout_callback,
+            stderr_callback=(
+                None if output_callback is None else lambda text: output_callback("stderr", text)
+            ),
+        )
+        if stdout_finalizer is not None:
+            stdout_finalizer()
         call_info = AgentCallInfo(
             argv=prepared.argv or [],
             prompt_via_stdin=prepared.prompt_via_stdin,
@@ -82,8 +96,21 @@ def _run_request(
             call_info=call_info,
             detail=failure.detail,
         )
+    content = result.stdout.text()
+    if decode_stdout is not None:
+        try:
+            content = decode_stdout(content)
+        except ValueError as exc:
+            raise AgentCallHostError(
+                cause="protocol_failure",
+                exit_code=result.returncode,
+                stderr_tail=result_stderr_tail(result),
+                elapsed=result.elapsed,
+                call_info=call_info,
+                detail=str(exc),
+            ) from exc
     return AgentResponse(
-        content=result.stdout.text(),
+        content=content,
         metadata={"elapsed": result.elapsed},
         call_info=call_info,
     )
@@ -159,18 +186,39 @@ def value_driven_agent_factory(
     """
 
     def dispatch(request: AgentRequest) -> AgentResponse:
+        from agm.agent.spec import AgentClaude
         from agm.sandbox.prepare import sandbox_run_for
 
         spec = request.agent
+        stream = (
+            ClaudeOutputStream(request.output_callback)
+            if request.output_callback is not None and isinstance(spec, AgentClaude)
+            else None
+        )
         try:
-            command = spec.argv(permission_mode=request.permission_mode)
+            command = (
+                spec.argv(
+                    permission_mode=request.permission_mode,
+                    verbose=True,
+                    stream_output=True,
+                )
+                if stream is not None and isinstance(spec, AgentClaude)
+                else spec.argv(permission_mode=request.permission_mode)
+            )
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
         sandbox = sandbox_run_for(request.sandbox, get_sandbox_context)
         return _run_request(
-            request, command, idle_timeout, delivery=_spec_delivery(spec), sandbox=sandbox
+            request,
+            command,
+            idle_timeout,
+            delivery=_spec_delivery(spec),
+            sandbox=sandbox,
+            stdout_callback=None if stream is None else stream.feed,
+            stdout_finalizer=None if stream is None else stream.finish,
+            decode_stdout=decode_claude_stream_json if stream is not None else None,
         )
 
     return dispatch

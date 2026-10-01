@@ -98,6 +98,7 @@ def run(args: ReplArgs) -> None:
     engine_seeds = engine_tiers.merged()
     timeout = resolve_timeout(engine_seeds)
     strict_json = resolve_strict_json(engine_seeds)
+    echo_agent_output = config.echo if args.echo is None else args.echo
 
     # One resolution for both the readable ``trace`` seed and the trace file
     # prepared below, exactly as ``agm exec`` does.
@@ -155,6 +156,7 @@ def run(args: ReplArgs) -> None:
             resolve_agent_spec=resolve_agent_spec,
             shell_exec_timeout=timeout,
             trace_path=trace_path,
+            echo_agent_output=echo_agent_output,
             engine_base=engine_seeds,
             process_environment=process_environment,
             host_settings_policy=host_settings_policy,

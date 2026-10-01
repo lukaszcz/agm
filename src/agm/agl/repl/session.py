@@ -239,6 +239,7 @@ class ReplSession:
         resolve_agent_spec: "AgentSpecResolver | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
+        echo_agent_output: bool = False,
         engine_base: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
         param_seed_resolver: (
@@ -338,6 +339,7 @@ class ReplSession:
         # but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
         self._initial_trace_path = trace_path
+        self._echo_agent_output = echo_agent_output
 
         # Internal runtime owns the registrations + host-environment assembly.
         # It never runs an entry on the session's behalf, so it is given none

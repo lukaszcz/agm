@@ -101,6 +101,7 @@ class _RunOptionValues(TypedDict):
     """The ``ExecArgs`` fields :func:`registered_run_options` fill, keyed by option name."""
 
     strict_json: bool | None
+    echo: bool | None
     max_call_depth: int | None
     default_agent: str | None
     default_sandbox: str | None

@@ -112,6 +112,7 @@ from agm.agl.semantics.types import (
 from agm.agl.zones import ParamZone
 from agm.cli_support.execution_options import (
     EXECUTION_OPTION_NAMES,
+    execution_option_flags,
     write_execution_options,
 )
 from agm.config.engine_keys import ENGINE_KEYS, EngineKeySpec
@@ -410,15 +411,16 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     }
 )
 
-# ``agm exec``'s reserved flag strings: declared built-ins UNION engine-key
-# flags (both polarities). Collision checking is verbatim — no
-# underscore/hyphen normalisation.
-EXEC_RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
+# ``agm exec``'s reserved flag strings: built-ins plus every shared execution
+# option. Collision checking is verbatim — no underscore/hyphen normalisation.
+EXEC_RESERVED_FLAGS: frozenset[str] = (
+    _BUILTIN_EXEC_FLAGS | engine_key_flags() | execution_option_flags()
+)
 
-# ``agm exec``'s run-time options a package-registered command parses too: every
-# engine-key flag and ``--max-call-depth``. ``agm.cli_dispatch`` takes the options
-# themselves from ``agm exec``'s command by these spellings.
-REGISTERED_RUN_FLAGS: frozenset[str] = engine_key_flags() | {"--max-call-depth"}
+# ``agm exec``'s run-time options a package-registered command parses too.
+# ``agm.cli_dispatch`` takes the options themselves from ``agm exec``'s command
+# by these spellings.
+REGISTERED_RUN_FLAGS: frozenset[str] = execution_option_flags()
 
 # A package-registered command's reserved flag strings: its run-time options
 # and help. Its program may claim ``agm exec``'s other spellings

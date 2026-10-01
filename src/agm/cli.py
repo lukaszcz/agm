@@ -180,6 +180,16 @@ def _strict_json_option() -> bool | None:
     )
 
 
+def _echo_option() -> bool | None:
+    option = execution_option_spec("echo")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Echo agent turn output to stderr.",
+    )
+
+
 def _debug_option() -> bool | None:
     option = execution_option_spec("debug")
     return typer.Option(
@@ -1102,6 +1112,7 @@ def exec_cmd(
         metavar="PATH",
         help="Select a program def by declaration path.",
     ),
+    echo: bool | None = _echo_option(),
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
@@ -1162,6 +1173,7 @@ def exec_cmd(
         code=code,
         program=program,
         argument_tokens=argument_tokens,
+        echo=echo,
         strict_json=strict_json,
         max_call_depth=max_call_depth,
         default_agent=default_agent,
@@ -1187,6 +1199,7 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
+    echo: bool | None = _echo_option(),
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
@@ -1213,6 +1226,7 @@ def repl_cmd(
 ) -> None:
     del _help
     repl_args = ReplArgs(
+        echo=echo,
         strict_json=strict_json,
         max_call_depth=max_call_depth,
         default_agent=default_agent,

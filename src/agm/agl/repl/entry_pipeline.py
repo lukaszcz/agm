@@ -677,6 +677,7 @@ class EntryPipeline:
                     self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None
                 ),
                 trace=trace,
+                echo_agent_output=self._ctx._echo_agent_output,
                 host_contracts=host_contracts,
                 base_frame=self._ctx._ir_base_frame,
                 extern_registry=host_env.extern_registry,

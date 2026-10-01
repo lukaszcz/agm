@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import queue
@@ -29,7 +30,12 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 from agm.agent.spec import AgentPi
-from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
+from agm.agent.transport import (
+    AgentCallInfo,
+    AgentOutputCallback,
+    AgentTransportFailureCause,
+    stderr_tail,
+)
 from agm.core.process import CapturedOutput, stop_process
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
 from agm.sandbox.prepare import SandboxContext, sandbox_run_for
@@ -92,6 +98,10 @@ class _RpcChild:
         default_factory=lambda: queue.Queue(maxsize=_MAX_STDOUT_CHUNKS)
     )
     stderr: _BoundedText = field(default_factory=_BoundedText)
+    stderr_decoder: codecs.IncrementalDecoder = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")("replace")
+    )
+    output_callback: AgentOutputCallback | None = None
     readers: list[threading.Thread] = field(default_factory=list)
     stopped: threading.Event = field(default_factory=threading.Event)
 
@@ -129,7 +139,15 @@ class PiRpcSessionBackend(SandboxFixture):
         # settled must not discard that answer, so report its state without requiring
         # it to still be alive here.
         child = self._live_child("prompt")
-        _, text = self._send("prompt", {"message": request.prompt}, wait_for_settled=True)
+        try:
+            _, text = self._send(
+                "prompt",
+                {"message": request.prompt},
+                wait_for_settled=True,
+                output_callback=request.output_callback,
+            )
+        finally:
+            child.output_callback = None
         elapsed = time.monotonic() - started
         return SessionAskResponse(
             content="".join(text),
@@ -280,7 +298,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 ),
                 _start_reader(
                     process.stderr,
-                    child.stderr.append,
+                    lambda chunk: _capture_stderr(child, chunk),
                     lambda: None,
                     child.stopped,
                 ),
@@ -316,15 +334,19 @@ class PiRpcSessionBackend(SandboxFixture):
         payload: dict[str, object],
         *,
         wait_for_settled: bool = False,
+        output_callback: AgentOutputCallback | None = None,
     ) -> tuple[dict[str, object], list[str]]:
         child = self._live_child(operation)
         request_id = str(uuid4())
         command = {"id": request_id, "type": operation, **payload}
         started = time.monotonic()
+        child.output_callback = output_callback
         self._write(child, command, operation, started)
 
         text: list[str] = []
         text_length = 0
+        assistant_progress: list[str] = []
+        tool_output_lengths: dict[str, str] = {}
         response: dict[str, object] | None = None
         state_request_id: str | None = None
         streaming: bool | None = None
@@ -341,6 +363,14 @@ class PiRpcSessionBackend(SandboxFixture):
                     _write_command(child, ui_cancellation, self._idle_timeout)
                 delta = _event_text_delta(event)
                 authoritative_text = _event_assistant_text(event)
+                if output_callback is not None:
+                    _emit_pi_progress(
+                        event,
+                        delta=delta,
+                        assistant_progress=assistant_progress,
+                        tool_output_lengths=tool_output_lengths,
+                        callback=output_callback,
+                    )
                 if event["type"] == "response":
                     _validate_response(event)
                     if event.get("id") == state_request_id and event.get("command") == "get_state":
@@ -399,6 +429,8 @@ class PiRpcSessionBackend(SandboxFixture):
                     text.clear()
                     text_length = 0
                     terminal_error = None
+                    assistant_progress.clear()
+                    tool_output_lengths.clear()
                 else:
                     if authoritative_text is not None:
                         text = [authoritative_text]
@@ -420,6 +452,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 settled = settled or event_type == "agent_settled"
         if terminal_error is not None:
             self._raise_ask_error("nonzero_exit", terminal_error, started, child)
+        child.output_callback = None
         return response, text
 
     def _parse_operation_response(
@@ -736,6 +769,82 @@ def _event_text_delta(event: dict[str, object]) -> str | None:
     if not isinstance(delta, str):
         raise _RpcProtocolError("Pi RPC text delta was not text")
     return delta
+
+
+def _capture_stderr(child: _RpcChild, chunk: bytes) -> None:
+    """Retain Pi diagnostics and echo decoded stderr while an ask is active."""
+    child.stderr.append(chunk)
+    text = child.stderr_decoder.decode(chunk)
+    callback = child.output_callback
+    if callback is not None and text:
+        try:
+            callback("stderr", text)
+        except OSError:
+            pass
+
+
+def _emit_pi_progress(
+    event: dict[str, object],
+    *,
+    delta: str | None,
+    assistant_progress: list[str],
+    tool_output_lengths: dict[str, str],
+    callback: AgentOutputCallback,
+) -> None:
+    """Echo Pi tool activity and assistant messages that invoke a tool."""
+    event_type = event["type"]
+    if event_type == "message_update" and delta is not None:
+        assistant_progress.append(delta)
+        return
+    if event_type == "message_end":
+        message = event.get("message")
+        if isinstance(message, dict):
+            typed_message = cast(dict[str, object], message)
+        else:
+            typed_message = None
+        if typed_message is not None and typed_message.get("role") == "assistant":
+            stop_reason = typed_message.get("stopReason")
+            if stop_reason not in ("stop", "length", "error"):
+                text = "".join(assistant_progress)
+                if text:
+                    callback("progress", text)
+        assistant_progress.clear()
+        return
+    if event_type == "tool_execution_start":
+        name = event.get("toolName")
+        if isinstance(name, str) and name:
+            callback("progress", f"[{name}]\n")
+        return
+    if event_type not in {"tool_execution_update", "tool_execution_end"}:
+        return
+    call_id = event.get("toolCallId")
+    if not isinstance(call_id, str):
+        return
+    result = (
+        event.get("partialResult") if event_type == "tool_execution_update" else event.get("result")
+    )
+    current = _rpc_result_text(result)
+    previous = tool_output_lengths.get(call_id, "")
+    added = current[len(previous) :] if current.startswith(previous) else current
+    tool_output_lengths[call_id] = current
+    if added:
+        callback("progress", added)
+
+
+def _rpc_result_text(value: object) -> str:
+    """Extract readable text blocks from one Pi tool result."""
+    if not isinstance(value, dict):
+        return ""
+    content = value.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        cast(str, item_value["text"])
+        for item in content
+        if isinstance(item, dict)
+        for item_value in (cast(dict[str, object], item),)
+        if item_value.get("type") == "text" and isinstance(item_value.get("text"), str)
+    )
 
 
 def _extension_ui_cancellation(event: dict[str, object]) -> dict[str, object] | None:

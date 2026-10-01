@@ -30,6 +30,7 @@ class _HelpGroup:
 
 
 EXECUTION_OPTION_SPECS: tuple[ExecutionOptionSpec, ...] = (
+    ExecutionOptionSpec("echo", ("--echo/--no-echo",), None, "echo"),
     ExecutionOptionSpec("strict_json", ("--strict-json/--no-strict-json",), None, "strict_json"),
     ExecutionOptionSpec("max_call_depth", ("--max-call-depth",), "N", "call_depth"),
     ExecutionOptionSpec("default_agent", ("--default-agent",), "AGENT", "default_agent"),
@@ -50,6 +51,7 @@ _SPEC_BY_NAME = {spec.name: spec for spec in EXECUTION_OPTION_SPECS}
 #: registered commands all accept each one.
 EXECUTION_OPTION_NAMES: frozenset[str] = frozenset(_SPEC_BY_NAME)
 _HELP_GROUPS: tuple[_HelpGroup, ...] = (
+    _HelpGroup("echo", "Echo agent turn output to stderr."),
     _HelpGroup("strict_json", "Strict or lenient agent JSON parsing."),
     _HelpGroup("call_depth", "Maximum call depth."),
     _HelpGroup("default_agent", "Default agent (Agent value or command)."),
@@ -65,6 +67,16 @@ _HELP_GROUPS: tuple[_HelpGroup, ...] = (
 def execution_option_spec(name: str) -> ExecutionOptionSpec:
     """Return the shared declaration metadata for one execution option."""
     return _SPEC_BY_NAME[name]
+
+
+def execution_option_flags() -> frozenset[str]:
+    """Return every CLI spelling declared by the shared execution options."""
+    return frozenset(
+        flag
+        for spec in EXECUTION_OPTION_SPECS
+        for declaration in spec.declarations
+        for flag in declaration.split("/")
+    )
 
 
 def execution_option_rows(parameter_names: Collection[str]) -> tuple[tuple[str, str], ...]:

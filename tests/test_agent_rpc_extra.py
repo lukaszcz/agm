@@ -21,6 +21,7 @@ from agm.agent.session import (
     rpc,
 )
 from agm.agent.spec import AgentClaude, AgentPi
+from agm.agent.transport import AgentOutputPhase
 from agm.sandbox.request import SandboxLimits
 from tests._agl_helpers import (
     session_sandbox_context,
@@ -85,8 +86,15 @@ def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
         payload: dict[str, object],
         *,
         wait_for_settled: bool = False,
+        output_callback: rpc.AgentOutputCallback | None = None,
     ) -> tuple[dict[str, object], list[str]]:
-        result = send(self, operation, payload, wait_for_settled=wait_for_settled)
+        result = send(
+            self,
+            operation,
+            payload,
+            wait_for_settled=wait_for_settled,
+            output_callback=output_callback,
+        )
         child = self._child
         assert child is not None
         child.process.wait(timeout=5)
@@ -543,7 +551,6 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         is None
     )
     assert rpc._session_id({"data": {"sessionId": ""}}) is None
-
     malformed_stats: tuple[dict[str, object], ...] = (
         {},
         {"data": {}},
@@ -621,6 +628,69 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     with pytest.raises(rpc._RpcProtocolError):
         rpc._terminal_prompt_failure({"type": "agent_end", "messages": None})
+
+
+def test_pi_output_helpers_handle_empty_and_closed_output_channels() -> None:
+    output: list[tuple[str, str]] = []
+
+    def callback(phase: AgentOutputPhase, text: str) -> None:
+        output.append((phase, text))
+
+    assistant_progress = ["pending"]
+    tool_output_lengths: dict[str, str] = {}
+    rpc._emit_pi_progress(
+        {"type": "message_end", "message": None},
+        delta=None,
+        assistant_progress=assistant_progress,
+        tool_output_lengths=tool_output_lengths,
+        callback=callback,
+    )
+    rpc._emit_pi_progress(
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "toolUse"}},
+        delta=None,
+        assistant_progress=assistant_progress,
+        tool_output_lengths=tool_output_lengths,
+        callback=callback,
+    )
+    rpc._emit_pi_progress(
+        {"type": "tool_execution_start"},
+        delta=None,
+        assistant_progress=assistant_progress,
+        tool_output_lengths=tool_output_lengths,
+        callback=callback,
+    )
+    rpc._emit_pi_progress(
+        {"type": "tool_execution_update", "partialResult": {"content": []}},
+        delta=None,
+        assistant_progress=assistant_progress,
+        tool_output_lengths=tool_output_lengths,
+        callback=callback,
+    )
+    rpc._emit_pi_progress(
+        {
+            "type": "tool_execution_update",
+            "toolCallId": "empty",
+            "partialResult": {"content": []},
+        },
+        delta=None,
+        assistant_progress=assistant_progress,
+        tool_output_lengths=tool_output_lengths,
+        callback=callback,
+    )
+    assert assistant_progress == []
+    assert output == []
+    assert rpc._rpc_result_text(None) == ""
+    assert rpc._rpc_result_text({"content": None}) == ""
+
+    child = _child(object())
+
+    def closed_channel(_phase: str, _text: str) -> None:
+        raise BrokenPipeError
+
+    child.output_callback = closed_channel
+    rpc._capture_stderr(child, b"diagnostic")
+
+    assert child.stderr.data == b"diagnostic"
 
 
 def test_open_rejects_an_already_live_child_and_dead_child_is_cleared(

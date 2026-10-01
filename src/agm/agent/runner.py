@@ -698,6 +698,8 @@ def run_prepared_prompt_result(
     prepared: PreparedPromptRun,
     *,
     idle_timeout: float | None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
 ) -> PromptRunResult:
     """Run a prepared runner invocation and return a structured result.
 
@@ -756,6 +758,8 @@ def run_prepared_prompt_result(
             idle_timeout=idle_timeout,
             isolate_process_group=True,
             interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
         )
     finally:
         if sandbox is not None:

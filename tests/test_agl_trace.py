@@ -278,6 +278,55 @@ class TestExecCommandRecord:
 
 
 class TestAgentCallRecord:
+    @pytest.mark.parametrize(("echo", "expected_stderr"), [(True, "work\nlog\ndone"), (False, "")])
+    def test_agent_turn_output_is_echoed_and_traced(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        echo: bool,
+        expected_stderr: str,
+    ) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            if request.output_callback is not None:
+                request.output_callback("progress", "")
+                request.output_callback("progress", "work\n")
+                request.output_callback("stderr", "log\n")
+            return AgentResponse(content="done")
+
+        result = _run_inline(
+            _agent_runtime(agent),
+            'let a = AgentCommand("runner")\nlet answer: text = a.ask("do work")\nanswer',
+            echo_agent_output=echo,
+            trace_file=trace_path,
+        )
+
+        assert result.ok
+        assert capsys.readouterr().err == expected_stderr
+        outputs = [record for record in _load_jsonl(trace_path) if record["kind"] == "agent_output"]
+        expected_outputs = (
+            [("progress", "work\n"), ("stderr", "log\n"), ("final", "done")] if echo else []
+        )
+        assert [(record["phase"], record["text"]) for record in outputs] == expected_outputs
+
+    def test_agent_output_is_echoed_when_tracing_is_off(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def agent(request: AgentRequest) -> AgentResponse:
+            if request.output_callback is not None:
+                request.output_callback("progress", "")
+            return AgentResponse(content="done")
+
+        result = _run_inline(
+            _agent_runtime(agent),
+            'let a = AgentCommand("runner")\nlet answer: text = a.ask("do work")\nanswer',
+            echo_agent_output=True,
+        )
+
+        assert result.ok
+        assert capsys.readouterr().err == "done"
+
     def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("good"))

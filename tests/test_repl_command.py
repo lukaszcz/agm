@@ -118,6 +118,13 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--quiet"]).exit_code == 0
         assert getattr(recorded_runs[0], "quiet") is True
 
+    @pytest.mark.parametrize(("flag", "expected"), [("--echo", True), ("--no-echo", False)])
+    def test_agent_output_echo_flags(
+        self, runner: CliRunner, recorded_runs: list[object], flag: str, expected: bool
+    ) -> None:
+        assert invoke(runner, ["repl", flag]).exit_code == 0
+        assert getattr(recorded_runs[0], "echo") is expected
+
     def test_trace_file_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--trace-file", "/tmp/r.log"]).exit_code == 0
         assert getattr(recorded_runs[0], "trace_file") == "/tmp/r.log"

@@ -29,6 +29,7 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 from agm.agent.spec import PermissionMode
+from agm.agent.transport import AgentOutputCallback
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
@@ -236,16 +237,23 @@ class AglSessionHost:
         """
         from agm.agl.runtime.request import AgentResponse
 
-        response = self._ask(handle, request.prompt)
+        response = self._ask(handle, request.prompt, request.output_callback)
         return AgentResponse(
             content=response.content,
             metadata=dict(response.metadata),
             call_info=response.call_info,
         )
 
-    def _ask(self, handle: str, prompt: str) -> SessionAskResponse:
+    def _ask(
+        self,
+        handle: str,
+        prompt: str,
+        output_callback: "AgentOutputCallback | None" = None,
+    ) -> SessionAskResponse:
         try:
-            return self._service.ask(handle, SessionAskRequest(prompt))
+            return self._service.ask(
+                handle, SessionAskRequest(prompt, output_callback=output_callback)
+            )
         except SessionAskError as error:
             self._raise_ask_error(error)
         except SessionHostError as error:

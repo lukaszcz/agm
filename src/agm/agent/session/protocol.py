@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from agm.agent.spec import PermissionMode
-from agm.agent.transport import AgentCallInfo, AgentTransportError
+from agm.agent.transport import AgentCallInfo, AgentOutputCallback, AgentTransportError
 from agm.sandbox.request import SandboxLimits
 
 
@@ -81,6 +81,7 @@ class SessionAskRequest:
     """
 
     prompt: str
+    output_callback: AgentOutputCallback | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

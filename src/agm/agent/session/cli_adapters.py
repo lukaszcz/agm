@@ -33,7 +33,13 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, PermissionMode
-from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
+from agm.agent.stream import ClaudeOutputStream, CodexOutputStream, decode_claude_stream_json
+from agm.agent.transport import (
+    AgentCallInfo,
+    AgentOutputCallback,
+    AgentTransportFailureCause,
+    stderr_tail,
+)
 from agm.core.cleanup import preserve_primary_error
 from agm.sandbox.prepare import SandboxContext, sandbox_run_for
 from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
@@ -113,6 +119,10 @@ class _CliPromptBackend(SandboxFixture):
         session_id: str | None = None,
         permission_mode: PermissionMode,
         sandbox: SandboxLimits | None,
+        output_callback: "AgentOutputCallback | None" = None,
+        stdout_callback: Callable[[str], None] | None = None,
+        stdout_finalizer: Callable[[], None] | None = None,
+        decode_stdout: Callable[[str], str] | None = None,
     ) -> SessionAskResponse:
         """Run one prepared prompt and translate process failures for sessions."""
         temp_files: list[Path] = []
@@ -130,7 +140,14 @@ class _CliPromptBackend(SandboxFixture):
                     sandbox=sandbox_run_for(sandbox, self._get_sandbox_context),
                 )
                 result = runner.run_prepared_prompt_result(
-                    prepared, idle_timeout=self._idle_timeout
+                    prepared,
+                    idle_timeout=self._idle_timeout,
+                    stdout_callback=stdout_callback,
+                    stderr_callback=(
+                        None
+                        if output_callback is None
+                        else lambda text: output_callback("stderr", text)
+                    ),
                 )
             except InterpolationError as exc:
                 raise SessionAskError(
@@ -147,6 +164,8 @@ class _CliPromptBackend(SandboxFixture):
                         permission_mode=permission_mode.value,
                     ),
                 ) from exc
+            if stdout_finalizer is not None:
+                stdout_finalizer()
             if failure := prompt_run_result_error(result):
                 raise SessionAskError(
                     cause=failure.cause,
@@ -167,8 +186,28 @@ class _CliPromptBackend(SandboxFixture):
                     ),
                     detail=failure.detail,
                 ) from failure
+            content = result.stdout.text()
+            if decode_stdout is not None:
+                try:
+                    content = decode_stdout(content)
+                except ValueError as exc:
+                    raise SessionAskError(
+                        cause="protocol_failure",
+                        exit_code=result.returncode,
+                        stderr_tail=result_stderr_tail(result),
+                        elapsed=result.elapsed,
+                        call_info=AgentCallInfo(
+                            argv=(prepared.argv or []).copy(),
+                            prompt_via_stdin=prepared.prompt_via_stdin,
+                            elapsed=result.elapsed,
+                            exit_code=result.returncode,
+                            sandboxed=isinstance(prepared.sandbox, PreparedSandboxCommand),
+                            permission_mode=permission_mode.value,
+                        ),
+                        detail=str(exc),
+                    ) from exc
             return SessionAskResponse(
-                content=result.stdout.text(),
+                content=content,
                 metadata={"elapsed": result.elapsed},
                 call_info=AgentCallInfo(
                     argv=(prepared.argv or []).copy(),
@@ -251,6 +290,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             session_id=session.session_id,
             permission_mode=self._permission_mode,
             sandbox=self._sandbox,
+            output_callback=request.output_callback,
         )
 
     def reset(self) -> None:
@@ -299,7 +339,11 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start or resume this backend's transcript for one prompt."""
         session = self._session_for(SessionOperation.ASK.value)
-        command = self._prompt_command(session, self._permission_mode)
+        stream_output = request.output_callback is not None
+        command = self._prompt_command(session, self._permission_mode, stream_output=stream_output)
+        stdout_stream = None
+        if request.output_callback is not None and isinstance(session.agent, AgentClaude):
+            stdout_stream = ClaudeOutputStream(request.output_callback)
         was_started = session.started
         session.started = True
         try:
@@ -309,6 +353,10 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
                 delivery=PromptDelivery.FILE,
                 permission_mode=self._permission_mode,
                 sandbox=self._sandbox,
+                output_callback=request.output_callback,
+                stdout_callback=None if stdout_stream is None else stdout_stream.feed,
+                stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
+                decode_stdout=(decode_claude_stream_json if stdout_stream is not None else None),
             )
         except SessionAskError as error:
             if not was_started and _creation_not_launched(error):
@@ -327,7 +375,11 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
 
     @abstractmethod
     def _prompt_command(
-        self, session: _SessionIdCliState[_SessionAgentT], permission_mode: PermissionMode
+        self,
+        session: _SessionIdCliState[_SessionAgentT],
+        permission_mode: PermissionMode,
+        *,
+        stream_output: bool,
     ) -> list[str]:
         """Build the backend-specific command for the current session state."""
 
@@ -375,16 +427,26 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
         )
 
     def _prompt_command(
-        self, session: _SessionIdCliState[AgentClaude], permission_mode: PermissionMode
+        self,
+        session: _SessionIdCliState[AgentClaude],
+        permission_mode: PermissionMode,
+        *,
+        stream_output: bool,
     ) -> list[str]:
         return (
-            session.agent.argv(permission_mode=permission_mode)
+            session.agent.argv(
+                permission_mode=permission_mode,
+                verbose=stream_output,
+                stream_output=stream_output,
+            )
             if session.single_prompt
             else session.agent.session_argv(
                 session.session_id,
                 resume=session.started,
                 name=session.name if not session.started else "",
                 permission_mode=permission_mode,
+                verbose=stream_output,
+                stream_output=stream_output,
             )
         )
 
@@ -474,34 +536,63 @@ class CodexCliSessionBackend(_CliPromptBackend):
         """
         session = self._session_for("ask")
         if session.single_prompt:
-            return self._run_prompt(
+            stream_output = request.output_callback is not None
+            stdout_stream = (
+                CodexOutputStream(request.output_callback)
+                if request.output_callback is not None
+                else None
+            )
+            response = self._run_prompt(
                 request.prompt,
-                session.agent.argv(permission_mode=self._permission_mode),
+                session.agent.argv(
+                    permission_mode=self._permission_mode, json_output=stream_output
+                ),
                 delivery=PromptDelivery.STDIN,
                 permission_mode=self._permission_mode,
                 sandbox=self._sandbox,
+                output_callback=request.output_callback,
+                stdout_callback=None if stdout_stream is None else stdout_stream.feed,
+                stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
             )
+            if not stream_output:
+                return response
+            try:
+                _, content = _parse_codex_jsonl(response.content)
+            except (_CodexProtocolError, _CodexTurnFailedError) as exc:
+                raise _codex_ask_error(response, "protocol_failure", exc) from exc
+            return replace(response, content=content)
         if session.session_id is None and session.started:
             raise SessionHostError(
                 "Codex session start did not produce a resumable thread", SessionOperation.ASK.value
             )
         starting = session.session_id is None
+        json_output = starting or request.output_callback is not None
+        stdout_stream = (
+            CodexOutputStream(request.output_callback)
+            if request.output_callback is not None
+            else None
+        )
         session.started = True
         try:
             response = self._run_prompt(
                 request.prompt,
                 session.agent.session_argv(
-                    session.session_id, permission_mode=self._permission_mode
+                    session.session_id,
+                    permission_mode=self._permission_mode,
+                    json_output=json_output if request.output_callback is not None else None,
                 ),
                 delivery=PromptDelivery.STDIN,
                 permission_mode=self._permission_mode,
                 sandbox=self._sandbox,
+                output_callback=request.output_callback,
+                stdout_callback=None if stdout_stream is None else stdout_stream.feed,
+                stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
             )
         except SessionAskError as error:
             if starting and _creation_not_launched(error):
                 session.started = False
             raise
-        if not starting:
+        if not json_output:
             return response
         try:
             thread_id, content = _parse_codex_jsonl(response.content)
@@ -513,7 +604,8 @@ class CodexCliSessionBackend(_CliPromptBackend):
             raise _codex_ask_error(response, "nonzero_exit", exc) from exc
         except _CodexProtocolError as exc:
             raise _codex_ask_error(response, "protocol_failure", exc) from exc
-        session.session_id = thread_id
+        if starting:
+            session.session_id = thread_id
         return replace(response, content=content)
 
     def reset(self) -> None:
@@ -552,8 +644,13 @@ class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
         )
 
     def _prompt_command(
-        self, session: _SessionIdCliState[AgentPi], permission_mode: PermissionMode
+        self,
+        session: _SessionIdCliState[AgentPi],
+        permission_mode: PermissionMode,
+        *,
+        stream_output: bool,
     ) -> list[str]:
+        del stream_output
         return (
             session.agent.argv(permission_mode=permission_mode)
             if session.single_prompt

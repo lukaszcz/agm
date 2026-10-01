@@ -23,7 +23,7 @@ from agm.agent.session import (
     create_agl_session_host,
 )
 from agm.agent.spec import AgentCommand, AgentPi, PermissionMode
-from agm.agent.transport import AgentCallInfo
+from agm.agent.transport import AgentCallInfo, AgentOutputPhase
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
@@ -211,7 +211,12 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
     agent = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(agent, "Rpc", env={})
 
-    response = host.ask_request(handle, AgentRequest(agent=agent, prompt="hello", env={}))
+    def callback(_phase: AgentOutputPhase, _text: str) -> None:
+        return None
+
+    response = host.ask_request(
+        handle, AgentRequest(agent=agent, prompt="hello", env={}, output_callback=callback)
+    )
 
     assert response.content == "answer"
     assert response.metadata == {"elapsed": 1.5, "provider": "pi"}
@@ -224,6 +229,7 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
         "sandboxed": False,
         "permission_mode": "none",
     }
+    assert backend.ask_requests[0].output_callback is callback
 
 
 def test_agl_session_host_translates_host_and_ask_failures() -> None:

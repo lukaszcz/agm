@@ -487,6 +487,7 @@ class IrInterpreter:
         resolve_agent_spec: "AgentSpecResolver | None" = None,
         close_sessions: bool = True,
         strict_json: bool = False,
+        echo_agent_output: bool = False,
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
@@ -513,6 +514,7 @@ class IrInterpreter:
         self._current_module: ModuleId = program.entry_module
         self._call_sites: list[tuple[ModuleId, Location | None]] = []
         self._trace: TraceStore = trace if trace is not None else noop_trace()
+        self._echo_agent_output = echo_agent_output
         self._max_call_depth: int = max_call_depth
         self._agent_dispatcher = agent_dispatcher
         self._session_host: SessionHost = (

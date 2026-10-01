@@ -405,6 +405,23 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "file") == str(agl_file)
 
+    @pytest.mark.parametrize(("flag", "expected"), [("--echo", True), ("--no-echo", False)])
+    def test_agent_output_echo_flags(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        recorded_runs: list[object],
+        flag: str,
+        expected: bool,
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "let x = 1\n")
+
+        result = invoke(runner, ["exec", flag, str(agl_file)])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "echo") is expected
+
     def test_plain_exec_does_not_discover_the_program_during_cli_parsing(
         self,
         runner: CliRunner,
@@ -2486,6 +2503,7 @@ class TestExecTimeoutAndLogFileFlags:
                 prepared: PreparedProgram,
                 *,
                 check_only: bool = False,
+                echo_agent_output: bool = False,
                 trace_file: Path | None = None,
                 invoked_command: str | None = None,
                 program_function: str | None = None,
@@ -2501,9 +2519,11 @@ class TestExecTimeoutAndLogFileFlags:
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
                 captured["process_environment"] = process_environment
+                captured["echo_agent_output"] = echo_agent_output
                 return super().run_prepared(
                     prepared,
                     check_only=check_only,
+                    echo_agent_output=echo_agent_output,
                     trace_file=trace_file,
                     invoked_command=invoked_command,
                     program_function=program_function,
@@ -2565,6 +2585,37 @@ class TestExecTimeoutAndLogFileFlags:
         result = exec_command.run(_exec_args_no_trace(agl_file, no_timeout=True))
         assert result is None
         assert captured["shell_exec_timeout"] is None
+
+    def test_cli_echo_flag_reaches_execution_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+        captured = self._capture_timeout(monkeypatch)
+
+        exec_command.run(_exec_args_no_trace(agl_file, echo=True))
+
+        assert captured["echo_agent_output"] is True
+
+    @pytest.mark.parametrize(
+        ("config_echo", "cli_echo", "expected"), [(True, None, True), (True, False, False)]
+    )
+    def test_exec_echo_config_and_cli_precedence(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config_echo: bool,
+        cli_echo: bool | None,
+        expected: bool,
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+        _config_home(tmp_path, monkeypatch, f"[exec]\necho = {str(config_echo).lower()}\n")
+        captured = self._capture_timeout(monkeypatch)
+
+        exec_command.run(_exec_args_no_trace(agl_file, echo=cli_echo))
+
+        assert captured["echo_agent_output"] is expected
 
     def test_cli_timeout_preserves_raw_builtin_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

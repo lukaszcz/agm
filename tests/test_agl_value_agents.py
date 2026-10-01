@@ -671,6 +671,105 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
     assert captured["stdin_text"] == "hello"
 
 
+def test_claude_agent_dispatch_echoes_progress_and_decodes_the_final_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agm.agl.runtime.request import AgentRequest
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    stream = "\n".join(
+        (
+            '{"type":"stream_event","event":{"type":"content_block_start",'
+            '"content_block":{"type":"tool_use","name":"Read"}}}',
+            '{"type":"stream_event","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"Checking"}}}',
+            '{"type":"assistant","message":{"stop_reason":"tool_use"}}',
+            '{"type":"assistant","message":{"stop_reason":"end_turn"}}',
+            '{"type":"result","result":"decoded final"}',
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        stdout_callback = kwargs.get("stdout_callback")
+        if callable(stdout_callback):
+            stdout_callback(stream)
+        stderr_callback = kwargs.get("stderr_callback")
+        if callable(stderr_callback):
+            stderr_callback("diagnostic\n")
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=stream.encode(), truncated=False),
+            stderr=CapturedOutput(data=b"diagnostic\n", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    output: list[tuple[str, str]] = []
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
+
+    response = dispatch(
+        AgentRequest(
+            agent=AgentClaude("sonnet", "medium"),
+            prompt="hello",
+            env={},
+            output_callback=lambda phase, text: output.append((phase, text)),
+        )
+    )
+
+    assert response.content == "decoded final"
+    assert output == [
+        ("progress", "[Read]\n"),
+        ("progress", "Checking"),
+        ("stderr", "diagnostic\n"),
+    ]
+    command = captured["cmd"]
+    assert isinstance(command, list)
+    assert "--verbose" in command
+    assert command[command.index("--output-format") + 1] == "stream-json"
+
+
+def test_claude_agent_dispatch_reports_malformed_echo_stream_as_protocol_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agm.agl.runtime.agents import AgentCallHostError
+    from agm.agl.runtime.request import AgentRequest
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        del cmd, kwargs
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"not json", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
+
+    with pytest.raises(AgentCallHostError) as raised:
+        dispatch(
+            AgentRequest(
+                agent=AgentClaude("sonnet", "medium"),
+                prompt="hello",
+                env={},
+                output_callback=lambda _phase, _text: None,
+            )
+        )
+
+    assert raised.value.cause == "protocol_failure"
+
+
 def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

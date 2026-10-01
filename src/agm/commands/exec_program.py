@@ -20,6 +20,8 @@ Exit-code contract:
     2  program executed but ended with an uncaught AgL exception
 
 Flag notes:
+    - ``--echo`` echoes live agent progress and final output to stderr;
+      ``--no-echo`` disables it. ``[exec] echo = true`` enables it by default.
     - ``--strict-json`` controls JSON-codec strictness: when set, agents must
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
@@ -786,6 +788,7 @@ def run(
     ):
         result = runtime.run_prepared(
             prepared,
+            echo_agent_output=config.echo if args.echo is None else args.echo,
             trace_file=trace_file,
             invoked_command=invoked_command,
             program_function=(

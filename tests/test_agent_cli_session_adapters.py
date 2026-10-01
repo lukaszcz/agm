@@ -70,6 +70,12 @@ class CaptureTransport:
             env = kwargs.get("env")
             self.envs.append(env if isinstance(env, dict) else None)
             outcome = self.outcomes.pop(0)
+            stdout_callback = kwargs.get("stdout_callback")
+            if callable(stdout_callback) and outcome.stdout:
+                stdout_callback(outcome.stdout)
+            stderr_callback = kwargs.get("stderr_callback")
+            if callable(stderr_callback) and outcome.stderr:
+                stderr_callback(outcome.stderr)
             return ProcessCaptureResult(
                 returncode=outcome.returncode,
                 stdout=CapturedOutput(data=outcome.stdout.encode(), truncated=outcome.timed_out),
@@ -315,6 +321,146 @@ def test_claude_compact_before_first_ask_is_deferred(monkeypatch: pytest.MonkeyP
     assert "--session-id" in transport.calls[0][0]
     assert "--resume" not in transport.calls[0][0]
     assert "named" in transport.calls[0][0]
+
+
+def test_claude_echo_stream_decodes_final_response_and_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"stream_event","event":{"type":"content_block_start",'
+            '"content_block":{"type":"tool_use","name":"Read"}}}',
+            '{"type":"stream_event","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"working"}}}',
+            '{"type":"assistant","message":{"stop_reason":"tool_use"}}',
+            '{"type":"stream_event","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"answer"}}}',
+            '{"type":"assistant","message":{"stop_reason":"end_turn"}}',
+            '{"type":"result","result":"decoded final"}',
+        ]
+    )
+    transport = CaptureTransport([CaptureOutcome(output, stderr="diagnostic\n")])
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentClaude("m", "t"))
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+        )
+    )
+
+    assert response.content == "decoded final"
+    assert output_chunks == [
+        ("progress", "[Read]\n"),
+        ("progress", "working"),
+        ("stderr", "diagnostic\n"),
+    ]
+    command = transport.calls[0][0]
+    assert command[:2] == ["claude", "-p"]
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert "--include-partial-messages" in command
+    assert "--verbose" in command
+
+
+def test_claude_echo_stream_rejects_an_undecodable_final_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("not json")])
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentClaude("m", "t"))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("question", output_callback=lambda _phase, _text: None))
+
+    assert raised.value.cause == "protocol_failure"
+
+
+def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.started","item":{"type":"command_execution","command":"ls"}}',
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"aggregated_output":"file.txt\\n"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"final"}}',
+        ]
+    )
+    resumed_output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}',
+        ]
+    )
+    transport = CaptureTransport(
+        [CaptureOutcome(output, stderr="codex log\n"), CaptureOutcome(resumed_output)]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("m", "t"))
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+        )
+    )
+
+    assert response.content == "final"
+    assert output_chunks == [
+        ("progress", "$ ls\n"),
+        ("progress", "file.txt\n"),
+        ("stderr", "codex log\n"),
+    ]
+    assert transport.calls[0][0][:4] == ["codex", "exec", "--json", "--model"]
+    resumed = backend.ask(SessionAskRequest("again", output_callback=lambda _phase, _text: None))
+    assert resumed.content == "resumed"
+    assert transport.calls[1][0][:5] == ["codex", "exec", "resume", "thread-1", "--json"]
+
+
+def test_codex_single_prompt_echo_decodes_jsonl_final_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.started","item":{"type":"command_execution","command":"pwd"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+        ]
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+        )
+    )
+
+    assert response.content == "answer"
+    assert output_chunks == [("progress", "$ pwd\n")]
+    assert transport.calls[0][0][:4] == ["codex", "exec", "--json", "--model"]
+
+
+def test_codex_single_prompt_echo_rejects_malformed_jsonl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("not json")])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("question", output_callback=lambda _phase, _text: None))
+
+    assert raised.value.cause == "protocol_failure"
 
 
 def test_pi_forks_immediately_after_open_then_child_starts_independently(

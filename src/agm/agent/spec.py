@@ -94,12 +94,25 @@ class AgentClaude:
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
-    def argv(self, *, permission_mode: PermissionMode = PermissionMode.NONE) -> list[str]:
+    def argv(
+        self,
+        *,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        verbose: bool = False,
+        stream_output: bool = False,
+    ) -> list[str]:
         """Build the argv for a one-shot Claude prompt invocation."""
+        output_options = (
+            ["--output-format", "stream-json", "--include-partial-messages"]
+            if stream_output
+            else []
+        )
         return [
             "claude",
             "-p",
             *_claude_options(self.model, self.thinking),
+            *output_options,
+            *(["--verbose"] if verbose else []),
             *_CLAUDE_PERMISSION_FLAGS[permission_mode],
         ]
 
@@ -112,6 +125,8 @@ class AgentClaude:
         json_output: bool = False,
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
+        verbose: bool = False,
+        stream_output: bool = False,
     ) -> list[str]:
         """Build a Claude prompt argv for an existing or newly named session."""
         command = ["claude", "-p", "--resume" if resume else "--session-id", session_id]
@@ -121,9 +136,12 @@ class AgentClaude:
             command.extend(("--output-format", "json"))
         if name:
             command.extend(("-n", name))
+        if stream_output:
+            command.extend(("--output-format", "stream-json", "--include-partial-messages"))
         return [
             *command,
             *_claude_options(self.model, self.thinking),
+            *(["--verbose"] if verbose else []),
             *_CLAUDE_PERMISSION_FLAGS[permission_mode],
         ]
 
@@ -146,15 +164,21 @@ class AgentCodex:
     prompt_via_stdin: ClassVar[bool] = True
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
-    def argv(self, *, permission_mode: PermissionMode = PermissionMode.NONE) -> list[str]:
+    def argv(
+        self,
+        *,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        json_output: bool = False,
+    ) -> list[str]:
         """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
-        return self._exec_argv(permission_mode=permission_mode)
+        return self._exec_argv(permission_mode=permission_mode, json_output=json_output)
 
     def session_argv(
         self,
         session_id: str | None = None,
         *,
         permission_mode: PermissionMode = PermissionMode.NONE,
+        json_output: bool | None = None,
     ) -> list[str]:
         """Build the argv that starts or resumes a Codex CLI session."""
         command = ["codex", "exec"]
@@ -163,7 +187,10 @@ class AgentCodex:
         else:
             command.extend(("resume", session_id))
         return self._exec_argv(
-            command, permission_mode=permission_mode, resuming=session_id is not None
+            command,
+            permission_mode=permission_mode,
+            resuming=session_id is not None,
+            json_output=session_id is None if json_output is None else json_output,
         )
 
     def _exec_argv(
@@ -172,6 +199,7 @@ class AgentCodex:
         *,
         permission_mode: PermissionMode = PermissionMode.NONE,
         resuming: bool = False,
+        json_output: bool = False,
     ) -> list[str]:
         """Add this specification's model settings and stdin marker to *command*.
 
@@ -181,6 +209,8 @@ class AgentCodex:
         accept different approval flags.
         """
         result = command or ["codex", "exec"]
+        if json_output and "--json" not in result:
+            result.append("--json")
         result.extend(_codex_options(self.model, self.thinking))
         table = _CODEX_RESUME_PERMISSION_FLAGS if resuming else _CODEX_PERMISSION_FLAGS
         result.extend(table[permission_mode])

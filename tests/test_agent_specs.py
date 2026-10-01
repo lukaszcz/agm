@@ -113,6 +113,18 @@ def test_agent_argv_omits_empty_field_flags() -> None:
     assert AgentPi("", "", "").argv() == ["pi", "-p"]
 
 
+def test_claude_turn_output_uses_verbose_print_mode() -> None:
+    assert AgentClaude("sonnet", "high").argv(verbose=True) == [
+        "claude",
+        "-p",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high",
+        "--verbose",
+    ]
+
+
 def test_session_argv_omits_empty_field_flags() -> None:
     assert AgentClaude("", "").session_argv("s") == ["claude", "-p", "--session-id", "s"]
     assert AgentCodex("", "").session_argv() == ["codex", "exec", "--json", "-"]
@@ -576,6 +588,20 @@ def test_claude_session_argv_appends_permission_flags_after_model_options() -> N
         "--effort",
         "high",
         "--dangerously-skip-permissions",
+    ]
+
+
+def test_claude_session_output_uses_verbose_print_mode() -> None:
+    assert AgentClaude("sonnet", "high").session_argv("sid", verbose=True) == [
+        "claude",
+        "-p",
+        "--session-id",
+        "sid",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high",
+        "--verbose",
     ]
 
 

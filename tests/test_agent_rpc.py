@@ -100,6 +100,11 @@ for line in sys.stdin.buffer:
         else:
             events = [response(command)]
     for event in expand(events, command):
+        if "stderr" in event:
+            sys.stderr.write(event["stderr"])
+            sys.stderr.flush()
+            time.sleep(.02)
+            continue
         if event == {"exit": True}: sys.exit(0)
         emit(event)
         if (
@@ -246,6 +251,81 @@ def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
     backend.compact("")
 
     assert command_types(stub) == ["prompt", "get_state", "compact"]
+    backend.close()
+
+
+def test_echo_streams_pi_tool_progress_and_stderr_without_replacing_final_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"stderr": "pi diagnostic\n"},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "toolUse",
+                        "content": [{"type": "text", "text": "Checking"}],
+                    },
+                },
+                {"type": "tool_execution_start", "toolName": "bash", "toolCallId": "c1"},
+                {
+                    "type": "tool_execution_update",
+                    "toolCallId": "c1",
+                    "partialResult": {"content": [{"type": "text", "text": "one"}]},
+                },
+                {
+                    "type": "tool_execution_update",
+                    "toolCallId": "c1",
+                    "partialResult": {"content": [{"type": "text", "text": "one two"}]},
+                },
+                {
+                    "type": "tool_execution_end",
+                    "toolCallId": "c1",
+                    "result": {"content": [{"type": "text", "text": "one two!"}]},
+                },
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "done"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [{"type": "text", "text": "done"}],
+                    },
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+    output: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question", output_callback=lambda phase, text: output.append((phase, text))
+        )
+    )
+
+    assert response.content == "done"
+    assert output == [
+        ("stderr", "pi diagnostic\n"),
+        ("progress", "Checking"),
+        ("progress", "[bash]\n"),
+        ("progress", "one"),
+        ("progress", " two"),
+        ("progress", "!"),
+    ]
     backend.close()
 
 

@@ -696,6 +696,8 @@ class ExecConfig:
     timeout: float | None
     trace: object | None
     trace_file: str | None
+    # Echo streamed agent output on the host's stderr channel.
+    echo: bool = False
     # Raw TOML value (a string or a native table): exec/repl decode it as a
     # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
@@ -742,6 +744,7 @@ def exec_config_from_merged(
                 effective[key] = table[key]
 
     resolved_strict_json = effective.get("strict-json")
+    resolved_echo = _optional_bool(exec_table, "echo") is True
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
@@ -758,6 +761,7 @@ def exec_config_from_merged(
     resolved_parse_error_retries = effective.get("parse-error-retries")
 
     return ExecConfig(
+        echo=resolved_echo,
         strict_json=resolved_strict_json,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,

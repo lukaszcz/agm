@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import json
+import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, ContextManager, NoReturn, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, ContextManager, Literal, NoReturn, Protocol, assert_never, cast
 
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
+from agm.agent.transport import AgentOutputCallback
 from agm.agent.values import agent_spec_shape
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name
 from agm.agl.ir.ids import ContractId, Location
@@ -112,6 +115,7 @@ class EffectCtx(Protocol):
     _descriptors: ValueDescriptors
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
+    _echo_agent_output: bool
     _session_host: SessionHost
     _get_sandbox_context: "Callable[[], SandboxContext] | None"
     _resolve_agent_spec: "AgentSpecResolver | None"
@@ -162,6 +166,7 @@ class EffectHandlers:
 
     def __init__(self, ctx: EffectCtx) -> None:
         self._ctx = ctx
+        self._output_lock = threading.Lock()
 
     def _descriptors(self) -> ValueDescriptors:
         return self._ctx._descriptors
@@ -248,6 +253,21 @@ class EffectHandlers:
                 for name, value in agent.fields.items()
             },
         }
+
+    def _agent_output_callback(self, attempt: int, span: Location) -> "AgentOutputCallback | None":
+        """Build a per-turn stream sink only when agent echoing is enabled."""
+        if not self._ctx._echo_agent_output:
+            return None
+
+        def emit(phase: Literal["progress", "final", "stderr"], text: str) -> None:
+            if not text:
+                return
+            with self._output_lock:
+                self._ctx._trace.agent_output(phase=phase, text=text, attempt=attempt, span=span)
+                sys.stderr.write(text)
+                sys.stderr.flush()
+
+        return emit
 
     def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
@@ -835,9 +855,12 @@ class EffectHandlers:
                 output_contract=output_contract,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                output_callback=self._agent_output_callback(attempt, node.location),
             )
             request.prompt = self._compose_session_prompt(handle, request)
             raw = dispatch(request)
+            if request.output_callback is not None:
+                request.output_callback("final", raw)
             if contract.is_unit:
                 return UNIT_VALUE
             result = self._ctx._parse_host_output(

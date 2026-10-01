@@ -189,6 +189,7 @@ class RunOptions:
     """
 
     check_only: bool = False
+    echo_agent_output: bool = False
     trace_file: "Path | None" = None
     invoked_command: str | None = None
     program_function: str | None = None
@@ -689,6 +690,7 @@ class PipelineDriver:
                 get_sandbox_context=host_env.get_sandbox_context,
                 resolve_agent_spec=host_env.resolve_agent_spec,
                 strict_json=self._default_strict_json,
+                echo_agent_output=options.echo_agent_output,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
                 max_call_depth=self._default_call_depth_limit,
@@ -1030,6 +1032,7 @@ class PipelineDriver:
         source: str,
         *,
         check_only: bool = False,
+        echo_agent_output: bool = False,
         trace_file: "Path | None" = None,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
@@ -1053,6 +1056,7 @@ class PipelineDriver:
                 default_stdlib=default_stdlib,
             ),
             check_only=check_only,
+            echo_agent_output=echo_agent_output,
             trace_file=trace_file,
             builtin_var_seeds=builtin_var_seeds,
             process_environment=process_environment,
@@ -1207,6 +1211,7 @@ class PipelineDriver:
         prepared: PreparedProgram,
         *,
         check_only: bool = False,
+        echo_agent_output: bool = False,
         trace_file: "Path | None" = None,
         invoked_command: str | None = None,
         program_function: str | None = None,
@@ -1273,6 +1278,7 @@ class PipelineDriver:
             prepared,
             RunOptions(
                 check_only=check_only,
+                echo_agent_output=echo_agent_output,
                 trace_file=trace_file,
                 invoked_command=invoked_command,
                 program_function=program_function,

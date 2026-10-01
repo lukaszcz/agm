@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from agm.agent.spec import PermissionMode
-from agm.agent.transport import AgentCallInfo
+from agm.agent.transport import AgentCallInfo, AgentOutputCallback
 from agm.agl.ir.ids import Location
 
 if TYPE_CHECKING:
@@ -105,6 +105,7 @@ class AgentRequest:
     output_contract: "OutputContract | TypelessOutputContract | None" = None
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
+    output_callback: AgentOutputCallback | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)

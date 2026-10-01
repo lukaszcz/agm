@@ -256,8 +256,9 @@ class CheckArgs:
 
 
 class ExecutionOptionValues(Protocol):
-    """The engine-setting execution options every AgL-running command carries."""
+    """Execution options shared by commands that run AgL programs."""
 
+    echo: bool | None
     strict_json: bool | None
     default_agent: str | None
     default_sandbox: str | None
@@ -276,6 +277,7 @@ class ExecArgs:
     strict_json: bool | None
     no_trace: bool
     trace_file: str | None
+    echo: bool | None = None
     argument_tokens: list[str] = field(default_factory=list)
     trace: bool = False
     code: str | None = None
@@ -304,6 +306,7 @@ class ReplArgs:
     quiet: bool
     no_trace: bool
     trace_file: str | None
+    echo: bool | None = None
     trace: bool = False
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None

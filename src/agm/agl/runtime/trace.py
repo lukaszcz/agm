@@ -15,7 +15,7 @@ from datetime import datetime
 from decimal import Decimal
 from math import isfinite
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from agm.agl.ir.ids import Location, SourceId
 from agm.agl.runtime.boundary import AglJson
@@ -238,6 +238,19 @@ class TraceStore:
         if call_info:
             extra.update(call_info)
         self._emit("agent_response", extra, span)
+
+    def agent_output(
+        self,
+        *,
+        phase: Literal["progress", "final", "stderr"],
+        text: str,
+        attempt: int,
+        span: "SourceSpan | Location | None" = None,
+    ) -> None:
+        """Record one streamed agent output chunk when tracing is enabled."""
+        if self._path is None:
+            return
+        self._emit("agent_output", {"phase": phase, "text": text, "attempt": attempt}, span)
 
     def parse_result(
         self,

@@ -7,7 +7,7 @@ the [AgL language reference](../agl/reference/index.md).
 ## `agm exec`
 
 ```text
-agm exec [--strict-json|--no-strict-json]
+agm exec [--echo|--no-echo] [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
          [--trace|--trace-file PATH|--no-trace]
@@ -72,6 +72,9 @@ a direct `agm repl` entry is a static error.
 
 ### Options
 
+- `--echo` / `--no-echo`: Echo live agent progress and the final response to stderr. Progress
+  and final response output are also recorded in the JSONL trace when tracing is enabled;
+  `--echo` overrides `[exec] echo` (default off).
 - `-c SOURCE`, `--code SOURCE`: AgL program source text, instead of `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` by declaration path (`main`,
   `review::main`). With a `PACKAGE/MODULE::PROGRAM` reference, replaces its program path and
@@ -176,7 +179,7 @@ program for execution fails, while `--help` and shell completion silently fall b
 `agm exec`'s own help and no completions. `agm exec` reserves:
 
 - its own options: `--help`/`-h`, `--program`/`-p`, `--code`/`-c`, `--module-path`/`-I`,
-  `--max-call-depth`, `--no-stdlib`;
+  `--max-call-depth`, `--no-stdlib`, `--echo`/`--no-echo`;
 - every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
   `--trace`/`--no-trace`, `--trace-file`, `--debug`/`--no-debug`, `--parse-error-retries`
@@ -420,11 +423,13 @@ command with the complete prompt. See
 
 ### Configuration
 
-`[exec]` in `config.toml` supplies engine defaults, overridable by CLI flags and source
-`std/config` writes:
+`[exec]` in `config.toml` supplies host defaults, overridable by CLI flags. Engine settings can
+also be changed by source `std/config` writes; agent output echo is a host option and has no
+source-level register:
 
 ```toml
 [exec]
+echo = false               # echo agent progress and final responses to stderr
 default-agent = "claude/sonnet:medium" # native shorthand or custom command
 default-sandbox = "Native"  # bare member name or a Sandbox(...) constructor call
 strict-json = false         # lenient JSON recovery is the default
@@ -650,6 +655,7 @@ $ echo $?
 
 ```text
 agm repl [--strict-json|--no-strict-json]
+         [--echo|--no-echo]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
          [--trace|--trace-file PATH|--no-trace]
@@ -676,9 +682,9 @@ Both front ends share session and evaluation behavior:
 Plain is used automatically when stdin or stdout is not a terminal, or `TERM=dumb`; `--plain`
 forces it on a terminal. No flag forces the console onto a non-terminal.
 
-The REPL reuses `[exec]` settings for `default-agent`, `default-sandbox`, call depth, JSON
-strictness, and timeout. As in `agm exec`, each typed `Agent` value selects its own backend
-command, `--default-agent` and `[exec] default-agent` accept [host Agent
+The REPL reuses `[exec]` settings for agent output echo, `default-agent`, `default-sandbox`, call
+depth, JSON strictness, and timeout. As in `agm exec`, each typed `Agent` value selects its own
+backend command, `--default-agent` and `[exec] default-agent` accept [host Agent
 syntax](#host-agent-syntax), `--default-sandbox` and `[exec] default-sandbox` accept [host
 AgentSandbox syntax](#host-agentsandbox-syntax), and all are effective whether or not the session
 loads `std/config` or `--no-stdlib` is given. [`[agent]` defaults](#agent-defaults) apply as
@@ -764,6 +770,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`, `--default-agent AGENT`,
   `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--debug` / `--no-debug`,
   `--parse-error-retries N`: As for `agm exec`; `debug` is read when the session ends.
+- `--echo` / `--no-echo`: Echo live agent progress and final responses to stderr, as in `agm exec`;
+  defaults to `[exec] echo` (off).
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library

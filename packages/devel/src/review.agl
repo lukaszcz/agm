@@ -28,8 +28,8 @@ def Agent::review(self, scope: text, aspects: text) -> Review =
   """
   self.ask prompt
 
-def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
-  let prompt: text = """
+def revise-issue-prompt(issue: Issue) -> text =
+  """
   Check if the following issue is still valid — if so, understand the root cause and fix it. Keep changes minimal and validate. Commit after fixing the issue.
 
   ## Issue
@@ -41,21 +41,25 @@ def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
   - If the issue was valid, respond with `Valid` and the fix description.
   - If the issue wasn't valid, respond with `Invalid` and the reason for invalidity.
   """
-  self.ask prompt
+
+def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
+  self.ask <| revise-issue-prompt(issue)
 
 # Returns `true` if there was at least one valid HIGH or CRITICAL issue.
 def Agent::revise-review(self, review: Review) -> bool =
   var ct: bool = false
   for issue in review.issues do
+    log::info(issue as json)
     let r = self.revise-issue(issue)
     log::info(r as json)
+    log::info-nl()
     if r is Valid and (issue.severity is HIGH or issue.severity is CRITICAL) =>
       ct := true
   done
   ct
 
-def Agent::revise-review-text(self, review: text) -> bool =
-  let prompt: text = """
+def revise-whole-review-prompt(review: text) -> text =
+  """
   Read the following review. For each listed issue, check if the issue is valid — if so, understand the root cause and fix it. Fix only still-valid issues, skip the rest, keep changes minimal, and validate.
 
   Fix the root cause of ALL valid issues. Commit after fixing each valid issue.
@@ -77,16 +81,21 @@ def Agent::revise-review-text(self, review: text) -> bool =
   - If at least one HIGH or CRITICAL issue was valid, return `true`.
   - If no HIGH or CRITICAL issue was valid, return `false`.
   """
-  self.ask prompt
 
-def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int, save-review: bool) -> unit =
+def Agent::revise-whole-review(self, review: text) -> bool =
+  self.ask <| revise-whole-review-prompt(review)
+
+def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int, save-reviews: bool) -> unit =
   var n: int = 1
   do[max-steps]
-    log::info-heading "Step %{n}"
+    log::info-heading "Refine step %{n}"
     n := n + 1
     let review = review-agent.review(scope, aspects)
-    if save-review =>
-      fs::write(utils::new-path("review", ".json"), "%{review as json}")
+    let review-json = review as json
+    log::info(review-json)
+    log::info-nl()
+    if save-reviews =>
+      fs::write(utils::new-path("review", ".json"), "%{review-json}")
     let ct = revise-agent.revise-review(review)
   until not ct
 
@@ -107,8 +116,8 @@ program def review-main(
   scope: text,
   aspects: text = default-aspects,
   extra-aspects: text = "",
-  agent: Agent = config::default-agent)
-  -> unit =
+  agent: Agent = config::default-agent
+) -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
   print <| agent.review(scope, aspects ++ sep ++ extra-aspects) as json
 
@@ -116,15 +125,15 @@ program def review-main(
 @doc("Revise based on a review.")
 program def revise-main(
   review-file: path,
-  agent: Agent = config::default-agent)
-  -> unit =
+  agent: Agent = config::default-agent
+) -> unit =
   let txt: text = fs::read(review-file)
   let high-valid: bool =
     case txt as? Review of
       | Some(value) =>
         agent.revise-review(value)
       | None =>
-        agent.revise-review-text(txt)
+        agent.revise-whole-review(txt)
   if
     | high-valid => print "At least one HIGH or CRITICAL issue was valid."
     | else => print "There were no valid HIGH or CRITICAL issues."
@@ -147,7 +156,7 @@ program def refine-main(
   review-agent: Agent = config::default-agent,
   revise-agent: Agent = config::default-agent,
   max-steps: int = 8,
-  save-review: bool = true)
-  -> unit =
+  save-reviews: bool = true
+) -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps, save-review)
+  refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps, save-reviews)

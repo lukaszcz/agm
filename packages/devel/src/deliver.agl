@@ -1,1 +1,163 @@
 # Plan delivery workflows
+
+import std/config
+import std/session::Session
+import std/fs
+import devel/review
+
+enum VerifyResult
+  | Complete(@doc("file path of next unblocked task, or None if all tasks finished") next-task-file: Option[path])
+  | Incomplete(reason: text)
+
+def make-tasks-prompt(plan-file: path, tasks-dir: path) -> text =
+  """
+  Read %{plan-file} and create implementation tasks for this plan. Make sure that each task can be implemented by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
+
+  In each task, add a brief "Context" section summarizing what the ultimate goals of the whole plan are. Make it clear that any work done must be a step toward these goals, but the ultimate plan goals are not acceptance criteria for the task.
+
+  Save the task files to %{tasks-dir}/TASK_*.md. Create a task index in %{tasks-dir}/TASK_INDEX.md. Create %{tasks-dir}/PROGRESS.md to track task progress - list of completed and remaining tasks, next unblocked task.
+
+  ## Format of PROGRESS.md
+
+  Only three sections:
+  1. Task status for each task (a list)
+      - done / blocked / unblocked (not started / in progress)
+  2. Next unblocked task
+  3. Completion log
+      - ONE line per task as each task lands (explicitly state this requirement)
+
+  Keep PROGRESS.md concise.
+  """
+
+def Agent::make-tasks(self, plan-file: path, tasks-dir: path) -> unit =
+  self.ask <| make-tasks-prompt(plan-file, tasks-dir)
+
+def implement-task-prompt(task-file: path, incomplete-reason: Option[text]) -> text =
+  let reason =
+    case incomplete-reason of
+      | Some(value) =>
+        """
+
+        ## Reason task is not done
+
+        %{value}
+        """
+      | None =>
+        ""
+  """
+  Implement the task described in @%{task-file}. Commit when done.
+
+  A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Never defer any work.
+  """ ++ reason
+
+def Agent::implement-task(self, task-file: path, incomplete-reason: Option[text]) -> unit =
+  self.ask <| implement-task-prompt(task-file, incomplete-reason)
+
+def update-task-progress-prompt(tasks-dir: path) -> text =
+  """
+  Update %{tasks-dir}/PROGRESS.md to track current task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks).
+
+  ## Format of PROGRESS.md
+
+  Only three sections:
+  1. Task status for each task (list)
+      - done / blocked / unblocked (not started / in progress)
+  2. Next unblocked task
+  3. Completion log
+      - ONE line per task as each task lands (explicitly state this requirement)
+
+  Keep PROGRESS.md concise.
+  """
+
+def verify-task-prompt(task-file: path, tasks-dir: path) -> text =
+  """
+  Verify if %{task-file} is completed. Check the implementation against the corresponding task file.
+
+  IMPORTANT: A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Do not consider deferrals as signs of completion.
+
+  %{update-task-progress-prompt(tasks-dir)}
+
+  ## Response
+
+  - If %{task-file} is complete, return `Complete` with the path to the next unblocked task or `None` if all tasks are complete.
+  - If %{task-file} is not complete, return `Incomplete` with a reason for why the task is not complete.
+  """
+
+def Session::verify-task(self, task-file: path, tasks-dir: path) -> VerifyResult =
+  self.ask <| verify-task-prompt(task-file, tasks-dir)
+
+def select-next-task-prompt(task-file: Option[path], tasks-dir: path) -> text =
+  let mark-done-prompt: text =
+    case task-file of
+      | Some(value) => "Mark %{value} as done. "
+      | None => ""
+  mark-done-prompt ++
+  update-task-progress-prompt(tasks-dir) ++
+  """
+
+  ## Response
+
+  Return the next unblocked task file path, or None if all tasks are complete.
+  """
+
+def Session::select-next-task(self, task-file: Option[path], tasks-dir: path) -> Option[path] =
+  self.ask <| select-next-task-prompt(task-file, tasks-dir)
+
+def Session::deliver-plan(self, plan-file: path, tasks-dir: path, impl-agent: Agent, review-agent: Agent, revise-agent: Agent, verify: bool, max-refine-steps: int, save-reviews: bool) -> unit =
+  var next-task: Option[path] = self.select-next-task(None, tasks-dir)
+  while next-task is Some do
+    let task-file = next-task.unwrap()
+    impl-agent.implement-task(task-file, None)
+    if verify =>
+      do
+        let r = self.verify-task(task-file, tasks-dir)
+        case r of
+          | Complete(next-task-file) =>
+            next-task := next-task-file
+          | Incomplete(reason) =>
+            impl-agent.implement-task(task-file, Some(reason))
+      until r is Complete
+    else =>
+      next-task := self.select-next-task(Some(task-file), tasks-dir)
+    if max-refine-steps > 0 =>
+      review::refine("the implementation of %{task-file}", review::default-aspects ++ ", adherence to %{task-file}", review-agent, revise-agent, max-refine-steps, save-reviews)
+  done
+
+let default-tasks-dir = ".agent-files/tasks"
+
+@command("devel make-tasks")
+@doc("Create task files for a plan")
+program def make-tasks-main(
+  plan-file: path,
+  @doc("Task directory. Default: %{default-tasks-dir}")
+  tasks-dir: path = default-tasks-dir,
+  agent: Agent = config::default-agent
+) -> unit =
+  agent.make-tasks(plan-file, tasks-dir)
+
+@command("devel deliver")
+@doc("Deliver an implementation for a plan")
+program def deliver-main(
+  plan-file: path,
+  @doc("Task directory. Default: %{default-tasks-dir}")
+  tasks-dir: path = default-tasks-dir,
+  @doc("Orchestrator agent - creates tasks from plan, selects next task, verifies task completion, updates progress tracker")
+  agent: Agent = config::default-agent,
+  @doc("Executor agent - implements the tasks")
+  impl-agent: Agent = config::default-agent,
+  @doc("Review agent for post-completion task refinement")
+  review-agent: Agent = config::default-agent,
+  @doc("Revise agent for post-completion task refinement")
+  revise-agent: Agent = config::default-agent,
+  @doc("Should the orchestrator verify task completion?")
+  verify: bool = true,
+  @doc("Max review-revise refinement loop steps. Default: 0")
+  max-refine-steps: int = 0,
+  @doc("Save reviews in the refinement loop?")
+  save-reviews: bool = false
+) -> unit =
+  if not fs::is-file("%{tasks-dir}/PROGRESS.md") =>
+    agent.make-tasks(plan-file, tasks-dir)
+  let session = session::Session::open(agent)
+  session.deliver-plan(plan-file, tasks-dir, impl-agent, review-agent, revise-agent, verify, max-refine-steps, save-reviews)
+  session.close()

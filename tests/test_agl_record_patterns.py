@@ -8,7 +8,13 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError, UnknownMemberError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    NoVisibleConstructorError,
+    UnknownMemberError,
+)
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
@@ -363,3 +369,36 @@ def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
         "case p of | A::helper(x) => x | _ => 0\n"
     )
     assert type(error) is UnknownMemberError
+
+
+@pytest.mark.parametrize(
+    ("other", "error_class"),
+    [
+        ("enum Signal\n  | Red\n  | Green\n", AmbiguousConstructorError),
+        ("def Red() -> int = 1\n", AmbiguousQualificationError),
+    ],
+    ids=["two-constructors", "a-constructor-and-a-function"],
+)
+def test_a_pattern_name_referenced_where_its_outside_reading_is_ambiguous_is_rejected(
+    tmp_path: Path, other: str, error_class: type[AmbiguousQualificationError]
+) -> None:
+    """The reference, not the field pattern, reports what the name selects outside it."""
+    entry = (
+        "import colors::*\nimport other::*\n"
+        "def f(w: Wrap) -> Color =\n  case w of\n  | Wrap(Red) => Red()\n  | _ => w.shade\n"
+    )
+    with pytest.raises(AglScopeError) as raised:
+        accept_graph(
+            tmp_path,
+            {
+                "colors": "enum Color\n  | Red\n  | Blue\n\nrecord Wrap\n  shade: Color\n",
+                "other": other,
+                "entry": entry,
+            },
+        )
+    error = raised.value
+    assert type(error) is error_class
+    assert error.span is not None
+    assert error.span.start_offset == entry.index("Red()")
+    assert entry[error.span.start_offset : error.span.end_offset] == "Red"
+    assert len(error.origins) == 2

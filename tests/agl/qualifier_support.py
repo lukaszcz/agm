@@ -30,7 +30,8 @@ verdict in its *file part* -- the header and the probe as one inline entry,
 the same text as a real file (:func:`file_source`), and the same text as one
 REPL entry, all three rejecting with one message -- and in every other way to
 group the header into REPL entries (:func:`all_groupings` over
-``len(header) + 1`` items, the ``+ 1`` standing for whichever probe follows).
+``len(header) + 1`` items, the ``+ 1`` standing for whichever probe follows),
+each rejecting with the inline entry's message too.
 Per grouping, one session evaluates ``sizes[:-1]`` setup entries through
 :meth:`~agm.agl.repl.session.ReplSession.eval_entry`; whether they all succeed
 *is* the grouping's legality, asserted against the expected legal set. Only a
@@ -534,7 +535,7 @@ def _assert_grouping(
     """Assert *sizes*'s legality and, when legal, every probe's REPL verdict (module docstring).
 
     With *inline_failures*, a rejection's message must also be the inline
-    entry's.
+    entry's (``None`` only for a REPL history no inline entry shares).
     """
     session_dir = tmp_path / ("repl-" + ".".join(map(str, sizes)))
     session_dir.mkdir()
@@ -580,6 +581,37 @@ def _legal_set(header: tuple[str, ...], legal: LegalGroupings) -> frozenset[tupl
     return frozenset(all_groupings(len(header) + 1)) if legal == "ALL" else legal
 
 
+def _inline_outcome(
+    tmp_path: Path,
+    modules: Mapping[str, str],
+    header: tuple[str, ...],
+    probe: Probe,
+    stdlib: bool,
+) -> tuple[ProgramVerdict, AglError | None]:
+    """*probe*'s outcome as one inline entry after *header*."""
+    source = "\n".join((*header, probe.text))
+    return _graph_outcome(
+        make_inline_graph_from_files(
+            tmp_path / "inline", {"entry": source, **modules}, default_stdlib=stdlib
+        )
+    )
+
+
+def _inline_failures(
+    tmp_path: Path,
+    modules: Mapping[str, str],
+    header: tuple[str, ...],
+    probes: Mapping[K, Probe],
+    stdlib: bool,
+) -> dict[K, AglError | None]:
+    """Each rejected probe's inline-entry failure, which its REPL entries must repeat."""
+    return {
+        key: _inline_outcome(tmp_path, modules, header, probe, stdlib)[1]
+        for key, probe in probes.items()
+        if probe.error is not None and not probe.info
+    }
+
+
 def _assert_file_part(
     tmp_path: Path,
     modules: Mapping[str, str],
@@ -587,13 +619,13 @@ def _assert_file_part(
     probes: Mapping[K, Probe],
     legal: frozenset[tuple[int, ...]],
     stdlib: bool,
-) -> None:
+) -> dict[K, AglError | None]:
     """Assert every probe as an inline entry, a real file and one REPL entry (module docstring).
 
     The real file rejects with the inline entry's message; the REPL entry, a
-    grouping every header has, with the inline entry's too.
+    grouping every header has, with the inline entry's too. Returns each
+    probe's inline-entry failure.
     """
-    inline_dir = tmp_path / "inline"
     file_dir = tmp_path / "file"
     file_dir.mkdir()
     # The real file's Python companion, which a file's ``extern def`` needs.
@@ -603,11 +635,7 @@ def _assert_file_part(
         if probe.info:
             continue
         source = "\n".join((*header, probe.text))
-        inline = _graph_outcome(
-            make_inline_graph_from_files(
-                inline_dir, {"entry": source, **modules}, default_stdlib=stdlib
-            )
-        )
+        inline = _inline_outcome(tmp_path, modules, header, probe, stdlib)
         _assert_program_outcome(key, inline, probe, partial(span_text, source))
         inline_failures[key] = inline[1]
         text, body_start = file_source(source)
@@ -626,6 +654,7 @@ def _assert_file_part(
     _assert_grouping(
         tmp_path, modules, header, (len(header) + 1,), probes, inline_failures, legal, stdlib
     )
+    return inline_failures
 
 
 def assert_verdicts(
@@ -646,14 +675,21 @@ def assert_verdicts(
     it.
     """
     legal_set = _legal_set(header, legal)
-    if part is None or part == "file":
+    inline_failures = (
         _assert_file_part(tmp_path, modules, header, probes, legal_set, stdlib)
+        if part is None or part == "file"
+        else None
+    )
     groupings = _other_groupings(len(header) + 1) if part is None else part
     if groupings == "file":
         return
     assert set(groupings) <= set(_other_groupings(len(header) + 1)), groupings
+    if inline_failures is None:
+        inline_failures = _inline_failures(tmp_path, modules, header, probes, stdlib)
     for sizes in groupings:
-        _assert_grouping(tmp_path, modules, header, sizes, probes, None, legal_set, stdlib)
+        _assert_grouping(
+            tmp_path, modules, header, sizes, probes, inline_failures, legal_set, stdlib
+        )
 
 
 def assert_verdict(

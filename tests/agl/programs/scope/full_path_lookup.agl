@@ -1,7 +1,7 @@
 # A spelling is looked up as its whole path, against every source: an own
 # `scope Agent` and the imported one combine, the own declaration winning its
 # path; an own `scope Geo` leaves the imported type `Geo` in type positions. A
-# use in a nearer region beats an own root declaration, `use e::Color as C`
+# use in a region (an earlier step) beats an own root declaration, `use e::Color as C`
 # renames the type and its member paths, and type arguments sit on the
 # segment that owns the next one.
 import M::*

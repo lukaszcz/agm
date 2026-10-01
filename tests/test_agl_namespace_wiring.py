@@ -1061,7 +1061,7 @@ def test_ambiguous_routed_owner_selects_unknown_member_when_no_candidate_declare
 ) -> None:
     """A value-position constructor route whose owner alone is ambiguous
     still selects none when neither candidate owner declares the requested
-    member: the same-level ambiguity of the leading segment is decided
+    member: the leading segment's ambiguity at its one step is decided
     full-path-first, so the owner's own ambiguity is not the final verdict
     while the requested member could still disambiguate it -- and here it
     cannot, since no candidate declares it either."""

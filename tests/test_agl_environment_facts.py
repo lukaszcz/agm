@@ -126,7 +126,7 @@ def _query_register_generic_type(env: TypeEnvironment) -> object:
 
 
 def _record_register_alias(env: TypeEnvironment) -> None:
-    env.register_alias("Alias", _ALIAS_TARGET, type_params=())
+    env.register_alias("Alias", _ALIAS_TARGET, type_params=(), declaration_span=dummy_span())
 
 
 def _query_register_alias(env: TypeEnvironment) -> object:
@@ -150,7 +150,7 @@ def _query_unregister_name(env: TypeEnvironment) -> object:
 
 
 def _setup_freeze_alias(env: TypeEnvironment) -> None:
-    env.register_alias("Frozen", _ALIAS_TARGET, type_params=())
+    env.register_alias("Frozen", _ALIAS_TARGET, type_params=(), declaration_span=dummy_span())
 
 
 def _record_freeze_alias(env: TypeEnvironment) -> None:
@@ -372,12 +372,14 @@ class TestJournalLifecycle:
     def test_begin_replay_seal_reproduces_facts_exactly(self) -> None:
         target_expr = NameT(name="A", span=dummy_span(), node_id=901)
         env = TypeEnvironment()
-        env.register_alias("A", target_expr)
+        env.register_alias("A", target_expr, declaration_span=dummy_span())
         env.freeze_alias("A", TextType())
         facts = EnvironmentFacts(
             entries=(
                 BindingTypeFact(node_id=902, typ=IntType()),
-                AliasFact(name="A", target_expr=target_expr, type_params=()),
+                AliasFact(
+                    name="A", target_expr=target_expr, type_params=(), declaration_span=dummy_span()
+                ),
             )
         )
 
@@ -401,10 +403,14 @@ class TestAliasReplaySkip:
         template must survive an identical replayed registration."""
         target_expr = NameT(name="A", span=dummy_span(), node_id=1001)
         target = TypeEnvironment()
-        target.register_alias("A", target_expr)
+        target.register_alias("A", target_expr, declaration_span=dummy_span())
         target.freeze_alias("A", IntType())
         facts = EnvironmentFacts(
-            entries=(AliasFact(name="A", target_expr=target_expr, type_params=()),)
+            entries=(
+                AliasFact(
+                    name="A", target_expr=target_expr, type_params=(), declaration_span=dummy_span()
+                ),
+            )
         )
 
         target.replay(facts)
@@ -426,7 +432,9 @@ class TestAliasReplaySkip:
         self, differing_target_expr: object, differing_type_params: tuple[str, ...]
     ) -> None:
         target = TypeEnvironment()
-        target.register_alias("A", NameT(name="A", span=dummy_span(), node_id=1101))
+        target.register_alias(
+            "A", NameT(name="A", span=dummy_span(), node_id=1101), declaration_span=dummy_span()
+        )
         target.freeze_alias("A", TextType())
         facts = EnvironmentFacts(
             entries=(
@@ -434,6 +442,7 @@ class TestAliasReplaySkip:
                     name="A",
                     target_expr=differing_target_expr,
                     type_params=differing_type_params,
+                    declaration_span=dummy_span(),
                 ),
             )
         )

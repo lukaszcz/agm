@@ -25,7 +25,7 @@ from tests._agl_helpers import dummy_span
 
 
 def resolve_bare_contribution(scope: ScopeNode, name: NameAtom) -> set[BindingRef] | None:
-    """Return the candidates the nearest layer contributing *name* holds for it."""
+    """Return the candidates of the first layer, from *scope* outward, contributing *name*."""
     layer: ScopeNode | None = scope
     while layer is not None:
         stored = layer.bare_contributions.get(name)

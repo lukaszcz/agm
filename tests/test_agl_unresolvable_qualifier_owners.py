@@ -99,6 +99,11 @@ _SCENARIOS = {
             "scalar-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
             "scalar-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
             "scalar-ctor": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
+            "scalar-pattern": rejected(
+                "case 1 of\n  | Geo::Nope => 1\n  | _ => 2", UnknownMemberError, "Geo::Nope"
+            ),
+            "scalar-is": rejected("1 is Geo::Nope", UnknownMemberError, "Geo::Nope"),
+            "scalar-cast": rejected("1 as? Geo::Nope", UnknownMemberError, "Geo::Nope"),
         },
     ),
     "local-scope-lacking-the-member": Scenario(

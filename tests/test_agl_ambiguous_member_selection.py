@@ -5,7 +5,9 @@ contribution declares is selected even when the owner's name is
 ambiguous, one several declare is ambiguous, and one none declares is an
 unknown member. An own declaration beats every contribution, an alias
 owner selects its target's members, and an enum referencing a record
-never makes it a member.
+never makes it a member. An owner two routes, two wildcard imports or two
+``use`` declarations supply is probed here only in the positions
+:mod:`tests.test_agl_qualifier_position_matrix` leaves out.
 
 Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
@@ -24,6 +26,7 @@ from agm.agl.scope.symbols import (
     AmbiguousQualificationError,
     UnknownMemberError,
 )
+from agm.agl.typecheck.checker import EnumOwnerMismatchError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
@@ -31,7 +34,6 @@ from tests.agl.qualifier_support import (
     option_identity,
     rejected,
     scenario_params,
-    type_positions_rejected,
 )
 
 _TL = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
@@ -168,86 +170,13 @@ _SCENARIOS = {
         header=(
             "import one/types",
             "import two/types",
-            "let v: one/types::Color = one/types::Color::Green",
         ),
         probes={
-            "route-NoSuch-value": rejected(
-                "types::Color::NoSuch", UnknownMemberError, "types::Color::NoSuch"
-            ),
-            "route-NoSuch-pattern": rejected(
-                "case v of\n  | types::Color::NoSuch => 1\n  | _ => 2",
-                UnknownMemberError,
-                "types::Color::NoSuch",
-            ),
-            "route-NoSuch-is": rejected(
-                "v is types::Color::NoSuch", UnknownMemberError, "types::Color::NoSuch"
-            ),
-            "route-NoSuch-annot": rejected(
-                "fn(x: types::Color::NoSuch) => 1", UnknownMemberError, "types::Color::NoSuch"
-            ),
-            "route-NoSuch-alias": rejected(
-                "type CC = types::Color::NoSuch\n1", UnknownMemberError, "types::Color::NoSuch"
-            ),
-            "route-NoSuch-tyarg": rejected(
-                "fn(x: array[types::Color::NoSuch]) => 1",
-                UnknownMemberError,
-                "types::Color::NoSuch",
-            ),
-            "route-NoSuch-reptype": rejected(
-                "types::Color::NoSuch", UnknownMemberError, "types::Color::NoSuch"
-            ),
             "route-NoSuch-call": rejected(
                 "types::Color::NoSuch()", UnknownMemberError, "types::Color::NoSuch"
             ),
-            "route-Red-value": rejected(
-                "types::Color::Red", AmbiguousQualificationError, "types::Color::Red"
-            ),
-            "route-Red-pattern": rejected(
-                "case v of\n  | types::Color::Red => 1\n  | _ => 2",
-                AmbiguousQualificationError,
-                "types::Color::Red",
-            ),
-            "route-Red-is": rejected(
-                "v is types::Color::Red", AmbiguousQualificationError, "types::Color::Red"
-            ),
-            "route-Red-annot": rejected(
-                "fn(x: types::Color::Red) => 1", AmbiguousQualificationError, "types::Color::Red"
-            ),
-            "route-Red-alias": rejected(
-                "type CC = types::Color::Red\n1", AmbiguousQualificationError, "types::Color::Red"
-            ),
-            "route-Red-tyarg": rejected(
-                "fn(x: array[types::Color::Red]) => 1",
-                AmbiguousQualificationError,
-                "types::Color::Red",
-            ),
-            "route-Red-reptype": rejected(
-                "types::Color::Red", AmbiguousQualificationError, "types::Color::Red"
-            ),
             "route-Red-call": rejected(
                 "types::Color::Red()", AmbiguousQualificationError, "types::Color::Red"
-            ),
-            "route-Green-value": accepted("types::Color::Green", "record one/types::Color::Green"),
-            "route-Green-pattern": accepted(
-                "case v of\n  | types::Color::Green => 1\n  | _ => 2", "int"
-            ),
-            "route-Green-is": accepted("v is types::Color::Green", "bool"),
-            "route-Green-narrow": accepted(
-                "v as? types::Color::Green",
-                option_identity("one/types::Color::Green"),
-            ),
-            "route-Green-annot": accepted(
-                "fn(x: types::Color::Green) => 1", "one/types::Color::Green -> int"
-            ),
-            "route-Green-alias": accepted(
-                "type CC = types::Color::Green\nfn(p: CC) => p",
-                "one/types::Color::Green -> one/types::Color::Green",
-            ),
-            "route-Green-tyarg": accepted(
-                "fn(x: array[types::Color::Green]) => 1", "array[one/types::Color::Green] -> int"
-            ),
-            "route-Green-reptype": accepted(
-                "types::Color::Green", "record one/types::Color::Green"
             ),
             "route-Green-call": accepted("types::Color::Green()", "record one/types::Color::Green"),
         },
@@ -258,53 +187,11 @@ _SCENARIOS = {
             "import m",
             "import m::*",
             "import n::*",
-            "let v: m::Color = m::Color::Green",
         ),
         probes={
-            "bare-NoSuch-value": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "bare-NoSuch-pattern": rejected(
-                "case v of\n  | Color::NoSuch => 1\n  | _ => 2", UnknownMemberError, "Color::NoSuch"
-            ),
-            "bare-NoSuch-is": rejected("v is Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            **type_positions_rejected("bare-NoSuch", "Color::NoSuch", UnknownMemberError),
-            "bare-NoSuch-reptype": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
             "bare-NoSuch-call": rejected("Color::NoSuch()", UnknownMemberError, "Color::NoSuch"),
-            "bare-Red-value": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
-            "bare-Red-pattern": rejected(
-                "case v of\n  | Color::Red => 1\n  | _ => 2",
-                AmbiguousQualificationError,
-                "Color::Red",
-            ),
-            "bare-Red-is": rejected("v is Color::Red", AmbiguousQualificationError, "Color::Red"),
-            **type_positions_rejected("bare-Red", "Color::Red", AmbiguousQualificationError),
-            "bare-Red-reptype": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
             "bare-Red-call": rejected("Color::Red()", AmbiguousQualificationError, "Color::Red"),
-            "bare-Green-value": accepted("Color::Green", "record m::Color::Green"),
-            "bare-Green-pattern": accepted("case v of\n  | Color::Green => 1\n  | _ => 2", "int"),
-            "bare-Green-is": accepted("v is Color::Green", "bool"),
-            "bare-Green-narrow": accepted(
-                "v as? Color::Green",
-                option_identity("m::Color::Green"),
-            ),
-            "bare-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Color::Green -> int"),
-            "bare-Green-alias": accepted(
-                "type CC = Color::Green\nfn(p: CC) => p", "m::Color::Green -> m::Color::Green"
-            ),
-            "bare-Green-tyarg": accepted(
-                "fn(x: array[Color::Green]) => 1", "array[m::Color::Green] -> int"
-            ),
-            "bare-Green-reptype": accepted("Color::Green", "record m::Color::Green"),
             "bare-Green-call": accepted("Color::Green()", "record m::Color::Green"),
-            "value": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "pattern": rejected(
-                "case v of\n  | Color::NoSuch => 1\n  | _ => 2", UnknownMemberError, "Color::NoSuch"
-            ),
-            "is": rejected("v is Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "annot": rejected("fn(x: Color::NoSuch) => 1", UnknownMemberError, "Color::NoSuch"),
-            "alias": rejected("type CC = Color::NoSuch\n1", UnknownMemberError, "Color::NoSuch"),
-            "tyarg": rejected(
-                "fn(x: array[Color::NoSuch]) => 1", UnknownMemberError, "Color::NoSuch"
-            ),
             "owner-annot": rejected("fn(x: Color) => 1", AmbiguousQualificationError, "Color"),
             "owner-applied-miss": rejected(
                 "fn(x: Color[int]::NoSuch) => 1", UnknownMemberError, "Color[int]::NoSuch"
@@ -317,55 +204,11 @@ _SCENARIOS = {
             "use b::*",
             "scope a\n  enum E = X | Y\nend a",
             "scope b\n  enum E = X | Z\nend b",
-            "let v: a::E = a::E::Y",
         ),
         probes={
-            "localuse-NoSuch-value": rejected("E::NoSuch", UnknownMemberError, "E::NoSuch"),
-            "localuse-NoSuch-pattern": rejected(
-                "case v of\n  | E::NoSuch => 1\n  | _ => 2", UnknownMemberError, "E::NoSuch"
-            ),
-            "localuse-NoSuch-is": rejected("v is E::NoSuch", UnknownMemberError, "E::NoSuch"),
-            "localuse-NoSuch-annot": rejected(
-                "fn(x: E::NoSuch) => 1", UnknownMemberError, "E::NoSuch"
-            ),
-            "localuse-NoSuch-alias": rejected(
-                "type CC = E::NoSuch\n1", UnknownMemberError, "E::NoSuch"
-            ),
-            "localuse-NoSuch-tyarg": rejected(
-                "fn(x: array[E::NoSuch]) => 1", UnknownMemberError, "E::NoSuch"
-            ),
-            "localuse-NoSuch-reptype": rejected("E::NoSuch", UnknownMemberError, "E::NoSuch"),
             "localuse-NoSuch-call": rejected("E::NoSuch()", UnknownMemberError, "E::NoSuch"),
-            "localuse-Red-value": rejected("E::Red", UnknownMemberError, "E::Red"),
-            "localuse-Red-pattern": rejected(
-                "case v of\n  | E::Red => 1\n  | _ => 2", UnknownMemberError, "E::Red"
-            ),
-            "localuse-Red-is": rejected("v is E::Red", UnknownMemberError, "E::Red"),
-            "localuse-Red-annot": rejected("fn(x: E::Red) => 1", UnknownMemberError, "E::Red"),
-            "localuse-Red-alias": rejected("type CC = E::Red\n1", UnknownMemberError, "E::Red"),
-            "localuse-Red-tyarg": rejected(
-                "fn(x: array[E::Red]) => 1", UnknownMemberError, "E::Red"
-            ),
-            "localuse-Red-reptype": rejected("E::Red", UnknownMemberError, "E::Red"),
-            "localuse-Red-call": rejected("E::Red()", UnknownMemberError, "E::Red"),
-            "localuse-Green-value": rejected("E::Green", UnknownMemberError, "E::Green"),
-            "localuse-Green-pattern": rejected(
-                "case v of\n  | E::Green => 1\n  | _ => 2", UnknownMemberError, "E::Green"
-            ),
-            "localuse-Green-is": rejected("v is E::Green", UnknownMemberError, "E::Green"),
-            "localuse-Green-annot": rejected(
-                "fn(x: E::Green) => 1", UnknownMemberError, "E::Green"
-            ),
-            "localuse-Green-alias": rejected(
-                "type CC = E::Green\n1", UnknownMemberError, "E::Green"
-            ),
-            "localuse-Green-tyarg": rejected(
-                "fn(x: array[E::Green]) => 1", UnknownMemberError, "E::Green"
-            ),
-            "localuse-Green-reptype": rejected("E::Green", UnknownMemberError, "E::Green"),
-            "localuse-Green-call": rejected("E::Green()", UnknownMemberError, "E::Green"),
         },
-        legal=frozenset({(4, 1, 1), (4, 2), (5, 1), (6,)}),
+        legal=frozenset({(4, 1), (5,)}),
     ),
     "two-module-uses": Scenario(
         modules={"m": _M_2, "n": _N_2},
@@ -374,58 +217,10 @@ _SCENARIOS = {
             "import n",
             "use m::*",
             "use n::*",
-            "let v: m::Color = m::Color::Green",
         ),
         probes={
-            "moduse-NoSuch-value": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "moduse-NoSuch-pattern": rejected(
-                "case v of\n  | Color::NoSuch => 1\n  | _ => 2", UnknownMemberError, "Color::NoSuch"
-            ),
-            "moduse-NoSuch-is": rejected("v is Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
-            "moduse-NoSuch-annot": rejected(
-                "fn(x: Color::NoSuch) => 1", UnknownMemberError, "Color::NoSuch"
-            ),
-            "moduse-NoSuch-alias": rejected(
-                "type CC = Color::NoSuch\n1", UnknownMemberError, "Color::NoSuch"
-            ),
-            "moduse-NoSuch-tyarg": rejected(
-                "fn(x: array[Color::NoSuch]) => 1", UnknownMemberError, "Color::NoSuch"
-            ),
-            "moduse-NoSuch-reptype": rejected("Color::NoSuch", UnknownMemberError, "Color::NoSuch"),
             "moduse-NoSuch-call": rejected("Color::NoSuch()", UnknownMemberError, "Color::NoSuch"),
-            "moduse-Red-value": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
-            "moduse-Red-pattern": rejected(
-                "case v of\n  | Color::Red => 1\n  | _ => 2",
-                AmbiguousQualificationError,
-                "Color::Red",
-            ),
-            "moduse-Red-is": rejected("v is Color::Red", AmbiguousQualificationError, "Color::Red"),
-            "moduse-Red-annot": rejected(
-                "fn(x: Color::Red) => 1", AmbiguousQualificationError, "Color::Red"
-            ),
-            "moduse-Red-alias": rejected(
-                "type CC = Color::Red\n1", AmbiguousQualificationError, "Color::Red"
-            ),
-            "moduse-Red-tyarg": rejected(
-                "fn(x: array[Color::Red]) => 1", AmbiguousQualificationError, "Color::Red"
-            ),
-            "moduse-Red-reptype": rejected("Color::Red", AmbiguousQualificationError, "Color::Red"),
             "moduse-Red-call": rejected("Color::Red()", AmbiguousQualificationError, "Color::Red"),
-            "moduse-Green-value": accepted("Color::Green", "record m::Color::Green"),
-            "moduse-Green-pattern": accepted("case v of\n  | Color::Green => 1\n  | _ => 2", "int"),
-            "moduse-Green-is": accepted("v is Color::Green", "bool"),
-            "moduse-Green-narrow": accepted(
-                "v as? Color::Green",
-                option_identity("m::Color::Green"),
-            ),
-            "moduse-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Color::Green -> int"),
-            "moduse-Green-alias": accepted(
-                "type CC = Color::Green\nfn(p: CC) => p", "m::Color::Green -> m::Color::Green"
-            ),
-            "moduse-Green-tyarg": accepted(
-                "fn(x: array[Color::Green]) => 1", "array[m::Color::Green] -> int"
-            ),
-            "moduse-Green-reptype": accepted("Color::Green", "record m::Color::Green"),
             "moduse-Green-call": accepted("Color::Green()", "record m::Color::Green"),
         },
     ),
@@ -442,7 +237,7 @@ _SCENARIOS = {
             "alias-use-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Base::Green -> int"),
             "alias-use-Green-is": rejected(
                 "let v: n::Color = n::Color::Red\nv is Color::Green",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "v is Color::Green",
                 phase="typecheck",
             ),
@@ -465,7 +260,7 @@ _SCENARIOS = {
             "alias-imp-Green-annot": accepted("fn(x: Color::Green) => 1", "m::Base::Green -> int"),
             "alias-imp-Green-is": rejected(
                 "let v: n::Color = n::Color::Red\nv is Color::Green",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "v is Color::Green",
                 phase="typecheck",
             ),
@@ -488,7 +283,7 @@ _SCENARIOS = {
             ),
             "alias-route-Green-is": rejected(
                 "let v: two/t::Color = two/t::Color::Red\nv is t::Color::Green",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "v is t::Color::Green",
                 phase="typecheck",
             ),

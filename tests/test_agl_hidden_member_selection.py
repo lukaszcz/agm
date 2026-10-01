@@ -169,7 +169,6 @@ _SCENARIOS = {
             "other-import-alias": accepted(
                 "type AA = Color::Red\nfn(p: AA) => p", "en2::Color::Red -> en2::Color::Red"
             ),
-            "other-import-reptype": accepted("Color::Red", "record en2::Color::Red"),
             "other-import-pat2": accepted(
                 (
                     "let v: en2::Color = en2::Color::Green\n"

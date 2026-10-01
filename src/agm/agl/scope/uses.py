@@ -200,7 +200,7 @@ class UseReader:
 
         Within a use's read, only those written before it. A use an earlier
         REPL entry retained yields to one this entry writes in the same
-        region naming the same target, unless spelled through it.
+        region replacing it (:meth:`_replacing`).
         """
         horizon = self._horizon
         for decl in layer.uses:
@@ -216,7 +216,8 @@ class UseReader:
     def _replacing(self, site: ScopePath, decl: UseDecl) -> frozenset[int]:
         """The visible uses this entry writes in region *site* replacing *decl*.
 
-        Each names *decl*'s target, but not through *decl* (:func:`spelled_through`).
+        A rename replaces a rename to its name; any other use, one of the same
+        target. Neither replaces a use it is spelled through (:func:`spelled_through`).
         """
         horizon = self._horizon
         written = [
@@ -224,10 +225,11 @@ class UseReader:
             for use in self._scope_nodes[site].uses
             if use.node_id in self._entry_ids
             and (horizon is None or use.node_id < horizon)
+            and use.alias == decl.alias
             and not spelled_through(use, decl)
         ]
-        if not written:
-            return frozenset()
+        if not written or decl.alias is not None:
+            return frozenset(use.node_id for use in written)
         target = self.named_target(site, decl)
         return frozenset(use.node_id for use in written if self.named_target(site, use) == target)
 
@@ -245,16 +247,11 @@ class UseReader:
         }
 
     def named_target(self, site: ScopePath, decl: UseDecl) -> frozenset[QName]:
-        """The scopes and types *decl*, written in region *site*, names as its target.
-
-        A single-item rename's target is the path holding the item.
-        """
+        """The scopes and types *decl*, a use renaming nothing written in region *site*, names."""
         found = self._identities.get(decl.node_id)
         if found is None:
-            target = _use_target(decl)
             with self._reading_use(decl):
-                named = target[:-1] if len(target) > 1 and self._use_renames(site, decl) else target
-                found = self._use_path_origins(site, decl, named)
+                found = self._use_path_origins(site, decl, _use_target(decl))
             self._identities[decl.node_id] = found
         return found
 
@@ -373,21 +370,21 @@ class UseReader:
         """*candidate* as *decl*, in region *site*, contributes it, exposed *alone* or owned.
 
         An alias segment stands for its target's path, so a member an alias
-        selects that the use exposes *alone* -- no longer spelled beneath
-        the alias -- is the target's own. Each way it was reached also
-        removes what the use's ``hiding`` names.
+        renaming its target selects that the use exposes *alone* -- no
+        longer spelled beneath the alias -- is the target's own; one an
+        alias applying its target selects stays at the alias's type
+        arguments. Each way it was reached also removes what the use's
+        ``hiding`` names.
         """
         target = candidate.target
         declaration = candidate.origin.declaration
         key = target.key
         constructor = target.constructor
-        member = (
-            None
-            if not alone or key is None or constructor is None or constructor.member is None
-            else self._type_owners.owner_member(
-                _qname_decl_key((key[0], _bare_atom(key[1]))), key[2]
-            )
-        )
+        member = None
+        if alone and key is not None and constructor is not None and constructor.member is not None:
+            owner = _qname_decl_key((key[0], _bare_atom(key[1])))
+            if not self._sources.applies(owner):
+                member = self._type_owners.owner_member(owner, key[2])
         if member is not None:
             target = QualifiedTarget(
                 (member.owner_module_id, member.owner_path, member.owner_name), None, member
@@ -446,12 +443,12 @@ class UseReader:
                 continue
             yield Candidate(
                 QualifiedTarget(
-                    (constructor.owner_module_id, constructor.owner_path, constructor.owner_name),
+                    _qname_decl_key(constructor.selected_qname),
                     self._sources.variant_binding_ref(constructor, decl.span),
                     constructor,
                 ),
                 layer,
-                contribution_origin(constructor.qname, layer),
+                contribution_origin(constructor.selected_qname, layer),
             )
 
     def _exposes_standalone(self, site: ScopePath, decl: UseDecl, name: str) -> bool:

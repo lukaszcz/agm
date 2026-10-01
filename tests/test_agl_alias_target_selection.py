@@ -24,7 +24,6 @@ from tests.agl.qualifier_support import (
     assert_repl_verdicts,
     assert_verdicts,
     info,
-    nonconstant_in_file,
     probe_table,
     verdict_parts,
 )
@@ -93,42 +92,39 @@ class TestUseOpenedRegionDecidesTheAliasTarget:
     @pytest.mark.parametrize("part", verdict_parts(3))
     def test_every_position(self, tmp_path: Path, part: Part) -> None:
         def region(body: str) -> str:
-            return f"scope r\n  use shapes::*\n  {body}\nend r\nr::v"
+            return f"scope r\n  use shapes::*\n  {body}\nend r\nr::v()"
 
         assert_verdicts(
             tmp_path,
             _GEO_LIB,
             ("import tl::*", _SHAPES),
-            nonconstant_in_file(
-                probe_table(
-                    {
-                        "value": region("let v = Geo::Point(x = 1)"),
-                        "annotation": region("let v = fn(p: Geo::Point) => p.x"),
-                        "alias": region("type X = Geo::Point\n  let v = fn(p: X) => p.x"),
-                        "alias-constructor": region("type X = Geo::Point\n  let v = X(x = 1)"),
-                        "pattern": region(
-                            "let v = fn(p: Geo::Point) => case p of\n    | Geo::Point(x) => x"
-                        ),
-                        "bare-type-past-region": region("let v = fn(p: Geo) => p"),
-                    },
-                    {
-                        "value": _ACCEPTED,
-                        "annotation": _ACCEPTED,
-                        "alias": _ACCEPTED,
-                        "alias-constructor": _ACCEPTED,
-                        "pattern": _ACCEPTED,
-                        "bare-type-past-region": _ACCEPTED,
-                    },
-                    identities={
-                        "value": _POINT,
-                        "annotation": "shapes::Geo::Point -> int",
-                        "alias": "shapes::Geo::Point -> int",
-                        "alias-constructor": _POINT,
-                        "pattern": "shapes::Geo::Point -> int",
-                        "bare-type-past-region": "tl::Geo -> tl::Geo",
-                    },
-                ),
-                ("annotation", "alias", "pattern", "bare-type-past-region"),
+            probe_table(
+                {
+                    "value": region("def v() = Geo::Point(x = 1)"),
+                    "annotation": region("def v() = fn(p: Geo::Point) => p.x"),
+                    "alias": region("type X = Geo::Point\n  def v() = fn(p: X) => p.x"),
+                    "alias-constructor": region("type X = Geo::Point\n  def v() = X(x = 1)"),
+                    "pattern": region(
+                        "def v() = fn(p: Geo::Point) => case p of\n    | Geo::Point(x) => x"
+                    ),
+                    "bare-type-past-region": region("def v() = fn(p: Geo) => p"),
+                },
+                {
+                    "value": _ACCEPTED,
+                    "annotation": _ACCEPTED,
+                    "alias": _ACCEPTED,
+                    "alias-constructor": _ACCEPTED,
+                    "pattern": _ACCEPTED,
+                    "bare-type-past-region": _ACCEPTED,
+                },
+                identities={
+                    "value": _POINT,
+                    "annotation": "shapes::Geo::Point -> int",
+                    "alias": "shapes::Geo::Point -> int",
+                    "alias-constructor": _POINT,
+                    "pattern": "shapes::Geo::Point -> int",
+                    "bare-type-past-region": "tl::Geo -> tl::Geo",
+                },
             ),
             part=part,
         )

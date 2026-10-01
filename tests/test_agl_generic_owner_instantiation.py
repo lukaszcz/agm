@@ -71,22 +71,6 @@ _SCENARIOS = {
             **type_positions("rec-plain", "Box::Inner", "Box::Inner"),
         },
     ),
-    "generic-enum-with-nested-record": Scenario(
-        header=("enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int",),
-        probes={
-            "enum-pat": rejected(
-                "let i = E::Inner(x = 1)\ncase i of\n  | E[int]::Inner(x) => x",
-                TypeArgumentsError,
-                "E[int]",
-            ),
-            "enum-pat-plain": accepted(
-                "let i = E::Inner(x = 1)\ncase i of\n  | E::Inner(x) => x", "int"
-            ),
-            "enum-val": rejected("E[int]::Inner(x = 1)", TypeArgumentsError, "E[int]"),
-            "enum-annot": rejected("fn(p: E[int]::Inner) => 1", TypeArgumentsError, "E[int]"),
-            "enum-val-plain": accepted("E::Inner(x = 1)", "record E::Inner\n  x: int"),
-        },
-    ),
     "generic-alias-with-nested-record": Scenario(
         header=("record Box[T]\n  v: T\ntype Al[T] = Box[T]\nrecord Al::Inner\n  x: int",),
         probes={

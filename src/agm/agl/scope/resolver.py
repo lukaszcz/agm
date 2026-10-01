@@ -97,7 +97,9 @@ from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BUILTIN_METHOD_RECEIVER_NAMES,
     AglScopeError,
+    Ambiguity,
     AmbiguousConstructorError,
+    AmbiguousQualificationError,
     BareAtom,
     BinderKind,
     BindingRef,
@@ -117,6 +119,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     SlotCandidate,
+    SpacedQualifierError,
     TypeArgumentsError,
     TypeOwner,
     TypeSelection,
@@ -1524,7 +1527,13 @@ class _Resolver(ModuleSources):
             prior_kinds.add(constraint.kind)
 
     def _canonical_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
-        """Intern *ref* as its member declaration's canonical metadata."""
+        """Intern *ref* as its member declaration's canonical metadata.
+
+        A member an alias selects is the alias's constructor with that member,
+        one per member, so it is its own.
+        """
+        if ref.member is not None:
+            return ref
         key = (ref.owner_module_id, ref.owner_decl_node_id)
         return self._constructor_metadata_by_decl_id.setdefault(key, ref)
 
@@ -1649,6 +1658,7 @@ class _Resolver(ModuleSources):
         if any(
             candidate.owner_module_id == cref.owner_module_id
             and candidate.owner_decl_node_id == cref.owner_decl_node_id
+            and candidate.member == cref.member
             for candidate in existing
         ):
             return existing
@@ -2927,7 +2937,7 @@ class _Resolver(ModuleSources):
 
     def _spaced_qualifier_repair(
         self, advisory: SpacedQualifier | None, failure_span: SourceSpan
-    ) -> AglScopeError | None:
+    ) -> SpacedQualifierError | None:
         """Explain a reference that whitespace split from its qualifier.
 
         A run such as ``app/config ::x`` never becomes a qualifier — the lexer
@@ -2957,13 +2967,11 @@ class _Resolver(ModuleSources):
             and (found.key is None or not self._is_constructible_type_ref(_key_qname(found.key)))
         ):
             return None
-        rendered = render_route_member(
-            advisory.segments, (advisory.member_text,), anchored=advisory.anchored
-        )
-        return AglScopeError(
-            f"Whitespace before '::{advisory.member_text}' makes this a call with a "
-            f"self-reference, not a qualifier. "
-            f"Write '{rendered}' without whitespace.",
+        return SpacedQualifierError(
+            advisory.member_text,
+            render_route_member(
+                advisory.segments, (advisory.member_text,), anchored=advisory.anchored
+            ),
             # The lexer knows the offsets but not which module it scanned; the
             # failing reference supplies the source identity.
             span=replace(advisory.dcolon_span, source=failure_span.source),
@@ -3505,7 +3513,11 @@ class _Resolver(ModuleSources):
                 alternative_constructor=(
                     outside.constructor if isinstance(outside, QualifiedTarget) else None
                 ),
-                ambiguous_outside=isinstance(outside, AglError),
+                outside_ambiguity=(
+                    Ambiguity.of(outside)
+                    if isinstance(outside, AmbiguousQualificationError)
+                    else None
+                ),
             )
             self._define(
                 name,

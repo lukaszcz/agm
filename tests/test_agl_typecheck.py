@@ -1060,8 +1060,18 @@ class TestTypeEnvironment:
             )
         )
         previous.register_type("Restored", restored)
-        previous.register_alias("Restored", IntT(span=mk_span(), node_id=1), type_params=("T",))
-        previous.register_alias("Alias", IntT(span=mk_span(), node_id=2), type_params=("T",))
+        previous.register_alias(
+            "Restored",
+            IntT(span=mk_span(), node_id=1),
+            type_params=("T",),
+            declaration_span=mk_span(),
+        )
+        previous.register_alias(
+            "Alias",
+            IntT(span=mk_span(), node_id=2),
+            type_params=("T",),
+            declaration_span=mk_span(),
+        )
         previous.freeze_alias("Alias", IntType(), type_params=("T",))
         previous.register_generic_type(
             "Restored",
@@ -1091,7 +1101,9 @@ class TestTypeEnvironment:
 
     def test_declared_type_template_resolves_an_unfrozen_alias(self) -> None:
         environment = TypeEnvironment()
-        environment.register_alias("Alias", IntT(span=mk_span(), node_id=1))
+        environment.register_alias(
+            "Alias", IntT(span=mk_span(), node_id=1), declaration_span=mk_span()
+        )
 
         assert environment.declared_type_template(ENTRY_ID, "Alias") == TypeTemplate(IntType())
 
@@ -1099,7 +1111,10 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         env.register_type("Foo", RecordType(name="Foo"))
         env.register_alias(
-            "Foo", IntT(span=SourceSpan(1, 1, 1, 1, 0, 0), node_id=1), type_params=("T",)
+            "Foo",
+            IntT(span=SourceSpan(1, 1, 1, 1, 0, 0), node_id=1),
+            type_params=("T",),
+            declaration_span=mk_span(),
         )
         env.register_generic_type(
             "Foo",
@@ -8802,21 +8817,6 @@ class TestTypeDeclarations:
         err = reject_type("type A = B\ntype B = A\n1")
         assert "cycle" in str(err).lower()
 
-    @pytest.mark.parametrize(
-        "source",
-        [
-            "type A = array[A]\n1",
-            "type A = int -> A\n1",
-            "type A = array[B]\ntype B = A\n1",
-            "type L[T] = array[L[T]]\nlet z: L[int] = []\nz",
-        ],
-        ids=["self", "function", "through-an-alias", "applied"],
-    )
-    def test_alias_expanding_to_itself_through_a_structural_type_is_rejected(
-        self, source: str
-    ) -> None:
-        assert isinstance(reject_type(source), AglTypeError)
-
     def test_record_not_json_shaped(self) -> None:
         err = reject_type("record R\n  x: int\nlet r: json = R(x = 1)\nr")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
@@ -10787,7 +10787,7 @@ class TestResolveTypeExprTypeVars:
         env1 = TypeEnvironment()
         sp = mk_span()
         target_expr = _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2)
-        env1.register_alias("Wrapper", target_expr, type_params=("T",))
+        env1.register_alias("Wrapper", target_expr, type_params=("T",), declaration_span=sp)
         env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)

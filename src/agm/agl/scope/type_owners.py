@@ -532,8 +532,13 @@ class TypeOwnerIndex:
         return self.identity(self.path_target(qname))
 
     def constructor_identity(self, constructor: ConstructorRef) -> ConstructorRef:
-        """Return the constructor *constructor* names: a renaming alias's is its target's."""
+        """Return the constructor *constructor* names: a renaming alias's is its target's.
+
+        A member an alias selects is the target's member.
+        """
         named = self._named(constructor.qname)
+        if named is not None and constructor.member is not None:
+            return named[1].members[constructor.member]
         if named is None or named[0] == constructor.qname or named[1].constructor is None:
             return constructor
         return named[1].constructor

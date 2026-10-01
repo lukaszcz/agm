@@ -3619,8 +3619,13 @@ class TestConstructorBindings:
 
         Scope decides it where the alias is declared, used or not.
         """
-        with pytest.raises(AglTypeError):
-            parse_and_resolve("type Local = Undeclared\n()\n")
+        source = "type Local = Undeclared\n()\n"
+        with pytest.raises(AglTypeError) as raised:
+            parse_and_resolve(source)
+        error = raised.value
+        assert type(error) is AglTypeError
+        assert error.span is not None
+        assert source[error.span.start_offset : error.span.end_offset] == "Undeclared"
 
     def test_alias_with_unresolvable_qualified_target_is_rejected(self) -> None:
         """Unlike a bare name, a qualified target names a definite route.

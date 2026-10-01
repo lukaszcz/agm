@@ -327,6 +327,24 @@ def _type_argument_mismatch(
     )
 
 
+class EnumOwnerMismatchError(AglTypeError):
+    """A qualifier naming an enum other than the one the value has.
+
+    ``owner`` is the qualifier as written; ``resolved`` and ``actual`` spell
+    the enum it selects and the value's enum as the module would write them.
+    """
+
+    def __init__(self, owner: str, resolved: str, actual: str, *, span: SourceSpan) -> None:
+        super().__init__(
+            f"Qualifier '{owner}' resolves to enum '{resolved}', "
+            f"but the value has enum type '{actual}'.",
+            span=span,
+        )
+        self.owner = owner
+        self.resolved = resolved
+        self.actual = actual
+
+
 def _enum_owner_mismatch(
     owner: str, resolved: EnumType, actual: EnumType, span: SourceSpan, *, reader: Reader
 ) -> AglTypeError:
@@ -336,10 +354,8 @@ def _enum_owner_mismatch(
     """
     if resolved.decl_id == actual.decl_id:
         return _type_argument_mismatch(owner, resolved, actual, span)
-    return AglTypeError(
-        f"Qualifier '{owner}' resolves to enum '{_spell_enum(resolved, reader)}', "
-        f"but the value has enum type '{_spell_enum(actual, reader)}'.",
-        span=span,
+    return EnumOwnerMismatchError(
+        owner, _spell_enum(resolved, reader), _spell_enum(actual, reader), span=span
     )
 
 
@@ -6579,9 +6595,14 @@ class _Checker:
             self._record_pattern_binding_ref(binders[0].pattern_node_id, binding)
         else:
             binding, constructor = self._select_pattern_slot_fallback(slot)
+            if slot.outside_ambiguity is not None and self._slot_has_references(slot):
+                raise slot.outside_ambiguity.error(
+                    slot.name,
+                    self._slot_reference_span(match_site, slot),
+                    reader=Reader(self._module_id, self._resolved.declared_segments),
+                )
             if (
-                slot.ambiguous_outside
-                or (binding.kind is BinderKind.constructor_binding and constructor is None)
+                binding.kind is BinderKind.constructor_binding and constructor is None
             ) and self._slot_has_references(slot):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",

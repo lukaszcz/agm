@@ -1921,16 +1921,28 @@ def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) 
         )
 
 
-def test_cross_module_alias_expanding_to_itself_structurally_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(AglTypeError):
-        check_agl_program(
-            tmp_path,
-            {
-                "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = [])",
-                "zzz": "import yyy\ntype Alias = array[yyy::Alias]",
-                "yyy": "import zzz\ntype Alias = zzz::Alias",
-            },
-        )
+@pytest.mark.parametrize(
+    "entry",
+    ["import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = [])", "import zzz\n1"],
+    ids=["read", "unread"],
+)
+def test_cross_module_alias_expanding_to_itself_is_rejected_where_declared(
+    tmp_path: Path, entry: str
+) -> None:
+    """A structural self-expansion is reported at an alias of it, read or not."""
+    declarations = {"zzz": "type Alias = array[yyy::Alias]", "yyy": "type Alias = zzz::Alias"}
+    modules = {
+        "zzz": f"import yyy\n{declarations['zzz']}",
+        "yyy": f"import zzz\n\n{declarations['yyy']}",
+    }
+    with pytest.raises(AglTypeError) as raised:
+        check_agl_program(tmp_path, {"entry": entry, **modules})
+    span = raised.value.span
+    assert span is not None
+    assert any(
+        text[span.start_offset : span.end_offset] == declarations[name]
+        for name, text in modules.items()
+    )
 
 
 @pytest.mark.parametrize(

@@ -1135,7 +1135,7 @@ class TestScopedBindingRetention:
         declared = session.eval_entry("scope Outer\n  def selected() -> int = value()\nend Outer")
         result = session.eval_entry("Outer::selected()")
 
-        # The nearer Outer::Source now wins the retained use's relative target.
+        # Outer::Source, at the first step `Source` tries from Outer, now wins the retained use.
         assert declared.ok, declared.diagnostics
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
@@ -2590,12 +2590,12 @@ _RETAINED_BASE = (
     ids=("1+1+1+1", "1+2+1"),
 )
 def test_a_narrowing_local_use_hides_every_path_beneath_a_retained_alias_target(
-    sizes: tuple[int, ...], use: str
+    tmp_path: Path, sizes: tuple[int, ...], use: str
 ) -> None:
     """An alias of a type an earlier entry declared stands for every path
     beneath it, so a later local ``use ... hiding`` removing those paths hides
     them through the alias too, while the alias itself still constructs."""
-    s = ReplSession()
+    s = ReplSession(cwd=tmp_path)
     _eval_grouped(
         s,
         (
@@ -2875,12 +2875,18 @@ class TestUseThenRedeclare:
     )
     @pytest.mark.parametrize("region", (False, True))
     def test_repeating_a_use_after_a_redeclaration_leaves_only_the_new_member(
-        self, scope: str, use: str, probe: str, value: IntValue | None, region: bool
+        self,
+        tmp_path: Path,
+        scope: str,
+        use: str,
+        probe: str,
+        value: IntValue | None,
+        region: bool,
     ) -> None:
         def at(entry: str) -> str:
             return f"scope r\n  let v = {entry}\nend r" if region else entry
 
-        s = ReplSession()
+        s = ReplSession(cwd=tmp_path)
         for decl in (
             scope.format(1),
             f"scope r\n  {use}\nend r" if region else use,
@@ -8189,7 +8195,7 @@ class TestImports:
         assert not s.eval_entry("original()").ok
         assert s.eval_entry("replacement()").value == IntValue(2)
 
-    def test_single_member_alias_use_is_replaced_by_parent_target(self) -> None:
+    def test_a_tail_use_keeps_a_rename_of_its_target(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
@@ -8199,37 +8205,58 @@ class TestImports:
 
         assert replacement.ok, replacement.diagnostics
         assert session.eval_entry("new()").value == IntValue(2)
-        assert not session.eval_entry("selected()").ok
+        assert session.eval_entry("selected()").value == IntValue(1)
 
-    def test_single_member_alias_replacement_applies_to_its_entry_transactionally(
-        self,
-    ) -> None:
+    def test_a_rename_keeps_a_tail_use_of_its_target(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::{old}").ok
 
-        failed = session.eval_entry("use Source::new as selected\nold()")
+        renamed = session.eval_entry("use Source::new as selected\nold() + selected()")
 
-        assert not failed.ok
-        assert session.eval_entry("old()").value == IntValue(1)
+        assert renamed.ok, renamed.diagnostics
+        assert renamed.value == IntValue(3)
+        assert session.eval_entry("old() + selected()").value == IntValue(3)
 
-        replacement = session.eval_entry("use Source::new as selected\nselected()")
-
-        assert replacement.ok, replacement.diagnostics
-        assert replacement.value == IntValue(2)
-        assert not session.eval_entry("old()").ok
-
-    def test_single_member_alias_replacement_can_reuse_the_exposed_name(self) -> None:
+    def test_a_rename_keeps_a_rename_of_its_target_to_another_name(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
-        assert session.eval_entry("use Source::old as selected").ok
+        assert session.eval_entry("use Source::old as first").ok
 
-        replacement = session.eval_entry("use Source::new as selected\nselected()")
+        renamed = session.eval_entry("use Source::new as second")
 
+        assert renamed.ok, renamed.diagnostics
+        assert session.eval_entry("first() + second()").value == IntValue(3)
+
+    @pytest.mark.parametrize(
+        ("earlier", "later", "read", "before", "after"),
+        [
+            ("use Source::old as selected", "use Source::new as selected", "selected()", 1, 2),
+            ("use Source::old as selected", "use Other::new as selected", "selected()", 1, 4),
+            ("use Source as selected", "use Other as selected", "selected::old()", 1, 3),
+        ],
+        ids=["same-target", "another-target", "whole-scope"],
+    )
+    def test_a_rename_replaces_an_earlier_rename_to_its_name_transactionally(
+        self, earlier: str, later: str, read: str, before: int, after: int
+    ) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "scope Source\n  def old() -> int = 1\n\n  def new() -> int = 2\nend Source\n\n"
+            "scope Other\n  def old() -> int = 3\n\n  def new() -> int = 4\nend Other"
+        ).ok
+        assert session.eval_entry(earlier).ok
+
+        failed = session.eval_entry(f'{later}\nlet bad: int = "not an int"')
+
+        assert not failed.ok
+        assert session.eval_entry(read).value == IntValue(before)
+        replacement = session.eval_entry(f"{later}\n{read}")
         assert replacement.ok, replacement.diagnostics
-        assert replacement.value == IntValue(2)
+        assert replacement.value == IntValue(after)
+        assert session.eval_entry(read).value == IntValue(after)
 
     def test_nested_whole_target_alias_does_not_replace_its_parent_use(self) -> None:
         session = open_session()
@@ -8243,7 +8270,7 @@ class TestImports:
         assert aliased.value == IntValue(3)
         assert session.eval_entry("old()").value == IntValue(1)
 
-    def test_nested_single_member_alias_replacement_keeps_other_retained_headers(
+    def test_a_nested_rename_keeps_the_retained_tail_use_of_its_target(
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
@@ -8274,9 +8301,12 @@ class TestImports:
 
         assert replacement.ok, replacement.diagnostics
         assert replacement.value == IntValue(2)
-        assert not session.eval_entry(
-            "scope Outer\n\n  scope Inner\n    def stale() -> int = old()\n  end Inner\nend Outer"
-        ).ok
+        kept = session.eval_entry(
+            "scope Outer\n\n  scope Inner\n    def kept() -> int = old()\n  end Inner\nend Outer"
+            "\n\nOuter::Inner::kept()"
+        )
+        assert kept.ok, kept.diagnostics
+        assert kept.value == IntValue(1)
 
     def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")

@@ -303,7 +303,7 @@ class ProgramAliasResolution:
     """
 
     keys: frozenset[DeclKey]
-    resolver: Callable[[DeclKey, SourceSpan | None], Type | None]
+    resolver: Callable[[DeclKey], Type | None]
 
 
 @_pickles_by_name
@@ -881,6 +881,7 @@ class AliasFact(EnvironmentFact):
     name: str
     target_expr: TypeExpr
     type_params: tuple[str, ...]
+    declaration_span: SourceSpan
 
     def apply(self, env: TypeEnvironment) -> None:
         """Replay the registration, unless it is already in place.
@@ -1024,6 +1025,27 @@ class CheckedModuleImage(_Record):
         return module
 
 
+class CycleAlias(NamedTuple):
+    """One alias of a cycle: its declaration order, spelling and declaration span."""
+
+    order: tuple[int, ...]
+    spelling: str
+    span: SourceSpan
+
+
+def _declaration_order(alias: CycleAlias) -> tuple[int, ...]:
+    return alias.order
+
+
+def alias_cycle_error(cycle: Iterable[CycleAlias]) -> AglTypeError:
+    """The error for an alias cycle, reported at its alias declared first.
+
+    Each alias of a cycle denotes no type.
+    """
+    _order, spelling, span = min(cycle, key=_declaration_order)
+    return AglTypeError(f"Type alias '{spelling}' is part of a cycle.", span=span)
+
+
 @_pickles_by_name
 @dataclass(frozen=True, slots=True)
 class DeclaredHeaderSeed(_Record):
@@ -1124,6 +1146,8 @@ class TypeEnvironment:
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
+        # Alias declarations — name → the span of the declaration.
+        self._alias_spans: dict[str, SourceSpan] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
         # Program environments receive explicit headers from the whole-program
         # pre-pass, then closed unannotated candidates from import-SCC inference,
@@ -1416,20 +1440,35 @@ class TypeEnvironment:
         self._resolved_aliases.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
+        self._alias_spans.pop(name, None)
         self._record_fact(UnregisteredNameFact(name=name))
 
     def register_alias(
-        self, name: str, target_expr: TypeExpr, *, type_params: tuple[str, ...] = ()
+        self,
+        name: str,
+        target_expr: TypeExpr,
+        *,
+        type_params: tuple[str, ...] = (),
+        declaration_span: SourceSpan,
     ) -> None:
         """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr.
 
         ``type_params`` must be provided for parameterized type aliases (e.g.
         ``type Wrapper[T] = array[T]``); defaults to ``()`` for plain aliases.
+        *declaration_span* locates the alias declaration, where a cycle is reported.
         """
         self._alias_targets[name] = target_expr
         self._resolved_aliases.pop(name, None)
         self._alias_type_params[name] = type_params
-        self._record_fact(AliasFact(name=name, target_expr=target_expr, type_params=type_params))
+        self._alias_spans[name] = declaration_span
+        self._record_fact(
+            AliasFact(
+                name=name,
+                target_expr=target_expr,
+                type_params=type_params,
+                declaration_span=declaration_span,
+            )
+        )
 
     def freeze_alias(self, name: str, template: Type, *, type_params: tuple[str, ...] = ()) -> None:
         """Preserve an alias's resolved template under its declaring identities."""
@@ -1553,7 +1592,7 @@ class TypeEnvironment:
         (``CatchClause``) or an ``extends`` base (``ExceptionDef``) -- which
         scope decides exactly like every other bare type name.
         """
-        return self._resolve_selected_type(node_id, None, name, span=span, _resolving=frozenset())
+        return self._resolve_selected_type(node_id, None, name, span=span, _resolving=())
 
     def type_name_declaration(self, type_expr: NameT | AppliedT) -> DeclKey | None:
         """Return the declaration identity scope selected for *type_expr*'s name.
@@ -1656,11 +1695,11 @@ class TypeEnvironment:
         key = self._qname_decl_key(qname)
         return self._in_program_type_tables(key) or self._is_program_alias_key(key)
 
-    def _ensure_program_alias_resolved(self, key: DeclKey, span: SourceSpan | None) -> Type | None:
+    def _ensure_program_alias_resolved(self, key: DeclKey) -> Type | None:
         """Resolve a program alias lazily while retaining its declaration path."""
         if self._program_aliases is None or not self._is_program_alias_key(key):
             return None
-        return self._program_aliases.resolver(key, span)
+        return self._program_aliases.resolver(key)
 
     def _resolve_program_key_as_bare_type(
         self, key: DeclKey, exposed_name: str, *, span: SourceSpan | None
@@ -1672,7 +1711,7 @@ class TypeEnvironment:
         typ = self._program_type_table.get(key)
         if typ is not None:
             return typ
-        typ = self._ensure_program_alias_resolved(key, span)
+        typ = self._ensure_program_alias_resolved(key)
         if typ is not None:
             return typ
         alias_def = self._program_alias_table.get(key)
@@ -1867,7 +1906,7 @@ class TypeEnvironment:
         name: str,
         *,
         span: SourceSpan | None,
-        _resolving: frozenset[str],
+        _resolving: tuple[str, ...],
         type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Resolve the unapplied type name ``qualifier::name`` to what scope selected for it.
@@ -1902,7 +1941,7 @@ class TypeEnvironment:
         span: SourceSpan | None,
         *,
         body_span: SourceSpan | None = None,
-        resolving: frozenset[str] = frozenset(),
+        resolving: tuple[str, ...] = (),
         type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Apply *args* to the declaration a type name selects: *key*, stored as *local_name*.
@@ -1926,7 +1965,7 @@ class TypeEnvironment:
         generic = self._program_generic_table.get(selected)
         if generic is not None:
             return self.instantiate_from_gdef(selected[2], generic, args, span=span)
-        self._ensure_program_alias_resolved(selected, span)
+        self._ensure_program_alias_resolved(selected)
         alias = self._program_alias_table.get(selected)
         if alias is not None:
             return self.instantiate_alias(selected[2], alias, args, span=span)
@@ -1939,7 +1978,7 @@ class TypeEnvironment:
         span: SourceSpan | None,
         *,
         body_span: SourceSpan | None,
-        resolving: frozenset[str],
+        resolving: tuple[str, ...],
         type_vars: frozenset[str],
     ) -> Type:
         """Apply *args* to *name*, a type this module's own namespace stores."""
@@ -1962,6 +2001,13 @@ class TypeEnvironment:
             )
         raise AglTypeError(f"Type '{name}' does not take type arguments.", span=span)
 
+    def _alias_cycle(self, name: str, resolving: tuple[str, ...]) -> AglTypeError:
+        """The error for re-entering alias *name* while resolving *resolving*, outermost first."""
+        return alias_cycle_error(
+            CycleAlias((self._alias_spans[alias].start_offset,), alias, self._alias_spans[alias])
+            for alias in resolving[resolving.index(name) :]
+        )
+
     def _instantiate_local_alias(
         self,
         name: str,
@@ -1970,12 +2016,12 @@ class TypeEnvironment:
         span: SourceSpan | None,
         *,
         body_span: SourceSpan | None = None,
-        resolving: frozenset[str] = frozenset(),
+        resolving: tuple[str, ...] = (),
         type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Instantiate the root-stored alias *name*, whose target is *alias_expr*."""
         if name in resolving:
-            raise AglTypeError(f"Type alias '{name}' is part of a cycle.", span=span)
+            raise self._alias_cycle(name, resolving)
         alias_params = self._alias_type_params.get(name, ())
         if len(args) != len(alias_params):
             raise AglTypeError(
@@ -1985,7 +2031,7 @@ class TypeEnvironment:
         body_type = self.resolve_type_expr(
             alias_expr,
             span=body_span,
-            _resolving=resolving | {name},
+            _resolving=(*resolving, name),
             type_vars=type_vars | frozenset(alias_params),
         )
         return self.instantiate_alias(
@@ -2000,7 +2046,7 @@ class TypeEnvironment:
         type_expr: object,
         *,
         span: SourceSpan | None = None,
-        _resolving: frozenset[str] | None = None,
+        _resolving: tuple[str, ...] = (),
         type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Resolve a ``TypeExpr`` AST node to a semantic ``Type``.
@@ -2015,8 +2061,8 @@ class TypeEnvironment:
         span:
             Override span for error messages (defaults to the node's span).
         _resolving:
-            Internal: set of alias names currently being resolved (cycle
-            detection).
+            Internal: the alias names currently being resolved, outermost first
+            (cycle detection).
         type_vars:
             Set of names that are in scope as rigid type variables.  A
             ``NameT`` whose name is in this set resolves to a ``TypeVarType``
@@ -2035,9 +2081,6 @@ class TypeEnvironment:
             TextT,
             UnitT,
         )
-
-        if _resolving is None:
-            _resolving = frozenset()
 
         if isinstance(type_expr, (NameT, AppliedT)) and type_expr.qualifier is not None:
             for segment in type_expr.qualifier.segments:
@@ -2138,7 +2181,7 @@ class TypeEnvironment:
         spelling: str,
         *,
         span: SourceSpan | None,
-        _resolving: frozenset[str],
+        _resolving: tuple[str, ...],
         type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Resolve *name*, a type this module stores, written *spelling* and used unapplied."""
@@ -2160,15 +2203,12 @@ class TypeEnvironment:
             return self.instantiate_alias(name, alias_def, (), span=span)
         if name in self._alias_targets:
             if name in _resolving:
-                raise AglTypeError(
-                    f"Type alias '{name}' is part of a cycle.",
-                    span=span,
-                )
+                raise self._alias_cycle(name, _resolving)
             target_expr = self._alias_targets[name]
             target = self.resolve_type_expr(
                 target_expr,
                 span=span,
-                _resolving=_resolving | {name},
+                _resolving=(*_resolving, name),
                 type_vars=type_vars,
             )
             self._resolved_aliases[name] = GenericAliasDef(type_params=(), template=target)
@@ -2212,7 +2252,7 @@ class TypeEnvironment:
     ) -> TypeTemplate:
         """Return the template of a declared source type, forcing a lazy program alias first."""
         key = (module_id, scope_path, name)
-        self._ensure_program_alias_resolved(key, None)
+        self._ensure_program_alias_resolved(key)
         if self._in_program_type_tables(key):
             return self._program_table_template(key)
         return self._own_local_template(_join_scoped_type_name(scope_path, name))
@@ -2251,7 +2291,7 @@ class TypeEnvironment:
         type_params = self._alias_type_params.get(local_name, ())
         template = self.resolve_type_expr(
             self._alias_targets[local_name],
-            _resolving=frozenset({local_name}),
+            _resolving=(local_name,),
             type_vars=frozenset(type_params),
         )
         return TypeTemplate(template, type_params)
@@ -2487,6 +2527,9 @@ class TypeEnvironment:
         self._alias_type_params.update(
             {name: params for name, params in other._alias_type_params.items() if not retired(name)}
         )
+        self._alias_spans.update(
+            {name: span for name, span in other._alias_spans.items() if not retired(name)}
+        )
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
 
@@ -2572,6 +2615,8 @@ class TypeEnvironment:
                 self._generic_types[name] = previous._generic_types[name]
             if name in previous._alias_type_params:
                 self._alias_type_params[name] = previous._alias_type_params[name]
+            if name in previous._alias_spans:
+                self._alias_spans[name] = previous._alias_spans[name]
         node_id_set = set(binding_node_ids)
         self.remove_binding_types(node_id_set)
         for node_id in node_id_set:

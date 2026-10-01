@@ -47,7 +47,6 @@ from tests.agl.qualifier_support import (
     assert_scenario,
     info,
     info_rejected,
-    nonconstant_in_file,
     rejected,
     scenario_params,
     type_positions,
@@ -121,7 +120,7 @@ _ALIASED_ENUM = "enum E\n  | Red\n  | Blue(v: int)\ntype C = E\n"
 _ONE_RED = "record one::E::Red"
 _ONE_BLUE = "record one::E::Blue\n  v: int"
 _OTHER_RED = "enum F\n  | Red\n"
-_OUTSIDE_THE_REGION = "scope r\n  use C::*\n  let v = Red\nend r\n\nRed"
+_OUTSIDE_THE_REGION = "scope r\n  use C::*\n  def v() = Red\nend r\n\nRed"
 _OWN_ALIASED_ENUM = ("scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S", "type C = S::E")
 _REFERENCED_R = "record R\n  x: int\nenum A\n  | ::R\n  | B\n"
 _TWICE_REFERENCED_P = "record P\n  x: int\nenum A\n  | ::P\n  | Q\nenum B\n  | ::P\n  | Z\n"
@@ -189,7 +188,7 @@ def _renamed_type_probes(
 ) -> dict[str, Probe]:
     """``C``, ``R`` and ``Q`` renaming ``e``'s ``Color``, ``Pt`` and alias ``P``; *local_use*
     renames the own *local_path* that *local* declares to ``M`` inside a region."""
-    in_t = local + "scope t\n  {use}\n  let v = {value}\nend t\n\nt::v"
+    in_t = local + "scope t\n  {use}\n  def v() = {value}\nend t\n\nt::v()"
     return {
         **type_positions("enum", "C", "e::Color"),
         "enum-not-a-value": rejected(
@@ -201,7 +200,7 @@ def _renamed_type_probes(
         ),
         "enum-is": accepted("fn(p: e::Color) => p is C::Red", "e::Color -> bool"),
         "enum-in-a-region": accepted(
-            "scope r\n  use e::Color as K\n  let v: K = K::Red\nend r\n\nr::v",
+            "scope r\n  use e::Color as K\n  def v() -> K = K::Red\nend r\n\nr::v()",
             "enum e::Color\n  | Red\n  | Green",
         ),
         **type_positions("record", "R", "e::Pt"),
@@ -244,19 +243,27 @@ _OWN_NESTED_X = (
 
 
 def _in_q(uses: str, value: str) -> str:
-    """A region ``Q`` with *uses* and its own ``X``; its ``let v`` reads *value*, then ``Q::v``."""
+    """A region ``Q`` with *uses* and its own ``X``; its ``v()`` reads *value*, then ``Q::v()``."""
     inner = "  scope X\n    def g() -> int = 2\n    def h() -> bool = true\n  end X"
-    return f"scope Q\n  {uses}\n{inner}\n  let v = {value}\nend Q\n\nQ::v"
+    return f"scope Q\n  {uses}\n{inner}\n  def v() = {value}\nend Q\n\nQ::v()"
+
+
+def _color_case_in_s(before: str) -> str:
+    """A function of region ``S`` matching a ``Color`` with bare ``Red``; *before* opens ``S``."""
+    return (
+        f"scope S\n{before}  def f(c: Color) -> int = case c of\n    | Red => 1\n    | _ => 2\n"
+        "end S\n\nS::f(Color::Red)"
+    )
 
 
 def _in_region(use: str, value: str) -> str:
-    """A region whose ``use`` exposes names that its ``let v`` reads, then ``r::v``."""
-    return f"scope r\n  {use}\n  let v = {value}\nend r\n\nr::v"
+    """A region whose ``use`` exposes names that its ``v()`` reads, then ``r::v()``."""
+    return f"scope r\n  {use}\n  def v() = {value}\nend r\n\nr::v()"
 
 
 def _in_nested(use: str, value: str) -> str:
-    """A region whose ``use`` exposes names that a nested region's ``let v`` reads."""
-    return f"scope r\n  {use}\n\n  scope q\n    let v = {value}\n  end q\nend r\n\nr::q::v"
+    """A region whose ``use`` exposes names that a nested region's ``v()`` reads."""
+    return f"scope r\n  {use}\n\n  scope q\n    def v() = {value}\n  end q\nend r\n\nr::q::v()"
 
 
 _LATER_M = "scope Agent\n  def f() -> int = 1\n  var cnt: int = 0\nend Agent\n"
@@ -290,114 +297,91 @@ _SCENARIOS = {
     "a-use-combines-an-own-scope-with-an-imported-one": Scenario(
         modules={"M": _USE_M},
         header=("import M::*", _USE_OWN),
-        probes=nonconstant_in_file(
-            {
-                "imported-member": accepted(_in_region("use Agent::*", "f()"), "int"),
-                "own-member": accepted(_in_region("use Agent::*", "g()"), "int"),
-                "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
-                "imported-type-value": accepted(
-                    _in_region("use Agent::*", "P(x = 1)"), "record M::Agent::P\n  x: int"
-                ),
-                "imported-type-annotation": accepted(
-                    _in_region("use Agent::*", "fn(p: P) => p.x"), "M::Agent::P -> int"
-                ),
-                "own-type-wins-its-path-in-annotation": accepted(
-                    _in_region("use Agent::*", "fn(q: Q) => q.y"), "Agent::Q -> bool"
-                ),
-                "own-type-wins-its-path-as-constructor": accepted(
-                    _in_region("use Agent::*", "Q(y = true)"), "record Agent::Q\n  y: bool"
-                ),
-                "own-type-wins-its-path-in-pattern": accepted(
-                    _in_region("use Agent::*", "case Q(y = true) of\n    | Q(y) => y"), "bool"
-                ),
-                "selected-from-both": accepted(_in_region("use Agent::{f, g}", "f() + g()"), "int"),
-                "hiding-an-imported-member": rejected(
-                    _in_region("use Agent::* hiding f", "f()"), AglScopeError, "f"
-                ),
-                "selecting-a-member-neither-declares": rejected(
-                    _in_region("use Agent::{h}", "1"), UnknownMemberError, "use Agent::{h}"
-                ),
-            },
-            (
-                "imported-member",
-                "imported-type-annotation",
-                "own-member",
-                "own-member-wins-its-path",
-                "own-type-wins-its-path-in-annotation",
-                "own-type-wins-its-path-in-pattern",
-                "selected-from-both",
+        probes={
+            "imported-member": accepted(_in_region("use Agent::*", "f()"), "int"),
+            "own-member": accepted(_in_region("use Agent::*", "g()"), "int"),
+            "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
+            "imported-type-value": accepted(
+                _in_region("use Agent::*", "P(x = 1)"), "record M::Agent::P\n  x: int"
             ),
-        ),
+            "imported-type-annotation": accepted(
+                _in_region("use Agent::*", "fn(p: P) => p.x"), "M::Agent::P -> int"
+            ),
+            "own-type-wins-its-path-in-annotation": accepted(
+                _in_region("use Agent::*", "fn(q: Q) => q.y"), "Agent::Q -> bool"
+            ),
+            "own-type-wins-its-path-as-constructor": accepted(
+                _in_region("use Agent::*", "Q(y = true)"), "record Agent::Q\n  y: bool"
+            ),
+            "own-type-wins-its-path-in-pattern": accepted(
+                _in_region("use Agent::*", "case Q(y = true) of\n    | Q(y) => y"), "bool"
+            ),
+            "selected-from-both": accepted(_in_region("use Agent::{f, g}", "f() + g()"), "int"),
+            "hiding-an-imported-member": rejected(
+                _in_region("use Agent::* hiding f", "f()"), AglScopeError, "f"
+            ),
+            "selecting-a-member-neither-declares": rejected(
+                _in_region("use Agent::{h}", "1"), UnknownMemberError, "use Agent::{h}"
+            ),
+        },
     ),
     "a-use-combines-an-own-scope-with-two-imported-ones": Scenario(
         modules={"M": _USE_M, "N": _USE_N},
         header=("import M::*", "import N::*", _USE_OWN),
-        probes=nonconstant_in_file(
-            {
-                "one-import-and-own": accepted(_in_region("use Agent::*", "f() + g()"), "int"),
-                "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
-                "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
-                "two-imported-members-clash-where-used": rejected(
-                    _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
-                ),
-            },
-            ("one-import-and-own", "own-member-wins-its-path", "the-other-import"),
-        ),
+        probes={
+            "one-import-and-own": accepted(_in_region("use Agent::*", "f() + g()"), "int"),
+            "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
+            "own-member-wins-its-path": accepted(_in_region("use Agent::*", "both()"), "bool"),
+            "two-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
+            ),
+        },
     ),
     "a-use-combines-imported-scopes": Scenario(
         modules={"M": _USE_M, "N": _USE_N, "O": _USE_O},
         header=("import M::*", "import N::*", "import O::*"),
-        probes=nonconstant_in_file(
-            {
-                "one-import": accepted(_in_region("use Agent::*", "f()"), "int"),
-                "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
-                "two-imported-members-clash-where-used": rejected(
-                    _in_region("use Agent::*", "both()"), AmbiguousQualificationError, "both"
-                ),
-                "three-imported-members-clash-where-used": rejected(
-                    _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
-                ),
-            },
-            ("one-import", "the-other-import"),
-        ),
+        probes={
+            "one-import": accepted(_in_region("use Agent::*", "f()"), "int"),
+            "the-other-import": accepted(_in_region("use Agent::*", "n()"), "text"),
+            "two-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "both()"), AmbiguousQualificationError, "both"
+            ),
+            "three-imported-members-clash-where-used": rejected(
+                _in_region("use Agent::*", "dup()"), AmbiguousQualificationError, "dup"
+            ),
+        },
     ),
     "a-use-combines-an-own-scope-with-a-module-route": Scenario(
         modules={"lib": _USE_LIB},
         header=("import lib", _USE_OWN_LIB),
-        probes=nonconstant_in_file(
-            {
-                "routed-member": accepted(_in_region("use lib::*", "f()"), "int"),
-                "own-member": accepted(_in_region("use lib::*", "g()"), "int"),
-                "own-member-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
-                "routed-type-value": accepted(
-                    _in_region("use lib::*", "P(x = 1)"), "record lib::P\n  x: int"
-                ),
-            },
-            ("own-member", "own-member-wins-its-path", "routed-member"),
-        ),
+        probes={
+            "routed-member": accepted(_in_region("use lib::*", "f()"), "int"),
+            "own-member": accepted(_in_region("use lib::*", "g()"), "int"),
+            "own-member-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
+            "routed-type-value": accepted(
+                _in_region("use lib::*", "P(x = 1)"), "record lib::P\n  x: int"
+            ),
+        },
     ),
     "a-use-of-an-imported-alias-reaches-its-target-members": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{C}",),
-        probes=nonconstant_in_file(
-            {
-                "member": accepted(_in_region("use C::*", "Red"), _ONE_RED),
-                "member-with-fields": accepted(_in_region("use C::*", "Blue(v = 1)"), _ONE_BLUE),
-                "member-pattern": accepted(
-                    _in_region(
-                        "use C::*", "case Blue(v = 2) as C of\n    | Red => 1\n    | Blue(v) => v"
-                    ),
-                    "int",
+        probes={
+            "member": accepted(_in_region("use C::*", "Red"), _ONE_RED),
+            "member-with-fields": accepted(_in_region("use C::*", "Blue(v = 1)"), _ONE_BLUE),
+            "member-pattern": accepted(
+                _in_region(
+                    "use C::*", "case Blue(v = 2) as C of\n    | Red => 1\n    | Blue(v) => v"
                 ),
-                "selected-member": accepted(_in_region("use C::{Red}", "Red"), _ONE_RED),
-                "routed-alias": accepted(_in_region("use one::C::*", "Red"), _ONE_RED),
-                "hiding-leaves-what-the-import-brings": accepted(
-                    _in_region("use C::* hiding Red", "Red"), _ONE_RED
-                ),
-                "outside-the-region-the-import-brings-it": accepted(_OUTSIDE_THE_REGION, _ONE_RED),
-            },
-            ("member-pattern",),
-        ),
+                "int",
+            ),
+            "selected-member": accepted(_in_region("use C::{Red}", "Red"), _ONE_RED),
+            "routed-alias": accepted(_in_region("use one::C::*", "Red"), _ONE_RED),
+            "hiding-leaves-what-the-import-brings": accepted(
+                _in_region("use C::* hiding Red", "Red"), _ONE_RED
+            ),
+            "outside-the-region-the-import-brings-it": accepted(_OUTSIDE_THE_REGION, _ONE_RED),
+        },
     ),
     "a-use-of-a-routed-alias-brings-its-target-members-to-its-region": Scenario(
         modules={"one": _ALIASED_ENUM},
@@ -410,7 +394,7 @@ _SCENARIOS = {
                 _in_region("use one::C::* hiding Red", "Blue(v = 1)"), _ONE_BLUE
             ),
             "outside-the-region": rejected(
-                "scope r\n  use one::C::*\n  let v = Red\nend r\n\nRed", AglScopeError, "Red"
+                "scope r\n  use one::C::*\n  def v() = Red\nend r\n\nRed", AglScopeError, "Red"
             ),
         },
     ),
@@ -578,7 +562,7 @@ _SCENARIOS = {
                     "scope S\n  def f(c: Color) -> bool = c is Red\nend S\n\nS::f(Color::Blue)",
                     "bool",
                 ),
-                "nearer-step": accepted(
+                "inner-step": accepted(
                     "scope S\n  def f(c: Shade) -> int = case c of\n    | Red => 1\n"
                     "    | _ => 2\nend S\n\nS::f(S::Shade::Dark)",
                     "int",
@@ -587,51 +571,77 @@ _SCENARIOS = {
         )
         for name, color in (("own", "enum Color\n  | Red\n  | Blue"), ("imported", "import lib::*"))
     },
+    **{
+        f"a-bare-pattern-beside-a-region-record-reads-every-step-for-{name}-constructors": (
+            Scenario(
+                modules={"lib": "enum Color\n  | Red\n  | Blue\n"},
+                header=(color, "scope S\n  record Red\n    q: int\nend S"),
+                probes={
+                    "outer-step": accepted(_color_case_in_s(""), "int"),
+                    "outer-step-is": accepted(
+                        "scope S\n  def f(c: Color) -> bool = c is Red\nend S\n\nS::f(Color::Red)",
+                        "bool",
+                    ),
+                    "region-record-is-the-scrutinee": accepted(
+                        "scope S\n  def g(r: Red) -> int = case r of\n    | Red(q) => q\nend S"
+                        "\n\nS::g(S::Red(q = 1))",
+                        "int",
+                    ),
+                    **{
+                        f"one-declaration-through-{route}": accepted(
+                            _color_case_in_s(f"  {written}\n"), "int"
+                        )
+                        for route, written in routes
+                    },
+                    "two-declarations-of-the-scrutinee-type": rejected(
+                        _color_case_in_s("  use Color::{Blue as Red}\n"),
+                        AglTypeError,
+                        "Red",
+                        phase="typecheck",
+                    ),
+                },
+            )
+        )
+        for name, color, routes in (
+            ("own", "enum Color\n  | Red\n  | Blue", (("a-use", "use Color::*"),)),
+            (
+                "imported",
+                "import lib::*",
+                (("a-use", "use Color::*"), ("a-region-import", "import lib::*")),
+            ),
+        )
+    },
     "a-region-import-makes-a-record-a-bare-pattern-there": Scenario(
         modules={"lib": "record Point\n  x: int\n"},
         header=("import lib", "let p = lib::Point(x = 1)"),
-        probes=nonconstant_in_file(
-            {
-                "tail": accepted(
-                    _in_region("import lib::{Point}\n", "case p of\n    | Point(x) => x"), "int"
-                ),
-                "hidden": rejected(
-                    _in_region("import lib::* hiding Point\n", "case p of\n    | Point(x) => x"),
-                    NoVisibleConstructorError,
-                    "Point(x)",
-                ),
-            },
-            ("tail",),
-        ),
+        probes={
+            "tail": accepted(
+                _in_region("import lib::{Point}\n", "case p of\n    | Point(x) => x"), "int"
+            ),
+            "hidden": rejected(
+                _in_region("import lib::* hiding Point\n", "case p of\n    | Point(x) => x"),
+                NoVisibleConstructorError,
+                "Point(x)",
+            ),
+        },
     ),
     "a-use-reads-own-scopes-by-whole-path": Scenario(
         header=(_OWN_ROOT_X, _OWN_NESTED_X),
-        probes=nonconstant_in_file(
-            {
-                "outer-and-inner-scope": accepted(_in_q("use X::*", "f() + g()"), "int"),
-                "inner-scope-wins-its-path": accepted(_in_q("use X::*", "h()"), "bool"),
-                "tail-over-both": accepted(_in_q("use X::{f, g}", "f() + g()"), "int"),
-                "alias-over-both": accepted(_in_q("use X as Y", "Y::f() + Y::g()"), "int"),
-                "exposed-and-inner-scope": accepted(
-                    _in_q("use A::*\n  use X::*", "k() + g() + f()"), "int"
-                ),
-                "inner-scope-wins-over-an-exposed-one": accepted(
-                    _in_q("use A::*\n  use X::*", "h()"), "bool"
-                ),
-                "exposed-scope-wins-over-an-outer-one": accepted(
-                    "scope Q\n  use A::*\n  use X::*\n  let v = h()\nend Q\n\nQ::v", "text"
-                ),
-            },
-            (
-                "alias-over-both",
-                "exposed-and-inner-scope",
-                "exposed-scope-wins-over-an-outer-one",
-                "inner-scope-wins-its-path",
-                "inner-scope-wins-over-an-exposed-one",
-                "outer-and-inner-scope",
-                "tail-over-both",
+        probes={
+            "outer-and-inner-scope": accepted(_in_q("use X::*", "f() + g()"), "int"),
+            "inner-scope-wins-its-path": accepted(_in_q("use X::*", "h()"), "bool"),
+            "tail-over-both": accepted(_in_q("use X::{f, g}", "f() + g()"), "int"),
+            "alias-over-both": accepted(_in_q("use X as Y", "Y::f() + Y::g()"), "int"),
+            "exposed-and-inner-scope": accepted(
+                _in_q("use A::*\n  use X::*", "k() + g() + f()"), "int"
             ),
-        ),
+            "inner-scope-wins-over-an-exposed-one": accepted(
+                _in_q("use A::*\n  use X::*", "h()"), "bool"
+            ),
+            "exposed-scope-wins-over-an-outer-one": accepted(
+                "scope Q\n  use A::*\n  use X::*\n  def v() = h()\nend Q\n\nQ::v()", "text"
+            ),
+        },
     ),
     "a-record-two-imported-enums-reference-is-one-declaration": Scenario(
         modules={"lib": _TWICE_REFERENCED_P},
@@ -662,88 +672,79 @@ _SCENARIOS = {
     ),
     "a-use-combines-the-scopes-earlier-uses-expose": Scenario(
         header=(_EXPOSED_A, _EXPOSED_B),
-        probes=nonconstant_in_file(
-            {
-                "one-exposure-each": accepted(_in_region(_USES_X, "f() + g()"), "int"),
-                "two-exposed-members-clash-where-used": rejected(
-                    _in_region(_USES_X, "h()"), AmbiguousQualificationError, "h"
-                ),
-                "selected-from-both": accepted(
-                    _in_region("use A::*\n  use B::*\n  use X::{f, g}", "f() + g()"), "int"
-                ),
-                "selecting-a-member-neither-declares": rejected(
-                    _in_region("use A::*\n  use B::*\n  use X::{k}", "1"),
-                    UnknownMemberError,
-                    "use X::{k}",
-                ),
-                "hiding-a-member-both-declare": rejected(
-                    _in_region("use A::*\n  use B::*\n  use X::* hiding h", "h()"),
-                    AglScopeError,
-                    "h",
-                ),
-                "exposed-by-enclosing-and-own-region": accepted(
-                    "scope r\n  use A::*\n\n  scope q\n    use B::*\n    use X::*\n"
-                    "    let v = f() + g()\n  end q\nend r\n\nr::q::v",
-                    "int",
-                ),
-            },
-            ("exposed-by-enclosing-and-own-region", "one-exposure-each", "selected-from-both"),
-        ),
+        probes={
+            "one-exposure-each": accepted(_in_region(_USES_X, "f() + g()"), "int"),
+            "two-exposed-members-clash-where-used": rejected(
+                _in_region(_USES_X, "h()"), AmbiguousQualificationError, "h"
+            ),
+            "selected-from-both": accepted(
+                _in_region("use A::*\n  use B::*\n  use X::{f, g}", "f() + g()"), "int"
+            ),
+            "selecting-a-member-neither-declares": rejected(
+                _in_region("use A::*\n  use B::*\n  use X::{k}", "1"),
+                UnknownMemberError,
+                "use X::{k}",
+            ),
+            "hiding-a-member-both-declare": rejected(
+                _in_region("use A::*\n  use B::*\n  use X::* hiding h", "h()"),
+                AglScopeError,
+                "h",
+            ),
+            "exposed-by-enclosing-and-own-region": accepted(
+                "scope r\n  use A::*\n\n  scope q\n    use B::*\n    use X::*\n"
+                "    def v() = f() + g()\n  end q\nend r\n\nr::q::v()",
+                "int",
+            ),
+        },
     ),
     "own-scope-and-imported-scope-combine": Scenario(
         modules={"M": _M},
         header=("import M::*", _OWN_AGENT, _OWN_GEO),
-        probes=nonconstant_in_file(
-            {
-                "combined-values": accepted("Agent::f() + Agent::g()", "int"),
-                "motivating-example": accepted(
-                    "def h() -> int = Agent::f() + Agent::g()\n"
-                    "def k(p: Geo) -> int = Geo::make()\n"
-                    "h() + k(Geo(x = 1)) + Box::b + Oops::o",
-                    "int",
-                ),
-                "imported-applied-type": accepted("fn(p: Box[int]) => p.v", "M::Box[int] -> int"),
-                "imported-exception-catch": accepted(
-                    "try\n  1\ncatch Oops as e =>\n  e.code", "int"
-                ),
-                "imported-exception-extends": accepted(
-                    "exception Local extends Oops\nfn(p: Local) => p.code", "Local -> int"
-                ),
-                "imported-type-repl-entry": rejected(
-                    "Agent::Mood",
-                    AglTypeError,
-                    "Agent::Mood",
-                    type_entry="enum M::Agent::Mood\n  | Up\n  | Down",
-                ),
-                "own-member-of-imported-type-path": accepted("Geo::make()", "int"),
-                "info-imported-generic-type": info(
-                    "Box", "Box is a generic record type.\nType:\n  record Box[T]\n    v: T"
-                ),
-                "info-imported-scoped-enum": info(
-                    "Agent::Mood",
-                    "Agent::Mood is an enum type.\nType:\n"
-                    "  enum M::Agent::Mood\n    | Up\n    | Down",
-                ),
-                **type_positions("imported-geo", "Geo", "M::Geo"),
-                **type_positions("imported-scoped", "Agent::Mood", "M::Agent::Mood"),
-                "imported-type-cast": accepted("fn(p: Geo) => p as Geo", "M::Geo -> M::Geo"),
-                "imported-type-value": accepted("Geo(x = 1)", "record M::Geo\n  x: int"),
-                "imported-type-pattern": accepted("case Geo(x = 1) of\n  | Geo(x) => x", "int"),
-                "imported-scope-is": accepted(
-                    "fn(p: Agent::Mood) => p is Agent::Mood::Up", "M::Agent::Mood -> bool"
-                ),
-                "imported-type-receiver": accepted(
-                    "def Geo::norm(self) -> int = self.x\nGeo(x = 2).norm()", "int"
-                ),
-                "missing-member-of-combined-scope": rejected(
-                    "Agent::h()", UnknownMemberError, "Agent::h"
-                ),
-                "imported-scope-from-inside-own-region": accepted(
-                    "scope Agent\n  let v = f() + g()\nend Agent\n\nAgent::v", "int"
-                ),
-            },
-            ("imported-scope-from-inside-own-region",),
-        ),
+        probes={
+            "combined-values": accepted("Agent::f() + Agent::g()", "int"),
+            "motivating-example": accepted(
+                "def h() -> int = Agent::f() + Agent::g()\n"
+                "def k(p: Geo) -> int = Geo::make()\n"
+                "h() + k(Geo(x = 1)) + Box::b + Oops::o",
+                "int",
+            ),
+            "imported-applied-type": accepted("fn(p: Box[int]) => p.v", "M::Box[int] -> int"),
+            "imported-exception-catch": accepted("try\n  1\ncatch Oops as e =>\n  e.code", "int"),
+            "imported-exception-extends": accepted(
+                "exception Local extends Oops\nfn(p: Local) => p.code", "Local -> int"
+            ),
+            "imported-type-repl-entry": rejected(
+                "Agent::Mood",
+                AglTypeError,
+                "Agent::Mood",
+                type_entry="enum M::Agent::Mood\n  | Up\n  | Down",
+            ),
+            "own-member-of-imported-type-path": accepted("Geo::make()", "int"),
+            "info-imported-generic-type": info(
+                "Box", "Box is a generic record type.\nType:\n  record Box[T]\n    v: T"
+            ),
+            "info-imported-scoped-enum": info(
+                "Agent::Mood",
+                "Agent::Mood is an enum type.\nType:\n  enum M::Agent::Mood\n    | Up\n    | Down",
+            ),
+            **type_positions("imported-geo", "Geo", "M::Geo"),
+            **type_positions("imported-scoped", "Agent::Mood", "M::Agent::Mood"),
+            "imported-type-cast": accepted("fn(p: Geo) => p as Geo", "M::Geo -> M::Geo"),
+            "imported-type-value": accepted("Geo(x = 1)", "record M::Geo\n  x: int"),
+            "imported-type-pattern": accepted("case Geo(x = 1) of\n  | Geo(x) => x", "int"),
+            "imported-scope-is": accepted(
+                "fn(p: Agent::Mood) => p is Agent::Mood::Up", "M::Agent::Mood -> bool"
+            ),
+            "imported-type-receiver": accepted(
+                "def Geo::norm(self) -> int = self.x\nGeo(x = 2).norm()", "int"
+            ),
+            "missing-member-of-combined-scope": rejected(
+                "Agent::h()", UnknownMemberError, "Agent::h"
+            ),
+            "imported-scope-from-inside-own-region": accepted(
+                "scope Agent\n  def v() = f() + g()\nend Agent\n\nAgent::v()", "int"
+            ),
+        },
     ),
     "own-declaration-beats-imported-one": Scenario(
         modules={"M": _M},
@@ -798,34 +799,31 @@ _SCENARIOS = {
     "scoped-use-beats-root-own-declaration": Scenario(
         modules={"s": _S},
         header=("import s", "record R\n  x: int"),
-        probes=nonconstant_in_file(
-            {
-                "value": accepted(
-                    'scope r\n  use s::*\n  let v = R(y = "a")\nend r\n\nr::v',
-                    "record s::R\n  y: text",
-                ),
-                "annotation": accepted(
-                    "scope r\n  use s::*\n  let v = fn(p: R) => p.y\nend r\n\nr::v", "s::R -> text"
-                ),
-                "pattern": accepted(
-                    'scope r\n  use s::*\n  let v = case R(y = "a") of\n    | R(y) => y\n'
-                    "end r\n\nr::v",
-                    "text",
-                ),
-                "receiver": accepted(
-                    "scope r\n  use s::*\n  def R::m(self) -> text = self.y\n"
-                    '  let v = R(y = "a").m()\nend r\n\nr::v',
-                    "text",
-                ),
-                "root-own-outside-region": accepted("R(x = 1)", "record R\n  x: int"),
-                "own-in-region-beats-use": accepted(
-                    "scope r\n  use s::*\n  record R\n    w: int\n  let v = R(w = 1)\n"
-                    "end r\n\nr::v",
-                    "record r::R\n  w: int",
-                ),
-            },
-            ("annotation", "pattern", "receiver"),
-        ),
+        probes={
+            "value": accepted(
+                'scope r\n  use s::*\n  def v() = R(y = "a")\nend r\n\nr::v()',
+                "record s::R\n  y: text",
+            ),
+            "annotation": accepted(
+                "scope r\n  use s::*\n  def v() = fn(p: R) => p.y\nend r\n\nr::v()", "s::R -> text"
+            ),
+            "pattern": accepted(
+                'scope r\n  use s::*\n  def v() = case R(y = "a") of\n    | R(y) => y\nend r'
+                "\n\nr::v()",
+                "text",
+            ),
+            "receiver": accepted(
+                "scope r\n  use s::*\n  def R::m(self) -> text = self.y\n"
+                '  def v() = R(y = "a").m()\nend r\n\nr::v()',
+                "text",
+            ),
+            "root-own-outside-region": accepted("R(x = 1)", "record R\n  x: int"),
+            "own-in-region-beats-use": accepted(
+                "scope r\n  use s::*\n  record R\n    w: int\n  def v() = R(w = 1)\nend r"
+                "\n\nr::v()",
+                "record r::R\n  w: int",
+            ),
+        },
     ),
     "route-and-own-path": Scenario(
         modules={"lib": _ROUTED},
@@ -999,20 +997,18 @@ _SCENARIOS = {
     "a-braced-use-renames-a-type": Scenario(
         modules={"e": _RENAMED},
         header=("import e", "use e::{Color as C, Pt as R, P as Q}"),
-        probes=nonconstant_in_file(_renamed_type_probes("use s::{L as M}"), ("local-annotation",)),
+        probes=_renamed_type_probes("use s::{L as M}"),
     ),
     "an-unbraced-use-renames-a-type-like-a-braced-one": Scenario(
         modules={"e": _RENAMED},
         # One entry: a REPL entry using a module supersedes its earlier uses.
         header=("import e", "use e::Color as C\nuse e::Pt as R\nuse e::P as Q"),
-        probes=nonconstant_in_file(_renamed_type_probes("use s::L as M"), ("local-annotation",)),
+        probes=_renamed_type_probes("use s::L as M"),
     ),
     "a-one-segment-use-renames-a-type-like-a-braced-one": Scenario(
         modules={"e": _RENAMED},
         header=("import e::*", "use Color as C\nuse Pt as R\nuse P as Q"),
-        probes=nonconstant_in_file(
-            _renamed_type_probes("use L as M", _ROOT_L, "L"), ("local-annotation",)
-        ),
+        probes=_renamed_type_probes("use L as M", _ROOT_L, "L"),
     ),
     "alias-segments": Scenario(
         modules={"e": _COLOR, "f": _SHADE},
@@ -1025,12 +1021,12 @@ _SCENARIOS = {
                 "fn(p: e::Color) => case p of\n  | C::Red => 1\n  | _ => 2", "e::Color -> int"
             ),
             "type-alias-member": accepted("type D = f::Color\nD::Dark", "record f::Color::Dark"),
-            "nearer-use-alias": accepted(
-                "scope r\n  use f::Color as C\n  let v = C::Dark\nend r\n\nr::v",
+            "region-use-alias": accepted(
+                "scope r\n  use f::Color as C\n  def v() = C::Dark\nend r\n\nr::v()",
                 "record f::Color::Dark",
             ),
-            "farther-use-alias-still-found": accepted(
-                "scope r\n  use f::Color as C\n  let v = C::Red\nend r\n\nr::v",
+            "root-use-alias-at-a-later-step": accepted(
+                "scope r\n  use f::Color as C\n  def v() = C::Red\nend r\n\nr::v()",
                 "record e::Color::Red",
             ),
             "unknown-alias-member": rejected("C::Blue", UnknownMemberError, "C::Blue"),
@@ -1053,7 +1049,7 @@ _SCENARIOS = {
             ),
             **type_positions("applied-alias", "B[int]::Som", "lib::Opt::Som[int]"),
             "applied-scoped-alias": accepted(
-                'scope q\n  use lib::Opt as K\n  let v = K[text]::Som(v = "x")\nend q\n\nq::v',
+                'scope q\n  use lib::Opt as K\n  def v() = K[text]::Som(v = "x")\nend q\n\nq::v()',
                 "record lib::Opt::Som[text]\n  v: text",
             ),
             "wrong-arity-alias": rejected("B[int, text]::Non", TypeArgumentsError, "B[int, text]"),
@@ -1109,7 +1105,7 @@ _SCENARIOS = {
         header=(_TL_LOCAL,),
         probes={
             "hidden-owner-value": rejected(
-                "scope r\n  use s::* hiding Geo\n\n  let v = Geo::Inner(y = 1)\nend r",
+                "scope r\n  use s::* hiding Geo\n\n  def v() = Geo::Inner(y = 1)\nend r",
                 HiddenMemberError,
                 "Geo::Inner",
             ),
@@ -1210,25 +1206,22 @@ _SCENARIOS = {
     ),
     "applied-owner-of-a-record-pattern": Scenario(
         header=(_NESTED_UNDER_GENERICS,),
-        probes=nonconstant_in_file(
-            {
-                "scoped-alias-owner": accepted(
-                    "scope q\n  type Rows[A] = E[array[A]]\n"
-                    "  let v = fn(r: E[array[int]]::A) => case r of\n"
-                    "    | Rows[int]::A(a) => a.size()\nend q\n\nq::v",
-                    "E::A[array[int]] -> int",
-                ),
-                "scoped-alias-owner-mismatch": rejected(
-                    "scope q\n  type Rows[A] = E[array[A]]\n"
-                    "  let v = fn(r: E[int]::A) => case r of\n"
-                    "    | Rows[int]::A(a) => 1\nend q",
-                    AglTypeError,
-                    "Rows[int]::A(a)",
-                    phase="typecheck",
-                ),
-            },
-            ("scoped-alias-owner", "scoped-alias-owner-mismatch"),
-        ),
+        probes={
+            "scoped-alias-owner": accepted(
+                "scope q\n  type Rows[A] = E[array[A]]\n"
+                "  def v() = fn(r: E[array[int]]::A) => case r of\n"
+                "    | Rows[int]::A(a) => a.size()\nend q\n\nq::v()",
+                "E::A[array[int]] -> int",
+            ),
+            "scoped-alias-owner-mismatch": rejected(
+                "scope q\n  type Rows[A] = E[array[A]]\n"
+                "  def v() = fn(r: E[int]::A) => case r of\n"
+                "    | Rows[int]::A(a) => 1\nend q",
+                AglTypeError,
+                "Rows[int]::A(a)",
+                phase="typecheck",
+            ),
+        },
     ),
     "enum-references-a-member-through-a-use": Scenario(
         modules={"lib": _GEO_REGION},
@@ -1431,33 +1424,25 @@ _SCENARIOS = {
     "a-use-of-a-record-exposes-its-own-spelling-as-a-constructor-only": Scenario(
         modules={"e": "record Pt\n  x: int\nrecord Pt::In\n  y: int\n"},
         header=("import e",),
-        probes=nonconstant_in_file(
-            {
-                "constructor": accepted(
-                    _in_region("use e::Pt::*", "Pt(x = 1)"), "record e::Pt\n  x: int"
-                ),
-                "no-type": rejected(
-                    _in_region("use e::Pt::*", "fn(p: Pt) => p"), AglTypeError, "Pt"
-                ),
-                "nested-type": accepted(
-                    _in_region("use e::Pt::*", "fn(p: In) => p"), "e::Pt::In -> e::Pt::In"
-                ),
-            },
-            ("nested-type",),
-        ),
+        probes={
+            "constructor": accepted(
+                _in_region("use e::Pt::*", "Pt(x = 1)"), "record e::Pt\n  x: int"
+            ),
+            "no-type": rejected(_in_region("use e::Pt::*", "fn(p: Pt) => p"), AglTypeError, "Pt"),
+            "nested-type": accepted(
+                _in_region("use e::Pt::*", "fn(p: In) => p"), "e::Pt::In -> e::Pt::In"
+            ),
+        },
     ),
     "a-tail-item-makes-its-qualifier-visible": Scenario(
         modules={"M": "scope Agent\n  def f() -> int = 1\n  def g() -> int = 2\nend Agent\n"},
         header=("import M",),
-        probes=nonconstant_in_file(
-            {
-                "selected": accepted(_in_region("use M::{Agent::f}", "Agent::f()"), "int"),
-                "unselected": rejected(
-                    _in_region("use M::{Agent::f}", "Agent::g()"), UnknownMemberError, "Agent::g"
-                ),
-            },
-            ("selected",),
-        ),
+        probes={
+            "selected": accepted(_in_region("use M::{Agent::f}", "Agent::f()"), "int"),
+            "unselected": rejected(
+                _in_region("use M::{Agent::f}", "Agent::g()"), UnknownMemberError, "Agent::g"
+            ),
+        },
     ),
     "an-injected-member-yields-only-to-a-record-the-use-exposes": Scenario(
         modules={
@@ -1509,13 +1494,21 @@ _SCENARIOS = {
     ),
     "a-use-reads-an-own-scope-declared-after-it": Scenario(
         modules={"M": _LATER_M},
-        # One entry: a REPL use replaces an earlier one of the same target.
-        header=("import M::*", "use Agent as A\nuse Agent::*", _LATER_OWN_SCOPE),
+        header=("import M::*", "use Agent as A", "use Agent::*", _LATER_OWN_SCOPE),
         probes={
             "alias-own": accepted("A::h()", "text"),
             "alias-imported": accepted("A::f()", "int"),
             "own": accepted("h()", "text"),
             "imported": accepted("f()", "int"),
+        },
+    ),
+    "a-rename-and-another-use-of-its-target-both-stay": Scenario(
+        modules={"lib": "scope S\n  def f() -> int = 1\n\n  def g() -> int = 2\nend S\n"},
+        header=("import lib", "use lib::S::*", "use lib::S as T", "use lib::S::g as h"),
+        probes={
+            "through-the-wildcard": accepted("f()", "int"),
+            "through-the-rename": accepted("T::f()", "int"),
+            "through-the-item-rename": accepted("h()", "int"),
         },
     ),
     "a-use-spelled-through-an-earlier-use-keeps-it": Scenario(
@@ -1539,7 +1532,7 @@ _SCENARIOS = {
             ),
         },
     ),
-    "a-use-reads-the-scope-a-nearer-use-exposes": Scenario(
+    "a-use-reads-the-scope-a-region-use-exposes": Scenario(
         modules={"lib1": _X_A, "lib2": _X_B},
         header=(
             "import lib1",
@@ -1550,42 +1543,36 @@ _SCENARIOS = {
         ),
         probes={
             "from-the-enclosing-use": accepted("S::g()", "int"),
-            "from-the-nearer-use": accepted("S::k()", "text"),
+            "from-the-region-use": accepted("S::k()", "text"),
             "root-use-alone-at-the-root": accepted("X::a()", "int"),
-            "nearer-use-stays-in-its-region": rejected("X::b()", UnknownMemberError, "X::b"),
+            "region-use-stays-in-its-region": rejected("X::b()", UnknownMemberError, "X::b"),
         },
     ),
     "a-module-alias-combines-with-an-own-scope-of-its-name": Scenario(
         modules={"m": _ALIASED_MODULE},
         header=("import m as lib", _USE_OWN_LIB),
-        probes=nonconstant_in_file(
-            {
-                "routed": accepted("lib::f()", "int"),
-                "routed-nested-scope": accepted("lib::Deep::d()", "int"),
-                "own": accepted("lib::g()", "int"),
-                "own-wins-its-path": accepted("lib::both()", "bool"),
-                "used": accepted(_in_region("use lib::*", "f() + g()"), "int"),
-                "used-own-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
-                "neither": rejected("lib::nope()", UnknownMemberError, "lib::nope"),
-            },
-            ("used", "used-own-wins-its-path"),
-        ),
+        probes={
+            "routed": accepted("lib::f()", "int"),
+            "routed-nested-scope": accepted("lib::Deep::d()", "int"),
+            "own": accepted("lib::g()", "int"),
+            "own-wins-its-path": accepted("lib::both()", "bool"),
+            "used": accepted(_in_region("use lib::*", "f() + g()"), "int"),
+            "used-own-wins-its-path": accepted(_in_region("use lib::*", "both()"), "bool"),
+            "neither": rejected("lib::nope()", UnknownMemberError, "lib::nope"),
+        },
     ),
     "a-middle-step-decides-a-qualified-chain": Scenario(
         modules={"M": "scope X\n  def f() -> bool = true\n  def k() -> bool = true\nend X\n"},
         header=("import M::*", "def X::f() -> int = 1", 'def S1::X::f() -> text = "m"'),
-        probes=nonconstant_in_file(
-            {
-                "middle-step": accepted(
-                    "scope S1::S2\n  let v = X::f()\nend S1::S2\n\nS1::S2::v", "text"
-                ),
-                "outer-step-when-the-middle-misses": accepted(
-                    "scope S1::S2\n  let v = X::k()\nend S1::S2\n\nS1::S2::v", "bool"
-                ),
-                "root-step": accepted("X::f()", "int"),
-            },
-            ("middle-step", "outer-step-when-the-middle-misses"),
-        ),
+        probes={
+            "middle-step": accepted(
+                "scope S1::S2\n  def v() = X::f()\nend S1::S2\n\nS1::S2::v()", "text"
+            ),
+            "outer-step-when-the-middle-misses": accepted(
+                "scope S1::S2\n  def v() = X::k()\nend S1::S2\n\nS1::S2::v()", "bool"
+            ),
+            "root-step": accepted("X::f()", "int"),
+        },
     ),
     "a-branch-reads-a-constructor-pattern-name-like-a-bare-value": Scenario(
         modules={"M": _WRAPPED_COLOR, "N": _SIGNAL},
@@ -1604,7 +1591,7 @@ _SCENARIOS = {
         probes={
             "ambiguous": rejected(
                 _branch("rank(Red)", region=False),
-                AglTypeError,
+                AmbiguousConstructorError,
                 "Red",
                 phase="typecheck",
             ),
@@ -1628,10 +1615,10 @@ _SCENARIOS = {
         header=(_SCOPED_COLOR, "def Red() -> int = 1"),
         probes={
             "in-its-scope": accepted(
-                "scope S\n  let v = Red\nend S\n\nS::v", "record S::Color::Red"
+                "scope S\n  def v() = Red\nend S\n\nS::v()", "record S::Color::Red"
             ),
             "in-a-nested-scope": accepted(
-                "scope S::T\n  let v = Blue\nend S::T\n\nS::T::v", "record S::Color::Blue"
+                "scope S::T\n  def v() = Blue\nend S::T\n\nS::T::v()", "record S::Color::Blue"
             ),
             "pattern-in-its-scope": accepted(
                 "scope S\n  def f(c: Color) -> int =\n    case c of\n      | Red => 1\n"
@@ -1642,7 +1629,7 @@ _SCENARIOS = {
             "outside-its-scope-other-member": rejected("Blue", AglScopeError, "Blue"),
             "no-member-path": rejected("S::Red", UnknownMemberError, "S::Red"),
             "own-record-at-its-step": accepted(
-                "scope S\n  record Red\n    q: int\n  let v = Red(q = 1)\nend S\n\nS::v",
+                "scope S\n  record Red\n    q: int\n  def v() = Red(q = 1)\nend S\n\nS::v()",
                 "record S::Red\n  q: int",
             ),
         },
@@ -1652,10 +1639,10 @@ _SCENARIOS = {
         header=("import lib::*",),
         probes={
             "in-its-scope": accepted(
-                "scope S\n  let v = Red\nend S\n\nS::v", "record lib::S::Color::Red"
+                "scope S\n  def v() = Red\nend S\n\nS::v()", "record lib::S::Color::Red"
             ),
             "in-a-nested-scope": accepted(
-                "scope S::T\n  let v = Blue\nend S::T\n\nS::T::v", "record lib::S::Color::Blue"
+                "scope S::T\n  def v() = Blue\nend S::T\n\nS::T::v()", "record lib::S::Color::Blue"
             ),
             "pattern-in-its-scope": accepted(
                 "scope S\n  def f(c: Color) -> int =\n    case c of\n      | Red => 1\n"
@@ -1668,14 +1655,14 @@ _SCENARIOS = {
             ),
             "outside-its-scope": rejected("Red", AglScopeError, "Red"),
             "no-member-path": rejected(
-                "scope S\n  let v = 1\nend S\n\nS::Red", UnknownMemberError, "S::Red"
+                "scope S\n  def v() = 1\nend S\n\nS::Red", UnknownMemberError, "S::Red"
             ),
             "own-member-wins": accepted(
-                "scope S\n  enum Shade\n    | Red\n  let v = Red\nend S\n\nS::v",
+                "scope S\n  enum Shade\n    | Red\n  def v() = Red\nend S\n\nS::v()",
                 "record S::Shade::Red",
             ),
             "own-record-wins": accepted(
-                "scope S\n  record Red\n    q: int\n  let v = Red(q = 1)\nend S\n\nS::v",
+                "scope S\n  record Red\n    q: int\n  def v() = Red(q = 1)\nend S\n\nS::v()",
                 "record S::Red\n  q: int",
             ),
         },
@@ -1685,10 +1672,10 @@ _SCENARIOS = {
         header=("scope R\n  import lib::*\nend R",),
         probes={
             "in-its-scope": accepted(
-                "scope R::S\n  let v = Red\nend R::S\n\nR::S::v", "record lib::S::Color::Red"
+                "scope R::S\n  def v() = Red\nend R::S\n\nR::S::v()", "record lib::S::Color::Red"
             ),
             "above-its-scope": rejected(
-                "scope R\n  let v = Red\nend R\n\nR::v", AglScopeError, "Red"
+                "scope R\n  def v() = Red\nend R\n\nR::v()", AglScopeError, "Red"
             ),
         },
     ),
@@ -1697,7 +1684,8 @@ _SCENARIOS = {
         header=(),
         probes={
             "member": accepted(
-                "scope R\n  import lib::*\n  let v = Red\nend R\n\nR::v", "record lib::Color::Red"
+                "scope R\n  import lib::*\n  def v() = Red\nend R\n\nR::v()",
+                "record lib::Color::Red",
             ),
             "pattern": accepted(
                 "scope R\n  import lib::*\n  def f(c: Color) -> int =\n    case c of\n"
@@ -1705,11 +1693,11 @@ _SCENARIOS = {
                 "int",
             ),
             "a-record-owns-its-name": accepted(
-                "scope R\n  import lib::*\n  let v = Blue(q = 1)\nend R\n\nR::v",
+                "scope R\n  import lib::*\n  def v() = Blue(q = 1)\nend R\n\nR::v()",
                 "record lib::Blue\n  q: int",
             ),
             "hidden-member": rejected(
-                "scope R\n  import lib::* hiding Color::Red\n  let v = Red\nend R\n\nR::v",
+                "scope R\n  import lib::* hiding Color::Red\n  def v() = Red\nend R\n\nR::v()",
                 AglScopeError,
                 "Red",
             ),
@@ -1721,21 +1709,16 @@ _SCENARIOS = {
     "a-hiding-at-an-enclosing-step-holds-in-a-nested-region": Scenario(
         modules={"M": "scope Agent\n  def f() -> int = 1\n  def g() -> int = 2\nend Agent\n"},
         header=("import M",),
-        probes=nonconstant_in_file(
-            {
-                "bare": rejected(_in_nested("use M::Agent::* hiding f", "f()"), AglScopeError, "f"),
-                "bare-kept": accepted(_in_nested("use M::Agent::* hiding f", "g()"), "int"),
-                "qualified": rejected(
-                    _in_nested("use M::* hiding Agent::f", "Agent::f()"),
-                    HiddenMemberError,
-                    "Agent::f",
-                ),
-                "qualified-kept": accepted(
-                    _in_nested("use M::* hiding Agent::f", "Agent::g()"), "int"
-                ),
-            },
-            ("bare-kept", "qualified-kept"),
-        ),
+        probes={
+            "bare": rejected(_in_nested("use M::Agent::* hiding f", "f()"), AglScopeError, "f"),
+            "bare-kept": accepted(_in_nested("use M::Agent::* hiding f", "g()"), "int"),
+            "qualified": rejected(
+                _in_nested("use M::* hiding Agent::f", "Agent::f()"),
+                HiddenMemberError,
+                "Agent::f",
+            ),
+            "qualified-kept": accepted(_in_nested("use M::* hiding Agent::f", "Agent::g()"), "int"),
+        },
     ),
 }
 

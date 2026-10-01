@@ -149,6 +149,7 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
     CheckedModuleImage,
+    CycleAlias,
     DeclaredHeaderSeed,
     EnvironmentFacts,
     FunctionSignature,
@@ -159,6 +160,7 @@ from agm.agl.typecheck.env import (
     PublishedModuleSurface,
     TypeEnvironment,
     _assert_checked_types_closed,
+    alias_cycle_error,
     assert_checked_module_output_closed,
     dereference_slot_constructor_ref,
 )
@@ -586,15 +588,22 @@ def _build_program_type_table(
     # module's ImportEnv so qualified and import-tail-exposed type refs resolve.
     cross_envs: dict[ModuleId, TypeEnvironment] = {}
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
-    resolving_aliases: set[DeclKey] = set()
+    resolving_aliases: list[DeclKey] = []
+    module_order = {mid: index for index, mid in enumerate(resolved.modules)}
 
-    def _resolve_program_alias(key: DeclKey, span: SourceSpan | None) -> Type | None:
-        alias_mid, scope_path, alias_name = key
+    def _resolve_program_alias(key: DeclKey) -> Type | None:
+        alias_mid = key[0]
         item = alias_decls[key]
         if key in resolving_aliases:
-            rendered = "::".join((*scope_path, alias_name))
-            raise AglTypeError(f"Type alias '{rendered}' is part of a cycle.", span=span)
-        resolving_aliases.add(key)
+            raise alias_cycle_error(
+                CycleAlias(
+                    (module_order[cyclic[0]], alias_decls[cyclic].span.start_offset),
+                    "::".join((*cyclic[1], cyclic[2])),
+                    alias_decls[cyclic].span,
+                )
+                for cyclic in resolving_aliases[resolving_aliases.index(key) :]
+            )
+        resolving_aliases.append(key)
         try:
             env = cross_envs[alias_mid]
             # An alias forced from elsewhere resolves in its declaring module's
@@ -615,7 +624,7 @@ def _build_program_type_table(
             tables.types[key] = resolved
             return resolved
         finally:
-            resolving_aliases.remove(key)
+            resolving_aliases.pop()
 
     program_aliases = ProgramAliasResolution(
         keys=program_alias_keys, resolver=_resolve_program_alias

@@ -29,6 +29,7 @@ from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
     NoVisibleConstructorError,
 )
+from agm.agl.typecheck.checker import EnumOwnerMismatchError
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -1400,3 +1401,35 @@ def test_qualified_member_alias_at_other_arguments_is_rejected(tmp_path: Path, e
     """A scope- or module-qualified alias selecting a member at other arguments matches nothing."""
     with pytest.raises(AglTypeError):
         _check(tmp_path, entry)
+
+
+@pytest.mark.parametrize(
+    ("own", "spelled"),
+    [("", "lib::Color"), ("scope lib\n  def x() -> int = 1\nend lib\n", "/lib::Color")],
+    ids=["unshadowed", "own-scope-of-the-route-name"],
+)
+def test_owner_naming_another_enum_is_spelled_where_it_selects(
+    tmp_path: Path, own: str, spelled: str
+) -> None:
+    """The mismatched owner's spelling selects its enum where the pattern is written."""
+    entry = (
+        f"import lib\n{own}enum Shade\n  | Red\n  | Green\n"
+        "def f(c: Shade) -> int = case c of\n  | /lib::Color::Red => 1\n  | _ => 2\n"
+    )
+    with pytest.raises(EnumOwnerMismatchError) as raised:
+        check_agl_program(tmp_path, {"lib": "enum Color\n  | Red\n  | Blue\n", "entry": entry})
+    error = raised.value
+    assert error.span is not None
+    assert entry[error.span.start_offset : error.span.end_offset] == "/lib::Color::Red"
+    assert (error.resolved, error.actual) == (spelled, "Shade")
+
+
+def test_a_region_at_a_referenced_member_path_declares_no_method(tmp_path: Path) -> None:
+    """``scope Status::Saved`` names no type when ``Saved`` is only referenced by ``Status``."""
+    entry = _LOCAL + "scope Status::Saved\n  def label(self) -> int = self.id\nend Status::Saved"
+    with pytest.raises(AglScopeError) as raised:
+        _check(tmp_path, entry)
+    error = raised.value
+    assert type(error) is AglScopeError
+    assert error.span is not None
+    assert entry[error.span.start_offset : error.span.end_offset] == "self"

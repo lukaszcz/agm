@@ -232,7 +232,9 @@ def _build_cross_module_constructor_candidates(
     - EnumDef: add each variant name as a candidate (e.g. ``Red``), and each
       member it references unless an import hides that member's declaration.
     - TypeAlias: add the alias name unless *type_owners* resolves it to an
-      enum, following each alias of the chain where it is declared.
+      enum, following each alias of the chain where it is declared; an
+      alias renaming an enum adds the enum's members, one applying an enum
+      each member as ``Alias::member`` selects it.
 
     A selected QName may also name an enum variant directly (e.g. an
     individually imported/renamed variant); such names are absent from
@@ -283,6 +285,19 @@ def _build_cross_module_constructor_candidates(
             ):
                 add_candidate(member.name, cross_module_constructor_refs[member_qname])
 
+    def add_applied_members(exposed_name: str, key: QName, alias: TypeAlias) -> None:
+        """Add the members *alias*, declared at *key* and applying an enum, injects bare.
+
+        Each is what ``Alias::member`` selects: the member at the alias's
+        type arguments.
+        """
+        owner = type_owners.declared_owner(key, alias)
+        for name, member in owner.alias_members().items():
+            if not declares_bare_constructor(
+                import_env.unqualified.get(name, ()), all_public_types
+            ) and not tail_removes(exposed_name, key, owner.members[name].qname):
+                add_candidate(name, member)
+
     for exposed_name, qnames in import_env.unqualified.items():
         if not isinstance(exposed_name, str):
             continue
@@ -308,6 +323,8 @@ def _build_cross_module_constructor_candidates(
                 elif isinstance(enum, EnumDef):
                     # The alias's paths are its target's: its members come with it.
                     add_members(exposed_name, key, target, enum, through_alias=True)
+                else:
+                    add_applied_members(exposed_name, key, decl)
             else:
                 add_members(exposed_name, key, key, decl, through_alias=False)
     return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}

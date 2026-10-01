@@ -467,6 +467,13 @@ class ConstructorRef:
         """This reference's declaration path, as a :data:`QName`."""
         return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name))
 
+    @property
+    def selected_qname(self) -> QName:
+        """The path this reference is selected at: an alias's member beneath the alias."""
+        if self.member is None:
+            return self.qname
+        return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name, self.member))
+
 
 @dataclass(frozen=True, slots=True)
 class TypeTarget:
@@ -572,10 +579,25 @@ class TypeOwner:
         """
         member = self.members.get(name)
         if member is not None and self.constructor is not None:
-            return replace(self.constructor, member=member.owner_name)
+            return self._selected_member(self.constructor, member)
         if self.names and (name in self.names or name == written):
             return self.constructor
         return None
+
+    def alias_members(self) -> dict[str, ConstructorRef]:
+        """An alias's inline members by name, each as ``Alias::name`` selects it."""
+        constructor = self.constructor
+        if constructor is None:
+            return {}
+        return {
+            name: self._selected_member(constructor, member)
+            for name, member in self.members.items()
+        }
+
+    @staticmethod
+    def _selected_member(constructor: ConstructorRef, member: ConstructorRef) -> ConstructorRef:
+        """Inline *member* as the alias whose constructor is *constructor* selects it."""
+        return replace(constructor, member=member.owner_name)
 
 
 def dedupe_constructor_candidates(
@@ -625,7 +647,7 @@ class PatternSlot:
     ``alternative`` is what the name reads outside the pattern -- an
     enclosing binding, an outer pattern-slot binding, or a declaration --
     if anything, and ``alternative_constructor`` the constructor it names.
-    ``ambiguous_outside`` is set when that reading is ambiguous.
+    ``outside_ambiguity`` is what that reading selects when it is ambiguous.
     """
 
     slot_id: int
@@ -634,7 +656,7 @@ class PatternSlot:
     alternative: BindingRef | None
     match_site_node_id: int
     alternative_constructor: ConstructorRef | None = None
-    ambiguous_outside: bool = False
+    outside_ambiguity: Ambiguity | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1060,8 +1082,9 @@ class ModuleResolution:
         read every named type and owner from here, never re-resolving a name.
     ``replaced_uses``
         Maps each retained ``use`` a REPL entry replaces to the entry's uses
-        replacing it: those at the same scope path whose target reaches the
-        same scopes and types, unless spelled through the retained use's name.
+        replacing it: those at the same scope path renaming to its name, or,
+        for a use renaming nothing, renaming nothing and reaching the same
+        scopes and types -- unless spelled through the retained use's name.
     ``declared_segments``
         The segments of every path the module declares -- a REPL session's
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
@@ -1340,6 +1363,35 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class Ambiguity:
+    """An ambiguous bare spelling's verdict kept as data, to report wherever it is read.
+
+    ``origins`` are what it selects; ``repair`` is set when they are all
+    constructors (:class:`AmbiguousConstructorError`).
+    """
+
+    origins: tuple[QualificationOrigin, ...]
+    repair: str | None
+
+    @staticmethod
+    def of(error: AmbiguousQualificationError) -> Ambiguity:
+        """The verdict *error* reports."""
+        return Ambiguity(
+            error.origins, error.repair if isinstance(error, AmbiguousConstructorError) else None
+        )
+
+    def error(self, name: str, span: SourceSpan, *, reader: Reader) -> AmbiguousQualificationError:
+        """The error for bare *name*, read at *span*, selecting these origins."""
+        if self.repair is None:
+            return AmbiguousQualificationError.for_origins(
+                (), (name,), self.origins, span=span, reader=reader
+            )
+        return AmbiguousConstructorError.for_constructor_origins(
+            name, self.origins, repair=self.repair, span=span, reader=reader
+        )
+
+
 class DuplicateDeclarationError(AglScopeError):
     """A module declaring, or re-exporting, one name twice at one path.
 
@@ -1410,6 +1462,18 @@ class UnknownMemberError(AglScopeError):
             span=span,
         )
         self.spelling = spelling
+        self.repair = repair
+
+
+class SpacedQualifierError(AglScopeError):
+    """A member reference whitespace split from its qualifier; *repair* is the tight spelling."""
+
+    def __init__(self, member: str, repair: str, *, span: SourceSpan | None) -> None:
+        super().__init__(
+            f"Whitespace before '::{member}' makes this a call with a self-reference, "
+            f"not a qualifier. Write '{repair}' without whitespace.",
+            span=span,
+        )
         self.repair = repair
 
 

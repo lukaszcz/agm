@@ -335,7 +335,29 @@ _SCENARIOS["declared-beneath-an-alias-of-a-builtin-type"] = Scenario(
         **_builtin_head_probes("text", "array", "array[int]"),
         **_builtin_head_probes("T2", "Arr", "IA"),
         **_builtin_head_probes("U2", "Brr", "IB"),
-        "own-by-alias": accepted('def text::m(self) -> int = 1\nT2::m("a")', "int"),
+        # A region's step reads the alias at the region's own path, where no type is.
+        **{
+            f"{alias}-region-method": rejected(
+                f"scope S\n  def {alias}::m(self) -> int = 1\nend S", AglScopeError, "self"
+            )
+            for alias in ("T2", "U2")
+        },
+        **{
+            f"own-read-by-{alias}-{name}": accepted(f"{declaration}\n{read}", identity)
+            for alias in ("T2", "U2")
+            for name, declaration, read, identity in (
+                ("static", "def text::g() -> int = 1", f"{alias}::g()", "int"),
+                ("static-value", "def text::g() -> int = 1", f"{alias}::g", "() -> int"),
+                ("method", "def text::m(self) -> int = 1", f'{alias}::m("a")', "int"),
+                ("method-value", "def text::m(self) -> int = 1", f"{alias}::m", "text -> int"),
+                (
+                    "type",
+                    "record text::R\n  x: int",
+                    f"fn(r: {alias}::R) => r.x",
+                    "text::R -> int",
+                ),
+            )
+        },
         "renaming-alias-of-an-alias": accepted(
             "type A4[Y] = Arr[Y]\ndef A4[Z]::m(self) -> int = 1\n[1].m()", "int"
         ),

@@ -17,7 +17,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import ModuleResolution
-from agm.agl.scope.symbols import AglScopeError, BinderKind
+from agm.agl.scope.symbols import AglScopeError, AmbiguousConstructorError, BinderKind
 from agm.agl.syntax import (
     Case,
     ConstructorPattern,
@@ -231,7 +231,7 @@ def test_assigning_to_a_slot_selected_as_a_binder_is_rejected() -> None:
 
 
 def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
-    with pytest.raises(AglTypeError) as exc_info:
+    with pytest.raises(AmbiguousConstructorError) as exc_info:
         resolve_and_check_inline_entry(
             "enum Color\n"
             "  | Red\n"
@@ -250,6 +250,23 @@ def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
 
     diagnostic = exc_info.value.to_diagnostic()
     assert diagnostic.line == 12
+
+
+def test_a_reference_reading_an_enclosing_slot_that_names_two_constructors_is_rejected() -> None:
+    """An inner pattern name read outside its pattern is the enclosing slot, here two members."""
+    entry = (
+        "enum Color\n  | Red\n  | Blue\nenum Signal\n  | Red\n  | Green\n"
+        "record Pair\n  c: Color\n  s: Signal\nrecord W\n  c: Color\n"
+        "def f(p: Pair, w: W) -> Color =\n  case p of\n  | Pair(c = Red, s = Red) =>\n"
+        "    case w of\n    | W(c = Red) => Red\n    | _ => p.c\n  | _ => p.c\n"
+    )
+    with pytest.raises(AglTypeError) as raised:
+        resolve_and_check_inline_entry(entry, HostCapabilities())
+    error = raised.value
+    assert type(error) is AglTypeError
+    assert error.span is not None
+    assert error.span.start_offset == entry.index("=> Red") + len("=> ")
+    assert entry[error.span.start_offset : error.span.end_offset] == "Red"
 
 
 # ---------------------------------------------------------------------------

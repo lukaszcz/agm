@@ -420,7 +420,8 @@ class ModuleSources(SourcesHost):
 
         An inline member wins its name over an injected one; a current
         declaration supersedes a retained enum at its path. An alias's paths
-        are its target's, so it brings the target's members.
+        are its target's, so it brings the target's members: an alias
+        applying an enum, each as its own path beneath the alias selects it.
         """
         owners: dict[QName, TypeOwner] = {
             (self._module_id, _bare_atom(path)): retained
@@ -448,6 +449,16 @@ class ModuleSources(SourcesHost):
                 *owner.members.items(),
                 *((injected.owner_name, injected) for injected in owner.injected),
             ):
+                index.setdefault(member_name, {}).setdefault(qname, constructor)
+        applying = (
+            (qname, applied)
+            for qname, declaration in self._all_public_types.items()
+            if isinstance(declaration, TypeAlias)
+            and qname not in owners
+            and (applied := self._type_owners.owner(qname)) is not None
+        )
+        for qname, applied in applying:
+            for member_name, constructor in applied.alias_members().items():
                 index.setdefault(member_name, {}).setdefault(qname, constructor)
         return index
 
@@ -650,12 +661,10 @@ class ModuleSources(SourcesHost):
             tuple(
                 Candidate(
                     QualifiedTarget(
-                        (c.owner_module_id, c.owner_path, c.owner_name),
-                        constructor_binding(name, c),
-                        c,
+                        _qname_decl_key(c.selected_qname), constructor_binding(name, c), c
                     ),
                     layer,
-                    contribution_origin(c.qname, layer),
+                    contribution_origin(c.selected_qname, layer),
                 )
                 for layer, constructors in (
                     (
@@ -1531,7 +1540,7 @@ class ModuleSources(SourcesHost):
             ):
                 continue
             key = _qname_decl_key(qname)
-            member_key = (member.owner_module_id, member.owner_path, member.owner_name)
+            member_key = _qname_decl_key(member.selected_qname)
             if any(
                 (ref.module_id, ref.scope_path, ref.name) == key
                 and not removes(hiding, key, self)

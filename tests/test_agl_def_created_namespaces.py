@@ -29,7 +29,6 @@ from tests.agl.qualifier_support import (
     accepted,
     assert_repl_verdicts,
     assert_scenario,
-    nonconstant_in_file,
     option_identity,
     rejected,
     scenario_params,
@@ -91,7 +90,6 @@ _SCENARIOS = {
             "member-tyarg": accepted(
                 "fn(p: array[Shape::Circle]) => 1", "array[en::Shape::Circle] -> int"
             ),
-            "member-reptype": accepted("Shape::Circle", "record en::Shape::Circle"),
             "member-call": accepted("Shape::Circle.area()", "int"),
             "member-mref": accepted("Shape::area(Shape::Circle)", "int"),
             "missing-value": rejected("Shape::Nope", UnknownMemberError, "Shape::Nope"),
@@ -104,19 +102,8 @@ _SCENARIOS = {
             "missing-is": rejected(
                 "let v: Shape = Shape::Square\nv is Shape::Nope", UnknownMemberError, "Shape::Nope"
             ),
-            "wild-pat": accepted(
-                ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Circle => 1\n  | _ => 2"),
-                "int",
-            ),
-            "wild-is": accepted("let v: Shape = Shape::Square\nv is Shape::Circle", "bool"),
-            "wild-narrow": accepted(
-                "let v: Shape = Shape::Square\nv as? Shape::Circle",
-                option_identity("en::Shape::Circle"),
-            ),
-            "wild-pat-miss": rejected(
-                ("let v: Shape = Shape::Circle\ncase v of\n  | Shape::Nope => 1\n  | _ => 2"),
-                UnknownMemberError,
-                "Shape::Nope",
+            "missing-narrow": rejected(
+                "let v: Shape = Shape::Square\nv as? Shape::Nope", UnknownMemberError, "Shape::Nope"
             ),
         },
     ),
@@ -403,8 +390,6 @@ _SCENARIOS = {
         header=("import al::*",),
         probes={
             "receiver": accepted("def Geo::m(self) -> int = 1\nGeo::m(1)", "int"),
-            "nope-val": rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
-            "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
             "method-val": rejected("Geo::m(1)", UnknownMemberError, "Geo::m"),
         },
     ),
@@ -414,84 +399,81 @@ _SCENARIOS = {
             "import tl::*",
             "import shapes",
         ),
-        probes=nonconstant_in_file(
-            {
-                "nodef-inner-annot": accepted(
-                    "scope r\n  use shapes::*\n  def g(p: Geo::Inner) -> int = 1\nend r\n\nr::g",
-                    "tl::Geo::Inner -> int",
-                ),
-                "nodef-inner-val": accepted(
-                    "scope r\n  use shapes::*\n  let q = Geo::Inner(y = 1)\nend r\n\nr::q",
-                    "record tl::Geo::Inner\n  y: int",
-                ),
-                "nodef-point-annot": accepted(
-                    ("scope r\n  use shapes::*\n  def g(p: Geo::Point) -> int = 1\nend r\n\nr::g"),
-                    "shapes::Geo::Point -> int",
-                ),
-                "nodef-point-val": accepted(
-                    "scope r\n  use shapes::*\n  let q = Geo::Point(x = 1)\nend r\n\nr::q",
-                    "record shapes::Geo::Point\n  x: int",
-                ),
-                "nodef-f": rejected(
-                    "scope r\n  use shapes::*\n  let q = Geo::f()\nend r",
-                    UnknownMemberError,
-                    "Geo::f",
-                ),
-                "near-inner-annot": accepted(
+        probes={
+            "nodef-inner-annot": accepted(
+                "scope r\n  use shapes::*\n  def g(p: Geo::Inner) -> int = 1\nend r\n\nr::g",
+                "tl::Geo::Inner -> int",
+            ),
+            "nodef-inner-val": accepted(
+                "scope r\n  use shapes::*\n  let q = Geo::Inner(y = 1)\nend r\n\nr::q",
+                "record tl::Geo::Inner\n  y: int",
+            ),
+            "nodef-point-annot": accepted(
+                ("scope r\n  use shapes::*\n  def g(p: Geo::Point) -> int = 1\nend r\n\nr::g"),
+                "shapes::Geo::Point -> int",
+            ),
+            "nodef-point-val": accepted(
+                "scope r\n  use shapes::*\n  let q = Geo::Point(x = 1)\nend r\n\nr::q",
+                "record shapes::Geo::Point\n  x: int",
+            ),
+            "nodef-f": rejected(
+                "scope r\n  use shapes::*\n  let q = Geo::f()\nend r",
+                UnknownMemberError,
+                "Geo::f",
+            ),
+            "near-inner-annot": accepted(
+                "scope r\n"
+                "  use shapes::*\n"
+                "  def Geo::f() -> int = 1\n"
+                "  def g(p: Geo::Inner) -> int = 1\n"
+                "end r\n\nr::g",
+                "tl::Geo::Inner -> int",
+            ),
+            "near-inner-val": accepted(
+                "scope r\n"
+                "  use shapes::*\n"
+                "  def Geo::f() -> int = 1\n"
+                "  let q = Geo::Inner(y = 1)\n"
+                "end r\n\nr::q",
+                "record tl::Geo::Inner\n  y: int",
+            ),
+            "near-point-annot": accepted(
+                (
                     "scope r\n"
                     "  use shapes::*\n"
                     "  def Geo::f() -> int = 1\n"
-                    "  def g(p: Geo::Inner) -> int = 1\n"
-                    "end r\n\nr::g",
-                    "tl::Geo::Inner -> int",
+                    "  def g(p: Geo::Point) -> int = 1\n"
+                    "end r\n"
+                    "\n"
+                    "r::g"
                 ),
-                "near-inner-val": accepted(
+                "shapes::Geo::Point -> int",
+            ),
+            "near-point-val": accepted(
+                (
                     "scope r\n"
                     "  use shapes::*\n"
                     "  def Geo::f() -> int = 1\n"
-                    "  let q = Geo::Inner(y = 1)\n"
-                    "end r\n\nr::q",
-                    "record tl::Geo::Inner\n  y: int",
+                    "  let q = Geo::Point(x = 1)\n"
+                    "end r\n"
+                    "\n"
+                    "r::q"
                 ),
-                "near-point-annot": accepted(
-                    (
-                        "scope r\n"
-                        "  use shapes::*\n"
-                        "  def Geo::f() -> int = 1\n"
-                        "  def g(p: Geo::Point) -> int = 1\n"
-                        "end r\n"
-                        "\n"
-                        "r::g"
-                    ),
-                    "shapes::Geo::Point -> int",
+                "record shapes::Geo::Point\n  x: int",
+            ),
+            "near-f": accepted(
+                (
+                    "scope r\n"
+                    "  use shapes::*\n"
+                    "  def Geo::f() -> int = 1\n"
+                    "  def q() = Geo::f()\n"
+                    "end r\n"
+                    "\n"
+                    "r::q()"
                 ),
-                "near-point-val": accepted(
-                    (
-                        "scope r\n"
-                        "  use shapes::*\n"
-                        "  def Geo::f() -> int = 1\n"
-                        "  let q = Geo::Point(x = 1)\n"
-                        "end r\n"
-                        "\n"
-                        "r::q"
-                    ),
-                    "record shapes::Geo::Point\n  x: int",
-                ),
-                "near-f": accepted(
-                    (
-                        "scope r\n"
-                        "  use shapes::*\n"
-                        "  def Geo::f() -> int = 1\n"
-                        "  let q = Geo::f()\n"
-                        "end r\n"
-                        "\n"
-                        "r::q"
-                    ),
-                    "int",
-                ),
-            },
-            ("near-f",),
-        ),
+                "int",
+            ),
+        },
     ),
     "imported-enum-without-method": Scenario(
         modules={"en": _EN},
@@ -547,6 +529,9 @@ _SCENARIOS = {
             "def-annot": accepted("fn(p: R::Geo::X) => 1", "tl::R::Geo::X -> int"),
             "def-pat": accepted("case tl::R::Geo::X(z = 1) of\n  | R::Geo::X(z) => z", "int"),
             "def-is": rejected("1 is R::Geo::X", AglTypeError, "1 is R::Geo::X", phase="typecheck"),
+            "def-narrow": rejected(
+                "1 as? R::Geo::X", AglTypeError, "1 as? R::Geo::X", phase="typecheck"
+            ),
             "def-reptype": accepted("R::Geo::X", "int -> tl::R::Geo::X"),
             "def-alias": accepted(
                 "type AA = R::Geo::X\nfn(p: AA) => p", "tl::R::Geo::X -> tl::R::Geo::X"

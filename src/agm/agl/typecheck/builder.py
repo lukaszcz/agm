@@ -376,7 +376,12 @@ class _TypeBuilder:
                     expected_contracts=BUILTIN_ALIAS_TARGETS,
                 )
                 self._env.unregister_name(item.name)
-                self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+                self._env.register_alias(
+                    item.name,
+                    item.type_expr,
+                    type_params=item.type_params,
+                    declaration_span=item.span,
+                )
                 if item.is_builtin:
                     self._builtin_alias_defs[item.name] = item
 

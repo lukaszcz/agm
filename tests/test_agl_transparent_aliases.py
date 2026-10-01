@@ -18,7 +18,6 @@ scenario's header (see :mod:`tests.agl.qualifier_support`).
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -38,10 +37,8 @@ from tests.agl.qualifier_support import (
     Scenario,
     accepted,
     assert_scenario,
-    file_statements,
     info,
     inline_verdict,
-    nonconstant_in_file,
     rejected,
     scenario_params,
     span_text,
@@ -99,8 +96,8 @@ _BASE_PATTERN = "fn(p: base::Base) => case p of\n  | Geo(x) => x"
 
 
 def _in_region(use: str, value: str) -> str:
-    """A region whose ``use`` exposes names that its ``let v`` reads, then ``r::v``."""
-    return f"scope r\n  {use}\n  let v = {value}\nend r\n\nr::v"
+    """A region whose ``use`` exposes names that its ``v()`` reads, then ``r::v()``."""
+    return f"scope r\n  {use}\n  def v() = {value}\nend r\n\nr::v()"
 
 
 def _one_declaration_probes(spelling: str, scrutinee: str = "base::Base") -> dict[str, Probe]:
@@ -537,7 +534,7 @@ _SCENARIOS["an-item-naming-an-alias-of-an-enum-injects-its-members"] = Scenario(
         "use-tail": accepted(f"import al\n{_in_region('use al::{Hue}', 'Red')}", _RECORD_RED),
         "use-rename": accepted(f"import al\n{_in_region('use al::Hue as K', 'Red')}", _RECORD_RED),
         "scoped-tail": accepted(
-            "import sh::{S::C}\n\nscope S\n  let v = Red\nend S\n\nS::v", _SCOPED_RED
+            "import sh::{S::C}\n\nscope S\n  def v() = Red\nend S\n\nS::v()", _SCOPED_RED
         ),
         "scoped-use-tail": accepted(
             f"import sh\n{_in_region('use sh::S::{C}', 'Red')}", _SCOPED_RED
@@ -709,6 +706,12 @@ def _applied_probes(spelling: str) -> dict[str, Probe]:
             "nested-record-annotation": rejected(
                 f"fn(p: {spelling}::In) => 1", TypeArgumentsError, spelling
             ),
+            "missing-beneath-nested-record": rejected(
+                f"{spelling}::In::x()", UnknownMemberError, f"{spelling}::In::x"
+            ),
+            "missing-beneath-nested-record-annotation": rejected(
+                f"fn(p: {spelling}::In::x) => 1", UnknownMemberError, f"{spelling}::In::x"
+            ),
             "static-function": rejected(f"{spelling}::g()", TypeArgumentsError, spelling),
             "method": rejected(f"{spelling}::m", TypeArgumentsError, spelling),
         }.items()
@@ -750,6 +753,78 @@ _SCENARIOS["an-applied-enum-alias-reads-members-as-its-applied-target"] = Scenar
     },
 )
 
+_OPT = "enum Opt[T]\n  | Som(v: T)\n  | Non\n"
+_APPLIED_ENUM = "import op\ntype IntOpt = op::Opt[int]\n"
+"""Declares an alias applying ``op``'s generic enum."""
+_INT_SOM = "record op::Opt::Som[int]\n  v: int"
+_BAD_SOM = 'Som(v = "s")'
+
+
+def _applied_members_probes(prefix: str, before: str, spelled: str = "IntOpt") -> dict[str, Probe]:
+    """Bare members of ``IntOpt``, spelled *spelled*, read as ``IntOpt::<member>``.
+
+    *before* injects them.
+    """
+    return {
+        f"{prefix}-{name}": probe
+        for name, probe in {
+            "member": accepted(f"{before}\nSom(v = 1)", _INT_SOM),
+            "member-fixes-its-arguments": rejected(
+                f"{before}\n{_BAD_SOM}", AglTypeError, '"s"', phase="typecheck"
+            ),
+            "nullary-member": accepted(
+                f"{before}\nfn(p: {spelled}) => p is Non", "op::Opt[int] -> bool"
+            ),
+            "pattern": accepted(
+                f"{before}\nfn(p: {spelled}) => case p of\n  | Som(v) => v\n  | Non => 0",
+                "op::Opt[int] -> int",
+            ),
+        }.items()
+    }
+
+
+_SCENARIOS["an-item-naming-an-applied-enum-alias-injects-its-members-applied"] = Scenario(
+    modules={"op": _OPT, "ia": _APPLIED_ENUM},
+    header=(),
+    probes={
+        **_applied_members_probes("tail", "import ia::{IntOpt}"),
+        **_applied_members_probes("use-tail", "import ia\nuse ia::{IntOpt}"),
+        **_applied_members_probes("use-wildcard", "import ia\nuse ia::IntOpt::*", "ia::IntOpt"),
+        "use-rename": rejected(
+            f"import ia\n{_in_region('use ia::IntOpt as K', _BAD_SOM)}",
+            AglTypeError,
+            '"s"',
+            phase="typecheck",
+        ),
+        "own-use": rejected(
+            f"import op\ntype IntOpt = op::Opt[int]\n{_in_region('use IntOpt::*', _BAD_SOM)}",
+            AglTypeError,
+            '"s"',
+            phase="typecheck",
+        ),
+        "hidden-member": rejected(
+            "import ia::* hiding IntOpt::Som\nSom(v = 1)", AglScopeError, "Som"
+        ),
+        "beside-a-hidden-member": accepted(
+            "import ia::* hiding IntOpt::Som\nfn(p: IntOpt) => p is Non", "op::Opt[int] -> bool"
+        ),
+        "beside-its-generic-enum": accepted(
+            f"import op::*\nimport ia::*\n{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
+        ),
+        **{
+            f"beside-its-generic-enum-pattern-on-{scrutinee}": accepted(
+                f"import op::*\nimport ia::*\nfn(p: {scrutinee}) => case p of\n"
+                f"  | Som(v) => v\n  | Non => {default}",
+                f"{selected} -> {result}",
+            )
+            for scrutinee, selected, result, default in (
+                ("IntOpt", "op::Opt[int]", "int", "0"),
+                ("Opt[text]", "op::Opt[text]", "text", '""'),
+            )
+        },
+    },
+)
+
 _SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] = Scenario(
     modules={"gen": _GENERIC},
     header=(
@@ -780,6 +855,9 @@ _SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] =
         "applied-in-place-record": accepted("Id[Box[int]]::Box(v = 1)", _INT_BOX),
         "applied-in-place-nested-record": rejected(
             "Id[Box[int]]::In(w = 1)", TypeArgumentsError, "Id[Box[int]]"
+        ),
+        "applied-in-place-missing-beneath-nested-record": rejected(
+            "Id[Box[int]]::In::x()", UnknownMemberError, "Id[Box[int]]::In::x"
         ),
         "applied-in-place-arity": rejected(
             "Id[Opt[int], int]::Some(v = 1)", TypeArgumentsError, "Id[Opt[int], int]"
@@ -830,6 +908,33 @@ _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
 )
 
 
+_EXPANDING: dict[str, tuple[tuple[str, ...], str]] = {
+    "self": (("type A = array[A]",), "A"),
+    "function": (("type A = int -> A",), "A"),
+    "applied": (("type L[T] = array[L[T]]",), "L[int]"),
+    "nominal-argument": (("record Box[T]\n  v: T", "type A = Box[A]"), "A"),
+    "through-an-alias": (("type A = array[B]", "type B = A"), "B"),
+    "first-declared-of-the-cycle": (("type B = A", "type A = array[B]"), "A"),
+    "read-through-a-record-first": (("record W\n  v: B", "type C = B", "type B = array[C]"), "W"),
+}
+"""Aliases whose targets expand to themselves through a structural type, and a
+spelling reading them; the cycle is reported at its alias declared first."""
+
+_SCENARIOS["an-alias-expanding-to-itself-is-rejected-where-declared"] = Scenario(
+    header=(),
+    probes={
+        f"{name}-{use}": rejected(
+            "\n".join((*declarations, text)),
+            AglTypeError,
+            next(d for d in declarations if d.startswith("type")),
+            phase="typecheck",
+        )
+        for name, (declarations, spelling) in _EXPANDING.items()
+        for use, text in (("unread", "1"), ("read", f"fn(p: {spelling}) => p"))
+    },
+)
+
+
 _SCENARIOS["ill-founded-aliases-denote-no-shared-type"] = Scenario(
     modules={"c1": "type T = array[T]\n", "c2": "type T = array[T]\n"},
     header=("import c1::*", "import c2::*"),
@@ -861,6 +966,15 @@ _SCENARIOS |= {
         modules={"gen": _GENERIC, "hd": _DENOTED_TWICE, "hx": "type G = int -> bool\n"},
         header=("import hd::* hiding F\nimport hx::*",),
         probes={"other-import": accepted("fn(f: G) => f(1)", "(int -> bool) -> bool")},
+    ),
+    "hiding-a-generic-type-leaves-an-alias-of-its-application": Scenario(
+        modules={"bx": "record Box[T]\n  v: T\ntype IntBox = Box[int]\n"},
+        header=("import bx::* hiding Box",),
+        probes={
+            "hidden": rejected("fn(p: Box[int]) => p.v", AglTypeError, "Box[int]"),
+            "kept": accepted("fn(p: IntBox) => p.v", "bx::Box[int] -> int"),
+            "kept-constructor": accepted("IntBox(v = 1)", "record bx::Box[int]\n  v: int"),
+        },
     ),
     "a-use-or-export-hiding-an-alias-removes-aliases-denoting-its-type": Scenario(
         modules={"gen": _GENERIC, "hd": _DENOTED_TWICE, "ex": "import hd\nexport hd hiding F\n"},
@@ -898,15 +1012,8 @@ def _builtin_alias_probes(text: str, array: str, applied: str) -> dict[str, Prob
         f"{text}-unknown": rejected(f"{text}::nope", UnknownMemberError, f"{text}::nope"),
         f"{text}-use": accepted(_in_region(f"use {text}::*", 'upper("a")'), "text"),
         f"{array}-method": accepted(_MAP.format(q=f"{array}::map"), "array[int] -> array[int]"),
-        # A file's statements sit in a function whose return type nothing infers.
-        f"{array}-uninferred": replace(
-            rejected(f"{array}::map", AglTypeError, f"{array}::map", phase="typecheck"),
-            in_file=rejected(
-                f"{array}::map",
-                AglTypeError,
-                file_statements(f"{array}::map"),
-                phase="typecheck",
-            ),
+        f"{array}-uninferred": rejected(
+            f"let _ = {array}::map", AglTypeError, f"{array}::map", phase="typecheck"
         ),
         f"{array}-applied": rejected(f"{array}[int]::map", TypeArgumentsError, f"{array}[int]"),
         f"{applied}-applied": rejected(f"{applied}::map", TypeArgumentsError, applied),
@@ -920,25 +1027,22 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
         "type T2 = text\ntype Arr[E] = array[E]\ntype IA = array[int]\ntype T3 = T2\n"
         "type A3 = Arr[int]",
     ),
-    probes=nonconstant_in_file(
-        {
-            **_builtin_alias_probes("text", "array", "array[int]"),
-            **_builtin_alias_probes("T2", "Arr", "IA"),
-            **_builtin_alias_probes("U2", "Brr", "IB"),
-            "alias-of-an-alias": accepted('T3::size("ab")', "int"),
-            "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
-            "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
-            "reached-at-the-alias-site": accepted("V2::yy()", "int"),
-            "hidden-beneath-at-the-alias-site": rejected(
-                "V2::sub::zz()", HiddenMemberError, "V2::sub::zz"
-            ),
-            "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
-            "info": info(
-                "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
-            ),
-        },
-        ("T2-use", "U2-use", "text-use"),
-    ),
+    probes={
+        **_builtin_alias_probes("text", "array", "array[int]"),
+        **_builtin_alias_probes("T2", "Arr", "IA"),
+        **_builtin_alias_probes("U2", "Brr", "IB"),
+        "alias-of-an-alias": accepted('T3::size("ab")', "int"),
+        "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
+        "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
+        "reached-at-the-alias-site": accepted("V2::yy()", "int"),
+        "hidden-beneath-at-the-alias-site": rejected(
+            "V2::sub::zz()", HiddenMemberError, "V2::sub::zz"
+        ),
+        "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
+        "info": info(
+            "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
+        ),
+    },
 )
 
 

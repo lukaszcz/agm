@@ -9,6 +9,7 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import AmbiguousConstructorError
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import evaluate_ir, make_graph_from_files
@@ -154,16 +155,17 @@ def test_constructor_candidate_after_explicit_binder_is_field_directed() -> None
     )
 
 
-def test_scope_rejects_duplicate_binders_and_typecheck_rejects_ambiguous_outer_references() -> None:
+def test_duplicate_binders_and_ambiguous_outer_references_are_rejected() -> None:
     _reject_scope(
         "enum Packet\n  | packet(value: int)\n"
         "let item = packet(1)\ncase item of | packet(value as value) => value"
     )
-    _reject_type(
-        "enum Flag\n  | on\nenum Other\n  | on\n"
-        "enum Packet\n  | packet(flag: Flag)\n"
-        "let item = packet(Flag::on)\ncase item of | packet(on) => on"
-    )
+    with pytest.raises(AmbiguousConstructorError):
+        _check(
+            "enum Flag\n  | on\nenum Other\n  | on\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\ncase item of | packet(on) => on"
+        )
 
 
 def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_path: Path) -> None:

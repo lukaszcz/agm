@@ -12,6 +12,7 @@ from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
+    SpacedQualifierError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -21,6 +22,12 @@ from tests.agl.ir_harness import base_caps, make_repl_graph_from_files, resolve_
 
 def _graph(tmp_path: Path, entry: str, modules: dict[str, str] | None = None) -> ModuleGraph:
     return make_repl_graph_from_files(tmp_path, {"entry": entry, **(modules or {})})
+
+
+def _span_text(entry: str, error: AglScopeError) -> str:
+    """The *entry* text *error*'s span covers."""
+    assert error.span is not None
+    return entry[error.span.start_offset : error.span.end_offset]
 
 
 @pytest.mark.parametrize(
@@ -94,24 +101,21 @@ def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -
         {"app/config": "def x() -> int = 1"},
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert "config::x" in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == "config::x"
 
 
 def test_spaced_qualifier_near_miss_repairs_an_own_scope_member(tmp_path: Path) -> None:
     """A tight spelling selecting an own scope's member is repaired like a module route."""
     entry = "scope lib\n  def x() -> int = 1\nend lib\n\nlib ::x()"
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(_graph(tmp_path, entry))
 
-    span = raised.value.span
-    assert span is not None
-    assert entry[span.start_offset : span.end_offset] == "::"
+    assert raised.value.repair == "lib::x"
+    assert _span_text(entry, raised.value) == "::"
 
 
 def test_spaced_qualifier_near_miss_repairs_a_bare_imported_type_member(tmp_path: Path) -> None:
@@ -119,12 +123,11 @@ def test_spaced_qualifier_near_miss_repairs_a_bare_imported_type_member(tmp_path
     entry = "import lib::*\nGeo ::Point(x = 1)"
     graph = _graph(tmp_path, entry, {"lib": "record Geo\n  y: int\nrecord Geo::Point\n  x: int"})
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    span = raised.value.span
-    assert span is not None
-    assert entry[span.start_offset : span.end_offset] == "::"
+    assert raised.value.repair == "Geo::Point"
+    assert _span_text(entry, raised.value) == "::"
 
 
 @pytest.mark.parametrize(
@@ -144,12 +147,10 @@ def test_spaced_qualifier_near_miss_unwraps_postfix_and_type_qualifiers(
         {"app/config": module_source},
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert intended.lower() in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == intended
 
 
 @pytest.mark.parametrize(
@@ -169,12 +170,10 @@ def test_spaced_slash_qualifier_near_miss_suggests_the_full_tight_route(
         {"app/config": module_source, "app/config/tools": module_source},
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert intended.lower() in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == intended
 
 
 def test_spaced_qualifier_repair_preserves_explicit_type_arguments(tmp_path: Path) -> None:
@@ -186,10 +185,10 @@ def test_spaced_qualifier_repair_preserves_explicit_type_arguments(tmp_path: Pat
         {"app/config": module_source},
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    assert "app/config::e[int]::x" in str(raised.value).lower()
+    assert raised.value.repair == "app/config::E[int]::X"
 
     repaired = resolve_repl_graph(
         _graph(
@@ -213,12 +212,10 @@ def test_spaced_slash_qualifier_near_miss_uses_the_full_route_despite_suffix_col
         },
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert "app/config::x" in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == "app/config::x"
 
 
 @pytest.mark.parametrize(
@@ -309,44 +306,35 @@ def test_spaced_slash_qualifier_preserves_non_route_division_forms(
 
 
 @pytest.mark.parametrize(
-    "module_source",
+    ("module_source", "repair"),
     (
-        "def other() -> int = 1\ndef x() -> int = 2",
-        "def other() -> int = 1",
+        ("def other() -> int = 1\ndef x() -> int = 2", "config::x"),
+        ("def other() -> int = 1", None),
     ),
 )
 def test_spaced_qualifier_near_miss_requires_a_contributed_member(
-    tmp_path: Path, module_source: str
+    tmp_path: Path, module_source: str, repair: str | None
 ) -> None:
-    graph = _graph(
-        tmp_path,
-        "import app/config::other\nconfig ::x",
-        {"app/config": module_source},
-    )
+    entry = "import app/config::other\nconfig ::x"
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_repl_graph(graph)
+        resolve_repl_graph(_graph(tmp_path, entry, {"app/config": module_source}))
 
     # The tight-qualifier repair is offered only when the route really
     # contributes the member; otherwise the qualifier is just undefined.
-    diagnostic = str(raised.value).lower()
-    assert "config" in diagnostic
-    assert ("config::x" in diagnostic) == ("def x" in module_source)
+    error = raised.value
+    assert (error.repair if isinstance(error, SpacedQualifierError) else None) == repair
+    assert _span_text(entry, error) == ("::" if repair else "config")
 
 
 def test_spaced_type_qualified_near_miss_requires_a_constructible_owner(tmp_path: Path) -> None:
-    graph = _graph(
-        tmp_path,
-        "import app/config\nconfig ::E::X",
-        {"app/config": "type E = int"},
-    )
+    entry = "import app/config\nconfig ::E::X"
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_repl_graph(graph)
+        resolve_repl_graph(_graph(tmp_path, entry, {"app/config": "type E = int"}))
 
-    diagnostic = str(raised.value).lower()
-    assert "whitespace" not in diagnostic
-    assert "config::e::x" not in diagnostic
+    assert type(raised.value) is AglScopeError
+    assert _span_text(entry, raised.value) == "config"
 
 
 @pytest.mark.parametrize(
@@ -387,28 +375,21 @@ def test_spaced_qualifier_near_miss_survives_a_shadowed_route_spelling(
     """The repair is offered even when the spaced spelling has its own local meaning."""
     graph = _graph(tmp_path, entry, modules)
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert intended.lower() in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == intended
 
 
 def test_an_unrelated_undefined_name_reports_its_own_error(tmp_path: Path) -> None:
     """A spaced qualifier elsewhere in the module does not colour other failures."""
-    graph = _graph(
-        tmp_path,
-        "import app/config\nlet y = missing\nconfig ::x",
-        {"app/config": "def x() -> int = 1"},
-    )
+    entry = "import app/config\nlet y = missing\nconfig ::x"
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_repl_graph(graph)
+        resolve_repl_graph(_graph(tmp_path, entry, {"app/config": "def x() -> int = 1"}))
 
-    diagnostic = str(raised.value).lower()
-    assert "missing" in diagnostic
-    assert "whitespace" not in diagnostic
+    assert type(raised.value) is AglScopeError
+    assert _span_text(entry, raised.value) == "missing"
 
 
 def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
@@ -421,12 +402,10 @@ def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
         {"app/config": "def x() -> int = 1"},
     )
 
-    with pytest.raises(AglScopeError) as raised:
+    with pytest.raises(SpacedQualifierError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert "config::x" in diagnostic
-    assert "whitespace" in diagnostic
+    assert raised.value.repair == "config::x"
 
 
 def test_qualified_scope_errors_distinguish_unknown_route_from_missing_member(

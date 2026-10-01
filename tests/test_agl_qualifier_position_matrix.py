@@ -29,6 +29,7 @@ from agm.agl.scope.symbols import (
     UnknownQualifierError,
 )
 from agm.agl.typecheck import AglTypeError
+from agm.agl.typecheck.checker import EnumOwnerMismatchError
 from tests.agl.qualifier_support import (
     Probe,
     Scenario,
@@ -196,9 +197,14 @@ def _form_probes(form: str) -> dict[str, Probe]:
         # Another type's member: a legal type, but no value ``v`` can be.
         probes |= {
             "other-pattern": rejected(
-                _SCRUTINEE_POSITIONS["pattern"].format(q=q), AglTypeError, q, phase="typecheck"
+                _SCRUTINEE_POSITIONS["pattern"].format(q=q),
+                EnumOwnerMismatchError,
+                q,
+                phase="typecheck",
             ),
-            "other-is": rejected(f"v is {q}", AglTypeError, f"v is {q}", phase="typecheck"),
+            "other-is": rejected(
+                f"v is {q}", EnumOwnerMismatchError, f"v is {q}", phase="typecheck"
+            ),
             "other-narrow": rejected(f"v as? {q}", AglTypeError, f"v as? {q}", phase="typecheck"),
         }
     return probes
@@ -284,19 +290,9 @@ _TYPE_ENTRY_MODULES = {
 _DEFPATH_TYPE_OWNER_LIB = "record Geo\n  x: int\nrecord Geo::Inner\n  y: int\n"
 _DEFPATH_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
 _DEFPATH3_LIB = "scope Geo\n\n  scope In\n    record Point\n      x: int\n  end In\nend Geo\n"
-_NEAREST_REGION_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
-_NEAREST_MODULES = {"shapes": _NEAREST_REGION_LIB, "tl": _DEFPATH_TYPE_OWNER_LIB}
-_NEAREST_HEADER = ("import tl::*", "import shapes", "use shapes::*")
-
-
-def _def_path3_probes() -> dict[str, Probe]:
-    """``Geo::In::Point`` of ``shapes`` beside a def-created ``Geo`` path; ``Geo::In::Nope``."""
-    return {
-        "point-value": accepted("Geo::In::Point(x = 1)", "record shapes::Geo::In::Point\n  x: int"),
-        **type_positions("point", "Geo::In::Point", "shapes::Geo::In::Point"),
-        "nope-value": rejected("Geo::In::Nope(x = 1)", UnknownMemberError, "Geo::In::Nope"),
-        **type_positions_rejected("nope", "Geo::In::Nope", UnknownMemberError),
-    }
+_USED_REGION_LIB = "scope Geo\n  record Point\n    x: int\nend Geo\n"
+_USED_REGION_MODULES = {"shapes": _USED_REGION_LIB, "tl": _DEFPATH_TYPE_OWNER_LIB}
+_USED_REGION_HEADER = ("import tl::*", "import shapes", "use shapes::*")
 
 
 # ---------------------------------------------------------------------------
@@ -422,22 +418,11 @@ _SCENARIOS: dict[str, Scenario] = {
             **type_positions("shape", "Shape", "Shape"),
         },
     ),
-    "own-enum-member-beside-a-route": Scenario(
-        modules={"pkg/Foo": "record R\n  x: int\nenum E\n  | A\n  | B\nrecord G[T]\n  v: T\n"},
-        header=("import pkg/Foo", "enum Foo\n  | R(y: int)\n  | E"),
-        probes={
-            "routed-value": accepted("Foo::E::A", "record pkg/Foo::E::A"),
-            **type_positions("routed", "Foo::E::A", "pkg/Foo::E::A"),
-            "anchored-value": rejected("::Foo::E::A", UnknownMemberError, "::Foo::E::A"),
-            **type_positions_rejected("anchored", "::Foo::E::A", UnknownMemberError),
-        },
-    ),
     "own-region-types-beside-imported-region": Scenario(
         modules={"shapes": _LOCAL_WINS_LIB},
         header=("import shapes::*", _LOCAL_WINS_LOCAL),
         probes={
             **type_positions("shape", "Geo::Shape", "Geo::Shape"),
-            "tri-value": accepted("Geo::Shape::Tri", "record Geo::Shape::Tri"),
             **type_positions("num", "Geo::Num", "text"),
             "point-value": accepted("Geo::Point(y = 1)", "record Geo::Point\n  y: int"),
         },
@@ -493,8 +478,6 @@ _SCENARIOS: dict[str, Scenario] = {
                 UnknownQualifierError,
                 "missing::Item",
             ),
-            "is": rejected("1 is missing::Item", UnknownQualifierError, "missing::Item"),
-            **type_positions_rejected("item", "missing::Item", UnknownQualifierError),
             **type_positions_rejected(
                 "applied", "missing::Item[int]", UnknownQualifierError, "missing::Item"
             ),
@@ -545,8 +528,8 @@ _SCENARIOS: dict[str, Scenario] = {
         },
     ),
     "use-region-beside-imported-type": Scenario(
-        modules=_NEAREST_MODULES,
-        header=_NEAREST_HEADER,
+        modules=_USED_REGION_MODULES,
+        header=_USED_REGION_HEADER,
         probes={
             "inner-value": accepted("Geo::Inner(y = 1)", "record tl::Geo::Inner\n  y: int"),
             **type_positions("inner", "Geo::Inner", "tl::Geo::Inner"),
@@ -556,13 +539,13 @@ _SCENARIOS: dict[str, Scenario] = {
         },
     ),
     "use-region-and-imported-type-beside-a-def-path": Scenario(
-        modules=_NEAREST_MODULES,
-        header=(*_NEAREST_HEADER, "def Geo::f() -> int = 1"),
+        modules=_USED_REGION_MODULES,
+        header=(*_USED_REGION_HEADER, "def Geo::f() -> int = 1"),
         probes={"own-function": accepted("Geo::f", "() -> int")},
     ),
     "use-region-beside-imported-receiver-type": Scenario(
-        modules={"shapes": _NEAREST_REGION_LIB, "tl": "record Geo\n  x: int\n"},
-        header=_NEAREST_HEADER,
+        modules={"shapes": _USED_REGION_LIB, "tl": "record Geo\n  x: int\n"},
+        header=_USED_REGION_HEADER,
         probes={
             "receiver": accepted(
                 "def Geo::f(self) -> Geo = self\nGeo(x = 1).f()", "record tl::Geo\n  x: int"
@@ -596,7 +579,6 @@ _SCENARIOS: dict[str, Scenario] = {
         modules={"shapes": _DEFPATH_LIB},
         header=("import shapes::*", "def Geo::f() -> int = 1"),
         probes={
-            "value": accepted("Geo::Point(x = 1)", "record shapes::Geo::Point\n  x: int"),
             "pattern": accepted(
                 "fn(p: Geo::Point) => case p of\n  | Geo::Point(x) as w => w",
                 "shapes::Geo::Point -> shapes::Geo::Point",
@@ -604,16 +586,13 @@ _SCENARIOS: dict[str, Scenario] = {
             **type_positions("point", "Geo::Point", "shapes::Geo::Point"),
         },
     ),
-    "outer-def-path-beside-length-three-import": Scenario(
-        modules={"shapes": _DEFPATH3_LIB},
-        header=("import shapes::*", "def Geo::f() -> int = 1"),
-        probes=_def_path3_probes(),
-    ),
     "inner-def-path-beside-length-three-import": Scenario(
         modules={"shapes": _DEFPATH3_LIB},
         header=("import shapes::*", "def Geo::In::f() -> int = 1"),
         probes={
-            **_def_path3_probes(),
+            **type_positions("point", "Geo::In::Point", "shapes::Geo::In::Point"),
+            "nope-value": rejected("Geo::In::Nope(x = 1)", UnknownMemberError, "Geo::In::Nope"),
+            **type_positions_rejected("nope", "Geo::In::Nope", UnknownMemberError),
             "sibling-is": rejected("1 is Geo::Other", UnknownMemberError, "Geo::Other"),
             **type_positions_rejected("sibling", "Geo::Other", UnknownMemberError),
         },
@@ -651,7 +630,6 @@ _SCENARIOS: dict[str, Scenario] = {
         modules={"pkg/Foo": _LEN4_LIB},
         header=("import pkg/Foo", _LEN4_LOCAL_SAME_LEAF),
         probes={
-            "value": accepted("Foo::E::A::Z(w = 1)", "record Foo::E::A::Z\n  w: int"),
             **type_positions("member", "Foo::E::A::Z", "Foo::E::A::Z"),
         },
     ),

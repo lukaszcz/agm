@@ -12,7 +12,8 @@ span, or the accepted identity:
 - ``::Name`` reads this module's root alone, exactly like the value
   ``::Name``, and names no member there when the root lacks it;
 - a name several ``use`` declarations at one step contribute is ambiguous in
-  every position, a caught exception and an ``extends`` base included;
+  every position (a caught exception and an ``extends`` base in
+  :mod:`tests.test_agl_bare_name_ambiguity`);
 - a scope region spelled like a type never stops its lookup, so a later-step
   same-spelled type -- imported or this module's own -- is still selected;
 - the type declaration at the first step that finds one is the one every
@@ -31,7 +32,6 @@ from tests.agl.qualifier_support import (
     Part,
     Phase,
     assert_verdicts,
-    nonconstant_in_file,
     probe_table,
     verdict_parts,
 )
@@ -108,23 +108,18 @@ _BOOM_MODULES = {
     "m/b": "exception Boom extends Exception\n",
 }
 _BOOM_HEADER = ("import m/a", "import m/b", "use m/a::*", "use m/b::*")
-_CATCH_BOOM = "let _ = try\n  ()\ncatch Boom as e =>\n  ()"
-_EXTENDS_BOOM = "exception Local extends Boom"
 
 
 class TestAmbiguousBareTypeNameInEveryPosition:
     """Two ``use`` declarations contributing ``Boom`` leave it ambiguous in every position.
 
     A caught exception type and an ``extends`` base read the same selection
-    as an annotation, however REPL entries group the ``use`` declarations.
+    as an annotation (probed in :mod:`tests.test_agl_bare_name_ambiguity`).
     """
 
     @pytest.mark.parametrize("part", verdict_parts(5))
     def test_every_position_is_ambiguous(self, tmp_path: Path, part: Part) -> None:
-        probes = {**_type_probes("Boom"), "catch": _CATCH_BOOM, "extends": _EXTENDS_BOOM}
-        spans = {key: "Boom" for key in probes}
-        spans["catch"] = "catch Boom as e =>\n  ()"
-        spans["extends"] = _EXTENDS_BOOM
+        probes = _type_probes("Boom")
         assert_verdicts(
             tmp_path,
             _BOOM_MODULES,
@@ -132,7 +127,7 @@ class TestAmbiguousBareTypeNameInEveryPosition:
             probe_table(
                 probes,
                 {key: _rejected(AmbiguousQualificationError) for key in probes},
-                span_texts=spans,
+                span_texts={key: "Boom" for key in probes},
             ),
             part=part,
         )
@@ -217,24 +212,22 @@ class TestScopeRegionNeverStopsABareTypeName:
         self, tmp_path: Path, part: Part
     ) -> None:
         probes = {
-            "annotation": _in_region("use b::*", "let v = fn(x: Boom) => 1") + "\nr::v",
-            "catch": _in_region("use b::*", "let v = try\n  1\ncatch Boom as e =>\n  2") + "\nr::v",
+            "annotation": _in_region("use b::*", "def v() = fn(x: Boom) => 1") + "\nr::v()",
+            "catch": _in_region("use b::*", "def v() = try\n  1\ncatch Boom as e =>\n  2")
+            + "\nr::v()",
             "extends": _in_region(
-                "use b::*", 'exception Local extends Boom\nlet v = Local(message = "m") is Boom'
+                "use b::*", 'exception Local extends Boom\ndef v() = Local(message = "m") is Boom'
             )
-            + "\nr::v",
+            + "\nr::v()",
         }
         assert_verdicts(
             tmp_path,
             _BOOM_REGION_MODULES,
             _BOOM_REGION_HEADER,
-            nonconstant_in_file(
-                probe_table(
-                    probes,
-                    {key: _ACCEPTED for key in probes},
-                    identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
-                ),
+            probe_table(
                 probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
             ),
             part=part,
         )

@@ -849,14 +849,15 @@ def _unknown(
 ) -> AglScopeError:
     """An unknown member of the longest prefix naming something, else an unknown qualifier.
 
-    A prefix names something when it is *visible*, or *selects* a type as
-    written: through an alias, the path it stands for. A prefix naming a
-    value but no qualifier ends the search: a function, binding or injected
-    enum member is never a qualifier.
+    A prefix names something when it is *visible*, or reaches a type as
+    written -- through an alias, the path it stands for -- whatever its
+    reading's verdict, as a visible path is. A prefix naming a value but no
+    qualifier ends the search: a function, binding or injected enum member
+    is never a qualifier.
     """
     for length in range(len(chain.segments), 0, -1):
         prefix = replace(chain, segments=chain.segments[: length - 1])
-        if visible(names[:length]) or isinstance(selects(prefix, LookupKind.TYPE), QualifiedTarget):
+        if visible(names[:length]) or selects(prefix, LookupKind.TYPE) is not None:
             written = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
                 render_qualified_name(written, names[length]), span=chain.span

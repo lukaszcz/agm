@@ -23,7 +23,6 @@ from tests.agl.qualifier_support import (
     Scenario,
     accepted,
     assert_scenario,
-    nonconstant_in_file,
     option_identity,
     rejected,
     scenario_params,
@@ -87,7 +86,7 @@ def _in_region(use: str) -> dict[str, Probe]:
             region("let q = Color::Red") + "\n\nr::q", "record tl::Color::Red"
         ),
         "region-receiver": accepted(
-            region("def Color::m(self) = self", "let q = Color::Blue.m()") + "\n\nr::q", _COLOR
+            region("def Color::m(self) = self", "def q() = Color::Blue.m()") + "\n\nr::q()", _COLOR
         ),
     }
 
@@ -140,12 +139,12 @@ _SCENARIOS = {
     "region-use-of-a-reexporting-module": Scenario(
         modules=_REEXPORTS,
         header=("import mid2",),
-        probes=nonconstant_in_file(_in_region("use mid2::*"), ("region-receiver",)),
+        probes=_in_region("use mid2::*"),
     ),
     "region-use-of-a-scoped-reexport": Scenario(
         modules=_REEXPORTS,
         header=("import mid",),
-        probes=nonconstant_in_file(_in_region("use mid::Shapes::*"), ("region-receiver",)),
+        probes=_in_region("use mid::Shapes::*"),
     ),
     "hiding-on-a-use-of-a-reexporting-module": Scenario(
         modules=_REEXPORTS,

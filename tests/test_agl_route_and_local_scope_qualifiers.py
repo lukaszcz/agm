@@ -24,6 +24,7 @@ from agm.agl.scope.symbols import (
     UnknownMemberError,
     UnknownQualifierError,
 )
+from agm.agl.typecheck.checker import EnumOwnerMismatchError
 from tests.agl.qualifier_support import (
     Scenario,
     accepted,
@@ -214,13 +215,13 @@ _SCENARIOS = {
             "full-EA-value": accepted("Foo::E::A", "record Foo::E::A"),
             "full-EA-pattern": rejected(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | Foo::E::A => 1\n  | _ => 2",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "Foo::E::A",
                 phase="typecheck",
             ),
             "full-EA-is": rejected(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is Foo::E::A",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "v is Foo::E::A",
                 phase="typecheck",
             ),
@@ -229,16 +230,12 @@ _SCENARIOS = {
                 "type AA = Foo::E::A\nfn(p: AA) => p", "Foo::E::A -> Foo::E::A"
             ),
             "full-EA-tyarg": accepted("fn(p: array[Foo::E::A]) => 1", "array[Foo::E::A] -> int"),
-            "full-EA-reptype": accepted("Foo::E::A", "record Foo::E::A"),
             "full-E-value": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
             ),
             "full-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
             "full-E-alias": accepted("type AA = Foo::E\nfn(p: AA) => p", "Foo::E -> Foo::E"),
             "full-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
-            "full-E-reptype": rejected(
-                "Foo::E", AglTypeError, "Foo::E", type_entry="enum Foo::E\n  | A\n  | C"
-            ),
             "full-Gi-value": rejected(
                 "Foo::G[int]", AglScopeError, "int", type_entry="record Foo::G[int]\n  w: int"
             ),
@@ -248,9 +245,6 @@ _SCENARIOS = {
             ),
             "full-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[Foo::G[int]] -> int"
-            ),
-            "full-Gi-reptype": rejected(
-                "Foo::G[int]", AglScopeError, "int", type_entry="record Foo::G[int]\n  w: int"
             ),
             "full-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "full-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
@@ -292,17 +286,16 @@ _SCENARIOS = {
             "full-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "full-slashEA-reptype": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
             "full-anchEA-value": accepted("::Foo::E::A", "record Foo::E::A"),
             "full-anchEA-pattern": rejected(
                 ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | ::Foo::E::A => 1\n  | _ => 2"),
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "::Foo::E::A",
                 phase="typecheck",
             ),
             "full-anchEA-is": rejected(
                 "let v: pkg/Foo::E = pkg/Foo::E::A\nv is ::Foo::E::A",
-                AglTypeError,
+                EnumOwnerMismatchError,
                 "v is ::Foo::E::A",
                 phase="typecheck",
             ),
@@ -313,7 +306,6 @@ _SCENARIOS = {
             "full-anchEA-tyarg": accepted(
                 "fn(p: array[::Foo::E::A]) => 1", "array[Foo::E::A] -> int"
             ),
-            "full-anchEA-reptype": accepted("::Foo::E::A", "record Foo::E::A"),
         },
     ),
     "unrelated-local-scope-named-like-a-route": Scenario(
@@ -347,7 +339,6 @@ _SCENARIOS = {
             "empty-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "empty-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
             "empty-E-value": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
             ),
@@ -356,9 +347,6 @@ _SCENARIOS = {
                 "type AA = Foo::E\nfn(p: AA) => p", "pkg/Foo::E -> pkg/Foo::E"
             ),
             "empty-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[pkg/Foo::E] -> int"),
-            "empty-E-reptype": rejected(
-                "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
-            ),
             "empty-Gi-value": rejected(
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
@@ -368,9 +356,6 @@ _SCENARIOS = {
             ),
             "empty-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
-            ),
-            "empty-Gi-reptype": rejected(
-                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "empty-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "empty-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
@@ -412,7 +397,6 @@ _SCENARIOS = {
             "empty-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "empty-slashEA-reptype": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
             "empty-anchEA-value": rejected("::Foo::E::A", UnknownMemberError, "::Foo::E::A"),
             "empty-anchEA-pattern": rejected(
                 ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | ::Foo::E::A => 1\n  | _ => 2"),
@@ -433,7 +417,6 @@ _SCENARIOS = {
             "empty-anchEA-tyarg": rejected(
                 "fn(p: array[::Foo::E::A]) => 1", UnknownMemberError, "::Foo::E::A"
             ),
-            "empty-anchEA-reptype": rejected("::Foo::E::A", UnknownMemberError, "::Foo::E::A"),
         },
     ),
     "local-enum-named-like-a-route": Scenario(
@@ -465,12 +448,13 @@ _SCENARIOS = {
             "enum-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "enum-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
+            "enum-EA-cast": accepted(
+                "fn(p: text) => p as? Foo::E::A", "text -> std/option::Option[pkg/Foo::E::A]"
+            ),
             "enum-E-value": accepted("Foo::E", "record Foo::E"),
             "enum-E-annot": accepted("fn(p: Foo::E) => 1", "Foo::E -> int"),
             "enum-E-alias": accepted("type AA = Foo::E\nfn(p: AA) => p", "Foo::E -> Foo::E"),
             "enum-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[Foo::E] -> int"),
-            "enum-E-reptype": accepted("Foo::E", "record Foo::E"),
             "enum-Gi-value": rejected(
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
@@ -480,9 +464,6 @@ _SCENARIOS = {
             ),
             "enum-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
-            ),
-            "enum-Gi-reptype": rejected(
-                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "enum-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "enum-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
@@ -524,7 +505,6 @@ _SCENARIOS = {
             "enum-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "enum-slashEA-reptype": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
             "enum-anchEA-value": rejected("::Foo::E::A", UnknownMemberError, "::Foo::E::A"),
             "enum-anchEA-pattern": rejected(
                 ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | ::Foo::E::A => 1\n  | _ => 2"),
@@ -545,7 +525,9 @@ _SCENARIOS = {
             "enum-anchEA-tyarg": rejected(
                 "fn(p: array[::Foo::E::A]) => 1", UnknownMemberError, "::Foo::E::A"
             ),
-            "enum-anchEA-reptype": rejected("::Foo::E::A", UnknownMemberError, "::Foo::E::A"),
+            "enum-anchEA-cast": rejected(
+                "fn(p: text) => p as? ::Foo::E::A", UnknownMemberError, "::Foo::E::A"
+            ),
         },
     ),
     "route-without-local-declaration": Scenario(
@@ -576,7 +558,6 @@ _SCENARIOS = {
             "none-EA-tyarg": accepted(
                 "fn(p: array[Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "none-EA-reptype": accepted("Foo::E::A", "record pkg/Foo::E::A"),
             "none-E-value": rejected(
                 "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
             ),
@@ -585,9 +566,6 @@ _SCENARIOS = {
                 "type AA = Foo::E\nfn(p: AA) => p", "pkg/Foo::E -> pkg/Foo::E"
             ),
             "none-E-tyarg": accepted("fn(p: array[Foo::E]) => 1", "array[pkg/Foo::E] -> int"),
-            "none-E-reptype": rejected(
-                "Foo::E", AglTypeError, "Foo::E", type_entry="enum pkg/Foo::E\n  | A\n  | B"
-            ),
             "none-Gi-value": rejected(
                 "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
@@ -597,9 +575,6 @@ _SCENARIOS = {
             ),
             "none-Gi-tyarg": accepted(
                 "fn(p: array[Foo::G[int]]) => 1", "array[pkg/Foo::G[int]] -> int"
-            ),
-            "none-Gi-reptype": rejected(
-                "Foo::G[int]", AglScopeError, "int", type_entry="record pkg/Foo::G[int]\n  v: int"
             ),
             "none-slashR-value": accepted("/pkg/Foo::R(x = 1)", "record pkg/Foo::R\n  x: int"),
             "none-slashR-annot": accepted("fn(p: /pkg/Foo::R) => 1", "pkg/Foo::R -> int"),
@@ -643,7 +618,6 @@ _SCENARIOS = {
             "none-slashEA-tyarg": accepted(
                 "fn(p: array[/pkg/Foo::E::A]) => 1", "array[pkg/Foo::E::A] -> int"
             ),
-            "none-slashEA-reptype": accepted("/pkg/Foo::E::A", "record pkg/Foo::E::A"),
             "none-anchEA-value": rejected("::Foo::E::A", UnknownQualifierError, "::Foo::E::A"),
             "none-anchEA-pattern": rejected(
                 ("let v: pkg/Foo::E = pkg/Foo::E::A\ncase v of\n  | ::Foo::E::A => 1\n  | _ => 2"),
@@ -664,7 +638,6 @@ _SCENARIOS = {
             "none-anchEA-tyarg": rejected(
                 "fn(p: array[::Foo::E::A]) => 1", UnknownQualifierError, "::Foo::E::A"
             ),
-            "none-anchEA-reptype": rejected("::Foo::E::A", UnknownQualifierError, "::Foo::E::A"),
         },
     ),
     "use-alias-named-like-a-route": Scenario(
@@ -702,14 +675,12 @@ _SCENARIOS = {
                 AmbiguousQualificationError,
                 "Foo::E::A",
             ),
-            "use-EA-reptype": rejected("Foo::E::A", AmbiguousQualificationError, "Foo::E::A"),
             "use-E-value": rejected("Foo::E", AmbiguousQualificationError, "Foo::E"),
             "use-E-annot": rejected("fn(p: Foo::E) => 1", AmbiguousQualificationError, "Foo::E"),
             "use-E-alias": rejected("type AA = Foo::E\n1", AmbiguousQualificationError, "Foo::E"),
             "use-E-tyarg": rejected(
                 "fn(p: array[Foo::E]) => 1", AmbiguousQualificationError, "Foo::E"
             ),
-            "use-E-reptype": rejected("Foo::E", AmbiguousQualificationError, "Foo::E"),
         },
         legal=frozenset({(3, 1), (4,)}),
     ),

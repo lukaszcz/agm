@@ -65,7 +65,7 @@ extern def text::slice(self, start: int, end: int) -> text
 @doc("Repeat the text, treating a negative count as zero.")
 extern def text::repeat(self, count: int) -> text
 
-@doc("Return whether the text has no characters.")
+@doc("Check if the text has no characters.")
 def text::is-empty(self) -> bool = self.size() == 0
 @extern-name("trim_start")
 @doc("Remove leading whitespace.")
@@ -74,7 +74,7 @@ extern def text::trim-start(self) -> text
 @doc("Remove trailing whitespace.")
 extern def text::trim-end(self) -> text
 @extern-name("starts_with")
-@doc("Return whether the text starts with the prefix.")
+@doc("Check if the text starts with the prefix.")
 extern def text::starts-with(self, prefix: text) -> bool
 @extern-name("ends_with")
 @doc("Check if the text ends with the suffix.")

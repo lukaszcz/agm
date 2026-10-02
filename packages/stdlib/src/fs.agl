@@ -66,7 +66,7 @@ extern def glob(pattern: text) -> array[path]
   Create an empty temporary file with the given suffix.
 
   Created in `std/os::temp-dir()` and removed when the run or REPL session ends, unless
-  `std/config::debug` is then set. Raises `FsError` if creation fails or the temporary directory is
+  `std/config::debug` is true. Raises `FsError` if creation fails or the temporary directory is
   not valid Unicode.
 """)
 extern def temp-file(suffix: text = "") -> path
@@ -75,7 +75,7 @@ extern def temp-file(suffix: text = "") -> path
   Create a temporary directory.
 
   Created in `std/os::temp-dir()` and removed with its contents when the run or REPL session ends,
-  unless `std/config::debug` is then set. Raises `FsError` if creation fails or the temporary
+  unless `std/config::debug` is true. Raises `FsError` if creation fails or the temporary
   directory is not valid Unicode.
 """)
 extern def temp-dir() -> path
@@ -85,8 +85,8 @@ def try-read(path: path) -> Result[text, FsError] =
   try Ok(read(path)) catch FsError as e => Err(e)
 
 @extern-name("is_file")
-@doc("Return whether `path` is a regular file.")
+@doc("Check if `path` is a regular file.")
 extern def is-file(path: path) -> bool
 @extern-name("is_dir")
-@doc("Return whether `path` is a directory.")
+@doc("Check if `path` is a directory.")
 extern def is-dir(path: path) -> bool

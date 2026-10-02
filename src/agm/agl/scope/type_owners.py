@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
@@ -35,7 +35,6 @@ from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.scope.type_names import (
     is_nominal_type_expr,
-    renames_target,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -142,12 +141,26 @@ Denoted = tuple[object, ...] | TypeExpr
 """A normalized denoted type (:meth:`TypeOwnerIndex.denotation`): a scalar type expression,
 or a tagged tuple of normalized parts."""
 
-AliasSelection = tuple[QName | None, NameT | AppliedT] | None
-"""An alias's selected target declaration and its spelling.
+AliasSelection = tuple[QName | None, TypeExpr]
+"""An alias's selected target declaration, and the type expression the alias stands for.
 
-``None`` for a structural target; a ``None`` declaration for a target scope
-selects none.
+No declaration for a structural expression, nor for a type name scope
+selects none for.
 """
+
+
+class AliasReach(NamedTuple):
+    """What a path beneath an alias stands for (:meth:`TypeOwnerIndex.alias_reach`).
+
+    ``paths`` are the full paths it stands for; ``sites`` the modules
+    declaring the aliases on the way, the nearest first, each of which may
+    write a declaration there (:meth:`TypeOwnerIndex.written_beneath`);
+    ``hidden`` whether a ``hiding`` at one of those aliases' sites removed it.
+    """
+
+    paths: tuple[QName, ...]
+    sites: tuple[ModuleId, ...]
+    hidden: bool
 
 
 class TypeOwnerIndex:
@@ -360,11 +373,11 @@ class TypeOwnerIndex:
         """Project retained alias *alias* at *qname* (:meth:`_current_retained_owner`)."""
         target = retained.target
         if target is None:
-            return self._builtin_owner(qname, alias, retained, every_use=False)
+            return self._builtin_owner(qname, retained, every_use=False)
         current = self.owner(target.qname)
         if current is None or current.decl_node_id != target.decl_node_id:
             return retained
-        spelling = alias.type_expr
+        spelling = retained.stands_for
         module_id, atom = qname
         if (
             not is_nominal_type_expr(spelling, alias.type_params)
@@ -449,23 +462,51 @@ class TypeOwnerIndex:
             final = current if owner.alias is None else None
         return final
 
-    def beneath_alias(
+    def alias_reach(self, alias: QName, table: TypeOwner, path: ScopePath) -> AliasReach:
+        """Return what *path* beneath alias *alias*, which selects *table*, stands for.
+
+        Beneath an alias of a built-in type, that path beneath each of its
+        :attr:`~TypeOwner.scopes`, its own module's first. Any other alias
+        stands for its target's path (:meth:`_target_beneath`), where the
+        modules declaring the aliases on the way write declarations too;
+        nothing when an alias names no nominal target.
+        """
+        if table.builtin_name is not None:
+            own = sorted((scope for scope in table.scopes if scope[0] == alias[0]), key=str)
+            scopes = (*own, *sorted(table.scopes.difference(own), key=str))
+            return AliasReach(
+                tuple((module_id, _atom((*_path(atom), *path))) for module_id, atom in scopes),
+                (),
+                table.hides(path),
+            )
+        beneath = self._target_beneath(alias, table, path)
+        if beneath is None:
+            return AliasReach((), (), False)
+        qname, hidden, sites = beneath
+        return AliasReach((qname,), sites, hidden)
+
+    def _target_beneath(
         self, alias: QName, table: TypeOwner, path: ScopePath
-    ) -> tuple[QName, bool] | None:
-        """Return the full path *path* beneath alias *alias* stands for, and whether it is hidden.
+    ) -> tuple[QName, bool, tuple[ModuleId, ...]] | None:
+        """Return the full path *path* beneath alias *alias* stands for, if it is hidden, its sites.
 
         *table* is what *alias* selects. *path* is read beneath the type the
         alias chain ends at, and a prefix of it there naming another alias
         stands for that alias's target in turn. It is hidden when a ``hiding``
-        at one of those aliases' sites removed it or a prefix of it. ``None``
-        when an alias names no nominal target.
+        at one of those aliases' sites removed it or a prefix of it. The sites
+        are the modules declaring those aliases, the first passed first.
+        ``None`` when an alias names no nominal target.
         """
         hidden = False
+        sites: dict[ModuleId, None] = {}
         while True:
             hidden = hidden or table.hides(path)
             final = self.final_target(alias)
             if final is None:
                 return None
+            for current, owner in self._alias_chain(alias):
+                if owner.alias is not None:
+                    sites[current[0]] = None
             module_id, atom = final
             base = _path(atom)
             for end in range(1, len(path)):
@@ -475,21 +516,20 @@ class TypeOwnerIndex:
                     alias, table, path = inner, inner_table, path[end:]
                     break
             else:
-                return (module_id, _atom((*base, *path))), hidden
+                return (module_id, _atom((*base, *path))), hidden, tuple(sites)
 
-    def declared_at(self, module_id: ModuleId, qname: QName) -> QName | None:
-        """Return the declaration *module_id* writes otherwise than *qname*, declared at *qname*.
+    def written_beneath(self, module_id: ModuleId, qname: QName) -> Iterator[ScopePath]:
+        """Yield where *module_id* writes a declaration otherwise, relative to full path *qname*.
 
-        ``def Geo::m`` with ``type Geo = Base`` is declared at ``Base::m``.
+        ``def Geo::m`` with ``type Geo = Base`` is declared at ``Base::m``:
+        at ``m`` beneath ``Base``, and at no path beneath ``Base::m``.
         """
-        return next(
-            (
-                (module_id, spelled)
-                for spelled, declared in self._declared_paths(module_id).items()
-                if declared == qname
-            ),
-            None,
-        )
+        target, atom = qname
+        base = _path(atom)
+        for declared, declared_atom in self._declared_paths(module_id).values():
+            path = _path(declared_atom)
+            if declared == target and path[: len(base)] == base:
+                yield path[len(base) :]
 
     def placement(self, qname: QName) -> QName:
         """Return the full path the declaration at *qname* is declared at (:meth:`declaration`).
@@ -504,12 +544,6 @@ class TypeOwnerIndex:
         owner = self.owner(qname)
         return frozenset() if owner is None else owner.scopes
 
-    def alias_sites(self, qname: QName) -> frozenset[ModuleId]:
-        """Return the modules declaring the aliases along *qname*'s chain (:meth:`_alias_chain`)."""
-        return frozenset(
-            current[0] for current, owner in self._alias_chain(qname) if owner.alias is not None
-        )
-
     def path_target(self, qname: QName) -> QName:
         """Return the full path *qname* stands for: beneath an alias, its target's path there."""
         module_id, atom = qname
@@ -518,7 +552,7 @@ class TypeOwnerIndex:
             alias = (module_id, _atom(path[:end]))
             owner = self.owner(alias)
             if owner is not None and owner.alias is not None:
-                beneath = self.beneath_alias(alias, owner, path[end:])
+                beneath = self._target_beneath(alias, owner, path[end:])
                 return qname if beneath is None else beneath[0]
         return qname
 
@@ -526,13 +560,12 @@ class TypeOwnerIndex:
         """Return the declaration type path *qname* names: a renaming alias's is its target's.
 
         An alias passing its type parameters through to its target
-        (:func:`~agm.agl.scope.type_names.renames_target`) is another name for
-        it, along the chain (:meth:`_alias_chain`); any other alias is a type
-        of its own.
+        (:attr:`TypeOwner.renames`) is another name for it, along the chain
+        (:meth:`_alias_chain`); any other alias is a type of its own.
         """
         named = qname
         for named, owner in self._alias_chain(qname):
-            if owner.alias is not None and not renames_target(owner.alias):
+            if owner.alias is not None and not owner.renames:
                 break
         return named
 
@@ -545,7 +578,10 @@ class TypeOwnerIndex:
         positions. ``None`` for any other path.
         """
         declaration = self._all_public_types.get(qname)
-        if not isinstance(declaration, TypeAlias) or renames_target(declaration):
+        if (
+            not isinstance(declaration, TypeAlias)
+            or self.declared_owner(qname, declaration).renames
+        ):
             return None
         return self._denoted(qname, declaration, frozenset({qname}))
 
@@ -704,6 +740,7 @@ class TypeOwnerIndex:
             frozenset({declaration.name}),
             alias=declaration,
             arity=arity,
+            stands_for=declaration.type_expr,
         )
         self._owners[qname] = presumed
         self._resolving.add(qname)
@@ -716,14 +753,15 @@ class TypeOwnerIndex:
     ) -> TypeOwner:
         """Return what alias *declaration* at *qname* selects, *presumed* meanwhile."""
         constructor, arity = presumed.constructor, presumed.arity
-        selection = self._alias_selection(qname, declaration)
-        if selection is None:
-            structural = TypeOwner(None, declaration.node_id, alias=declaration, arity=arity)
-            return self._builtin_owner(qname, declaration, structural, every_use=True)
-        target_qname, type_expr = selection
+        target_qname, type_expr = self._alias_selection(qname, declaration)
+        if not is_nominal_type_expr(type_expr, declaration.type_params):
+            structural = TypeOwner(
+                None, declaration.node_id, alias=declaration, arity=arity, stands_for=type_expr
+            )
+            return self._builtin_owner(qname, structural, every_use=True)
         target = None if target_qname is None else self.owner(target_qname)
         if target_qname is None or target is None:
-            return presumed
+            return replace(presumed, stands_for=type_expr)
         reachable, hidden = self._projection(qname, type_expr, target_qname, target, every_use=True)
         return TypeOwner(
             constructor,
@@ -738,12 +776,11 @@ class TypeOwnerIndex:
             arity=arity,
             builtin=_applied_builtin(target, type_expr),
             scopes=target.scopes,
+            stands_for=type_expr,
         )
 
-    def _builtin_owner(
-        self, qname: QName, alias: TypeAlias, owner: TypeOwner, *, every_use: bool
-    ) -> TypeOwner:
-        """Return *owner* of alias *alias* at *qname*, with its scopes when it names a built-in.
+    def _builtin_owner(self, qname: QName, owner: TypeOwner, *, every_use: bool) -> TypeOwner:
+        """Return *owner* of the alias at *qname*, with its scopes when it stands for a built-in.
 
         Those the built-in type's name names as a qualifier where the alias
         is declared, read with every use when *every_use*, and that module's own path spelled
@@ -751,8 +788,8 @@ class TypeOwnerIndex:
         a ``hiding`` there removed is hidden. *owner* stands for any other
         target.
         """
-        builtin = alias.type_expr
-        spelling = named_builtin_type(builtin)
+        builtin = owner.stands_for
+        spelling = None if builtin is None else named_builtin_type(builtin)
         if spelling is None:
             return owner
         scopes = self._builtin_scopes(qname, spelling.name, every_use=every_use) | {
@@ -778,13 +815,13 @@ class TypeOwnerIndex:
     def _spelled_selection(
         self, qname: QName, alias: TypeAlias, spelling: TypeExpr
     ) -> AliasSelection:
-        """Return the declaration *spelling*, written in alias *alias* at *qname*, denotes.
+        """Return what *spelling*, written in alias *alias* at *qname*, denotes and stands for.
 
         An alias standing for one of its type parameters (``type Id[T] = T``),
-        applied to a type name, denotes what that name denotes there.
+        applied, stands for its argument there.
         """
         if not is_nominal_type_expr(spelling, alias.type_params):
-            return None
+            return None, spelling
         selection = self._decided_targets(qname, alias, spelling)
         target = None if selection is None else self.declared_path(selection)
         parameter = None if target is None else self.projected_parameter(target)
@@ -792,9 +829,8 @@ class TypeOwnerIndex:
             parameter is not None
             and isinstance(spelling, AppliedT)
             and parameter[0] < len(spelling.args)
-            and is_nominal_type_expr(argument := spelling.args[parameter[0]], alias.type_params)
         ):
-            return self._spelled_selection(qname, alias, argument)
+            return self._spelled_selection(qname, alias, spelling.args[parameter[0]])
         return target, spelling
 
     def projected_parameter(self, qname: QName) -> tuple[int, int] | None:
@@ -805,10 +841,8 @@ class TypeOwnerIndex:
         """
         owner = self.owner(self.identity(qname))
         declaration = None if owner is None else owner.alias
-        if declaration is None:
-            return None
-        spelling = declaration.type_expr
-        if not isinstance(spelling, NameT) or spelling.qualifier is not None:
+        spelling = None if owner is None else owner.stands_for
+        if declaration is None or not isinstance(spelling, NameT) or spelling.qualifier is not None:
             return None
         params = declaration.type_params
         return (params.index(spelling.name), len(params)) if spelling.name in params else None
@@ -870,8 +904,7 @@ class TypeOwnerIndex:
                 continue
             if not isinstance(declaration, TypeAlias):
                 return ()
-            selection = self._alias_selection(current, declaration)
-            current = None if selection is None else selection[0]
+            current = self._alias_selection(current, declaration)[0]
         return ()
 
 

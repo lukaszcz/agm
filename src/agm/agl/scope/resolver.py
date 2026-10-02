@@ -2745,19 +2745,6 @@ class _Resolver(ModuleSources):
         )
         return isinstance(found, QualifiedTarget) and found.constructor == candidate
 
-    def _probe_chain(
-        self, qualifier: tuple[str, ...], member: str, span: SourceSpan, *, anchored: bool
-    ) -> QualifierChain:
-        """The spelling ``qualifier::member`` at *span*, looked up but never recorded."""
-        node_id = self._program.node_id
-        return QualifierChain(
-            QualifierAnchor.MODULE if anchored else None,
-            tuple(QualifierSegment(segment, None, span, node_id) for segment in qualifier),
-            member,
-            span,
-            node_id,
-        )
-
     def _routed_spelling(self, candidate: ConstructorRef, origin: QName, span: SourceSpan) -> str:
         """Spell *candidate*, imported as *origin*, by its shortest route selecting it at *span*.
 
@@ -3033,7 +3020,7 @@ class _Resolver(ModuleSources):
         reaches it. Another declaration at that path hides nothing. Every use
         is read when *every_use*; otherwise those the read in progress sees.
         """
-        with self._uses.view(every_use), self._named_scope(scope_path):
+        with self._uses.view(every_use), self._named_scope(scope_path), self._reaching():
             return frozenset(
                 path
                 for path in paths

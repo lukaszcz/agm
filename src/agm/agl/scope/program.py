@@ -1400,12 +1400,23 @@ def resolve_program(
         found = alias_prefix(path, export_maps[module_id], alias_origins)
         if found is None:
             return {}
-        (alias_module, alias_atom), rest = found
-        named = type_owners.path_target((alias_module, _atom((*_path(alias_atom), *rest))))
-        target_module, target_atom = named
-        reached: dict[PathAtom, QName] = {(): named} if named in decl_info else {}
-        for relative in declared_in_program(named):
-            reached[relative] = (target_module, _atom((*_path(target_atom), *relative)))
+        alias, rest = found
+        reach = type_owners.alias_reach(
+            alias, type_owners.declared_owner(alias, all_public_types[alias]), rest
+        )
+        reached: dict[PathAtom, QName] = {}
+        if reach.hidden:
+            return reached
+        for named in reach.paths:
+            module, atom = named
+            # Where the alias is declared, a site's own declaration wins its path.
+            for site in reach.sites:
+                for relative in type_owners.written_beneath(site, named):
+                    reached.setdefault(relative, (site, _atom((*_path(atom), *relative))))
+            if named in decl_info:
+                reached.setdefault((), named)
+            for relative in declared_in_program(named):
+                reached.setdefault(relative, (module, _atom((*_path(atom), *relative))))
         return reached
 
     import_envs: dict[ModuleId, ImportEnv] = {}

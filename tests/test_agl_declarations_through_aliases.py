@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.scope.symbols import (
     AglScopeError,
     DuplicateDeclarationError,
@@ -42,18 +43,28 @@ from tests.agl.qualifier_support import (
 _BASE = "record Base\n  x: int\nrecord Base::Inner\n  y: int\ndef Base::f() -> int = 1\n"
 _ALIASING = "import base::*\nexport base::{Base}\ntype Geo = Base\n"
 """Exports ``base``'s ``Base`` and an alias of it."""
-_MODULES = {"base": _BASE, "al": _ALIASING}
+_STANDING_FOR = "type Id[T] = T\ntype Geo = Id[Base]"
+"""``Geo`` aliases ``Base`` through an alias standing for its type parameter."""
+_MODULES = {
+    "base": _BASE,
+    "al": _ALIASING,
+    "pj": f"import base::*\nexport base::{{Base}}\n{_STANDING_FOR}\n",
+}
 
 _OWN_ALIAS = ("import base::*", "type Geo = Base")
 _IMPORTED_ALIAS = ("import al::*",)
+_OWN_STANDING_FOR = ("import base::*", _STANDING_FOR)
+_IMPORTED_STANDING_FOR = ("import pj::*",)
 _ROUTED_ALIAS = ("import base", "import base::*", "type Geo = base::Base")
 _LOCAL_TARGET = ("record Base\n  x: int\nrecord Base::Inner\n  y: int", "type Geo = Base")
 _ALIASES = (
     ("an-own-alias", _OWN_ALIAS),
     ("an-imported-alias", _IMPORTED_ALIAS),
     ("an-alias-of-an-own-type", _LOCAL_TARGET),
+    ("an-own-alias-standing-for-its-argument", _OWN_STANDING_FOR),
 )
-"""Each way ``Geo`` aliases ``Base``: an own alias, an imported one, an own one of an own type."""
+"""Each way ``Geo`` aliases ``Base``: an own alias, an imported one, an own one of an own type,
+and one through an alias standing for its type parameter."""
 
 
 def _declarations(spelling: str) -> str:
@@ -162,6 +173,8 @@ _SCENARIOS = (
             ("an-own-alias", _OWN_ALIAS, "base::Base"),
             ("an-imported-alias", _IMPORTED_ALIAS, "base::Base"),
             ("an-alias-of-an-own-type", _LOCAL_TARGET, "Base"),
+            ("an-own-alias-standing-for-its-argument", _OWN_STANDING_FOR, "base::Base"),
+            ("an-imported-alias-standing-for-its-argument", _IMPORTED_STANDING_FOR, "base::Base"),
         )
     }
     | {
@@ -411,6 +424,33 @@ _SCENARIOS |= {
     )
     for name, owner in (("before-the-path-beneath-it", "A"), ("after-the-path-beneath-it", "X"))
 }
+
+_SCENARIOS["declared-beneath-an-alias-standing-for-its-argument"] = Scenario(
+    modules={**_APPLIED_MODULES, "funcs": "type Id[T] = T\n"},
+    header=(
+        "import gen::*\nimport funcs::*",
+        "type T5 = Id[text]\ntype Arr5[E] = Id[array[E]]\ntype IA5 = Id[array[int]]",
+        "type B5[T] = Id[Box[T]]\ntype IB5 = Id[Box[int]]\ntype F5 = Id[int -> bool]",
+    ),
+    probes={
+        **_builtin_head_probes("T5", "Arr5", "IA5"),
+        **_applied_head_probes("IB5"),
+        "renaming-static": accepted("def B5::k() -> int = 1\nBox::k()", "int"),
+        "renaming-method": accepted("def B5::m[T](self) -> T = self.v\nBox(v = 1).m()", "int"),
+        "renaming-record": accepted(
+            "record B5::R\n  z: int\nBox::R(z = 1)", "record Box::R\n  z: int"
+        ),
+        "renaming-read": accepted("B5::In(w = 1)", "record gen::Box::In\n  w: int"),
+        **{
+            f"structural-{name}": rejected(text, AglScopeError, "F5")
+            for name, text in {
+                "static": "def F5::m() -> int = 1",
+                "method": "def F5::m(self) -> int = 1",
+                "region": "scope F5\n  def z() -> int = 1\nend F5",
+            }.items()
+        },
+    },
+)
 
 
 def _through(spelling: str) -> str:
@@ -1106,6 +1146,88 @@ _SCENARIOS["declared-through-aliases-of-types-of-modules-importing-each-other"] 
     },
 )
 
+_USED = "record R\n  r: int\n"
+
+
+def _used_in(spelling: str) -> str:
+    """A region written *spelling* whose ``use`` makes ``lb``'s ``R`` available beneath it."""
+    return f"scope {spelling}\n  use lb::{{R}}\nend {spelling}"
+
+
+def _receiver_probes(spellings: tuple[str, ...]) -> dict[str, Probe]:
+    """Methods whose receiver each of *spellings* reaches only through a ``use`` in its scope."""
+    made = "lb::R(r = 1).m()"
+    probes: dict[str, Probe] = {}
+    for spelling in spellings:
+        probes |= {
+            f"{spelling}-shorthand": accepted(
+                f"def {spelling}::R::m(self) -> int = self.r\n{made}", "int"
+            ),
+            f"{spelling}-region": accepted(
+                f"scope {spelling}\n  def R::m(self) -> int = self.r\nend {spelling}\n{made}",
+                "int",
+            ),
+            f"{spelling}-nested-region": accepted(
+                f"scope {spelling}::R\n  def m(self) -> int = self.r\nend {spelling}::R\n{made}",
+                "int",
+            ),
+            f"{spelling}-read-outside": rejected(
+                f"{spelling}::R(r = 1)", UnknownMemberError, f"{spelling}::R"
+            ),
+        }
+    return probes
+
+
+_RECEIVER_SCENARIOS = {
+    "an-imported-alias": (("import al::*\nimport lb",), "Base", ("Base", "Geo")),
+    "an-own-alias": (("import base::*\nimport lb", "type Geo = Base"), "Base", ("Base", "Geo")),
+    "an-own-alias-of-an-own-type": (
+        ("import lb", "record Own\n  o: int\ntype OG = Own"),
+        "Own",
+        ("Own", "OG"),
+    ),
+}
+for _name, (_header, _target, _spellings) in _RECEIVER_SCENARIOS.items():
+    for _region in _spellings:
+        _SCENARIOS[f"a-receiver-a-use-in-the-scope-written-{_region}-of-{_name}-reaches"] = (
+            Scenario(
+                modules={**_MODULES, "lb": _USED},
+                header=(*_header, _used_in(_region)),
+                probes=_receiver_probes(_spellings),
+            )
+        )
+
+_HIDDEN_PATH = (
+    "use Sc::* hiding Base::v\n\nscope Sc\n  def Base::v() -> int = 1\nend Sc",
+    "record Base\n  x: int",
+    "type Geo = Base",
+)
+"""A use hiding the path ``Base::v``, which nothing else declares, and an alias of ``Base``."""
+_BOUND_AT_THE_HIDDEN_PATH = {
+    "let": "let Base::v = 2",
+    "var-through-the-alias": "var Geo::v = 2",
+    "region": "scope Base\n  let v = 2\nend Base",
+    "region-through-the-alias": "scope Geo\n  let v = 2\nend Geo",
+}
+
+_SCENARIOS["an-alias-reaches-a-binding-declared-at-a-path-a-use-hides"] = Scenario(
+    header=_HIDDEN_PATH,
+    probes={
+        **{
+            f"{form}-through-{spelling}": accepted(f"{binding}\n{spelling}::v", "int")
+            for form, binding in _BOUND_AT_THE_HIDDEN_PATH.items()
+            for spelling in ("Base", "Geo")
+        },
+        "through-an-alias-of-the-alias": accepted("type G2 = Geo\nlet Base::v = 2\nG2::v", "int"),
+        "through-an-alias-declared-after": accepted("let Base::v = 2\ntype G2 = Geo\nG2::v", "int"),
+        "unbound-through-Base": rejected("Base::v", HiddenMemberError, "Base::v"),
+        "unbound-through-Geo": rejected("Geo::v", HiddenMemberError, "Geo::v"),
+        "unbound-through-an-alias-of-the-alias": rejected(
+            "type G2 = Geo\nG2::v", HiddenMemberError, "G2::v"
+        ),
+    },
+)
+
 
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, the file part and every REPL grouping."""
@@ -1248,7 +1370,8 @@ def test_an_earlier_entrys_alias_reaches_a_binding_its_path_was_read_hidden_befo
         {
             "through-the-alias": accepted(f"{binding}\nGeo::v", "int"),
             "through-the-target": accepted(f"{binding}\nBase::v", "int"),
-            "unbound": rejected("Geo::v", UnknownMemberError, "Geo::v"),
+            "unbound": rejected("Geo::v", HiddenMemberError, "Geo::v"),
+            "unbound-through-the-target": rejected("Base::v", HiddenMemberError, "Base::v"),
         },
     )
 

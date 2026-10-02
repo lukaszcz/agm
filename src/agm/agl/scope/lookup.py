@@ -41,6 +41,7 @@ from agm.agl.scope.symbols import (
     UnknownMemberError,
     UnknownQualifierError,
     add_layers,
+    contribution_origin,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import SourceSpan
@@ -223,6 +224,16 @@ class Reading:
         return Reading(self.candidates + other.candidates, self.refusals + other.refusals)
 
 
+class AliasTarget(NamedTuple):
+    """The type an alias stands for, and the path naming it in the module declaring it.
+
+    A built-in type has no declaration (``None``); its path is its name.
+    """
+
+    declared: QName | None
+    path: ScopePath
+
+
 class Application(NamedTuple):
     """The type an applied segment stands for, and the type arguments the segment takes."""
 
@@ -336,6 +347,25 @@ class PathSources(DeclarationNames, Protocol):
         """
         ...
 
+    def declaring_beside(self, path: ScopePath) -> tuple[ScopePath, ...]:
+        """The other scope paths of the module's own declaring what its scope path *path* does.
+
+        Own scope paths declaring one path are one path: what one anchors,
+        a declaring path beneath any of them reaches.
+        """
+        ...
+
+    def stands_for(self, key: DeclarationKey) -> AliasTarget | None:
+        """What alias *key* stands for; ``None`` for another type or an alias of no named type."""
+        ...
+
+    def names_only(self, target: AliasTarget, named: Reading) -> bool:
+        """Whether a path reaching the types *named* names only *target*'s type.
+
+        A built-in type's name always names it.
+        """
+        ...
+
     def routed_hidden(self, chain: QualifierChain, path: ScopePath) -> bool:
         """Whether a ``hiding`` removed *path* from *chain*'s leading module route."""
         ...
@@ -375,22 +405,23 @@ class _Step:
     """One step: the path spellings are read under, and what reads them.
 
     *owners* reads the types a written prefix selects as the owner of the
-    segments after it. The first *start* written segments form a module
-    route rather than selecting anything themselves.
+    segments after it; *hidden* tells whether a ``hiding`` removed a full
+    path from what the step reads. The first *start* written segments form
+    a module route rather than selecting anything themselves.
     """
 
     path: ScopePath
     read: Callable[[ScopePath, LookupKind], Reading]
     owners: Callable[[ScopePath], Reading]
+    hidden: Callable[[ScopePath], bool]
     start: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class _Anchor:
-    """Where a spelling is read: its steps, and how a miss there is named."""
+    """Where a spelling is read: its steps, and what a path names there."""
 
     steps: tuple[_Step, ...]
-    hidden: Callable[[ScopePath], bool]
     visible: Callable[[ScopePath], frozenset[QName]]
     route: tuple[str, ...] = ()
 
@@ -433,25 +464,22 @@ def lookup_declared(
     """Return the declaration of *kind* at full *path*, read at its parent step alone.
 
     A declaration at *path* is what a declaring path (a receiver's) names, so
-    no step further out is tried. A parent no scope path of the module's own
-    spells -- one written through an alias, a module route or a contributed
-    type -- anchors nothing itself: its step is the nearest own scope path
-    above it, which injects nothing beneath it. *written* is the qualifier
-    chain spelling the last names of *path*, if any; the types its prefixes
-    select add what their own member tables select. Finding nothing is then
-    an owner-table refusal, a hidden member when a ``hiding`` removed *path*,
-    else an unknown member of it. A bare value spelling (no *written*) also
-    reads the enum members injected at the parent step, as
-    :func:`lookup_bare` does. *span* locates a bare spelling's ambiguity.
+    no step further out is tried (:func:`_declaring_step`). *written* is the
+    qualifier chain spelling the last names of *path*, if any; the types its
+    prefixes select add what their own member tables select, and an alias
+    among them stands for its target's path, read at that path's own parent
+    step. Finding nothing is then an owner-table refusal, a hidden member
+    when a ``hiding`` removed *path*, else an unknown member of it. A bare
+    value spelling (no *written*) also reads the enum members injected at
+    the parent step, as :func:`lookup_bare` does. *span* locates a bare
+    spelling's ambiguity.
     """
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
-    at = sources.nearest_scope(path[:-1])
-    parent = _step(
+    step = _declaring_step(
         sources,
-        at,
-        injects=written is None and kind is LookupKind.VALUE and at == path[:-1],
+        path[: len(path) - len(names)],
+        injects=written is None and kind is LookupKind.VALUE,
     )
-    step = replace(parent, path=path[: len(path) - len(names)])
     walk = _Walk(sources, step.path, (step,), (), written, names, span)
     found = walk.find(kind)
     if found is not None or written is None:
@@ -459,7 +487,7 @@ def lookup_declared(
     refusal = walk.refusal()
     if refusal is not None:
         return refusal
-    if sources.hidden_at(parent.path, path):
+    if step.hidden(path):
         return HiddenMemberError(render_qualifier_path(written), path[-1], span=written.span)
     return UnknownMemberError(render_qualified_name(written, path[-1]), span=written.span)
 
@@ -536,7 +564,7 @@ def lookup_qualified(
             return misfit
     if not chain.segments:
         return UnknownMemberError(render_qualified_name(chain, member), span=span)
-    if anchor.hidden(names):
+    if any(step.hidden((*step.path, *names)) for step in anchor.steps):
         return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
 
     def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
@@ -559,22 +587,24 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
                     (),
                     lambda path, kind: sources.routed_at(routed, path[1:], kind),
                     lambda path: sources.routed_at(routed, path[1:], LookupKind.TYPE),
+                    lambda path: sources.routed_hidden(routed, path[1:]),
                     1,
                 ),
             ),
-            lambda path: sources.routed_hidden(routed, path[1:]),
             lambda path: sources.routed_origins(routed, path[1:]),
             chain.leading_route,
         )
     if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
         own = _Step(
-            (), sources.own_root_at, lambda path: sources.own_root_at(path, LookupKind.TYPE)
+            (),
+            sources.own_root_at,
+            lambda path: sources.own_root_at(path, LookupKind.TYPE),
+            _nowhere,
         )
-        return _Anchor((own,), _nowhere, sources.own_origins)
+        return _Anchor((own,), sources.own_origins)
     steps = lookup_steps(scope_path)
     return _Anchor(
         tuple(_step(sources, step) for step in steps),
-        lambda path: any(sources.hidden_at(step, (*step, *path)) for step in steps),
         lambda path: frozenset().union(
             *(
                 sources.own_origins((*step, *path))
@@ -615,7 +645,37 @@ def _step(
             step[: len(path) - 1], path, LookupKind.TYPE
         )
 
-    return _Step(step, read, owners)
+    return _Step(step, read, owners, lambda path: sources.hidden_at(step, path))
+
+
+def _declaring_step(sources: PathSources, base: ScopePath, *, injects: bool) -> _Step:
+    """Return the step the declaring paths written beneath *base* are read at.
+
+    Each full path is read at its parent step alone. A parent no scope path
+    of the module's own spells -- one written through an alias, a module
+    route or a contributed type -- anchors nothing itself: its step is the
+    nearest own scope path above it, which injects nothing beneath it. A
+    parent that is one also reads what every other own scope path declaring
+    its path anchors (:meth:`PathSources.declaring_beside`). When *injects*,
+    a parent step reads the enum members injected at it.
+    """
+
+    def parent(path: ScopePath) -> _Step:
+        at = sources.nearest_scope(path[:-1])
+        return _step(sources, at, injects=injects and at == path[:-1])
+
+    def read(path: ScopePath, kind: LookupKind) -> Reading:
+        reading = parent(path).read(path, kind)
+        for beside in sources.declaring_beside(path[:-1]):
+            reading += _step(sources, beside).read((*beside, path[-1]), kind)
+        return reading
+
+    return _Step(
+        base,
+        read,
+        lambda path: parent(path).owners(path),
+        lambda path: parent(path).hidden(path),
+    )
 
 
 class _Walk:
@@ -708,8 +768,8 @@ class _Walk:
         """Read the full path at *step*.
 
         Every type a written prefix of at most *owners_within* names reaches,
-        and every alias a longer one reaches, adds what its own member table
-        selects for the rest of the path. When
+        and every alias a longer one reaches, adds what it selects for the
+        rest of the path (:meth:`_beneath`). When
         *injects*, a module qualifier's surface adds the enum member it injects.
         """
         full = (*step.path, *self._names)
@@ -719,16 +779,7 @@ class _Walk:
             return reading
         reading = sum(
             (
-                _reached_as(
-                    self._sources.projected(
-                        key, owner.layer, full[end:], chain, kind, routed=owner.routed
-                    )
-                    if (applied := self._applied(chain, key, end - len(step.path) - 1)) is None
-                    else self._sources.beneath_applied(
-                        applied.target, owner.layer, full[end:], chain, kind, routed=owner.routed
-                    ),
-                    owner,
-                )
+                _reached_as(self._beneath(step, owner, key, full, end, chain, kind), owner)
                 for end in range(len(step.path) + step.start + 1, len(full))
                 for owner in step.owners(full[:end]).candidates
                 if (key := owner.target.key) is not None
@@ -744,6 +795,58 @@ class _Walk:
         ):
             reading += self._sources.surface_injected(chain, self._names[-1])
         return reading
+
+    def _beneath(
+        self,
+        step: _Step,
+        owner: Candidate,
+        key: DeclarationKey,
+        full: ScopePath,
+        end: int,
+        chain: QualifierChain,
+        kind: LookupKind,
+    ) -> Reading:
+        """What type *key*, which *owner* reached as ``full[:end]`` at *step*, selects beneath.
+
+        Its own member table selects for the rest of *full*. Where an alias's
+        selects nothing, the alias stands for its target's path where it is
+        read: when that path names only the target at *step*, what
+        contributions reach beneath it there is reached as the alias is, and
+        a path a ``hiding`` removed there is refused. An owner only a module
+        route reached is read as that module's alone.
+        """
+        sources = self._sources
+        rest = full[end:]
+        applied = self._applied(chain, key, end - len(step.path) - 1)
+        if applied is not None:
+            return sources.beneath_applied(
+                applied.target, owner.layer, rest, chain, kind, routed=owner.routed
+            )
+        reading = sources.projected(key, owner.layer, rest, chain, kind, routed=owner.routed)
+        target = None if reading.candidates or owner.routed else sources.stands_for(key)
+        if target is None:
+            return reading
+        spelled = (*step.path, *target.path)
+        if spelled == full[:end]:
+            return reading
+        beside = (*spelled, *rest)
+        contributed = tuple(
+            replace(
+                candidate,
+                layer=owner.layer,
+                origin=contribution_origin(candidate.origin.declaration, owner.layer),
+            )
+            for candidate in step.read(beside, kind).candidates
+            if candidate.layer is not ContributionLayer.DECLARED and not candidate.routed
+        )
+        hidden = not contributed and step.hidden(beside)
+        if not (contributed or hidden) or not sources.names_only(target, step.owners(spelled)):
+            return reading
+        return reading + Reading(contributed, (self._hidden(chain),) if hidden else ())
+
+    def _hidden(self, chain: QualifierChain) -> HiddenMemberError:
+        """The refusal of the walk's spelling, *chain*, as hidden."""
+        return HiddenMemberError(render_qualifier_path(chain), self._names[-1], span=chain.span)
 
     def _applied(
         self, chain: QualifierChain, key: DeclarationKey, index: int
@@ -770,8 +873,7 @@ class _Walk:
         chain = self._chain
         if len(kept) == len(reading.candidates) or chain is None:
             return Reading(kept, reading.refusals)
-        hidden = HiddenMemberError(render_qualifier_path(chain), self._names[-1], span=chain.span)
-        return Reading(kept, (*reading.refusals, hidden))
+        return Reading(kept, (*reading.refusals, self._hidden(chain)))
 
     def _owned(
         self, chain: QualifierChain, step: _Step, target: QualifiedTarget
@@ -884,11 +986,17 @@ def _unknown(
 
 
 def _reached_as(reading: Reading, owner: Candidate) -> Reading:
-    """*reading*, what *owner*'s member table selects, reached the ways *owner* was."""
+    """*reading*, what lies beneath *owner*, reached the ways *owner* and each candidate were."""
     if owner.hiding == NOT_HIDDEN:
         return reading
     return Reading(
-        tuple(replace(candidate, hiding=owner.hiding) for candidate in reading.candidates),
+        tuple(
+            replace(
+                candidate,
+                hiding=frozenset(way | also for way in owner.hiding for also in candidate.hiding),
+            )
+            for candidate in reading.candidates
+        ),
         reading.refusals,
     )
 

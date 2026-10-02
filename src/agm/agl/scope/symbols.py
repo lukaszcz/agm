@@ -51,7 +51,7 @@ from agm.agl.syntax.nodes import (
     UseDecl,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr, named_builtin_type
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, named_builtin_type
 from agm.agl.zones import ParamZone
 
 ScopePath = tuple[str, ...]
@@ -475,6 +475,14 @@ class ConstructorRef:
         return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name, self.member))
 
 
+def _passes_parameters(type_params: tuple[str, ...], target: AppliedT) -> bool:
+    """Whether applied *target*'s arguments are exactly *type_params*, in order."""
+    return type_params == tuple(
+        arg.name if isinstance(arg, NameT) and arg.qualifier is None else None
+        for arg in target.args
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TypeTarget:
     """The precise declaration identity an alias's target names.
@@ -528,7 +536,10 @@ class TypeOwner:
     terms of the alias's own type parameters; ``scopes`` are then the scope
     paths the built-in's name names as a qualifier where the alias of it is
     declared -- that module's own path spelled so among them -- and
-    ``hidden`` is relative to them.
+    ``hidden`` is relative to them. ``stands_for`` is, for an alias, the type
+    expression it stands for where it is declared: its target expression, or
+    the argument there of an alias standing for one of its type parameters
+    (``Id[Base]`` with ``type Id[T] = T`` stands for ``Base``).
     """
 
     constructor: ConstructorRef | None
@@ -544,12 +555,44 @@ class TypeOwner:
     arity: int = 0
     builtin: TypeExpr | None = None
     scopes: frozenset[QName] = frozenset()
+    stands_for: TypeExpr | None = None
 
     @property
     def builtin_name(self) -> str | None:
         """The name of the built-in type :attr:`builtin` is, if any."""
         named = None if self.builtin is None else named_builtin_type(self.builtin)
         return None if named is None else named.name
+
+    @property
+    def renames(self) -> bool:
+        """Whether an alias is another name for its target: it passes its type parameters through.
+
+        By the type name it :attr:`stands_for`: ``type A = m::B``, ``type
+        A[T] = m::B[T]`` and ``type A = Id[m::B]`` rename ``m::B``; ``type A =
+        m::B[int]`` and ``type A[T] = m::B`` are types of their own.
+        """
+        alias, target = self.alias, self.stands_for
+        if isinstance(target, NameT):
+            return alias is not None and not alias.type_params
+        return (
+            alias is not None
+            and isinstance(target, AppliedT)
+            and _passes_parameters(alias.type_params, target)
+        )
+
+    @property
+    def applies(self) -> bool:
+        """Whether an alias applies the type name it stands for to other arguments than its own.
+
+        A built-in's name included: ``type A = m::B[int]`` and ``type A =
+        array[int]`` do; ``type A[T] = array[T]`` passes its own parameters
+        through, and ``type A = text`` applies nothing.
+        """
+        alias, target = self.alias, self.stands_for
+        if alias is None or target is None:
+            return False
+        named = target if isinstance(target, (NameT, AppliedT)) else named_builtin_type(target)
+        return isinstance(named, AppliedT) and not _passes_parameters(alias.type_params, named)
 
     def hides(self, path: ScopePath) -> bool:
         """Whether *path* beneath the alias's target, or a path above it, is :attr:`hidden`."""

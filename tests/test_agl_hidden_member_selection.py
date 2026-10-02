@@ -359,6 +359,29 @@ _SCENARIOS = {
     ),
 }
 
+_BENEATH = (
+    "scope S\n  def a() -> int = 1\n  def b() -> int = 2\nend S\n"
+    "\n"
+    "record R\n  x: int\n\ndef R::m() -> int = 1\ndef R::n() -> int = 2\n"
+)
+"""Functions beneath a scope and beneath a type."""
+
+_SCENARIOS["a-re-export-hiding-a-path-hides-it-beneath-the-scope-or-type-above"] = Scenario(
+    modules={"sc": _BENEATH, "ex": "import sc\nexport sc hiding S::a, R::m\n"},
+    header=("import ex::*\nimport ex", "import sc::{S::b}"),
+    probes={
+        f"{route}{owner}-{verdict}": probe
+        for route in ("", "ex::")
+        for owner, hidden, kept in (("S", "a", "b"), ("R", "m", "n"))
+        for verdict, probe in {
+            "hidden": rejected(
+                f"{route}{owner}::{hidden}()", HiddenMemberError, f"{route}{owner}::{hidden}"
+            ),
+            "kept": accepted(f"{route}{owner}::{kept}()", "int"),
+        }.items()
+    },
+)
+
 
 class TestHiddenMemberSelection:
     """Hidden members across imports, uses, routes and method paths."""

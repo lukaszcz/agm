@@ -18,6 +18,7 @@ scenario's header (see :mod:`tests.agl.qualifier_support`).
 
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 import pytest
@@ -588,6 +589,104 @@ _SCENARIOS |= {
 }
 
 
+_PLACED = {"G": ("Base", "h"), "T2": ("text", "s"), "Arr": ("array", "z")}
+"""Each alias ``pl`` declares beneath, with its target and the member the items name."""
+_ITEMS = {
+    "an-alias": ", ".join(f"{alias}::{member}" for alias, (_, member) in _PLACED.items()),
+    "the-declared-path": ", ".join(f"{target}::{member}" for target, member in _PLACED.values()),
+}
+"""The members ``pl`` declares beneath its aliases' targets, spelled through each."""
+
+
+def _placing(target: str) -> str:
+    """Module ``pl``: aliases of ``base``'s ``Base`` (spelled *target*), ``text`` and ``array``.
+
+    It declares ``j`` and the member of :data:`_PLACED` beneath each, through the alias.
+    """
+    aliases = {"G": target, "T2": "text", "Arr[E]": "array[E]"}
+    return "import base\nimport base::*\n" + "".join(
+        f"type {alias} = {aliased}\n"
+        f"def {name}::{_PLACED[name][1]}() -> int = 2\ndef {name}::j() -> int = 4\n"
+        for alias, aliased in aliases.items()
+        for name in (alias.partition("[")[0],)
+    )
+
+
+_PLACING = {"a-routed-target": _placing("base::Base"), "a-bare-target": _placing("Base")}
+
+
+def _placed_probes(verdict: Callable[[str], Probe], spellings: Collection[str]) -> dict[str, Probe]:
+    """*verdict* of each member of :data:`_PLACED`, through each of *spellings* of its path.
+
+    A spelling is ``alias`` or ``target``, bare or after a route; the sibling
+    ``j`` stays reached through the alias.
+    """
+    siblings = {f"{alias}-sibling": accepted(f"{alias}::j()", "int") for alias in _PLACED}
+    return siblings | {
+        path: verdict(path)
+        for alias, (target, member) in _PLACED.items()
+        for spelling in spellings
+        for path in (f"{spelling.format(alias=alias, target=target)}::{member}",)
+    }
+
+
+def _hidden_call(path: str) -> Probe:
+    return rejected(f"{path}()", HiddenMemberError, path)
+
+
+def _accepted_call(path: str) -> Probe:
+    return accepted(f"{path}()", "int")
+
+
+_SCENARIOS |= {
+    f"an-import-tail-through-{spelled}-names-what-its-module-declares-beneath-{target}": Scenario(
+        modules={"base": _BASE, "pl": placing},
+        header=(f"import pl::{{{items}, G::j, T2::j, Arr::j}}",),
+        probes=_placed_probes(_accepted_call, (written,)),
+    )
+    for target, placing in _PLACING.items()
+    for (spelled, items), written in zip(_ITEMS.items(), ("{alias}", "{target}"), strict=True)
+}
+
+_SCENARIOS |= {
+    f"an-export-item-through-{spelled}-names-what-its-module-declares-beneath-{target}": Scenario(
+        modules={
+            "base": _BASE,
+            "pl": placing,
+            "ex": f"import pl\nexport pl::{{{items}, G::j, T2::j, Arr::j}}\n",
+        },
+        header=(_ROUTES,),
+        probes=_placed_probes(_accepted_call, (written, f"ex::{written}")),
+    )
+    for target, placing in _PLACING.items()
+    for (spelled, items), written in zip(_ITEMS.items(), ("{alias}", "{target}"), strict=True)
+}
+
+_SCENARIOS |= {
+    f"hiding-through-{spelled}-removes-what-its-module-declares-beneath-{target}": Scenario(
+        modules={"base": _BASE, "pl": placing},
+        header=(f"import pl::* hiding {items}",),
+        probes=_placed_probes(_hidden_call, ("{alias}", "{target}", "pl::{alias}", "pl::{target}")),
+    )
+    for target, placing in _PLACING.items()
+    for spelled, items in _ITEMS.items()
+}
+
+_SCENARIOS |= {
+    f"an-export-hiding-through-{spelled}-removes-what-its-module-declares-beneath-{target}": (
+        Scenario(
+            modules={"base": _BASE, "pl": placing, "ex": f"import pl\nexport pl hiding {items}\n"},
+            header=(_ROUTES,),
+            probes=_placed_probes(
+                _hidden_call, ("{alias}", "{target}", "ex::{alias}", "ex::{target}")
+            ),
+        )
+    )
+    for target, placing in _PLACING.items()
+    for spelled, items in _ITEMS.items()
+}
+
+
 _REFERENCING = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item"
 """An enum referencing a record declared beneath the enum's own path."""
 
@@ -866,6 +965,44 @@ _SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] =
     },
 )
 
+_SCENARIOS["an-alias-of-an-alias-standing-for-its-parameter-is-another-name-for-its-argument"] = (
+    Scenario(
+        modules={
+            "base": _BASE,
+            "pj": "import base::*\nexport base::{Base}\ntype Id[T] = T\ntype PB = Id[Base]\n",
+        },
+        header=(
+            "import base::*\nimport pj",
+            "type Id[T] = T\ntype Id2[T] = Id[T]",
+            "type IB = Id[Base]\ntype J = Id2[Id[Base]]",
+        ),
+        probes={
+            **{
+                f"{spelling}-{position}": probe
+                for spelling in ("IB", "J", "pj::PB")
+                for position, probe in {
+                    "static": accepted(f"{spelling}::f()", "int"),
+                    "nested-value": accepted(f"{spelling}::Inner(y = 1)", _INNER),
+                    "enum-member": accepted(
+                        f"{spelling}::Shape::Sq", "record base::Base::Shape::Sq"
+                    ),
+                    "value": accepted(f"{spelling}(x = 1)", "record base::Base\n  x: int"),
+                    "unknown": rejected(
+                        f"{spelling}::nope()", UnknownMemberError, f"{spelling}::nope"
+                    ),
+                    **type_positions("alias", spelling, "base::Base"),
+                    **type_positions("nested", f"{spelling}::Inner", "base::Base::Inner"),
+                }.items()
+            },
+            "declared-later": accepted("def Base::late() -> int = 5\nIB::late()", "int"),
+            "one-declaration": accepted(
+                "fn(a: IB, b: J) => [a, b, Base(x = 1)]",
+                "(base::Base, base::Base) -> array[base::Base]",
+            ),
+        },
+    )
+)
+
 
 _DENOTING_A = (
     "import gen::*\ntype IntBox = Box[int]\ntype F = int -> bool\ntype P = Box[path]\n"
@@ -1045,6 +1182,120 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
     },
 )
 
+_SCENARIOS["an-item-through-an-alias-names-what-its-site-reaches-beneath-the-target"] = Scenario(
+    modules={
+        "tx": _TEXT_SCOPE,
+        "bj": _HIDING_SITE,
+        "ex": "import bj\nexport bj::{V2::yy}\n",
+        "eh": "import bj\nexport bj hiding V2::yy\n",
+    },
+    header=(),
+    probes={
+        "tail": accepted("import bj::{V2::yy, V2::sub::yy}\nV2::yy() + V2::sub::yy()", "int"),
+        "tail-hidden-at-the-alias-site": rejected(
+            "import bj::{V2::zz}\n1", UnknownMemberError, "import bj::{V2::zz}"
+        ),
+        "hiding": rejected("import bj::* hiding V2::yy\nV2::yy()", HiddenMemberError, "V2::yy"),
+        "hiding-keeps-another": accepted("import bj::* hiding V2::yy\nV2::sub::yy()", "int"),
+        "hiding-hidden-at-the-alias-site": rejected(
+            "import bj::* hiding V2::zz\n1", UnknownMemberError, "import bj::* hiding V2::zz"
+        ),
+        "export-item": accepted("import ex::*\nV2::yy()", "int"),
+        "export-item-routed": accepted("import ex\nex::V2::yy()", "int"),
+        "export-hiding": rejected("import eh::*\nV2::yy()", HiddenMemberError, "V2::yy"),
+        "export-hiding-keeps-another": accepted("import eh::*\nV2::sub::yy()", "int"),
+    },
+)
+
+_PLAIN = "record Base\n  x: int\n\ndef Base::f() -> int = 1\n"
+_ALIASING = "import base\ntype Geo = base::Base\ntype U2 = text\n"
+_BENEATH = (
+    "import base::*\n\ndef Base::k() -> int = 1\n\nrecord Base::In2\n  a: int\n\n"
+    "scope Base::S\n  def s() -> int = 4\nend Base::S\n\ndef text::g() -> int = 8\n"
+)
+"""Declares paths beneath ``base``'s ``Base`` and beneath ``text``."""
+_BENEATH_TOO = "import base::*\n\ndef Base::k() -> int = 2\n"
+_FORWARDING = "import base::*\n\nscope Base\n  export lib::{free}\nend Base\n"
+"""Forwards ``lib``'s ``free`` beneath ``base``'s ``Base``."""
+_FORWARDING_THROUGH = "import base::*\nimport al::*\n\nscope Geo\n  export lib::{free}\nend Geo\n"
+_NAMED_ALIKE = "scope Base\n  def o() -> int = 3\nend Base\n"
+"""Declares a scope of its own named like ``base``'s ``Base``."""
+_READER_MODULES = {
+    "base": _PLAIN,
+    "al": _ALIASING,
+    "lib": "def free() -> int = 6\n",
+    "nb": _BENEATH,
+    "nc": _BENEATH_TOO,
+    "fw": _FORWARDING,
+    "fg": _FORWARDING_THROUGH,
+    "na": _NAMED_ALIKE,
+}
+
+_SCENARIOS["an-alias-reaches-what-its-reader-imports-beneath-the-target-path"] = Scenario(
+    modules=_READER_MODULES,
+    header=("import base::*\nimport al::*",),
+    probes={
+        "forwarded": accepted("import fw::*\nGeo::free()", "int"),
+        "forwarded-through-an-alias": accepted("import fg::*\nGeo::free()", "int"),
+        "forwarded-by-a-route": rejected(
+            "import fg\nfg::Geo::free()", UnknownMemberError, "fg::Geo::free"
+        ),
+        "declared": accepted("import nb::*\nGeo::k()", "int"),
+        "own-alias": accepted("import nb::*\ntype OG = Base\nOG::k()", "int"),
+        "own-alias-of-own-root": rejected(
+            "import nb::*\ntype OG = Base\n::OG::k()", UnknownMemberError, "::OG::k"
+        ),
+        "annotation": accepted("import nb::*\nfn(p: Geo::In2) => p.a", "nb::Base::In2 -> int"),
+        "constructor": accepted("import nb::*\nGeo::In2(a = 1)", "record nb::Base::In2\n  a: int"),
+        "scope-beneath": accepted("import nb::*\nGeo::S::s()", "int"),
+        "use-item": accepted("import nb::*\nuse Geo::{k}\nk()", "int"),
+        "scope-named-alike": accepted("import na::*\nGeo::o()", "int"),
+        "hidden": rejected("import nb::* hiding Base::k\nGeo::k()", HiddenMemberError, "Geo::k"),
+        "two-distinct": rejected(
+            "import nb::*\nimport nc::*\nGeo::k()", AmbiguousQualificationError, "Geo::k"
+        ),
+        "written-in-a-scope": accepted(
+            "import nb::*\n\nscope Q\n  def q() -> int = Geo::k()\nend Q\n\nQ::q()", "int"
+        ),
+        "imported-in-a-scope-the-alias-is-not": rejected(
+            "scope Q\n  import nb::*\n  def q() -> int = Geo::k()\nend Q\n\nQ::q()",
+            UnknownMemberError,
+            "Geo::k",
+        ),
+        "declaring-beneath": accepted(
+            "import nb::*\ndef Geo::k2() -> int = Geo::k()\nGeo::k2()", "int"
+        ),
+        "builtin": accepted("import nb::*\nU2::g()", "int"),
+    },
+)
+
+_SCENARIOS["an-alias-names-a-type-its-reader-imports-beneath-the-target-path"] = Scenario(
+    modules=_READER_MODULES,
+    header=("import base::*\nimport al::*\nimport nb::*",),
+    probes=type_positions("type", "Geo::In2", "nb::Base::In2"),
+)
+
+_SCENARIOS["an-alias-reaches-no-import-beneath-a-path-not-naming-its-target"] = Scenario(
+    modules=_READER_MODULES,
+    header=("import al::*",),
+    probes={
+        "target-path": accepted("import nb::*\nBase::k()", "int"),
+        "alias": rejected("import nb::*\nGeo::k()", UnknownMemberError, "Geo::k"),
+    },
+)
+
+_SCENARIOS["an-alias-named-as-its-target-path-reaches-imports-beneath-that-path"] = Scenario(
+    modules=_READER_MODULES,
+    header=("import base\nimport nb::*",),
+    probes={
+        "imported-beneath": accepted("type Base = base::Base\nBase::k()", "int"),
+        "declared-by-the-target": accepted("type Base = base::Base\nBase::f()", "int"),
+        "nothing": rejected(
+            "type Base = base::Base\nBase::nope()", UnknownMemberError, "Base::nope"
+        ),
+    },
+)
+
 
 class TestTransparentAliases:
     """Alias spellings in every position, the file part and every REPL grouping."""
@@ -1084,13 +1335,16 @@ def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
     [
         pytest.param("import al\nexport al::{Geo::Nope}\n", id="item"),
         pytest.param("import al\nexport al hiding Geo::Nope\n", id="hiding"),
+        pytest.param("import bj\nexport bj::{V2::zz}\n", id="item-hidden-at-the-alias-site"),
+        pytest.param("import bj\nexport bj hiding V2::zz\n", id="hiding-hidden-at-the-alias-site"),
     ],
 )
 def test_an_export_item_through_an_alias_naming_nothing_is_an_error_where_written(
     tmp_path: Path, export: str
 ) -> None:
+    modules = {**_MODULES, "tx": _TEXT_SCOPE, "bj": _HIDING_SITE}
     phase, error, span, _identity = inline_verdict(
-        tmp_path, {"entry": "import ex\n1", "ex": export, **_MODULES}
+        tmp_path, {"entry": "import ex\n1", "ex": export, **modules}
     )
 
     assert (phase, error) == ("scope", UnknownMemberError)

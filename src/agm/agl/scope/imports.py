@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
@@ -24,6 +24,7 @@ from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
     "EMPTY_IMPORT_ENV",
+    "Exposure",
     "ItemDeclaration",
     "ImportEnv",
     "ImportTarget",
@@ -43,9 +44,11 @@ __all__ = [
     "qualifier_candidates",
     "qualifier_decls",
     "qualifier_hides",
+    "qualifier_exposures",
     "qualifier_member_decls",
     "qualifier_members",
     "qualifier_scope_paths",
+    "unqualified_exposures",
     "declares_bare_constructor",
 ]
 
@@ -55,6 +58,8 @@ PathAtom: TypeAlias = tuple[str, ...]
 NameAtom: TypeAlias = str | PathAtom
 QName: TypeAlias = tuple[ModuleId, NameAtom]
 ScopeOrigins: TypeAlias = frozenset[QName]
+Exposure: TypeAlias = tuple[NameAtom, QName, frozenset[int]]
+"""A path imports expose, what it names, and the import declarations contributing it."""
 BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
 
 
@@ -763,6 +768,27 @@ def qualifier_member_decls(
                 )
                 found[qname] = found.get(qname, frozenset()) | decls[member]
     return found
+
+
+def qualifier_exposures(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
+) -> Iterator[Exposure]:
+    """Yield every member the import routes *qualifier* names reach."""
+    exposed = {
+        member: qualifier_member_decls(env, qualifier, member, anchored=anchored)
+        for _module, members in qualifier_members(env, qualifier, anchored=anchored)
+        for member in members
+    }
+    for member, reached in exposed.items():
+        for qname, decls in reached.items():
+            yield member, qname, decls
+
+
+def unqualified_exposures(env: ImportEnv) -> Iterator[Exposure]:
+    """Yield every root bare atom the root-position import tails expose."""
+    for atom, reached in env.unqualified_decls.items():
+        for qname, decls in reached.items():
+            yield atom, qname, decls
 
 
 def qualifier_scope_paths(

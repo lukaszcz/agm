@@ -45,16 +45,21 @@ _ALIASING = "import base::*\nexport base::{Base}\ntype Geo = Base\n"
 """Exports ``base``'s ``Base`` and an alias of it."""
 _STANDING_FOR = "type Id[T] = T\ntype Geo = Id[Base]"
 """``Geo`` aliases ``Base`` through an alias standing for its type parameter."""
+_APPLYING_A_CONSTANT = "type Kc[T] = Base\ntype Geo = Kc[int]"
+"""``Geo`` aliases ``Base`` through a generic alias standing for ``Base`` alone."""
 _MODULES = {
     "base": _BASE,
     "al": _ALIASING,
     "pj": f"import base::*\nexport base::{{Base}}\n{_STANDING_FOR}\n",
+    "kc": f"import base::*\nexport base::{{Base}}\n{_APPLYING_A_CONSTANT}\n",
 }
 
 _OWN_ALIAS = ("import base::*", "type Geo = Base")
 _IMPORTED_ALIAS = ("import al::*",)
 _OWN_STANDING_FOR = ("import base::*", _STANDING_FOR)
 _IMPORTED_STANDING_FOR = ("import pj::*",)
+_OWN_APPLYING_A_CONSTANT = ("import base::*", _APPLYING_A_CONSTANT)
+_IMPORTED_APPLYING_A_CONSTANT = ("import kc::*",)
 _ROUTED_ALIAS = ("import base", "import base::*", "type Geo = base::Base")
 _LOCAL_TARGET = ("record Base\n  x: int\nrecord Base::Inner\n  y: int", "type Geo = Base")
 _ALIASES = (
@@ -62,9 +67,10 @@ _ALIASES = (
     ("an-imported-alias", _IMPORTED_ALIAS),
     ("an-alias-of-an-own-type", _LOCAL_TARGET),
     ("an-own-alias-standing-for-its-argument", _OWN_STANDING_FOR),
+    ("an-own-alias-applying-a-constant-alias", _OWN_APPLYING_A_CONSTANT),
 )
 """Each way ``Geo`` aliases ``Base``: an own alias, an imported one, an own one of an own type,
-and one through an alias standing for its type parameter."""
+one through an alias standing for its type parameter, and one through a constant generic alias."""
 
 
 def _declarations(spelling: str) -> str:
@@ -175,6 +181,12 @@ _SCENARIOS = (
             ("an-alias-of-an-own-type", _LOCAL_TARGET, "Base"),
             ("an-own-alias-standing-for-its-argument", _OWN_STANDING_FOR, "base::Base"),
             ("an-imported-alias-standing-for-its-argument", _IMPORTED_STANDING_FOR, "base::Base"),
+            ("an-own-alias-applying-a-constant-alias", _OWN_APPLYING_A_CONSTANT, "base::Base"),
+            (
+                "an-imported-alias-applying-a-constant-alias",
+                _IMPORTED_APPLYING_A_CONSTANT,
+                "base::Base",
+            ),
         )
     }
     | {
@@ -425,32 +437,46 @@ _SCENARIOS |= {
     for name, owner in (("before-the-path-beneath-it", "A"), ("after-the-path-beneath-it", "X"))
 }
 
-_SCENARIOS["declared-beneath-an-alias-standing-for-its-argument"] = Scenario(
-    modules={**_APPLIED_MODULES, "funcs": "type Id[T] = T\n"},
-    header=(
-        "import gen::*\nimport funcs::*",
+_NORMALIZED = {
+    "standing-for-its-argument": (
+        "type Id[T] = T\n",
         "type T5 = Id[text]\ntype Arr5[E] = Id[array[E]]\ntype IA5 = Id[array[int]]",
         "type B5[T] = Id[Box[T]]\ntype IB5 = Id[Box[int]]\ntype F5 = Id[int -> bool]",
     ),
-    probes={
-        **_builtin_head_probes("T5", "Arr5", "IA5"),
-        **_applied_head_probes("IB5"),
-        "renaming-static": accepted("def B5::k() -> int = 1\nBox::k()", "int"),
-        "renaming-method": accepted("def B5::m[T](self) -> T = self.v\nBox(v = 1).m()", "int"),
-        "renaming-record": accepted(
-            "record B5::R\n  z: int\nBox::R(z = 1)", "record Box::R\n  z: int"
-        ),
-        "renaming-read": accepted("B5::In(w = 1)", "record gen::Box::In\n  w: int"),
-        **{
-            f"structural-{name}": rejected(text, AglScopeError, "F5")
-            for name, text in {
-                "static": "def F5::m() -> int = 1",
-                "method": "def F5::m(self) -> int = 1",
-                "region": "scope F5\n  def z() -> int = 1\nend F5",
-            }.items()
+    "applying-a-generic-alias": (
+        "import gen::*\ntype KT[T] = text\ntype KA[T, E] = array[E]\ntype KI[T] = array[int]\n"
+        "type KB[T, U] = gen::Box[U]\ntype KF[T] = int -> bool\n",
+        "type T5 = KT[int]\ntype Arr5[E] = KA[int, E]\ntype IA5 = KI[text]",
+        "type B5[T] = KB[int, T]\ntype IB5 = KB[text, int]\ntype F5 = KF[int]",
+    ),
+}
+"""Aliases applying a generic alias of another module, by what each then denotes."""
+
+_SCENARIOS |= {
+    f"declared-beneath-an-alias-{name}": Scenario(
+        modules={**_APPLIED_MODULES, "funcs": funcs},
+        header=("import gen::*\nimport funcs::*", builtin, nominal),
+        probes={
+            **_builtin_head_probes("T5", "Arr5", "IA5"),
+            **_applied_head_probes("IB5"),
+            "renaming-static": accepted("def B5::k() -> int = 1\nBox::k()", "int"),
+            "renaming-method": accepted("def B5::m[T](self) -> T = self.v\nBox(v = 1).m()", "int"),
+            "renaming-record": accepted(
+                "record B5::R\n  z: int\nBox::R(z = 1)", "record Box::R\n  z: int"
+            ),
+            "renaming-read": accepted("B5::In(w = 1)", "record gen::Box::In\n  w: int"),
+            **{
+                f"structural-{position}": rejected(text, AglScopeError, "F5")
+                for position, text in {
+                    "static": "def F5::m() -> int = 1",
+                    "method": "def F5::m(self) -> int = 1",
+                    "region": "scope F5\n  def z() -> int = 1\nend F5",
+                }.items()
+            },
         },
-    },
-)
+    )
+    for name, (funcs, builtin, nominal) in _NORMALIZED.items()
+}
 
 
 def _through(spelling: str) -> str:
@@ -898,6 +924,14 @@ def _region_probes(spelling: str) -> dict[str, Probe]:
             "int",
         ),
         f"{spelling}-member-receiver": accepted(region(member, "Base::E::A(a = 1).m()"), "int"),
+        **{
+            f"{spelling}-member-receiver-declared-through-{other}": accepted(
+                f"enum {other}::F\n  | C(c: int)\n\n"
+                + region("  def C::m(self) -> int = self.c", "Base::F::C(c = 1).m()"),
+                "int",
+            )
+            for other in ("Base", "Geo")
+        },
         f"{spelling}-unknown-receiver": rejected(
             region("  def A::m(self) -> int = 1", "1"), AglScopeError, "self"
         ),

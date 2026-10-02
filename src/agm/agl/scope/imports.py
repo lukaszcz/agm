@@ -202,8 +202,9 @@ class ImportEnv:
     ``decl_bare_scope_routes`` carry the parallel namespace-only contribution
     for scopes that have no declaration member to put in a bare table.
     ``decl_hidden`` holds, per tailed declaration, the bare atoms its
-    ``hiding`` removed from its tail; ``unqualified_hidden`` holds the
-    declarations a root-position import's ``hiding`` removed.
+    ``hiding`` or the imported module's export ``hiding`` removed from its
+    tail; ``unqualified_hidden`` holds the declarations a root-position
+    import's ``hiding`` removed.
     ``unqualified_decls`` names the declarations contributing each root bare
     atom's origins, as :attr:`ModuleContribution.path_member_decls` does a
     route's members; ``decl_hiding`` holds the declarations each tailed or
@@ -331,15 +332,15 @@ class _ContributionAccumulator:
     alias_decls: dict[str, set[int]]
 
 
-def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
+def matching_atoms(surface: Iterable[NameAtom], prefix: PathAtom) -> tuple[NameAtom, ...]:
     """Return every atom of *surface* that a selection *prefix* reaches."""
     return tuple(atom for atom in surface if _path(atom)[: len(prefix)] == prefix)
 
 
 def _selected_public_atoms(
     items: tuple[ImportItem, ...],
-    exports: Mapping[NameAtom, QName],
-    scope_exports: Mapping[NameAtom, ScopeOrigins],
+    exports: Iterable[NameAtom],
+    scope_exports: Iterable[NameAtom],
 ) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
     """Expand selected declaration atoms and independent scope identities.
 
@@ -492,7 +493,9 @@ def build_import_env(
     type aliases, beneath whose exports a ``hiding`` item may name a path.
     *withheld* holds, per module, what its export ``hiding`` removes beneath
     each re-exported atom; a declaration reaching one export through several
-    atoms withholds only what each does.
+    atoms withholds only what each does. An atom there the module does not
+    export is one its export ``hiding`` removed, with its declarations: the
+    import hides it like one of its own ``hiding`` items.
     """
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
     root_bare: dict[NameAtom, dict[QName, set[int]]] = {}
@@ -516,18 +519,33 @@ def build_import_env(
             hidden_exports, hidden_scopes = _selected_public_atoms(
                 decl.hidden, module_exports, module_scopes
             )
-            named = _item_declarations(decl.hidden, module, module_exports, aliases, decl.span)
+            module_withheld = withheld.get(module, {})
+            unexported = {
+                source: origins
+                for source, origins in module_withheld.items()
+                if source not in module_exports
+            }
+            named = (
+                *_item_declarations(decl.hidden, module, module_exports, aliases, decl.span),
+                *(
+                    ItemDeclaration(module, _path(source), origin, (), decl.span)
+                    for source, origins in unexported.items()
+                    for origin in origins
+                    if origin in aliases
+                ),
+            )
             if named:
                 decl_hiding.setdefault(decl.node_id, []).extend(named)
+            surface = (*module_exports, *unexported)
             if decl.tail is None:
                 selected_exports: tuple[NameAtom, ...] = ()
                 selected_scopes: tuple[NameAtom, ...] = ()
             elif not decl.tail:
-                selected_exports = tuple(module_exports)
+                selected_exports = surface
                 selected_scopes = tuple(module_scopes)
             else:
                 selected_exports, selected_scopes = _selected_public_atoms(
-                    decl.tail, module_exports, module_scopes
+                    decl.tail, surface, module_scopes
                 )
                 beneath = _tail_beneath_exposures(
                     decl.tail, module, module_exports, aliases, decl.span
@@ -536,10 +554,10 @@ def build_import_env(
                     decl_tail_beneath.setdefault(decl.node_id, {}).setdefault(
                         exposed, set()
                     ).update(items)
-            hidden = set(hidden_exports)
+            hidden = {*hidden_exports, *unexported}
             hidden_scope_paths = set(hidden_scopes)
             if not decl.scope_path:
-                root_hidden.update(module_exports[source] for source in hidden)
+                root_hidden.update(module_exports[source] for source in hidden_exports)
             acc = accumulators.setdefault(
                 module,
                 _ContributionAccumulator(
@@ -562,7 +580,6 @@ def build_import_env(
                 acc.aliases.add(decl.alias)
             route_hidden.update(hidden)
             route_decls.add(decl.node_id)
-            module_withheld = withheld.get(module, {})
             reached_withheld = decl_withheld.setdefault(decl.node_id, {})
             for source, qname in module_exports.items():
                 if source not in hidden:

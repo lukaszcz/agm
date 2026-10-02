@@ -633,7 +633,7 @@ class ModuleSources(SourcesHost):
             (
                 origin
                 for candidate, layers in candidates.items()
-                for origin in contribution_origins(candidate.qname, layers)
+                for origin in contribution_origins(candidate.selected_qname, layers)
             ),
             repair=repair,
             span=span,
@@ -974,7 +974,7 @@ class ModuleSources(SourcesHost):
             self._declared_type(key)
             for key in (candidate.target.key for candidate in named.candidates)
             if key is not None
-        } == {target.declared}
+        } <= {target.declared}
 
     def _selected_by_table(
         self,
@@ -1334,10 +1334,9 @@ class ModuleSources(SourcesHost):
         return _qname_decl_key(owners.identity(qname))
 
     def denotes(self, key: DeclarationKey) -> object:
-        """What *key* names in an ambiguity: its identity, or the type an alias denotes."""
-        identity = self.identity(key)
-        denoted = self._type_owners.denotation(_key_qname(identity))
-        return identity if denoted is None else denoted
+        """What *key* names in an ambiguity: its identity, or what an alias denotes there."""
+        denoted = self._type_owners.denotation(_key_qname(key))
+        return self.identity(key) if denoted is None else denoted
 
     def placement(self, key: DeclarationKey) -> DeclarationKey:
         """See :meth:`~agm.agl.scope.lookup.DeclarationNames.placement`.

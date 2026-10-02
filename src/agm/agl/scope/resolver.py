@@ -298,6 +298,24 @@ def _start_offset(item: Item) -> int:
     return item.span.start_offset
 
 
+def _root_items_as_written(items: tuple[Item, ...]) -> tuple[tuple[Item, ...], tuple[Item, ...]]:
+    """The module root's *items* as its source wrote them, and an inline entry's statements.
+
+    The inline wrap (``parser/wrap.py``) moves the root statements of a source
+    without a ``program def`` into a synthetic entry after the root
+    declarations; they are put back among those, at their own source
+    positions.
+    """
+    statements: tuple[Item, ...] = ()
+    declarations: list[Item] = []
+    for item in items:
+        if isinstance(item, FuncDef) and item.is_synthetic and isinstance(item.body, Block):
+            statements = item.body.items
+        else:
+            declarations.append(item)
+    return tuple(sorted((*declarations, *statements), key=_start_offset)), statements
+
+
 def _nested_misplacement(item: Item) -> AglScopeError | None:
     """Why a nested block may not hold *item*, or ``None``: these declare at a module root."""
     if isinstance(item, (ImportDecl, ExportDecl)):
@@ -844,8 +862,11 @@ class _Resolver(ModuleSources):
         Region and shorthand syntax both arrive as declarations with a scope
         path. Regions additionally contribute their own path, so an empty
         region and a shorthand-only path have identical namespace identity.
+        An inline entry's root statements bind at the root
+        (:meth:`_resolve_root_items`): their ``let``/``var`` binders are
+        collected like the root's own, in source order.
         """
-        for item in program.body.items:
+        for item in _root_items_as_written(program.body.items)[0]:
             self._collect_item_declaration(item, (), ())
 
     def _collect_item_declaration(self, item: Item, written: ScopePath, scope: ScopePath) -> None:
@@ -859,11 +880,6 @@ class _Resolver(ModuleSources):
             return
         if isinstance(item, ImportDecl):
             self._import_decl_scope_paths[item.node_id] = scope
-            return
-        if isinstance(item, FuncDef) and item.is_synthetic:
-            # The inline host entry is executable AST, not a source declaration.
-            # Its body is still resolved by the main walk, but its implementation
-            # name must never claim a source namespace slot.
             return
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             self._register_declaration(item, self._declaration_scope(item))
@@ -2082,22 +2098,15 @@ class _Resolver(ModuleSources):
     def _resolve_root_items(self, items: tuple[Item, ...]) -> None:
         """Resolve the module root's *items*, an inline entry's statements among them.
 
-        The inline wrap (``parser/wrap.py``) moves the root statements of a
-        source without a ``program def`` into a synthetic entry after the root
-        declarations. They still resolve at their own source positions among
-        those declarations, in the root scope, with a function body's flags:
-        the text reads -- and reports its first error -- exactly as written,
-        and a statement's ``let``/``var`` is a root binding ``::name`` reaches.
+        The statements resolve at their own source positions among the root
+        declarations (:func:`_root_items_as_written`), in the root scope, with
+        a function body's flags: the text reads -- and reports its first
+        error -- exactly as written, and a statement's ``let``/``var`` is a
+        root binding ``::name`` reaches.
         """
-        statements: tuple[Item, ...] = ()
-        declarations: list[Item] = []
-        for item in items:
-            if isinstance(item, FuncDef) and item.is_synthetic and isinstance(item.body, Block):
-                statements = item.body.items
-            else:
-                declarations.append(item)
+        written, statements = _root_items_as_written(items)
         statement_ids = {id(statement) for statement in statements}
-        for item in sorted((*declarations, *statements), key=_start_offset):
+        for item in written:
             if id(item) not in statement_ids:
                 self._resolve_block_items((item,))
                 continue
@@ -2704,13 +2713,10 @@ class _Resolver(ModuleSources):
         (:meth:`_routed_spelling`). Anything else is spelled by its
         declaration path.
         """
-        path = (*candidate.owner_path, name)
+        origin = candidate.selected_qname
         if candidate.owner_module_id == self._module_id:
+            path = (*_bare_path(origin[1])[:-1], name)
             return spell_declaration(self._module_id, path, reader=self.reader())
-        origin = (
-            candidate.owner_module_id,
-            _bare_atom((*candidate.owner_path, candidate.owner_name)),
-        )
         unqualified = self._import_env.unqualified
         owner = next(
             (
@@ -2763,9 +2769,7 @@ class _Resolver(ModuleSources):
             )
         )
         return min(spellings, key=len, default=None) or spell_declaration(
-            candidate.owner_module_id,
-            (*candidate.owner_path, candidate.owner_name),
-            reader=self.reader(),
+            origin[0], _bare_path(origin[1]), reader=self.reader()
         )
 
     def _validate_qualifier_chains(self, root: SyntaxNode, type_params: Iterable[str] = ()) -> None:
@@ -3389,13 +3393,14 @@ class _Resolver(ModuleSources):
 
         A renaming alias's constructor is its target's
         (:meth:`TypeOwnerIndex.constructor_identity`), and aliases denoting one
-        type construct one (:meth:`TypeOwnerIndex.denotation`): the candidate
+        type construct one, as do the members aliases applying one enum alike
+        select (:meth:`TypeOwnerIndex.denotation`): the candidate
         naming the declaration directly stands for it, else its first by path.
         """
         grouped: dict[object, dict[ConstructorRef, Layers]] = {}
         for candidate, layers in candidates.items():
             named = self._type_owners.constructor_identity(candidate)
-            denoted = self._type_owners.denotation(named.qname)
+            denoted = self._type_owners.denotation(named.selected_qname)
             grouped.setdefault(named if denoted is None else denoted, {})[candidate] = layers
         return {
             (

@@ -1286,6 +1286,29 @@ _SCENARIOS = {
             "binding-claiming-a-declared-name": rejected(
                 "def f() -> int = 1\nlet f = 2\nf", DuplicateDeclarationError, "let f = 2"
             ),
+            **{
+                f"{binder}-named-like-{name}": rejected(
+                    text, DuplicateDeclarationError, f"{binder} Geo = 2"
+                )
+                for binder in ("let", "var")
+                for name, text in (
+                    (
+                        "a-scope-region",
+                        f"scope Geo\n  def g() -> int = 1\nend Geo\n{binder} Geo = 2\n1",
+                    ),
+                    ("a-declared-path", f"def Geo::g() -> int = 1\n{binder} Geo = 2\n1"),
+                )
+            },
+            "binding-before-a-declaration-of-its-name": rejected(
+                "let f = 1\ndef f() -> int = 2\n1",
+                DuplicateDeclarationError,
+                "def f() -> int = 2",
+            ),
+            "binding-named-like-a-later-declared-path": rejected(
+                "let Geo = 2\ndef Geo::g() -> int = 1\n1",
+                DuplicateDeclarationError,
+                "def Geo::g() -> int = 1",
+            ),
         },
     ),
     "receivers-read-the-full-path": Scenario(

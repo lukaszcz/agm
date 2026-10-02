@@ -30,6 +30,7 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     TypeTarget,
     dedupe_constructor_candidates,
+    passes_parameters,
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
@@ -53,6 +54,7 @@ from agm.agl.syntax.types import (
     FuncT,
     NameT,
     TypeExpr,
+    member_type_params,
     named_builtin_type,
     substitute_type_names,
 )
@@ -141,12 +143,22 @@ Denoted = tuple[object, ...] | TypeExpr
 """A normalized denoted type (:meth:`TypeOwnerIndex.denotation`): a scalar type expression,
 or a tagged tuple of normalized parts."""
 
-AliasSelection = tuple[QName | None, TypeExpr]
-"""An alias's selected target declaration, and the type expression the alias stands for.
 
-No declaration for a structural expression, nor for a type name scope
-selects none for.
-"""
+class AliasSelection(NamedTuple):
+    """What an alias's target expression denotes, and what it reaches that through.
+
+    ``target`` is the declaration it denotes and ``stands_for`` the type
+    expression it stands for (:attr:`TypeOwner.stands_for`); ``through`` is
+    the declaration a type name selects where the alias is declared, with
+    that name: the alias reaches its paths. The two declarations differ
+    where the alias applies a generic alias that is a type of its own. No
+    declaration for a structural expression, nor for a type name scope
+    selects none for.
+    """
+
+    target: QName | None
+    stands_for: TypeExpr
+    through: tuple[QName, NameT | AppliedT] | None
 
 
 class AliasReach(NamedTuple):
@@ -570,20 +582,33 @@ class TypeOwnerIndex:
         return named
 
     def denotation(self, qname: QName) -> Denoted | None:
-        """The type the alias declared at *qname* denotes, unless it renames its target.
+        """The type the alias *qname* names (:meth:`identity`) denotes, unless renaming its target.
 
         Normalized: each named head is the declaration it selects where it is
         spelled, read through aliases with their parameters substituted
         (``Box[path]`` is ``Box[text]``), and the alias's own parameters are
-        positions. ``None`` for any other path.
+        positions. A member such an alias selects is that member at the
+        alias's arguments: ``O::Som`` with ``type O = Opt[int]`` is
+        ``("member", <O's denotation>, "Som")``. ``None`` for any other path.
         """
-        declaration = self._all_public_types.get(qname)
+        named = self.identity(qname)
+        declaration = self._all_public_types.get(named)
+        if isinstance(declaration, TypeAlias):
+            if self.declared_owner(named, declaration).renames:
+                return None
+            return self._denoted(named, declaration, frozenset({named}))
+        module_id, atom = qname
+        path = _path(atom)
+        if len(path) < 2:
+            return None
+        alias = self.identity((module_id, _atom(path[:-1])))
+        declaration = self._all_public_types.get(alias)
         if (
             not isinstance(declaration, TypeAlias)
-            or self.declared_owner(qname, declaration).renames
+            or path[-1] not in self.declared_owner(alias, declaration).members
         ):
             return None
-        return self._denoted(qname, declaration, frozenset({qname}))
+        return ("member", self._denoted(alias, declaration, frozenset({alias})), path[-1])
 
     def _denoted(
         self,
@@ -632,12 +657,13 @@ class TypeOwnerIndex:
     def constructor_identity(self, constructor: ConstructorRef) -> ConstructorRef:
         """Return the constructor *constructor* names: a renaming alias's is its target's.
 
-        A member an alias selects is the target's member.
+        A member an alias renaming an enum selects is the enum's member; one
+        an alias applying it selects stays the alias's (:meth:`denotation`).
         """
         named = self.identity(constructor.qname)
         owner = self.owner(named)
         if owner is not None and constructor.member is not None:
-            return owner.members[constructor.member]
+            return constructor if owner.alias is not None else owner.members[constructor.member]
         if owner is None or named == constructor.qname or owner.constructor is None:
             return constructor
         return owner.constructor
@@ -753,29 +779,30 @@ class TypeOwnerIndex:
     ) -> TypeOwner:
         """Return what alias *declaration* at *qname* selects, *presumed* meanwhile."""
         constructor, arity = presumed.constructor, presumed.arity
-        target_qname, type_expr = self._alias_selection(qname, declaration)
+        denoted, type_expr, through = self._alias_selection(qname, declaration)
         if not is_nominal_type_expr(type_expr, declaration.type_params):
             structural = TypeOwner(
                 None, declaration.node_id, alias=declaration, arity=arity, stands_for=type_expr
             )
             return self._builtin_owner(qname, structural, every_use=True)
-        target = None if target_qname is None else self.owner(target_qname)
-        if target_qname is None or target is None:
+        target = None if denoted is None else self.owner(denoted)
+        reached = None if through is None else self.owner(through[0])
+        if denoted is None or target is None or through is None or reached is None:
             return replace(presumed, stands_for=type_expr)
-        reachable, hidden = self._projection(qname, type_expr, target_qname, target, every_use=True)
+        reachable, hidden = self._projection(qname, through[1], through[0], reached, every_use=True)
         return TypeOwner(
             constructor,
             declaration.node_id,
-            target.names | {declaration.name} if target.names else frozenset(),
+            reached.names | {declaration.name} if reached.names else frozenset(),
             reachable,
-            target.referenced,
+            reached.referenced,
             declaration,
             hidden=hidden,
-            target=TypeTarget(target_qname, target.decl_node_id),
-            own_path_referenced=target.own_path_referenced,
+            target=TypeTarget(denoted, target.decl_node_id),
+            own_path_referenced=reached.own_path_referenced,
             arity=arity,
-            builtin=_applied_builtin(target, type_expr),
-            scopes=target.scopes,
+            builtin=_applied_builtin(reached, through[1]),
+            scopes=reached.scopes,
             stands_for=type_expr,
         )
 
@@ -818,20 +845,55 @@ class TypeOwnerIndex:
         """Return what *spelling*, written in alias *alias* at *qname*, denotes and stands for.
 
         An alias standing for one of its type parameters (``type Id[T] = T``),
-        applied, stands for its argument there.
+        applied, stands for its argument there; any other generic alias that
+        is a type of its own (:meth:`_applied_alias`), for what that stands
+        for with its arguments.
         """
         if not is_nominal_type_expr(spelling, alias.type_params):
-            return None, spelling
+            return AliasSelection(None, spelling, None)
         selection = self._decided_targets(qname, alias, spelling)
         target = None if selection is None else self.declared_path(selection)
-        parameter = None if target is None else self.projected_parameter(target)
+        if target is None:
+            return AliasSelection(None, spelling, None)
+        if isinstance(spelling, AppliedT):
+            parameter = self.projected_parameter(target)
+            if parameter is not None and parameter[0] < len(spelling.args):
+                return self._spelled_selection(qname, alias, spelling.args[parameter[0]])
+            applied = self._applied_alias(target, alias, spelling)
+            if applied is not None:
+                return AliasSelection(*applied, (target, spelling))
+        return AliasSelection(target, spelling, (target, spelling))
+
+    def _applied_alias(
+        self, qname: QName, alias: TypeAlias, spelling: AppliedT
+    ) -> tuple[QName | None, TypeExpr] | None:
+        """What *spelling*, applying generic alias *qname* in alias *alias*, denotes and stands for.
+
+        What the applied alias does, with *spelling*'s arguments for its
+        parameters: ``P[int]`` with ``type P[T] = Plain`` is ``Plain``.
+        ``None`` unless *qname* is a generic alias that is a type of its own;
+        also when *alias* passes it its own parameters, and so renames it, or
+        when what it stands for names a type spelled like a parameter of
+        *alias*, which would read as that parameter.
+        """
+        applied = self.owner(self.identity(qname))
+        generic = None if applied is None else applied.alias
+        stands_for = None if applied is None else applied.stands_for
         if (
-            parameter is not None
-            and isinstance(spelling, AppliedT)
-            and parameter[0] < len(spelling.args)
+            applied is None
+            or generic is None
+            or stands_for is None
+            or not generic.type_params
+            or applied.renames
+            or passes_parameters(alias.type_params, spelling)
+            or set(member_type_params((stands_for,), alias.type_params)).difference(
+                generic.type_params
+            )
         ):
-            return self._spelled_selection(qname, alias, spelling.args[parameter[0]])
-        return target, spelling
+            return None
+        bound = dict(zip(generic.type_params, spelling.args, strict=False))
+        target = applied.target
+        return None if target is None else target.qname, substitute_type_names(stands_for, bound)
 
     def projected_parameter(self, qname: QName) -> tuple[int, int] | None:
         """The position of the type parameter alias *qname* stands for, and how many it takes.
@@ -904,7 +966,7 @@ class TypeOwnerIndex:
                 continue
             if not isinstance(declaration, TypeAlias):
                 return ()
-            current = self._alias_selection(current, declaration)[0]
+            current = self._alias_selection(current, declaration).target
         return ()
 
 

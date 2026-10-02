@@ -5155,11 +5155,11 @@ class _Checker:
         """
         constructor = self._constructor_ref_for(node.node_id)
         if node.qualifier is None:
-            matching = tuple(
-                candidate
+            matching = {
+                candidate: related.decl_id
                 for candidate in self._resolved.is_test_constructor_candidates.get(node.node_id, ())
-                if self._related_exception(exception_type, candidate) is not None
-            )
+                if (related := self._related_exception(exception_type, candidate)) is not None
+            }
             constructor = self._unique_constructor_candidate(
                 node.variant,
                 node.span,
@@ -6272,14 +6272,14 @@ class _Checker:
         *,
         subject: str,
     ) -> tuple[ConstructorRef, RecordType] | None:
-        """Select the unique one of *candidates* constructing a member of *enum_type*.
+        """Select the unique member of *enum_type* that *candidates* construct.
 
         Candidates match any member-record declaration of the concrete enum,
         so distinct members of one enum remain ambiguous when they share a
         spelling. The selected member accompanies the candidate.
         """
         members = {
-            candidate.owner_decl_node_id: (candidate, member)
+            candidate: member
             for candidate in candidates
             if (member := self._enum_member_for_constructor_candidate(enum_type, candidate))
             is not None
@@ -6288,10 +6288,10 @@ class _Checker:
             variant,
             span,
             enum_type,
-            tuple(candidate for candidate, _member in members.values()),
+            {candidate: member.decl_id for candidate, member in members.items()},
             subject=subject,
         )
-        return None if selected is None else members[selected.owner_decl_node_id]
+        return None if selected is None else (selected, members[selected])
 
     def _select_enum_member(
         self,
@@ -6336,11 +6336,11 @@ class _Checker:
         A candidate matches when the record it constructs, through any alias,
         matches *record_type*.
         """
-        matching = tuple(
-            candidate
+        matching = {
+            candidate: record_type.decl_id
             for candidate in self._pattern_constructor_candidates(pattern)
             if self._constructs_record(candidate, record_type)
-        )
+        }
         return self._unique_constructor_candidate(
             pattern.name,
             pattern.span,
@@ -6464,18 +6464,21 @@ class _Checker:
         name: str,
         span: SourceSpan,
         owner_type: RecordType | EnumType | ExceptionType,
-        candidates: tuple[ConstructorRef, ...],
+        candidates: Mapping[ConstructorRef, int],
         *,
         subject: str,
     ) -> ConstructorRef | None:
-        """Return one owner-matched candidate unless distinct records remain."""
-        by_declaration = {candidate.owner_decl_node_id: candidate for candidate in candidates}
-        if len(by_declaration) > 1:
+        """Return the first owner-matched candidate unless they construct distinct declarations.
+
+        *candidates* map to the declaration each constructs: those constructing
+        one, at arguments *owner_type* fixes, are one.
+        """
+        if len(set(candidates.values())) > 1:
             raise AglTypeError(
                 f"{subject} '{name}' is ambiguous for '{owner_type!r}'.",
                 span=span,
             )
-        return next(iter(by_declaration.values())) if by_declaration else None
+        return next(iter(candidates), None)
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type

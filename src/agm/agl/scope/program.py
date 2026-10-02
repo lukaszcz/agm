@@ -27,7 +27,7 @@ Design
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -565,7 +565,8 @@ class Placements(Protocol):
 Withheld = dict[ModuleId, dict[NameAtom, frozenset[QName]]]
 """Per module, the declarations each re-exported atom's export ``hiding`` removes beneath it.
 
-An atom absent withholds nothing.
+An atom absent withholds nothing. One the module does not export maps to the
+declarations its export ``hiding`` removed there.
 """
 
 
@@ -658,6 +659,7 @@ def _resolve_reexports(
         changed: SourceSpan | None = None
         for mid in component:
             removed: dict[NameAtom, frozenset[QName]] = dict.fromkeys(local_atoms[mid], frozenset())
+            unexported: dict[NameAtom, frozenset[QName]] = {}
             decls = graph.modules[mid].export_decls
             for decl in decls:
                 for target_mid in targets(decl):
@@ -673,6 +675,8 @@ def _resolve_reexports(
                             _raise_reexport_conflict(exposed, existing, qname, decl)
                         kept = found.withheld.get(exposed, frozenset())
                         removed[exposed] = removed.get(exposed, kept) & kept
+                    for exposed, origins in found.removed.items():
+                        unexported[exposed] = unexported.get(exposed, frozenset()) | origins
                     for exposed, origins in found.scopes.items():
                         existing = export_maps[mid].get(exposed)
                         if existing is not None and existing not in type_origins:
@@ -682,7 +686,11 @@ def _resolve_reexports(
                         if merged_origins != existing_origins:
                             scope_export_maps[mid][exposed] = merged_origins
                             changed = decl.span
-            recorded = {exposed: hidden for exposed, hidden in removed.items() if hidden}
+            recorded = {exposed: hidden for exposed, hidden in removed.items() if hidden} | {
+                exposed: origins
+                for exposed, origins in unexported.items()
+                if exposed not in export_maps[mid]
+            }
             if recorded != withheld[mid]:
                 # Only *mid*'s exports withhold, so it has one.
                 withheld[mid] = recorded
@@ -722,11 +730,15 @@ def _converge(step: Callable[[], SourceSpan | None], declarations: int) -> None:
 
 @dataclass(frozen=True, slots=True)
 class _Additions:
-    """What one export forwards: declarations, what each withholds beneath it, and scopes."""
+    """What one export forwards: declarations, what each withholds beneath it, and scopes.
+
+    ``removed`` holds the atoms a ``hiding`` keeps it from forwarding, with their declarations.
+    """
 
     declarations: dict[NameAtom, QName]
     withheld: dict[NameAtom, frozenset[QName]]
     scopes: dict[NameAtom, ScopeOrigins]
+    removed: dict[NameAtom, frozenset[QName]] = field(default_factory=dict)
 
 
 def _compute_reexport_additions(
@@ -748,7 +760,9 @@ def _compute_reexport_additions(
     it names, every one beneath them and beneath the scopes an alias of a
     built-in type among them stands for, whatever atom spells them or
     wherever it is placed (by *placements*), and each
-    forwarded atom withholds them beneath it too. With *allow_missing*, a
+    forwarded atom withholds them beneath it too; an atom a whole-module
+    export's ``hiding`` removes, or the target's did, is recorded removed.
+    With *allow_missing*, a
     selected item matching nothing forwards nothing, and a ``hiding`` item
     matching nothing withholds the whole export.
     """
@@ -864,15 +878,27 @@ def _compute_reexport_additions(
             scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
 
     if not decl.items:
+        unexported = {
+            source: origins
+            for source, origins in target_withheld.items()
+            if source not in target_exports
+        }
         for source, origin in target_exports.items():
-            if not beneath_any(origin, removed):
+            if beneath_any(origin, removed):
+                unexported[source] = frozenset({origin})
+            else:
                 add(source, origin, target_withheld.get(source, frozenset()))
         for source, origins in target_scopes.items():
             kept = frozenset(origin for origin in origins if not beneath_any(origin, removed))
             if kept and source not in hidden_scopes:
                 rooted = rooted_atom(_path(source))
                 scope_result[rooted] = scope_result.get(rooted, frozenset()) | kept
-        return _Additions(result, withheld_result, scope_result)
+        return _Additions(
+            result,
+            withheld_result,
+            scope_result,
+            {rooted_atom(_path(source)): origins for source, origins in unexported.items()},
+        )
 
     for item, declarations, scopes, reached in selected_items:
         for source in declarations:

@@ -475,7 +475,7 @@ class ConstructorRef:
         return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name, self.member))
 
 
-def _passes_parameters(type_params: tuple[str, ...], target: AppliedT) -> bool:
+def passes_parameters(type_params: tuple[str, ...], target: AppliedT) -> bool:
     """Whether applied *target*'s arguments are exactly *type_params*, in order."""
     return type_params == tuple(
         arg.name if isinstance(arg, NameT) and arg.qualifier is None else None
@@ -539,7 +539,10 @@ class TypeOwner:
     ``hidden`` is relative to them. ``stands_for`` is, for an alias, the type
     expression it stands for where it is declared: its target expression, or
     the argument there of an alias standing for one of its type parameters
-    (``Id[Base]`` with ``type Id[T] = T`` stands for ``Base``).
+    (``Id[Base]`` with ``type Id[T] = T`` stands for ``Base``), or what any
+    other generic alias that is a type of its own stands for with its
+    arguments there (``P[int]`` with ``type P[T] = Plain`` stands for
+    ``Plain``).
     """
 
     constructor: ConstructorRef | None
@@ -568,8 +571,9 @@ class TypeOwner:
         """Whether an alias is another name for its target: it passes its type parameters through.
 
         By the type name it :attr:`stands_for`: ``type A = m::B``, ``type
-        A[T] = m::B[T]`` and ``type A = Id[m::B]`` rename ``m::B``; ``type A =
-        m::B[int]`` and ``type A[T] = m::B`` are types of their own.
+        A[T] = m::B[T]``, ``type A = Id[m::B]`` and ``type A = P[int]`` with
+        ``type P[T] = m::B`` rename ``m::B``; ``type A = m::B[int]`` and
+        ``type A[T] = m::B`` are types of their own.
         """
         alias, target = self.alias, self.stands_for
         if isinstance(target, NameT):
@@ -577,7 +581,7 @@ class TypeOwner:
         return (
             alias is not None
             and isinstance(target, AppliedT)
-            and _passes_parameters(alias.type_params, target)
+            and passes_parameters(alias.type_params, target)
         )
 
     @property
@@ -592,7 +596,7 @@ class TypeOwner:
         if alias is None or target is None:
             return False
         named = target if isinstance(target, (NameT, AppliedT)) else named_builtin_type(target)
-        return isinstance(named, AppliedT) and not _passes_parameters(alias.type_params, named)
+        return isinstance(named, AppliedT) and not passes_parameters(alias.type_params, named)
 
     def hides(self, path: ScopePath) -> bool:
         """Whether *path* beneath the alias's target, or a path above it, is :attr:`hidden`."""

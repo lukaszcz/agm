@@ -400,25 +400,34 @@ _SCENARIOS = {
         },
     ),
     **{
-        f"an-export-hiding-{name}-removes-every-spelling-of-its-declaration": Scenario(
+        f"{hiding}-{name}-removes-every-spelling-of-its-declaration": Scenario(
             modules=_export_hiding(item),
-            header=(_ROUTES, "import base"),
+            header=(header.format(item=item), "import base"),
             probes={
                 "target-value": rejected("Base(x = 1)", AglScopeError, "Base"),
                 "alias-value": rejected("Geo(x = 1)", AglScopeError, "Geo"),
                 "alias-pattern": rejected(_BASE_PATTERN, NoVisibleConstructorError, "Geo(x)"),
                 "alias-annot": rejected("fn(p: Geo) => p", AglTypeError, "Geo"),
                 "beneath-the-target": rejected(
-                    "Base::Inner(y = 1)", UnknownQualifierError, "Base::Inner"
+                    "Base::Inner(y = 1)", HiddenMemberError, "Base::Inner"
                 ),
-                "beneath-the-alias": rejected("Geo::f", UnknownQualifierError, "Geo::f"),
-                "routed-alias": rejected("ex::Geo(x = 1)", UnknownMemberError, "ex::Geo"),
+                "beneath-the-alias": rejected("Geo::f", HiddenMemberError, "Geo::f"),
+                "routed-alias": rejected(
+                    f"{route}::Geo(x = 1)", HiddenMemberError, f"{route}::Geo"
+                ),
+                "routed-beneath-the-alias": rejected(
+                    f"{route}::Geo::f", HiddenMemberError, f"{route}::Geo::f"
+                ),
                 "beneath-it-through-another-alias": rejected("fn(p: Sh) => p", AglTypeError, "Sh"),
                 "unrelated-alias": accepted("fn(p: Uh) => p", "base::Oops -> base::Oops"),
                 "other-import": accepted("base::Base::Inner(y = 1)", _INNER),
             },
         )
         for name, item in (("a-target", "Base"), ("an-alias", "Geo"))
+        for hiding, route, header in (
+            ("an-export-hiding", "ex", _ROUTES),
+            ("an-import-hiding", "al", "import al::* hiding {item}\nimport al hiding {item}"),
+        )
     },
     "a-cycle-reads-its-final-exports-through-aliases": Scenario(
         modules={"base": _BASE, "al": _CYCLING, "ex": _CYCLED},
@@ -554,17 +563,24 @@ _DECLARING_BENEATH = (
 """Declares beneath ``base``'s ``Base`` and beneath ``text``, directly and through aliases."""
 
 
-def _beneath_hidden_alias_probes(error: type[AglScopeError], routed: str) -> dict[str, Probe]:
-    """What ``hiding Geo, T2`` removes beneath their targets, rejected with *error*.
+def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
+    """What ``hiding Geo, T2`` removes beneath their targets: hidden under every spelling.
 
-    *routed* spells a removed path through a module route.
+    *route* is the module route the removed paths are also spelled through.
     """
     return {
-        "direct": rejected("Base::h()", error, "Base::h"),
-        "through-the-alias": rejected("Base::k()", error, "Base::k"),
-        "routed": rejected(f"{routed}()", error, routed),
-        "beneath-a-builtin": rejected("text::lt()", error, "text::lt"),
-        "beneath-a-builtin-through-the-alias": rejected("text::lu()", error, "text::lu"),
+        **{
+            f"{name}{routed}": rejected(f"{qualifier}{path}()", HiddenMemberError, qualifier + path)
+            for routed, qualifier in (("", ""), ("-routed", f"{route}::"))
+            for name, path in {
+                "direct": "Base::h",
+                "through-the-alias": "Base::k",
+                "by-the-alias": "Geo::k",
+                "beneath-a-builtin": "text::lt",
+                "beneath-a-builtin-through-the-alias": "text::lu",
+                "beneath-a-builtin-by-the-alias": "T2::lu",
+            }.items()
+        },
         "target": rejected("fn(x: Base) => x", AglTypeError, "Base"),
         "builtin-alias": rejected("fn(x: U) => x", AglTypeError, "U"),
         "builtin-kept": accepted('text::size("ab")', "int"),
@@ -574,8 +590,8 @@ def _beneath_hidden_alias_probes(error: type[AglScopeError], routed: str) -> dic
 _SCENARIOS |= {
     "hiding-an-alias-removes-what-its-module-declares-beneath-the-target": Scenario(
         modules={"base": _BASE, "ad": _DECLARING_BENEATH},
-        header=("import ad::* hiding Geo, T2",),
-        probes=_beneath_hidden_alias_probes(HiddenMemberError, "ad::Base::h"),
+        header=("import ad::* hiding Geo, T2\nimport ad hiding Geo, T2",),
+        probes=_beneath_hidden_alias_probes("ad"),
     ),
     "an-export-hiding-an-alias-removes-what-its-module-declares-beneath-the-target": Scenario(
         modules={
@@ -584,7 +600,7 @@ _SCENARIOS |= {
             "ex": "import ad\nexport ad hiding Geo, T2\n",
         },
         header=(_ROUTES,),
-        probes=_beneath_hidden_alias_probes(UnknownMemberError, "ex::Base::k"),
+        probes=_beneath_hidden_alias_probes("ex"),
     ),
 }
 
@@ -907,9 +923,16 @@ _SCENARIOS["an-item-naming-an-applied-enum-alias-injects-its-members-applied"] =
         "beside-a-hidden-member": accepted(
             "import ia::* hiding IntOpt::Som\nfn(p: IntOpt) => p is Non", "op::Opt[int] -> bool"
         ),
-        "beside-its-generic-enum": accepted(
-            f"import op::*\nimport ia::*\n{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
-        ),
+        **{
+            f"beside-its-generic-enum-{name}": rejected(
+                f"import op::*\nimport ia::*\n{value}", AmbiguousConstructorError, spelled
+            )
+            for name, value, spelled in (
+                ("member", "Som(v = 1)", "Som"),
+                ("member-at-other-arguments", _BAD_SOM, "Som"),
+                ("nullary-member", "Non", "Non"),
+            )
+        },
         **{
             f"beside-its-generic-enum-pattern-on-{scrutinee}": accepted(
                 f"import op::*\nimport ia::*\nfn(p: {scrutinee}) => case p of\n"
@@ -921,6 +944,86 @@ _SCENARIOS["an-item-naming-an-applied-enum-alias-injects-its-members-applied"] =
                 ("Opt[text]", "op::Opt[text]", "text", '""'),
             )
         },
+        "beside-its-generic-enum-pattern-on-its-member": accepted(
+            "import op::*\nimport ia::*\nfn(p: Opt::Som[int]) => case p of\n  | Som(v) => v",
+            "op::Opt::Som[int] -> int",
+        ),
+        "beside-its-generic-enum-is": accepted(
+            "import op::*\nimport ia::*\nfn(p: IntOpt) => p is Som", "op::Opt[int] -> bool"
+        ),
+    },
+)
+
+_TEXT_OPT = "import op\ntype TextOpt = op::Opt[text]\n"
+
+
+def _distinct_members_probes(prefix: str, before: str, text_opt: str) -> dict[str, Probe]:
+    """Bare members two aliases applying ``Opt`` at distinct arguments inject by *before*.
+
+    *text_opt* spells the alias applying it to ``text``.
+    """
+    return {
+        f"{prefix}-{name}": probe
+        for name, probe in {
+            "member": rejected(f"{before}\nSom(v = 1)", AmbiguousConstructorError, "Som"),
+            "member-at-other-arguments": rejected(
+                f"{before}\n{_BAD_SOM}", AmbiguousConstructorError, "Som"
+            ),
+            "nullary-member": rejected(f"{before}\nNon", AmbiguousConstructorError, "Non"),
+            "pattern": accepted(
+                f'{before}\nfn(p: {text_opt}) => case p of\n  | Som(v) => v\n  | Non => ""',
+                "op::Opt[text] -> text",
+            ),
+            "is": accepted(f"{before}\nfn(p: {text_opt}) => p is Som", "op::Opt[text] -> bool"),
+            "qualified": accepted(
+                f"{before}\n{text_opt}::{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
+            ),
+        }.items()
+    }
+
+
+_SCENARIOS["applied-enum-aliases-inject-their-members-at-their-own-arguments"] = Scenario(
+    modules={
+        "op": _OPT,
+        "ia": _APPLIED_ENUM,
+        "it": _TEXT_OPT,
+        "at": _TEXT_OPT,
+        "twin": "import op\ntype OtherIntOpt = op::Opt[int]\n",
+        "ren": "import op\ntype Ren[T] = op::Opt[T]\n",
+    },
+    header=(),
+    probes={
+        **_distinct_members_probes("items", "import ia::{IntOpt}\nimport it::{TextOpt}", "TextOpt"),
+        **_distinct_members_probes(
+            "items-whatever-the-module-names",
+            "import ia::{IntOpt}\nimport at::{TextOpt}",
+            "TextOpt",
+        ),
+        **_distinct_members_probes(
+            "uses",
+            "import ia\nimport it\nuse ia::IntOpt::*\nuse it::TextOpt::*",
+            "it::TextOpt",
+        ),
+        **{
+            f"beside-its-generic-enum-used-{name}": rejected(
+                f"import op\nimport ia\nuse op::Opt::*\nuse ia::IntOpt::*\n{value}",
+                AmbiguousConstructorError,
+                "Som",
+            )
+            for name, value in (("member", "Som(v = 1)"), ("at-other-arguments", _BAD_SOM))
+        },
+        "at-the-same-arguments": accepted(
+            "import ia::{IntOpt}\nimport twin::{OtherIntOpt}\nSom(v = 1)", _INT_SOM
+        ),
+        "at-the-same-arguments-fixes-them": rejected(
+            f"import ia::{{IntOpt}}\nimport twin::{{OtherIntOpt}}\n{_BAD_SOM}",
+            AglTypeError,
+            '"s"',
+            phase="typecheck",
+        ),
+        "renaming-beside-its-generic-enum": accepted(
+            f"import op::*\nimport ren::{{Ren}}\n{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
+        ),
     },
 )
 
@@ -965,16 +1068,17 @@ _SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] =
     },
 )
 
-_SCENARIOS["an-alias-of-an-alias-standing-for-its-parameter-is-another-name-for-its-argument"] = (
-    Scenario(
+_SCENARIOS |= {
+    name: Scenario(
         modules={
             "base": _BASE,
-            "pj": "import base::*\nexport base::{Base}\ntype Id[T] = T\ntype PB = Id[Base]\n",
+            "pj": f"import base::*\nexport base::{{Base}}\ntype Id[T] = {stands}\n"
+            f"type PB = Id[{argument}]\n",
         },
         header=(
             "import base::*\nimport pj",
-            "type Id[T] = T\ntype Id2[T] = Id[T]",
-            "type IB = Id[Base]\ntype J = Id2[Id[Base]]",
+            f"type Id[T] = {stands}\ntype Id2[T] = Id[T]",
+            f"type IB = Id[{argument}]\ntype J = Id2[Id[{argument}]]",
         ),
         probes={
             **{
@@ -999,10 +1103,40 @@ _SCENARIOS["an-alias-of-an-alias-standing-for-its-parameter-is-another-name-for-
                 "fn(a: IB, b: J) => [a, b, Base(x = 1)]",
                 "(base::Base, base::Base) -> array[base::Base]",
             ),
+            "written-in-place": rejected(
+                f"Id[{argument}]::f()", TypeArgumentsError, f"Id[{argument}]"
+            ),
         },
     )
-)
+    for name, stands, argument in (
+        (
+            "an-alias-of-an-alias-standing-for-its-parameter-is-another-name-for-its-argument",
+            "T",
+            "Base",
+        ),
+        (
+            "an-alias-applying-a-constant-alias-is-another-name-for-what-that-stands-for",
+            "Base",
+            "int",
+        ),
+    )
+}
 
+
+_SCENARIOS["an-alias-applying-a-constant-alias-reaches-what-that-alias-does"] = Scenario(
+    modules={
+        "base": _BASE,
+        "hp": "import base::* hiding Base::f\ntype Kc[T] = Base\n",
+        "mid": "import hp::{Kc}\ntype Geo = Kc[int]\n",
+    },
+    header=("import hp::*\nimport mid::*",),
+    probes={
+        "applied-alias-hidden": rejected("Kc::f()", HiddenMemberError, "Kc::f"),
+        "hidden": rejected("Geo::f()", HiddenMemberError, "Geo::f"),
+        "nested": accepted("Geo::Inner(y = 1)", _INNER),
+        "value": accepted("Geo(x = 1)", "record base::Base\n  x: int"),
+    },
+)
 
 _DENOTING_A = (
     "import gen::*\ntype IntBox = Box[int]\ntype F = int -> bool\ntype P = Box[path]\n"
@@ -1229,7 +1363,25 @@ _READER_MODULES = {
     "fw": _FORWARDING,
     "fg": _FORWARDING_THROUGH,
     "na": _NAMED_ALIKE,
+    "nt": (
+        "record Base\n  y: int\n\ndef Base::k() -> int = 9\n\n"
+        "scope Base::S\n  def s() -> int = 7\nend Base::S\n"
+    ),
+    "a2": "import al::*\ntype G2 = Geo\n",
 }
+
+
+_OWN_NAMED_ALIKE = (
+    "scope Q\n\n  scope Base\n    def w() -> int = 5\n  end Base\n\n"
+    "  def q() -> int = {}::w()\nend Q\n\nQ::q()"
+)
+"""Reads ``w`` of a scope of the reader's own named like ``base``'s ``Base``."""
+
+
+def _in_scope(imported: str, value: str) -> str:
+    """Call a function returning *value*, in a scope importing *imported*."""
+    return f"scope Q\n  import {imported}\n  def q() = {value}\nend Q\n\nQ::q()"
+
 
 _SCENARIOS["an-alias-reaches-what-its-reader-imports-beneath-the-target-path"] = Scenario(
     modules=_READER_MODULES,
@@ -1257,10 +1409,54 @@ _SCENARIOS["an-alias-reaches-what-its-reader-imports-beneath-the-target-path"] =
         "written-in-a-scope": accepted(
             "import nb::*\n\nscope Q\n  def q() -> int = Geo::k()\nend Q\n\nQ::q()", "int"
         ),
-        "imported-in-a-scope-the-alias-is-not": rejected(
-            "scope Q\n  import nb::*\n  def q() -> int = Geo::k()\nend Q\n\nQ::q()",
-            UnknownMemberError,
-            "Geo::k",
+        "use-of-a-scope-beneath": accepted("import nb::*\nuse Geo::S::*\ns()", "int"),
+        "use-of-a-scope-beneath-renamed": accepted("import nb::*\nuse Geo::S as R\nR::s()", "int"),
+        "imported-in-a-scope-the-alias-is-not": accepted(_in_scope("nb::*", "Geo::k()"), "int"),
+        "imported-in-a-scope-beside-the-own-root": accepted(
+            'def Base::k() -> text = "own"\n' + _in_scope("nb::*", "Geo::k()"), "int"
+        ),
+        "the-target-path-beside-the-own-root": accepted(
+            'def Base::k() -> text = "own"\n' + _in_scope("nb::*", "Base::k()"), "int"
+        ),
+        "alias-of-the-alias-in-a-scope": accepted(
+            "type G2 = Geo\n" + _in_scope("nb::*", "G2::k()"), "int"
+        ),
+        "hidden-in-a-scope": rejected(
+            _in_scope("nb::* hiding Base::k", "Geo::k()"), HiddenMemberError, "Geo::k"
+        ),
+        "alias-of-an-alias-of-the-alias-hidden": rejected(
+            "import nb::* hiding Base::k\ntype G2 = Geo\ntype G3 = G2\nG3::k()",
+            HiddenMemberError,
+            "G3::k",
+        ),
+        "imported-alias-of-the-alias-hidden": rejected(
+            "import a2::*\nimport nb::* hiding Base::k\nG2::k()", HiddenMemberError, "G2::k"
+        ),
+        "alias-of-the-alias-hidden-in-a-scope": rejected(
+            "type G2 = Geo\n" + _in_scope("nb::* hiding Base::k", "G2::k()"),
+            HiddenMemberError,
+            "G2::k",
+        ),
+        "two-distinct-in-a-scope": rejected(
+            _in_scope("nb::*\n  import nc::*", "Geo::k()"), AmbiguousQualificationError, "Geo::k"
+        ),
+        "scope-beneath-in-a-scope": accepted(_in_scope("nb::*", "Geo::S::s()"), "int"),
+        "use-in-a-scope": accepted(_in_scope("nb::*\n  use Geo::S::*", "s()"), "int"),
+        "annotation-in-a-scope": accepted(
+            "scope Q\n  import nb::*\n  def q(p: Geo::In2) -> int = p.a\nend Q\n\nQ::q",
+            "nb::Base::In2 -> int",
+        ),
+        "builtin-in-a-scope": accepted(_in_scope("nb::*", "U2::g()"), "int"),
+        "alias-declared-in-a-scope": accepted(
+            "import nb::*\n\nscope Q\n  type QG = Base\n  def q() -> int = QG::k()\nend Q\n\n"
+            "Q::q()",
+            "int",
+        ),
+        "own-scope-named-alike": rejected(
+            _OWN_NAMED_ALIKE.format("Geo"), UnknownMemberError, "Geo::w"
+        ),
+        "own-scope-named-alike-by-the-target-path": accepted(
+            _OWN_NAMED_ALIKE.format("Base"), "int"
         ),
         "declaring-beneath": accepted(
             "import nb::*\ndef Geo::k2() -> int = Geo::k()\nGeo::k2()", "int"
@@ -1275,12 +1471,67 @@ _SCENARIOS["an-alias-names-a-type-its-reader-imports-beneath-the-target-path"] =
     probes=type_positions("type", "Geo::In2", "nb::Base::In2"),
 )
 
-_SCENARIOS["an-alias-reaches-no-import-beneath-a-path-not-naming-its-target"] = Scenario(
+_SCENARIOS["an-alias-reaches-its-target-path-where-its-reader-names-no-type-so"] = Scenario(
     modules=_READER_MODULES,
     header=("import al::*",),
     probes={
         "target-path": accepted("import nb::*\nBase::k()", "int"),
-        "alias": rejected("import nb::*\nGeo::k()", UnknownMemberError, "Geo::k"),
+        "alias": accepted("import nb::*\nGeo::k()", "int"),
+        "forwarded": accepted("import fw::*\nGeo::free()", "int"),
+        "annotation": accepted("import nb::*\nfn(p: Geo::In2) => p.a", "nb::Base::In2 -> int"),
+        "scope-beneath": accepted("import nb::*\nGeo::S::s()", "int"),
+        "use-of-a-scope-beneath": accepted("import nb::*\nuse Geo::S::*\ns()", "int"),
+        "imported-in-a-scope": accepted(_in_scope("nb::*", "Geo::k()"), "int"),
+        "own-scope-named-alike": rejected(
+            "scope Base\n  def w() -> int = 5\nend Base\n\nGeo::w()", UnknownMemberError, "Geo::w"
+        ),
+        "own-scope-named-alike-by-the-target-path": accepted(
+            "scope Base\n  def w() -> int = 5\nend Base\n\nBase::w()", "int"
+        ),
+        "hidden": rejected("import nb::* hiding Base::k\nGeo::k()", HiddenMemberError, "Geo::k"),
+        "declared-by-the-target": accepted("import nb::*\nGeo::f()", "int"),
+        "nothing": rejected("import nb::*\nGeo::nope()", UnknownMemberError, "Geo::nope"),
+    },
+)
+
+_SCENARIOS["an-alias-reaches-nothing-beneath-a-path-naming-another-type"] = Scenario(
+    modules=_READER_MODULES,
+    header=("import al::*\nimport nt::*",),
+    probes={
+        "target-path": accepted("Base::k()", "int"),
+        "alias": rejected("Geo::k()", UnknownMemberError, "Geo::k"),
+        "in-a-scope": rejected(_in_scope("nt::*", "Geo::k()"), UnknownMemberError, "Geo::k"),
+        "use-by-the-target-path": accepted("use Base::S::*\ns()", "int"),
+        "use": rejected("use Geo::S::*\ns()", UnknownQualifierError, "use Geo::S::*"),
+        "declared-by-the-target": accepted("Geo::f()", "int"),
+    },
+)
+
+_APPLYING_MODULES = {
+    "gen": "record Box[T]\n  v: T\n\nenum Opt[T]\n  | Full(v: T)\n  | Empty\n",
+    "ga": "import gen::*\ntype IntBox = Box[int]\ntype IntOpt = Opt[int]\n",
+    "gb": "import gen::*\n\ndef Box::k() -> int = 1\n",
+}
+_INT_FULL = "record gen::Opt::Full[int]\n  v: int"
+
+_SCENARIOS["an-applied-alias-reads-its-target-path-as-its-application-does"] = Scenario(
+    modules=_APPLYING_MODULES,
+    header=("import ga::*",),
+    probes={
+        "application": rejected(
+            "import gen::*\nimport gb::*\nBox[int]::k()", TypeArgumentsError, "Box[int]"
+        ),
+        "alias": rejected("import gb::*\nIntBox::k()", TypeArgumentsError, "IntBox"),
+        "application-in-a-scope": rejected(
+            _in_scope("gb::*", "Box[int]::k()"), TypeArgumentsError, "Box[int]"
+        ),
+        "alias-in-a-scope": rejected(
+            _in_scope("gb::*", "IntBox::k()"), TypeArgumentsError, "IntBox"
+        ),
+        "member-application-in-a-scope": accepted(
+            _in_scope("gen::*", "Opt[int]::Full(v = 1)"), _INT_FULL
+        ),
+        "member-in-a-scope": accepted(_in_scope("gen::*", "IntOpt::Full(v = 1)"), _INT_FULL),
     },
 )
 
@@ -1289,6 +1540,7 @@ _SCENARIOS["an-alias-named-as-its-target-path-reaches-imports-beneath-that-path"
     header=("import base\nimport nb::*",),
     probes={
         "imported-beneath": accepted("type Base = base::Base\nBase::k()", "int"),
+        "use-of-a-scope-beneath": accepted("use Base::S::*\ntype Base = base::Base\ns()", "int"),
         "declared-by-the-target": accepted("type Base = base::Base\nBase::f()", "int"),
         "nothing": rejected(
             "type Base = base::Base\nBase::nope()", UnknownMemberError, "Base::nope"

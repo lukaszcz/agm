@@ -419,11 +419,20 @@ class _Step:
 
 @dataclass(frozen=True, slots=True)
 class _Anchor:
-    """Where a spelling is read: its steps, and what a path names there."""
+    """Where a spelling is read: its steps, and what a full path names at one."""
 
     steps: tuple[_Step, ...]
-    visible: Callable[[ScopePath], frozenset[QName]]
+    origins: Callable[[_Step, ScopePath], frozenset[QName]]
     route: tuple[str, ...] = ()
+
+
+class _Standing(NamedTuple):
+    """An alias a written prefix reaches at *step*, and what it stands for."""
+
+    step: _Step
+    owner: Candidate
+    key: DeclarationKey
+    target: AliasTarget
 
 
 def lookup_bare(
@@ -526,9 +535,10 @@ def lookup_origins(
 
     Those of every step: a qualifier names each scope it reaches.
     """
-    return _anchor(sources, chain, scope_path).visible(
-        (*(segment.name for segment in chain.segments), chain.member)
-    )
+    names = (*(segment.name for segment in chain.segments), chain.member)
+    anchor = _anchor(sources, chain, scope_path)
+    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
+    return walk.named(anchor.origins)
 
 
 def lookup_qualified(
@@ -567,12 +577,11 @@ def lookup_qualified(
     if any(step.hidden((*step.path, *names)) for step in anchor.steps):
         return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
 
-    def selects(prefix: QualifierChain, kind: LookupKind) -> QualifiedTarget | AglError | None:
-        written = names[: len(prefix.segments) + 1]
-        walk = _Walk(sources, scope_path, anchor.steps, anchor.route, prefix, written, span)
-        return walk.find(kind)
+    def written(prefix: QualifierChain) -> _Walk:
+        spelled = names[: len(prefix.segments) + 1]
+        return _Walk(sources, scope_path, anchor.steps, anchor.route, prefix, spelled, span)
 
-    return _unknown(chain, names, anchor.visible, selects)
+    return _unknown(chain, names, anchor.origins, written)
 
 
 def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
@@ -591,7 +600,7 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
                     1,
                 ),
             ),
-            lambda path: sources.routed_origins(routed, path[1:]),
+            lambda _step, path: sources.routed_origins(routed, path[1:]),
             chain.leading_route,
         )
     if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
@@ -601,17 +610,10 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
             lambda path: sources.own_root_at(path, LookupKind.TYPE),
             _nowhere,
         )
-        return _Anchor((own,), sources.own_origins)
-    steps = lookup_steps(scope_path)
+        return _Anchor((own,), lambda _step, path: sources.own_origins(path))
     return _Anchor(
-        tuple(_step(sources, step) for step in steps),
-        lambda path: frozenset().union(
-            *(
-                sources.own_origins((*step, *path))
-                | sources.contributed_origins(step, (*step, *path))
-                for step in steps
-            )
-        ),
+        tuple(_step(sources, step) for step in lookup_steps(scope_path)),
+        lambda step, path: sources.own_origins(path) | sources.contributed_origins(step.path, path),
     )
 
 
@@ -707,6 +709,8 @@ class _Walk:
         self._names = names
         self._span = span
         self._refusals: list[AglError] = []
+        self._reached: dict[tuple[ScopePath, int], tuple[Candidate, ...]] = {}
+        self._stands: dict[int, tuple[_Standing, ...]] = {}
 
     def find(self, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Return what the first step selecting a declaration of *kind* selects."""
@@ -769,24 +773,29 @@ class _Walk:
 
         Every type a written prefix of at most *owners_within* names reaches,
         and every alias a longer one reaches, adds what it selects for the
-        rest of the path (:meth:`_beneath`). When
-        *injects*, a module qualifier's surface adds the enum member it injects.
+        rest of the path (:meth:`_beneath`). A prefix reaching no type at
+        *step* stands for the path of each alias it reaches at another
+        (:meth:`_beside`). When *injects*, a module qualifier's surface adds
+        the enum member it injects.
         """
-        full = (*step.path, *self._names)
-        reading = step.read(full, kind)
+        names = self._names
+        reading = step.read((*step.path, *names), kind)
         chain = self._chain
         if chain is None:
             return reading
-        reading = sum(
-            (
-                _reached_as(self._beneath(step, owner, key, full, end, chain, kind), owner)
-                for end in range(len(step.path) + step.start + 1, len(full))
-                for owner in step.owners(full[:end]).candidates
-                if (key := owner.target.key) is not None
-                and (end <= len(step.path) + owners_within or self._sources.aliases(key))
-            ),
-            reading,
-        )
+        for count in range(step.start + 1, len(names)):
+            owners = self._owners(step, count)
+            for owner in owners:
+                key = owner.target.key
+                if key is not None and (count <= owners_within or self._sources.aliases(key)):
+                    reading += _reached_as(
+                        self._beneath(step, owner, key, count, chain, kind), owner
+                    )
+            if not owners:
+                for standing in self._standing(count):
+                    reading += _reached_as(
+                        self._beside(step, standing, count, chain, kind), standing.owner
+                    )
         if (
             injects
             and kind is not LookupKind.TYPE
@@ -796,28 +805,54 @@ class _Walk:
             reading += self._sources.surface_injected(chain, self._names[-1])
         return reading
 
+    def _owners(self, step: _Step, count: int) -> tuple[Candidate, ...]:
+        """The types the first *count* written names reach at *step*."""
+        at = (step.path, count)
+        owners = self._reached.get(at)
+        if owners is None:
+            prefix = (*step.path, *self._names[:count])
+            owners = self._reached[at] = step.owners(prefix).candidates
+        return owners
+
+    def _standing(self, count: int) -> tuple[_Standing, ...]:
+        """The aliases the first *count* written names reach at any step, standing for a path.
+
+        One only a module route reached stands for none: it is read as that
+        module's alone.
+        """
+        stands = self._stands.get(count)
+        if stands is None:
+            sources = self._sources
+            stands = self._stands[count] = tuple(
+                _Standing(step, owner, key, target)
+                for step in self._steps
+                if count > step.start
+                for owner in self._owners(step, count)
+                if (key := owner.target.key) is not None
+                and not owner.routed
+                and (target := sources.stands_for(key)) is not None
+            )
+        return stands
+
     def _beneath(
         self,
         step: _Step,
         owner: Candidate,
         key: DeclarationKey,
-        full: ScopePath,
-        end: int,
+        count: int,
         chain: QualifierChain,
         kind: LookupKind,
     ) -> Reading:
-        """What type *key*, which *owner* reached as ``full[:end]`` at *step*, selects beneath.
+        """What type *key*, which *owner* reached as the first *count* names at *step*, selects.
 
-        Its own member table selects for the rest of *full*. Where an alias's
-        selects nothing, the alias stands for its target's path where it is
-        read: when that path names only the target at *step*, what
-        contributions reach beneath it there is reached as the alias is, and
-        a path a ``hiding`` removed there is refused. An owner only a module
-        route reached is read as that module's alone.
+        Its own member table selects for the rest of the names. Where an
+        alias's selects nothing, the path it stands for is read in its place
+        (:meth:`_beside`). An owner only a module route reached is read as
+        that module's alone.
         """
         sources = self._sources
-        rest = full[end:]
-        applied = self._applied(chain, key, end - len(step.path) - 1)
+        rest = self._names[count:]
+        applied = self._applied(chain, key, count - 1)
         if applied is not None:
             return sources.beneath_applied(
                 applied.target, owner.layer, rest, chain, kind, routed=owner.routed
@@ -826,11 +861,34 @@ class _Walk:
         target = None if reading.candidates or owner.routed else sources.stands_for(key)
         if target is None:
             return reading
+        standing = _Standing(step, owner, key, target)
+        return reading + self._beside(step, standing, count, chain, kind)
+
+    def _beside(
+        self,
+        step: _Step,
+        standing: _Standing,
+        count: int,
+        chain: QualifierChain,
+        kind: LookupKind,
+    ) -> Reading:
+        """What the path alias *standing* stands for reaches at *step* as the first *count* names.
+
+        Where that path names only the alias's target at *step*, what
+        contributions reach beneath it there is reached as the alias is (the
+        alias's own member table reads this module's declarations), and a
+        path a ``hiding`` removed there is refused. An alias applying its
+        target selects what its own member table does of what is reached. An
+        alias named as its target's path adds nothing: the walk reads that
+        path.
+        """
+        sources, names = self._sources, self._names
+        _, owner, key, target = standing
+        if target.path == names[:count]:
+            return Reading()
         spelled = (*step.path, *target.path)
-        if spelled == full[:end]:
-            return reading
-        beside = (*spelled, *rest)
-        contributed = tuple(
+        beside = (*spelled, *names[count:])
+        reached = tuple(
             replace(
                 candidate,
                 layer=owner.layer,
@@ -839,10 +897,39 @@ class _Walk:
             for candidate in step.read(beside, kind).candidates
             if candidate.layer is not ContributionLayer.DECLARED and not candidate.routed
         )
-        hidden = not contributed and step.hidden(beside)
-        if not (contributed or hidden) or not sources.names_only(target, step.owners(spelled)):
-            return reading
-        return reading + Reading(contributed, (self._hidden(chain),) if hidden else ())
+        hidden = not reached and step.hidden(beside)
+        if not (reached or hidden) or not sources.names_only(target, step.owners(spelled)):
+            return Reading()
+        if hidden:
+            return Reading(refusals=(self._hidden(chain),))
+        if sources.applies(key):
+            selected = sources.projected(key, owner.layer, names[count:], chain, kind, routed=False)
+            if selected.candidates:
+                return selected
+        return Reading(reached)
+
+    def named(self, origins: Callable[[_Step, ScopePath], frozenset[QName]]) -> frozenset[QName]:
+        """The scopes and types the walk's full path names at every step, by *origins*.
+
+        An alias a written prefix reaches adds what the path it stands for
+        names in its place, as :meth:`_reading` reads it.
+        """
+        names, sources = self._names, self._sources
+        found: set[QName] = set()
+        for step in self._steps:
+            found |= origins(step, (*step.path, *names))
+            for count in range(step.start + 1, len(names)):
+                stands = self._standing(count)
+                if self._owners(step, count):
+                    stands = tuple(standing for standing in stands if standing.step is step)
+                for standing in stands:
+                    target = standing.target
+                    spelled = (*step.path, *target.path)
+                    if target.path != names[:count] and sources.names_only(
+                        target, step.owners(spelled)
+                    ):
+                        found |= origins(step, (*spelled, *names[count:]))
+        return frozenset(found)
 
     def _hidden(self, chain: QualifierChain) -> HiddenMemberError:
         """The refusal of the walk's spelling, *chain*, as hidden."""
@@ -883,7 +970,8 @@ class _Walk:
         A segment owns what follows it -- the next segment's selection, or
         *target* after the last -- when a type its full path reaches declares
         that as an inline member (an alias's projected member is declared
-        beneath the alias). A segment carries type arguments only when the
+        beneath the alias); where it reaches none, an alias another step
+        reaches so does. A segment carries type arguments only when the
         type its full path selects (own first, else the one contributed; two
         are ambiguous) owns what follows, as many as it takes. A segment
         selecting an alias that applies its target carries that alias's.
@@ -894,7 +982,12 @@ class _Walk:
             segment = segments[index]
             last = index == len(segments) - 1
             prefix = (*step.path, *self._names[: index + 1])
-            owners = self._unremoved(step.owners(prefix)).candidates
+            owners = self._unremoved(
+                Reading(
+                    self._owners(step, index + 1)
+                    or tuple(standing.owner for standing in self._standing(index + 1))
+                )
+            ).candidates
             selected = _decided(owners, self._sources.denotes)
             applied = segment.type_args is not None or (
                 isinstance(selected, Candidate)
@@ -962,25 +1055,25 @@ class _Walk:
 def _unknown(
     chain: QualifierChain,
     names: ScopePath,
-    visible: Callable[[ScopePath], frozenset[QName]],
-    selects: Callable[[QualifierChain, LookupKind], QualifiedTarget | AglError | None],
+    origins: Callable[[_Step, ScopePath], frozenset[QName]],
+    written: Callable[[QualifierChain], _Walk],
 ) -> AglScopeError:
     """An unknown member of the longest prefix naming something, else an unknown qualifier.
 
-    A prefix names something when it is *visible*, or reaches a type as
-    written -- through an alias, the path it stands for -- whatever its
-    reading's verdict, as a visible path is. A prefix naming a value but no
-    qualifier ends the search: a function, binding or injected enum member
-    is never a qualifier.
+    A prefix names something when its walk (*written*) names a scope or type
+    by *origins*, or reaches a type -- through an alias, the path it stands
+    for -- whatever its reading's verdict, as a visible path is. A prefix
+    naming a value but no qualifier ends the search: a function, binding or
+    injected enum member is never a qualifier.
     """
     for length in range(len(chain.segments), 0, -1):
-        prefix = replace(chain, segments=chain.segments[: length - 1])
-        if visible(names[:length]) or selects(prefix, LookupKind.TYPE) is not None:
-            written = replace(chain, segments=chain.segments[:length])
+        walk = written(replace(chain, segments=chain.segments[: length - 1]))
+        if walk.named(origins) or walk.find(LookupKind.TYPE) is not None:
+            spelled = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
-                render_qualified_name(written, names[length]), span=chain.span
+                render_qualified_name(spelled, names[length]), span=chain.span
             )
-        if selects(prefix, LookupKind.VALUE) is not None:
+        if walk.find(LookupKind.VALUE) is not None:
             break
     return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 

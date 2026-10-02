@@ -382,6 +382,43 @@ _SCENARIOS["a-re-export-hiding-a-path-hides-it-beneath-the-scope-or-type-above"]
     },
 )
 
+_BENEATH_NESTED = (
+    "scope S\n  def a() -> int = 1\n\n  scope T\n    def c() -> int = 3\n  end T\nend S\n"
+    "\n"
+    "record R\n  x: int\n\ndef R::m() -> int = 1\ndef f() -> int = 4\ndef g() -> int = 5\n"
+)
+"""Functions beneath a scope, a scope within it and a type, and two beside them."""
+
+_SCENARIOS |= {
+    f"{name}-of-a-scope-or-type-hides-every-path-beneath-it": Scenario(
+        modules={
+            "sc": _BENEATH_NESTED,
+            "ex": "import sc\nexport sc hiding S, R, f\n",
+            "ex2": "import ex\nexport ex\n",
+        },
+        header=(header,),
+        probes={
+            **{
+                f"{routed}{path}": rejected(
+                    f"{qualifier}{path}{arguments}", HiddenMemberError, qualifier + path
+                )
+                for routed, qualifier in (("", ""), ("routed-", f"{route}::"))
+                for path, arguments in (("S::a", "()"), ("S::T::c", "()"), ("R::m", "()"))
+            },
+            "routed-type": rejected(f"{route}::R(x = 1)", HiddenMemberError, f"{route}::R"),
+            **type_positions_rejected("routed-type", f"{route}::R", HiddenMemberError),
+            "routed-function": rejected(f"{route}::f()", HiddenMemberError, f"{route}::f"),
+            "kept": accepted("g()", "int"),
+            "routed-kept": accepted(f"{route}::g()", "int"),
+        },
+    )
+    for name, route, header in (
+        ("an-import-hiding", "sc", "import sc::* hiding S, R, f\nimport sc hiding S, R, f"),
+        ("a-re-export-hiding", "ex", "import ex::*\nimport ex"),
+        ("a-re-export-of-a-re-export-hiding", "ex2", "import ex2::*\nimport ex2"),
+    )
+}
+
 
 class TestHiddenMemberSelection:
     """Hidden members across imports, uses, routes and method paths."""

@@ -24,49 +24,76 @@ record Url
 exception UrlParseError extends Exception
   raw: text
 
-# Requires `scheme://` authority syntax; the host may be empty only for
-# `file`. Rejects userinfo (`user@host`, which `Url` has no field for),
-# control characters and spaces, an invalid host or port, or a malformed
-# percent-encoding anywhere in the URL. Query is ordered pairs so repeated
-# keys and their order survive a round trip.
+@doc("""
+  Parse an absolute URL into its components.
+
+  Raises `UrlParseError` when the URL is invalid.
+
+  Requires `scheme://` authority syntax; the host may be empty only for `file`. Rejects userinfo
+  (`user@host`, which `Url` has no field for), control characters and spaces, an invalid host or
+  port, or a malformed percent-encoding anywhere in the URL. Query is ordered pairs so repeated keys
+  and their order survive a round trip.
+""")
 extern def parse(value: url) -> Url
+@doc("Parse an absolute URL, returning `UrlParseError` as `Err`.")
 def try-parse(value: url) -> Result[Url, UrlParseError] =
   try Ok(parse(value)) catch UrlParseError as e => Err(e)
+@doc("Parse an absolute URL, or return `None` when invalid.")
 def parse?(value: url) -> Option[Url] =
   try-parse(value).ok()
 
-# Reconstructs canonical URL text from `self`: a bare non-empty `path` gets a
-# leading `/`, a `host` containing `:` is bracketed, and `path`/`fragment` are
-# percent-encoded outside the RFC 3986 `pchar` set (fragment also keeps `/`
-# and `?`) while any existing `%XX` escape is left intact. Round-trips at the
-# record level -- `parse(u.render()) == u` for every `Url` `parse` returns --
-# but the text matches the input only when the input was already canonical.
-# `scheme`, `host`, and `port` are validated by the same rules `parse`
-# applies (a non-lowercase or otherwise invalid `scheme`, an empty `host`
-# outside the `file` scheme, an invalid `host`, or a `port` outside
-# 0-65535, raises `UrlParseError` with `raw` set to that field) since a
-# hand-built record skips the checks parsing would have applied.
+@doc("""
+  Render the URL's components as canonical URL text.
+
+  Reconstructs canonical URL text from `self`: a bare non-empty `path` gets a leading `/`, a `host`
+  containing `:` is bracketed, and `path`/`fragment` are percent-encoded outside the RFC 3986
+  `pchar` set (fragment also keeps `/` and `?`) while any existing `%XX` escape is left intact.
+  Round-trips at the record level -- `parse(u.render()) == u` for every `Url` `parse` returns -- but
+  the text matches the input only when the input was already canonical. `scheme`, `host`, and `port`
+  are validated by the same rules `parse` applies (a non-lowercase or otherwise invalid `scheme`, an
+  empty `host` outside the `file` scheme, an invalid `host`, or a `port` outside 0-65535, raises
+  `UrlParseError` with `raw` set to that field) since a hand-built record skips the checks parsing
+  would have applied.
+""")
 extern def Url::render(self) -> url
 
-# RFC 3986 reference resolution (section 5.2), for any scheme. `base` must
-# parse and `reference` must pass the same textual checks `parse` applies
-# (control characters/spaces, malformed percent-encoding); a resolved result
-# carrying an authority (e.g. from a `//`-prefixed reference) is re-checked
-# through `parse`, so a bad host, port, or smuggled-in userinfo still raises
-# `UrlParseError`. A result with no authority, such as `g:h`, is not.
+@doc("""
+  Resolve a URL reference against a base URL using RFC 3986 rules.
+
+  RFC 3986 reference resolution (section 5.2), for any scheme. `base` must parse and `reference`
+  must pass the same textual checks `parse` applies (control characters/spaces, malformed
+  percent-encoding); a resolved result carrying an authority (e.g. from a `//`-prefixed reference)
+  is re-checked through `parse`, so a bad host, port, or smuggled-in userinfo still raises
+  `UrlParseError`. A result with no authority, such as `g:h`, is not.
+""")
 extern def join(base: url, reference: text) -> url
 
-# Percent-encodes every character but `A-Za-z0-9-._~`; space becomes `%20`.
+@doc("""
+  Percent-encode text, preserving only ASCII letters, digits, and `-._~`.
+
+  Encodes spaces as `%20`.
+""")
 extern def encode(value: text) -> text
-# Percent-decodes `value`; raises `UrlParseError` on a malformed `%` escape
-# or invalid UTF-8 after decoding.
+@doc("""
+  Percent-decode text as UTF-8.
+
+  Raises `UrlParseError` on a malformed percent escape or invalid UTF-8 after decoding.
+""")
 extern def decode(value: text) -> text
 
-# Form-encodes ordered pairs into a query string: space becomes `+`.
 @extern-name("encode_query")
+@doc("""
+  Form-encode ordered key-value pairs as a query string.
+
+  Encodes spaces as `+`.
+""")
 extern def encode-query(fields: array[Pair[text, text]]) -> text
-# Parses a query string into ordered pairs: `+` and `%20` both decode to a
-# space, a blank value is kept, and a bare key (`?flag`) yields `("flag", "")`.
-# Raises `UrlParseError` on a malformed `%` escape or invalid UTF-8.
 @extern-name("parse_query")
+@doc("""
+  Decode a query string into ordered key-value pairs.
+
+  Parses a query string into ordered pairs: `+` and `%20` both decode to a space, a blank value is
+  kept, and a bare key (`?flag`) yields `("flag", "")`. Raises `UrlParseError` on a malformed `%`
+  escape or invalid UTF-8.
+""")
 extern def parse-query(value: text) -> array[Pair[text, text]]

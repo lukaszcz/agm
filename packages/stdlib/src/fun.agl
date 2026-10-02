@@ -3,7 +3,11 @@ infixr <| at 4
 infixl >> at 60
 infixr << at 60
 
+@doc("Apply the function on the right to the value on the left.")
 def |>[A, B](x: A, f: (A) -> B) -> B = f(x)
+@doc("Apply the function on the left to the value on the right.")
 def <|[A, B](f: (A) -> B, x: A) -> B = f(x)
+@doc("Compose two functions, applying the left function first.")
 def >>[A, B, C](f: (A) -> B, g: (B) -> C) -> (A) -> C = fn (x: A) => g(f(x))
+@doc("Compose two functions, applying the right function first.")
 def <<[A, B, C](f: (B) -> C, g: (A) -> B) -> (A) -> C = fn (x: A) => f(g(x))

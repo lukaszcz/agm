@@ -47,6 +47,11 @@ bind an argument.
 
 ## Declarations
 
+- Document functions with `@doc` on a separate line before the declaration.
+  Start with one concise sentence describing the function. Put exception
+  conditions and other notes in separate paragraphs; use a block string for
+  multiline documentation.
+
 - Declare a record's fields in the indented block form, one field per line,
   rather than in a parenthesized list:
 

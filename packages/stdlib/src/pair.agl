@@ -2,10 +2,13 @@ record Pair[A, B]
   first: A
   second: B
 
+@doc("Return a pair with the function applied to its first value.")
 def Pair::map-first[A, B, C](self, f: (A) -> C) -> Pair[C, B] =
   Pair(f(self.first), self.second)
 
+@doc("Return a pair with the function applied to its second value.")
 def Pair::map-second[A, B, C](self, f: (B) -> C) -> Pair[A, C] =
   Pair(self.first, f(self.second))
 
+@doc("Return a pair with its first and second values exchanged.")
 def Pair::swap[A, B](self) -> Pair[B, A] = Pair(self.second, self.first)

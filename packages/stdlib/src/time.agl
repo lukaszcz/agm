@@ -4,25 +4,45 @@ import std/option::Option
 exception TimeParseError extends Exception
   raw: text
 
+@doc("Return the current Unix epoch timestamp with nanosecond source precision.")
 extern def now() -> decimal
 @extern-name("now_iso")
+@doc("Return the current UTC time as an ISO-8601 timestamp.")
 extern def now-iso() -> text
+@doc("Return a monotonic elapsed-time clock in seconds.")
 extern def monotonic() -> decimal
+@doc("Pause the current thread for `seconds`.")
 extern def sleep(seconds: decimal) -> unit
 @extern-name("parse_iso")
+@doc("""
+  Parse an ISO-8601 timestamp, interpreting offset-free input as UTC.
+
+  Raises `TimeParseError` when the input does not match the timestamp format.
+""")
 extern def parse-iso(value: text) -> decimal
+@doc("Parse ISO-8601 text as Unix epoch seconds, returning `TimeParseError` as `Err`.")
 def try-parse-iso(value: text) -> Result[decimal, TimeParseError] =
   try Ok(parse-iso(value)) catch TimeParseError as e => Err(e)
+@doc("Parse ISO-8601 text as Unix epoch seconds, or return `None` on failure.")
 def parse-iso?(value: text) -> Option[decimal] =
   try-parse-iso(value).ok()
 
 @extern-name("format_iso")
+@doc("Format Unix epoch seconds as a UTC ISO-8601 timestamp.")
 extern def format-iso(epoch: decimal) -> text
+@doc("Format Unix epoch seconds in UTC with a strftime format.")
 extern def format(epoch: decimal, fmt: text) -> text
-# Return a UTC timestamp at microsecond precision.
+@doc("Return the current UTC timestamp in YYYYMMDD-HHMMSS-ffffff form.")
 def timestamp() -> text = format(now(), "%Y%m%d-%H%M%S-%f")
+@doc("""
+  Parse a strptime value, interpreting offset-free input as UTC.
+
+  Raises `TimeParseError` when the input does not match the timestamp format.
+""")
 extern def parse(value: text, fmt: text) -> decimal
+@doc("Parse text with a strptime format, returning `TimeParseError` as `Err`.")
 def try-parse(value: text, fmt: text) -> Result[decimal, TimeParseError] =
   try Ok(parse(value, fmt)) catch TimeParseError as e => Err(e)
+@doc("Parse text with a strptime format, or return `None` on failure.")
 def parse?(value: text, fmt: text) -> Option[decimal] =
   try-parse(value, fmt).ok()

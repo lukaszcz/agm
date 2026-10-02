@@ -9,49 +9,89 @@ infixr ++ at prio + + 0
 record TextBuilder
   chunks: array[text]
 
-# Each call creates an independent empty builder.
+@doc("Create an independent empty text builder.")
 def builder() -> TextBuilder = TextBuilder([])
 
-# Amortized constant time: stores the chunk without copying accumulated text.
+@doc("""
+  Append a chunk to the text builder.
+
+  Amortized constant time: stores the chunk without copying accumulated text.
+""")
 def TextBuilder::append(self, chunk: text) -> unit = self.chunks.push(chunk)
+@doc("Remove all chunks from the text builder.")
 def TextBuilder::clear(self) -> unit = self.chunks.clear()
 
-# Return an immutable snapshot, retaining chunks for further appends or reuse.
-# Linear in chunk count plus output length; build once after appending in a loop.
+@doc("""
+  Return an immutable text snapshot of the builder's chunks.
+
+  Retains chunks for further appends or reuse. Takes time linear in chunk count plus output length;
+  build once after appending in a loop.
+""")
 def TextBuilder::build(self) -> text = join(self.chunks, "")
 
+@doc("Interpolate a text template using the given variables.")
 extern def interp(template: text, vars: dict[text, text]) -> text
+@doc("Join the text values with the separator between them.")
 extern def join(values: array[text], separator: text) -> text
 
 @extern-name("concat")
+@doc("Concatenate two text values.")
 extern def ++(left: text, right: text) -> text
 
+@doc("Return the number of Unicode scalar characters.")
 extern def text::size(self) -> int
+@doc("Return the characters as individual text values.")
 extern def text::chars(self) -> array[text]
+@doc("Split the text into lines, removing line endings.")
 extern def text::lines(self) -> array[text]
+@doc("Split the text at each occurrence of the separator.")
 extern def text::split(self, separator: text) -> array[text]
+@doc("Remove leading and trailing whitespace.")
 extern def text::trim(self) -> text
+@doc("Return the text converted to uppercase.")
 extern def text::upper(self) -> text
+@doc("Return the text converted to lowercase.")
 extern def text::lower(self) -> text
+@doc("Return whether the text contains the substring.")
 extern def text::contains(self, substring: text) -> bool
+@doc("Replace every occurrence of `old` with `new`.")
 extern def text::replace(self, old: text, new: text) -> text
+@doc("""
+  Return characters from `start` inclusive to `end` exclusive.
+
+  Negative indices count from the end; bounds are clipped to the text.
+""")
 extern def text::slice(self, start: int, end: int) -> text
+@doc("Repeat the text, treating a negative count as zero.")
 extern def text::repeat(self, count: int) -> text
 
+@doc("Return whether the text has no characters.")
 def text::is-empty(self) -> bool = self.size() == 0
 @extern-name("trim_start")
+@doc("Remove leading whitespace.")
 extern def text::trim-start(self) -> text
 @extern-name("trim_end")
+@doc("Remove trailing whitespace.")
 extern def text::trim-end(self) -> text
 @extern-name("starts_with")
+@doc("Return whether the text starts with the prefix.")
 extern def text::starts-with(self, prefix: text) -> bool
 @extern-name("ends_with")
+@doc("Return whether the text ends with the suffix.")
 extern def text::ends-with(self, suffix: text) -> bool
 @extern-name("index_of")
+@doc("""
+  Return the first character index of the substring.
+
+  Raises `IndexError` when the substring is absent.
+""")
 extern def text::index-of(self, substring: text) -> int
 @extern-name("index_of_option")
+@doc("Return the first character index of the substring, or `None` when absent.")
 extern def text::index-of?(self, substring: text) -> Option[int]
 @extern-name("pad_start")
+@doc("Prepend repeated fill text to reach the requested character length.")
 extern def text::pad-start(self, length: int, fill: text) -> text
 @extern-name("pad_end")
+@doc("Append repeated fill text to reach the requested character length.")
 extern def text::pad-end(self, length: int, fill: text) -> text

@@ -5,36 +5,88 @@ exception FsError extends Exception
   path: path
   operation: text
 
+@doc("""
+  Read UTF-8 text from the file.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def read(path: path) -> text
-# Creates missing parent directories.
+@doc("""
+  Write UTF-8 content, creating missing parent directories.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def write(path: path, content: text) -> unit
-# Creates a missing file and any missing parent directories.
+@doc("""
+  Append UTF-8 content, creating the file and missing parent directories.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def append(path: path, content: text) -> unit
+@doc("Return whether `path` exists.")
 extern def exists(path: path) -> bool
-# Raises `FsError` if any entry's name is not valid Unicode.
+@doc("""
+  Return immediate child paths of `path`.
+
+  Raises `FsError` if any entry's name is not valid Unicode.
+""")
 extern def list(path: path) -> array[path]
-# Creates *path* and any missing parent directories.
+@doc("""
+  Create the directory and any missing parent directories.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def mkdir(path: path) -> unit
+@doc("""
+  Remove a file, symbolic link, or directory tree.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def remove(path: path) -> unit
-# Creates any missing parent directories of *destination*.
+@doc("""
+  Copy a file, creating missing parent directories at the destination.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def copy(source: path, destination: path) -> unit
-# Creates any missing parent directories of *destination*.
+@doc("""
+  Move a file or directory, creating missing parent directories at the destination.
+
+  Raises `FsError` when the filesystem operation fails.
+""")
 extern def move(source: path, destination: path) -> unit
-# Raises `FsError` if any match's name is not valid Unicode.
+@doc("""
+  Return paths matching a shell-style `pattern`.
+
+  Raises `FsError` if any match's name is not valid Unicode.
+""")
 extern def glob(pattern: text) -> array[path]
-# Creates a new empty file named with *suffix* in `std/os::temp-dir()`. It is removed when
-# the host session ends (the run, or the REPL session) unless `std/config::debug` is then set.
 @extern-name("temp_file")
+@doc("""
+  Create an empty temporary file with the given suffix.
+
+  Created in `std/os::temp-dir()` and removed when the run or REPL session ends, unless
+  `std/config::debug` is then set. Raises `FsError` if creation fails or the temporary directory is
+  not valid Unicode.
+""")
 extern def temp-file(suffix: text = "") -> path
-# Creates a new directory in `std/os::temp-dir()`. It is removed with its contents when the
-# host session ends unless `std/config::debug` is then set.
 @extern-name("temp_dir")
+@doc("""
+  Create a temporary directory.
+
+  Created in `std/os::temp-dir()` and removed with its contents when the run or REPL session ends,
+  unless `std/config::debug` is then set. Raises `FsError` if creation fails or the temporary
+  directory is not valid Unicode.
+""")
 extern def temp-dir() -> path
 
+@doc("Read UTF-8 text from the file, returning `FsError` as `Err`.")
 def try-read(path: path) -> Result[text, FsError] =
   try Ok(read(path)) catch FsError as e => Err(e)
 
 @extern-name("is_file")
+@doc("Return whether `path` is a regular file.")
 extern def is-file(path: path) -> bool
 @extern-name("is_dir")
+@doc("Return whether `path` is a directory.")
 extern def is-dir(path: path) -> bool

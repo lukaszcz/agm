@@ -36,6 +36,7 @@ RunResult surface asserted:
 from __future__ import annotations
 
 import json
+import re
 import unittest.mock
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -2155,6 +2156,8 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
 
     def module_lines(name: str) -> list[str]:
         source = (STDLIB_MODULES_DIR / f"{name}.agl").read_text(encoding="utf-8")
+        # Documentation must not affect the declaration rewrites below.
+        source = re.sub(r'(?m)^ *@doc\((?:"""[\s\S]*?"""|"(?:\\.|[^"\\])*")\)\n', "", source)
         return source.splitlines(keepends=True)
 
     fun_lines = module_lines("fun")

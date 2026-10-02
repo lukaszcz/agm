@@ -3,6 +3,7 @@
 import std/config
 import std/session::Session
 import std/fs
+import std/log
 import devel/review
 
 enum VerifyResult
@@ -12,7 +13,10 @@ enum VerifyResult
   | Incomplete
       reason: text
 
-def make-tasks-prompt(plan-file: path, tasks-dir: path) -> text =
+def make-tasks-prompt(plan-file: path, tasks-dir: path, instructions: text = "") -> text =
+  let instructions' =
+    if text::is-empty(instructions) => ""
+    else => "## Instructions\n\n%{instructions}"
   """
   Read %{plan-file} and create implementation tasks for this plan. Make sure that each task can be implemented by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
 
@@ -30,10 +34,12 @@ def make-tasks-prompt(plan-file: path, tasks-dir: path) -> text =
       - ONE line per task as each task lands (explicitly state this requirement)
 
   Keep PROGRESS.md concise.
+
+  %{instructions'}
   """
 
-def Agent::make-tasks(self, plan-file: path, tasks-dir: path) -> unit =
-  self.ask <| make-tasks-prompt(plan-file, tasks-dir)
+def Agent::make-tasks(self, plan-file: path, tasks-dir: path, instructions: text = "") -> unit =
+  self.ask <| make-tasks-prompt(plan-file, tasks-dir, instructions)
 
 def implement-task-prompt(task-file: path, incomplete-reason: Option[text]) -> text =
   let reason =
@@ -134,9 +140,10 @@ program def make-tasks-main(
   plan-file: path,
   @doc("Task directory. Default: %{default-tasks-dir}")
   tasks-dir: path = default-tasks-dir,
-  agent: Agent = config::default-agent
+  agent: Agent = config::default-agent,
+  instructions: text = ""
 ) -> unit =
-  agent.make-tasks(plan-file, tasks-dir)
+  agent.make-tasks(plan-file, tasks-dir, instructions)
 
 @command("devel deliver")
 @doc("Deliver an implementation for a plan")
@@ -159,6 +166,11 @@ program def deliver-main(
   @doc("Save reviews in the refinement loop?")
   save-reviews: bool = false
 ) -> unit =
+  log::info-heading("Plan delivery")
+  log::info("plan: %{plan-file}")
+  log::info("tasks-dir: %{tasks-dir}")
+  log::info("orchestrator: %{agent}")
+  log::info("executor: %{impl-agent}")
   if not fs::is-file("%{tasks-dir}/PROGRESS.md") =>
     agent.make-tasks(plan-file, tasks-dir)
   let session = session::Session::open(agent)

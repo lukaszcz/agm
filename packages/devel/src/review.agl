@@ -119,7 +119,8 @@ program def review-main(
   agent: Agent = config::default-agent
 ) -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| agent.review(scope, aspects ++ sep ++ extra-aspects) as json
+  let aspects' = aspects ++ sep ++ extra-aspects
+  print <| agent.review(scope, aspects') as json
 
 @command("devel revise")
 @doc("Revise based on a review.")
@@ -159,4 +160,10 @@ program def refine-main(
   save-reviews: bool = true
 ) -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps, save-reviews)
+  let aspects' = aspects ++ sep ++ extra-aspects
+  log::info-heading("Refine loop")
+  log::info("scope: %{scope}")
+  log::info("aspects: %{aspects'}")
+  log::info("review-agent: %{review-agent}")
+  log::info("revise-agent: %{revise-agent}")
+  refine(scope, aspects', review-agent, revise-agent, max-steps, save-reviews)

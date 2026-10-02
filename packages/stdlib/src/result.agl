@@ -56,13 +56,13 @@ def Result::unwrap[T, E](self) -> T =
     | Ok(value) => value
     | Err(_) => raise UnwrapError(message = "Result has no value")
 
-@doc("Return whether this result is `Ok`.")
+@doc("Check if this result is `Ok`.")
 def Result::is-ok[T, E](self) -> bool =
   case self of
     | Ok(_) => true
     | Err(_) => false
 
-@doc("Return whether this result is `Err`.")
+@doc("Check if this result is `Err`.")
 def Result::is-err[T, E](self) -> bool = not self.is-ok()
 
 @doc("Return the `Ok` value as an option, or `None` for an `Err`.")

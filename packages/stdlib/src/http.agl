@@ -67,7 +67,7 @@ def Headers::get(self, name: text) -> text = self.entries.get(HeadersInternals::
 @doc("Return a header's value, or `None` when absent, ignoring name case.")
 def Headers::get?(self, name: text) -> Option[text] =
   self.entries.get?(HeadersInternals::lower-name(name))
-@doc("Return whether the headers contain the name, ignoring case.")
+@doc("Check if the headers contain the name, ignoring case.")
 def Headers::contains(self, name: text) -> bool =
   self.entries.contains(HeadersInternals::lower-name(name))
 @doc("Set a header's value, ignoring name case.")
@@ -108,7 +108,7 @@ record Response
   cookies: dict[text, text]
   elapsed: decimal
 
-@doc("Return whether the response has a 2xx status.")
+@doc("Check if the response has a 2xx status.")
 def Response::ok(self) -> bool = self.status >= 200 and self.status < 300
 
 @doc("""

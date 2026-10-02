@@ -23,7 +23,7 @@ extern def write(path: path, content: text) -> unit
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def append(path: path, content: text) -> unit
-@doc("Return whether `path` exists.")
+@doc("Check if `path` exists.")
 extern def exists(path: path) -> bool
 @doc("""
   Return immediate child paths of `path`.

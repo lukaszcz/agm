@@ -11,7 +11,7 @@ exception RegexError extends Exception
   pattern: text
 
 @doc("""
-  Return whether `pattern` occurs anywhere in `s`.
+  Check if `pattern` occurs anywhere in `s`.
 
   Raises `RegexError` when the pattern is invalid.
 """)

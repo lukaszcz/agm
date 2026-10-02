@@ -77,21 +77,21 @@ def Optional::unwrap[T](self, default: T) -> T =
     | Some(value) => value
     | Default => default
 
-@doc("Return whether this value is `Some`.")
+@doc("Check if this value is `Some`.")
 def Optional::is-some[T](self) -> bool =
   case self of
     | None => false
     | Some(_) => true
     | Default => false
 
-@doc("Return whether this value is `None`.")
+@doc("Check if this value is `None`.")
 def Optional::is-none[T](self) -> bool =
   case self of
     | None => true
     | Some(_) => false
     | Default => false
 
-@doc("Return whether this value is `Default`.")
+@doc("Check if this value is `Default`.")
 def Optional::is-default[T](self) -> bool =
   case self of
     | None => false

@@ -32,7 +32,7 @@ extern def json::kind(self) -> text
 extern def json::size(self) -> int
 @doc("Return the object's keys, or an empty array for other kinds.")
 extern def json::keys(self) -> array[text]
-@doc("Return whether the JSON value is an object containing the key.")
+@doc("Check if the JSON value is an object containing the key.")
 extern def json::has(self, key: text) -> bool
 @doc("""
   Return the object's value for the key.

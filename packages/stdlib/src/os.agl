@@ -53,7 +53,7 @@ end ChdirInternals
 def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.vars)
 
 @extern-name("is_interactive")
-@doc("Return whether standard input and output are both connected to a terminal.")
+@doc("Check if standard input and output are both connected to a terminal.")
 extern def is-interactive() -> bool
 @doc("""
   Find an executable on the given environment's `PATH`, or return `None`.

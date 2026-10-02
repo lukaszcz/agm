@@ -4,7 +4,7 @@ import std/errors::KeyError
 
 @doc("Return the number of entries.")
 extern def dict[text, V]::size(self) -> int
-@doc("Return whether the dictionary has no entries.")
+@doc("Check if the dictionary has no entries.")
 def dict[text, V]::is-empty(self) -> bool = self.size() == 0
 @doc("""
   Return the value for the given key.
@@ -26,7 +26,7 @@ extern def dict[text, V]::set(self, key: text, value: V) -> unit
 @extern-name("remove_option")
 @doc("Remove and return the value for the given key, or `None` when absent.")
 extern def dict[text, V]::remove?(self, key: text) -> Option[V]
-@doc("Return whether the dictionary contains the given key.")
+@doc("Check if the dictionary contains the given key.")
 extern def dict[text, V]::contains(self, key: text) -> bool
 @doc("Remove all entries from the dictionary.")
 extern def dict[text, V]::clear(self) -> unit

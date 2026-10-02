@@ -16,13 +16,13 @@ def Either::map-right[A, B, C](self, f: (B) -> C) -> Either[A, C] =
     | Left(value) => Left(value)
     | Right(value) => Right(f(value))
 
-@doc("Return whether this value is `Left`.")
+@doc("Check if this value is `Left`.")
 def Either::is-left[A, B](self) -> bool =
   case self of
     | Left(_) => true
     | Right(_) => false
 
-@doc("Return whether this value is `Right`.")
+@doc("Check if this value is `Right`.")
 def Either::is-right[A, B](self) -> bool = not self.is-left()
 
 @doc("Return the `Left` value as an option, or `None` for a `Right`.")

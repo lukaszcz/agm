@@ -59,13 +59,13 @@ def Option::unwrap[T](self) -> T =
     | None => raise UnwrapError(message = "Option has no value")
     | Some(value) => value
 
-@doc("Return whether this value is `Some`.")
+@doc("Check if this value is `Some`.")
 def Option::is-some[T](self) -> bool =
   case self of
     | None => false
     | Some(_) => true
 
-@doc("Return whether this value is `None`.")
+@doc("Check if this value is `None`.")
 def Option::is-none[T](self) -> bool = not self.is-some()
 
 @doc("Call the function only when a value is present.")

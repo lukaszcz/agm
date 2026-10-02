@@ -42,10 +42,10 @@ extern def relative(path: path, base: path) -> path
 """)
 extern def expand-user(path: path) -> path
 @extern-name("is_absolute")
-@doc("Return whether `path` is absolute on the host platform.")
+@doc("Check if `path` is absolute on the host platform.")
 extern def is-absolute(path: path) -> bool
 @extern-name("is_under")
-@doc("Return whether `path` lexically resolves inside `base`, or is `base` itself.")
+@doc("Check if `path` lexically resolves inside `base`, or is `base` itself.")
 extern def is-under(path: path, base: path) -> bool
 @doc("Return the non-empty path components of `path`.")
 extern def parts(path: path) -> array[text]

@@ -52,7 +52,7 @@ extern def text::trim(self) -> text
 extern def text::upper(self) -> text
 @doc("Return the text converted to lowercase.")
 extern def text::lower(self) -> text
-@doc("Return whether the text contains the substring.")
+@doc("Check if the text contains the substring.")
 extern def text::contains(self, substring: text) -> bool
 @doc("Replace every occurrence of `old` with `new`.")
 extern def text::replace(self, old: text, new: text) -> text
@@ -77,7 +77,7 @@ extern def text::trim-end(self) -> text
 @doc("Return whether the text starts with the prefix.")
 extern def text::starts-with(self, prefix: text) -> bool
 @extern-name("ends_with")
-@doc("Return whether the text ends with the suffix.")
+@doc("Check if the text ends with the suffix.")
 extern def text::ends-with(self, suffix: text) -> bool
 @extern-name("index_of")
 @doc("""

@@ -13,6 +13,14 @@ default:
 setup:
     uv sync --locked --python 3.14 --group dev
 
+# Build the Markdown documentation into site/
+docs-build:
+    uv run --locked --group docs mkdocs build --strict
+
+# Serve the documentation with live reload (default: http://127.0.0.1:8000)
+docs-serve *args:
+    uv run --locked --group docs mkdocs serve --strict {{args}}
+
 check_coverage := "100"
 
 # Measure coverage through sys.monitoring rather than the C trace function.

@@ -208,7 +208,7 @@ program def main(threshold: int) -> unit =
 ```
 
 A `:=` that ends its line is otherwise a
-[line continuation](lexical-structure.md#layout-rules); the suite form wins when
+[line continuation](lexical-structure.md#layout-indentation-newlines-continuation); the suite form wins when
 the next line is indented further.
 
 ## `def` — function declarations

@@ -1,0 +1,98 @@
+site_name: AGM documentation
+site_description: AgL language reference, AGM command reference, and implementation architecture
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, '']
+repo_url: https://github.com/lukaszcz/agm
+edit_uri: ''
+
+theme:
+  name: material
+  custom_dir: docs/templates
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - toc.integrate
+  font: false
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+
+exclude_docs: |
+  AGENTS.md
+  README.md
+  /prompts/
+
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Language reference:
+      - Overview: agl/reference/index.md
+      - Lexical structure: agl/reference/lexical-structure.md
+      - Program structure: agl/reference/program-structure.md
+      - Types and values: agl/reference/types.md
+      - Bindings and scope: agl/reference/bindings-and-scope.md
+      - Expressions: agl/reference/expressions.md
+      - Strings and interpolation: agl/reference/strings-and-interpolation.md
+      - Functions: agl/reference/functions.md
+      - Control flow: agl/reference/control-flow.md
+      - Pattern matching: agl/reference/pattern-matching.md
+      - Generics: agl/reference/generics.md
+      - Agent calls: agl/reference/agent-calls.md
+      - Shell execution: agl/reference/shell-execution.md
+      - Exceptions: agl/reference/exceptions.md
+      - Attributes: agl/reference/attributes.md
+      - Modules: agl/reference/modules.md
+      - Named scopes: agl/reference/scopes.md
+      - Packages: agl/reference/packages.md
+      - Python FFI: agl/reference/ffi.md
+      - Host environment: agl/reference/host-environment.md
+      - Grammar: agl/reference/grammar.md
+  - Command reference:
+      - Overview: commands/index.md
+      - Workspace and project lifecycle: commands/workspaces.md
+      - Agent workflows: commands/agents.md
+      - Loop automation: commands/loop.md
+      - AgL workflow DSL: commands/agl.md
+      - Packages: commands/pkg.md
+      - Configuration: commands/config.md
+      - Dependencies: commands/dependencies.md
+      - Sandboxing: commands/run.md
+      - Worktrees: commands/worktrees.md
+      - tmux sessions: commands/tmux.md
+  - Architecture:
+      - Overview: arch/index.md
+      - AGM:
+          - CLI and command dispatch: arch/cli.md
+          - Core primitives: arch/core.md
+          - Configuration: arch/config.md
+          - Projects and workspaces: arch/workspaces.md
+          - Packages: arch/packages.md
+          - Package store and installation: arch/package-store.md
+          - Sandboxed execution: arch/sandbox.md
+          - Agent workflows: arch/agents.md
+          - Testing: arch/testing.md
+      - AgL:
+          - Overview: arch/agl/index.md
+          - Frontend:
+              - Overview: arch/agl/frontend/index.md
+              - 'Syntax: lexer, parser, AST': arch/agl/frontend/syntax.md
+              - Name resolution: arch/agl/frontend/scope.md
+              - Type system and checking: arch/agl/frontend/types.md
+              - Match compilation: arch/agl/frontend/matchcompile.md
+          - Execution:
+              - Overview: arch/agl/execution/index.md
+              - Lowering and the IR: arch/agl/execution/lowering.md
+              - Evaluator: arch/agl/execution/evaluator.md
+              - Host runtime: arch/agl/execution/runtime.md
+              - Python FFI: arch/agl/execution/ffi.md
+          - Modules: arch/agl/modules.md
+          - Pipeline and hosting: arch/agl/hosting.md
+          - REPL: arch/agl/repl.md

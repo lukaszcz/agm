@@ -8,7 +8,7 @@ The runtime package is the eval-free services layer: agent dispatch and session 
 
 ## Codecs
 
-Built-in JSON contracts consume the typeless schema and decode data compiled during lowering. `runtime/codec.py` keeps strict parsing and lenient recovery separate: agent and shell output use the configured policy, casts and `std/value::parse`/`try-parse` always parse strictly — accepting strict JSON or one [AgL value-syntax](../../agl/reference/host-environment.md#value-syntax) literal via `runtime/value_decode.py`, never lenient recovery — and `std/json` exposes both explicitly. Lenient recovery is target-aware in one place: a plain-enum target whose recovered value is not a member falls back to the one member tag its text names.
+Built-in JSON contracts consume the typeless schema and decode data compiled during lowering. `runtime/codec.py` keeps strict parsing and lenient recovery separate: agent and shell output use the configured policy, casts and `std/value::parse`/`try-parse` always parse strictly — accepting strict JSON or one [AgL value-syntax](../../../agl/reference/host-environment.md#value-syntax) literal via `runtime/value_decode.py`, never lenient recovery — and `std/json` exposes both explicitly. Lenient recovery is target-aware in one place: a plain-enum target whose recovered value is not a member falls back to the one member tag its text names.
 
 ## Rendering and Serialization
 

@@ -460,7 +460,7 @@ targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there; a field
 assignment likewise accepts any record-typed postfix receiver, provided its
-field is marked `var`. See [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+field is marked `var`. See [Bindings and scope](bindings-and-scope.md#destructive-assignment)
 for which roots are legal and the evaluation order. Each opening `[` must be
 adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
 while `xs [0]` is not.
@@ -776,7 +776,7 @@ not permitted inside `%{…}`.
 A `$` template's payload (its `verbatim_text`) is specified in
 [Lexical structure](lexical-structure.md#verbatim-literals); its
 interpolation semantics are in
-[Strings and interpolation](strings-and-interpolation.md#the--literal).
+[Strings and interpolation](strings-and-interpolation.md#the-literal).
 
 ```agl
 program def main() -> unit =

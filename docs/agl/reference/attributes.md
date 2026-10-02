@@ -186,7 +186,7 @@ record Job
 ## `@command`
 
 `@command` registers a `program def` as a command of the package that owns its
-module ([Packages](packages.md#commands)). Its argument is a command path:
+module ([Packages](packages.md#programs-and-commands)). Its argument is a command path:
 space-separated words naming the command a reader invokes, so
 `@command("devel review")` is invoked as `devel review`. A path whose first
 word is one of the host's own commands, or any word of which looks like an

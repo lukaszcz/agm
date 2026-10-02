@@ -157,7 +157,7 @@ Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
 every alias shares the same underlying object. Elements and values are read
 with indexing (`xs[0]`, `metadata["key"]`). An array or dict can be updated
-in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#destructive-assignment)
 for the assignment-root rules and evaluation order. There is no `len`
 operator.
 
@@ -326,7 +326,7 @@ A `T` requiring structure parses strict JSON or
 data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
 `text as json`, which wraps the text as a JSON string instead of parsing it
 (see [`text as json` — embedding, not
-parsing](#text-as-json--embedding-not-parsing)). A `text` target returns the
+parsing](#text-as-json-embedding-not-parsing)). A `text` target returns the
 text unchanged.
 
 `T` comes from an explicit `::[T]` type argument or the contextual expected
@@ -640,7 +640,7 @@ follows the same zones — see
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
 they have the same name and the same fields — see
-[Module- and scope-qualified type identity](#module--and-scope-qualified-type-identity).
+[Module- and scope-qualified type identity](#module-and-scope-qualified-type-identity).
 A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
@@ -1058,7 +1058,7 @@ Typing is exact nominal matching with these implicit coercions:
    applies only against a known base-exception slot and preserves the value's
    concrete identity; the same widening is available explicitly as `as` to a
    named ancestor type. It does not propagate through containers. See
-   [`try`/`catch`](exceptions.md#try--catch) for how a `catch` clause matches
+   [`try`/`catch`](exceptions.md#try-catch) for how a `catch` clause matches
    this hierarchy.
 6. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{# Keep component navigation separate at every viewport size. #}
+{% block site_nav %}
+  {% if page and "navigation" not in page.meta.get("hide", []) %}
+    <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+      <div class="md-sidebar__scrollwrap">
+        <div class="md-sidebar__inner">
+          {% with nav = namespace(items=nav.items | selectattr("active") | list, homepage=nav.homepage) %}
+            {% include "partials/nav.html" %}
+          {% endwith %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

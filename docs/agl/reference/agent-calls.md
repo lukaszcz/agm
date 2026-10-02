@@ -115,7 +115,7 @@ let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
 A `$` literal
-([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+([Strings and interpolation](strings-and-interpolation.md#the-literal)) may
 supply the same single argument, inline or as a block; explicit type
 arguments — on either the free function or a receiver method — and
 target-type inference work exactly as for a quoted prompt:
@@ -139,7 +139,7 @@ the short-lived session for its receiver. Use `ask(...)` or
 `%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
 environment hole — and pipe the result when chaining is needed, as in
 `print <| ask $ …`
-([Strings and interpolation](strings-and-interpolation.md#the--literal)).
+([Strings and interpolation](strings-and-interpolation.md#the-literal)).
 
 ## Agents as values
 
@@ -598,14 +598,14 @@ type. For a JSON-typed target the instructions embed the actual JSON Schema
 precise, authoritative shape rather than a prose paraphrase. They are
 equivalent to:
 
-```text
+````text
 Return exactly one JSON value conforming to the following JSON Schema.
 Do not include Markdown, prose, or code fences.
 
 ```json
 <derived JSON Schema>
 ```
-```
+````
 
 For the permissive `json` type (schema `{}`) only the behavioural preamble is
 emitted, since there is no shape to convey.

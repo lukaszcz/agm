@@ -32,7 +32,7 @@ pattern_field  ::= pattern                                (* positional sub-patt
 
 Matches anything, binds nothing. The same spelling is the unreadable discard
 binder in `let _ = value` and `var _ = value`; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding).
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding).
 
 <!-- agl-check: fragment -->
 ```agl
@@ -73,7 +73,7 @@ case result of
 At a `case` branch root, a bare name is never a variable binder: it must
 denote a visible fieldless enum-member constructor. By contrast, a bare `let`-root name
 always introduces an immutable binder visible in the continuation; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding). Ordinary
 value bindings do not alter case-constructor lookup; capitalization carries no
 meaning ([Lexical structure](lexical-structure.md)).
 

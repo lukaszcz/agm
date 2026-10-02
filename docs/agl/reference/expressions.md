@@ -416,7 +416,7 @@ so aliases of `receiver` observe the new value. A `let` receiver is valid: it
 prevents rebinding the name, not updating a `var` field. An enum-typed receiver
 has no fields; narrow it with a `case` pattern or cast it to a member record
 before assignment. Exceptions and fields without `var` cannot be assigned.
-See [Bindings and scope](bindings-and-scope.md#--destructive-assignment) for
+See [Bindings and scope](bindings-and-scope.md#destructive-assignment) for
 assignment targets, evaluation order, and cycle behavior.
 
 ## Record update

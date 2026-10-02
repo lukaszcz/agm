@@ -86,3 +86,7 @@ dev = [
     "typesafe-sdk>=0.7.1,<1",
     "httpx2>=2.13.0",
 ]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.7,<10",
+]

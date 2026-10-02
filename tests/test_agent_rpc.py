@@ -318,15 +318,110 @@ def test_echo_streams_pi_tool_progress_and_stderr_without_replacing_final_respon
     )
 
     assert response.content == "done"
-    assert output == [
-        ("stderr", "pi diagnostic\n"),
-        ("progress", "Checking"),
-        ("progress", "[bash]\n"),
-        ("progress", "one"),
-        ("progress", " two"),
-        ("progress", "!"),
+    assert [text for phase, text in output if phase == "stderr"] == ["pi diagnostic\n"]
+    assert [text for phase, text in output if phase == "progress"] == [
+        "Checking",
+        "[bash]\n",
+        "one",
+        " two",
+        "!",
     ]
     backend.close()
+
+
+def test_prompt_waits_for_stderr_already_read_by_the_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"stderr": "pi diagnostic\n"},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "answer"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [{"type": "text", "text": "answer"}],
+                    },
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+    child = backend._child
+    assert child is not None
+
+    stderr_read = threading.Event()
+    release_stderr = threading.Event()
+    finish_attempted = threading.Event()
+    original_lock = child.stderr_lock
+
+    class ObservedLock:
+        def __init__(self, lock: rpc._Lock) -> None:
+            self.lock = lock
+
+        def acquire(self) -> bool:
+            if threading.current_thread().name == "rpc-ask":
+                finish_attempted.set()
+            return self.lock.acquire()
+
+        def release(self) -> None:
+            self.lock.release()
+
+    original_lock.acquire()
+    try:
+        child.stderr_lock = ObservedLock(original_lock)
+    finally:
+        original_lock.release()
+
+    capture_stderr = rpc._capture_stderr
+
+    def delay_stderr_delivery(captured_child: rpc._RpcChild, chunk: bytes) -> None:
+        stderr_read.set()
+        release_stderr.wait()
+        capture_stderr(captured_child, chunk)
+
+    monkeypatch.setattr(rpc, "_capture_stderr", delay_stderr_delivery)
+
+    output: list[tuple[str, str]] = []
+    answers: list[str] = []
+    failures: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            answers.append(
+                backend.ask(
+                    SessionAskRequest(
+                        "question", output_callback=lambda phase, text: output.append((phase, text))
+                    )
+                ).content
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    ask_thread = threading.Thread(target=ask, name="rpc-ask")
+    try:
+        ask_thread.start()
+        assert stderr_read.wait(5)
+        assert finish_attempted.wait(5)
+    finally:
+        release_stderr.set()
+        if ask_thread.ident is not None:
+            ask_thread.join(timeout=5)
+        backend.close()
+
+    assert not ask_thread.is_alive()
+    assert failures == []
+    assert answers == ["answer"]
+    assert output == [("stderr", "pi diagnostic\n")]
 
 
 def test_interrupting_prompt_kills_the_active_rpc_child(

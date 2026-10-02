@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import IO, Literal, TypeVar, cast
+from typing import IO, Literal, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent.session.protocol import (
@@ -85,6 +85,14 @@ class _BoundedText:
         return CapturedOutput(data=self.data, truncated=False, head_truncated=self.truncated)
 
 
+class _Lock(Protocol):
+    """The lock interface used to synchronize stderr delivery."""
+
+    def acquire(self) -> bool: ...
+
+    def release(self) -> None: ...
+
+
 @dataclass(slots=True)
 class _RpcChild:
     """The process and bounded asynchronously drained streams for one Pi session."""
@@ -101,6 +109,8 @@ class _RpcChild:
     stderr_decoder: codecs.IncrementalDecoder = field(
         default_factory=lambda: codecs.getincrementaldecoder("utf-8")("replace")
     )
+    stderr_lock: _Lock = field(default_factory=threading.Lock)
+    stderr_reader_done: threading.Event = field(default_factory=threading.Event)
     output_callback: AgentOutputCallback | None = None
     readers: list[threading.Thread] = field(default_factory=list)
     stopped: threading.Event = field(default_factory=threading.Event)
@@ -147,7 +157,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 output_callback=request.output_callback,
             )
         finally:
-            child.output_callback = None
+            _finish_stderr_delivery(child, drain=False)
         elapsed = time.monotonic() - started
         return SessionAskResponse(
             content="".join(text),
@@ -296,12 +306,7 @@ class PiRpcSessionBackend(SandboxFixture):
                     lambda: _queue_stdout(child, None),
                     child.stopped,
                 ),
-                _start_reader(
-                    process.stderr,
-                    lambda chunk: _capture_stderr(child, chunk),
-                    lambda: None,
-                    child.stopped,
-                ),
+                _start_stderr_reader(child, process.stderr),
             )
         )
         return child
@@ -450,9 +455,9 @@ class PiRpcSessionBackend(SandboxFixture):
                     if failure is not None:
                         terminal_error = failure
                 settled = settled or event_type == "agent_settled"
+        _finish_stderr_delivery(child)
         if terminal_error is not None:
             self._raise_ask_error("nonzero_exit", terminal_error, started, child)
-        child.output_callback = None
         return response, text
 
     def _parse_operation_response(
@@ -609,6 +614,48 @@ def _start_reader(
         finally:
             stream.close()
             finish()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    return reader
+
+
+def _start_stderr_reader(child: _RpcChild, stream: IO[bytes]) -> threading.Thread:
+    """Drain stderr while holding the delivery lock through each read and callback."""
+    descriptor = stream.fileno()
+    os.set_blocking(descriptor, False)
+
+    def read() -> None:
+        try:
+            while not child.stopped.is_set():
+                try:
+                    readable = select.select([descriptor], [], [], 0.05)[0]
+                except (OSError, ValueError):
+                    break
+                if not readable:
+                    continue
+                lock = child.stderr_lock
+                lock.acquire()
+                try:
+                    if child.stopped.is_set():
+                        break
+                    try:
+                        chunk = os.read(descriptor, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    _capture_stderr(child, chunk)
+                finally:
+                    lock.release()
+        finally:
+            lock = child.stderr_lock
+            lock.acquire()
+            try:
+                stream.close()
+                child.stderr_reader_done.set()
+            finally:
+                lock.release()
 
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
@@ -781,6 +828,28 @@ def _capture_stderr(child: _RpcChild, chunk: bytes) -> None:
             callback("stderr", text)
         except OSError:
             pass
+
+
+def _finish_stderr_delivery(child: _RpcChild, *, drain: bool = True) -> None:
+    """Deliver pending diagnostics before disabling the active ask callback."""
+    lock = child.stderr_lock
+    lock.acquire()
+    try:
+        if drain and not child.stderr_reader_done.is_set():
+            stream = child.process.stderr
+            if stream is not None:
+                try:
+                    descriptor = stream.fileno()
+                    while select.select([descriptor], [], [], 0)[0]:
+                        chunk = os.read(descriptor, 4096)
+                        if not chunk:
+                            break
+                        _capture_stderr(child, chunk)
+                except (OSError, ValueError):
+                    pass
+        child.output_callback = None
+    finally:
+        lock.release()
 
 
 def _emit_pi_progress(

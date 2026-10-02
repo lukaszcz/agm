@@ -9,7 +9,7 @@ import queue
 import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import cast
+from typing import IO, cast
 
 import pytest
 
@@ -691,6 +691,92 @@ def test_pi_output_helpers_handle_empty_and_closed_output_channels() -> None:
     rpc._capture_stderr(child, b"diagnostic")
 
     assert child.stderr.data == b"diagnostic"
+
+
+class _StderrProcess:
+    def __init__(self, stderr: IO[bytes] | None) -> None:
+        self.stderr = stderr
+
+
+def test_finish_stderr_delivery_drains_pending_pipe_bytes() -> None:
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb", buffering=0)
+    child = _child(_StderrProcess(stream))
+    output: list[tuple[str, str]] = []
+    child.output_callback = lambda phase, text: output.append((phase, text))
+    os.write(write_fd, b"pending diagnostic")
+    os.close(write_fd)
+
+    try:
+        rpc._finish_stderr_delivery(child)
+    finally:
+        stream.close()
+
+    assert output == [("stderr", "pending diagnostic")]
+    assert child.stderr.data == b"pending diagnostic"
+    assert child.output_callback is None
+
+
+def test_finish_stderr_delivery_handles_missing_or_closed_streams() -> None:
+    for stream in (None, io.BytesIO()):
+        child = _child(_StderrProcess(stream))
+        child.output_callback = lambda _phase, _text: None
+
+        rpc._finish_stderr_delivery(child)
+
+        assert child.output_callback is None
+
+
+@pytest.mark.parametrize("failure", [OSError("closed"), ValueError("closed")])
+def test_stderr_reader_stops_when_select_fails(
+    monkeypatch: pytest.MonkeyPatch, failure: OSError | ValueError
+) -> None:
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb", buffering=0)
+    child = _child(_StderrProcess(stream))
+
+    def fail_select(*_args: object) -> tuple[list[int], list[int], list[int]]:
+        raise failure
+
+    monkeypatch.setattr(rpc.select, "select", fail_select)
+    reader = rpc._start_stderr_reader(child, stream)
+    reader.join(timeout=5)
+    os.close(write_fd)
+
+    assert not reader.is_alive()
+    assert child.stderr_reader_done.is_set()
+
+
+def test_stderr_reader_stops_when_pipe_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb", buffering=0)
+    child = _child(_StderrProcess(stream))
+    os.write(write_fd, b"ready")
+
+    def fail_read(_descriptor: int, _size: int) -> bytes:
+        raise OSError("closed")
+
+    monkeypatch.setattr(rpc.os, "read", fail_read)
+    reader = rpc._start_stderr_reader(child, stream)
+    reader.join(timeout=5)
+    os.close(write_fd)
+
+    assert not reader.is_alive()
+    assert child.stderr_reader_done.is_set()
+
+
+def test_stderr_reader_closes_a_stopped_child_stream() -> None:
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb", buffering=0)
+    child = _child(_StderrProcess(stream))
+    child.stopped.set()
+
+    reader = rpc._start_stderr_reader(child, stream)
+    reader.join(timeout=5)
+    os.close(write_fd)
+
+    assert not reader.is_alive()
+    assert child.stderr_reader_done.is_set()
 
 
 def test_open_rejects_an_already_live_child_and_dead_child_is_cleared(

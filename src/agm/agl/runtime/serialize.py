@@ -9,10 +9,12 @@ routed through :class:`float`.  Instead :func:`value_to_json_obj` preserves the
 ``Decimal`` in the JSON-shaped object, and :func:`dumps_exact` emits it as
 unquoted numeric text using the ``Decimal``'s own exact string form.
 
-Two entry points:
+Three entry points:
 
 - :func:`value_to_json_obj` — ``Value`` → JSON-shaped object (``dict``/``list``/
   ``str``/``int``/``Decimal``/``bool``/``None``).  ``Decimal`` is preserved.
+- :func:`value_to_trace_json_obj` — best-effort trace data, retaining enum tags
+  and degrading cycles and non-data values.
 - :func:`dumps_exact` — render such an object as JSON text, emitting ``Decimal``
   as exact unquoted numeric text.
 """
@@ -20,8 +22,10 @@ Two entry points:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
-from typing import assert_never
+from math import isfinite
+from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayEncode,
@@ -64,6 +68,12 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from agm.util.unicode import surrogate_index
+
+if TYPE_CHECKING:
+    from agm.agl.ir.builtin_nominals import BuiltinNominals
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.program import ValueDescriptors
 
 
 class AglNonDataValue(Exception):
@@ -358,6 +368,128 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     if isinstance(value, ContractValue):
         raise AglNonDataValue("contract")
     assert_never(value)  # pragma: no cover
+
+
+def value_to_trace_json_obj(
+    value: Value,
+    descriptors: "ValueDescriptors",
+    builtin_nominals: "BuiltinNominals",
+) -> object:
+    """Convert a runtime value to a best-effort JSON shape for a trace record.
+
+    Unlike :func:`value_to_json_obj`, this walk degrades cycles and non-data
+    values instead of raising. Enum members retain their ``$case`` tag, while
+    decimal values use their exact text form because JSONL trace records use
+    the standard JSON encoder.
+    """
+    enum_members = {
+        variant.member: variant.name
+        for descriptor in descriptors.nominals.values()
+        for variant in descriptor.variants
+    }
+    return _trace_value(value, enum_members, builtin_nominals, None)
+
+
+def _trace_value(
+    value: Value,
+    enum_members: "Mapping[NominalId, str]",
+    builtin_nominals: "BuiltinNominals",
+    active: set[int] | None,
+) -> object:
+    if isinstance(value, TextValue):
+        return value.value if surrogate_index(value.value) is None else non_data_marker("text")
+    if isinstance(value, IntValue):
+        return value.value
+    if isinstance(value, DecimalValue):
+        return dumps_exact(value.value, indent=None)
+    if isinstance(value, BoolValue):
+        return value.value
+    if isinstance(value, JsonValue):
+        return _trace_json_data(value.raw, active)
+    if isinstance(value, ArrayValue):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return [
+                _trace_value(item, enum_members, builtin_nominals, active)
+                for item in value.elements
+            ]
+        finally:
+            active.discard(id(value))
+    if isinstance(value, DictValue):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return {
+                key: _trace_value(item, enum_members, builtin_nominals, active)
+                for key, item in value.entries.items()
+            }
+        finally:
+            active.discard(id(value))
+    if isinstance(value, (RecordValue, ExceptionValue)):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            fields = {
+                key: _trace_value(item, enum_members, builtin_nominals, active)
+                for key, item in value.fields.items()
+            }
+            variant = enum_members.get(value.nominal)
+            if variant is None:
+                builtin_member = builtin_nominals.reverse(value.nominal)
+                variant = None if builtin_member is None else builtin_member[1]
+            return {"$case": variant, **fields} if variant is not None else fields
+        finally:
+            active.discard(id(value))
+    if isinstance(value, UnitValue):
+        return non_data_marker("unit")
+    if isinstance(value, ConstructorValue):
+        return non_data_marker("constructor")
+    if isinstance(value, IrClosureValue):
+        return non_data_marker("function")
+    if isinstance(value, IteratorValue):
+        return non_data_marker("iterator")
+    if isinstance(value, ContractValue):
+        return non_data_marker("contract")
+    assert_never(value)  # pragma: no cover
+
+
+def _trace_enter(value: object, active: set[int] | None) -> set[int] | None:
+    try:
+        return enter_value(id(value), active)
+    except AglCyclicValue:
+        return None
+
+
+def _trace_json_data(value: object, active: set[int] | None) -> object:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        return value if surrogate_index(value) is None else non_data_marker("text")
+    if isinstance(value, float):
+        return value if isfinite(value) else non_data_marker("float")
+    if isinstance(value, Decimal):
+        return dumps_exact(value, indent=None)
+    if isinstance(value, Mapping):
+        nested = _trace_enter(value, active)
+        if nested is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return {str(key): _trace_json_data(item, nested) for key, item in value.items()}
+        finally:
+            nested.discard(id(value))
+    if isinstance(value, Sequence) and not isinstance(value, bytes):
+        nested = _trace_enter(value, active)
+        if nested is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return [_trace_json_data(item, nested) for item in value]
+        finally:
+            nested.discard(id(value))
+    return non_data_marker(type(value).__name__)
 
 
 def dumps_exact(obj: object, *, indent: int | None = 2) -> str:

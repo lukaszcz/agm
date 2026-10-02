@@ -939,6 +939,181 @@ class TestBuiltinExceptionFields:
 
 
 class TestRunBoundaryRecords:
+    def test_run_start_records_program_arguments_and_config_values(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.arguments import ProgramArguments
+        from agm.agl.semantics.values import BoolValue, IntValue
+        from tests._agl_helpers import agent_value
+
+        source = (
+            '@param let environment: text = "default-env"\n'
+            "@param let retries: int = 1\n"
+            "@param let threshold: decimal = 1.5\n"
+            "program def main(@arg-pos count: int, @arg-named label: text) -> unit = ()\n"
+        )
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = runtime.prepare_program(source)
+        discovery = runtime.discover_programs(prepared)
+        assert discovery.compiled is not None
+        (program,) = discovery.programs
+        parameters = discovery.params_for(program)
+        preflight = runtime.preflight_arguments(
+            prepared,
+            program,
+            ProgramArguments(positional=(7,), named={"label": "release"}),
+            compiled=discovery.compiled,
+            param_values={
+                parameters[0].key: "production",
+                parameters[1].key: 4,
+                parameters[2].key: "0.125",
+            },
+        )
+        assert preflight.result.ok
+        assert preflight.executable is not None
+
+        trace_path = tmp_path / "trace.jsonl"
+        result = runtime.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=preflight.executable,
+            trace_file=trace_path,
+            program_symbol=preflight.executable.program_symbols[program.node_id],
+            arguments=preflight.arguments,
+            param_seeds=preflight.param_seeds,
+            builtin_host_settings={
+                "strict-json": BoolValue(True),
+                "parse-error-retries": IntValue(2),
+                "default-agent": agent_value("AgentCommand", command="tool"),
+            },
+        )
+
+        assert result.ok
+        start = next(record for record in _load_jsonl(trace_path) if record["kind"] == "run_start")
+        assert start["arguments"] == {"count": 7, "label": "release"}
+        assert start["parameters"] == {
+            "<entry>::environment": "production",
+            "<entry>::retries": 4,
+            "<entry>::threshold": "0.125",
+        }
+        assert start["config"] == {
+            "std/config::strict-json": True,
+            "std/config::parse-error-retries": 2,
+            "std/config::default-agent": {"$case": "AgentCommand", "command": "tool"},
+        }
+
+    def test_trace_values_keep_enum_data_and_degrade_cycles_and_non_data(self) -> None:
+        from decimal import Decimal
+
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from agm.agl.ir.ids import ContractId, FunctionId, NominalId
+        from agm.agl.ir.program import (
+            NominalDescriptor,
+            NominalKind,
+            ValueDescriptors,
+            VariantDescriptor,
+        )
+        from agm.agl.runtime.serialize import value_to_trace_json_obj
+        from agm.agl.semantics.values import (
+            ArrayValue,
+            BoolValue,
+            ConstructorValue,
+            ContractValue,
+            DecimalValue,
+            DictValue,
+            ExceptionValue,
+            IntValue,
+            IrClosureValue,
+            IteratorValue,
+            JsonValue,
+            RecordValue,
+            TextValue,
+            UnitValue,
+        )
+
+        enum_id = NominalId(1)
+        member_id = NominalId(2)
+        descriptors = ValueDescriptors(
+            nominals={
+                enum_id: NominalDescriptor(
+                    nominal=enum_id,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Shade",
+                    kind=NominalKind.ENUM,
+                    variants=(VariantDescriptor("Blue", ("value",), member_id),),
+                )
+            },
+            functions={},
+        )
+
+        def encode(value: object) -> object:
+            return value_to_trace_json_obj(value, descriptors, NO_BUILTIN_DECLARATIONS)
+
+        assert encode(RecordValue(member_id, {"value": TextValue("sky")})) == {
+            "$case": "Blue",
+            "value": "sky",
+        }
+        assert encode(RecordValue(NominalId(3), {"value": IntValue(4)})) == {"value": 4}
+        assert encode(ExceptionValue(NominalId(4), {"message": TextValue("failed")})) == {
+            "message": "failed"
+        }
+        assert encode(ArrayValue([IntValue(1)])) == [1]
+        assert encode(DictValue(entries={"count": IntValue(2)})) == {"count": 2}
+        assert encode(DecimalValue(Decimal("1.25"))) == "1.25"
+        assert encode(BoolValue(True)) is True
+
+        assert encode(
+            JsonValue(
+                {
+                    "null": None,
+                    "bool": False,
+                    "integer": 3,
+                    "text": "ok",
+                    "decimal": Decimal("2.5"),
+                    "float": 1.5,
+                    "bad-text": "\ud800",
+                    "bad-float": float("nan"),
+                    "nested": [True, {"value": 2}],
+                }
+            )
+        ) == {
+            "null": None,
+            "bool": False,
+            "integer": 3,
+            "text": "ok",
+            "decimal": "2.5",
+            "float": 1.5,
+            "bad-text": "<text has no JSON representation>",
+            "bad-float": "<float has no JSON representation>",
+            "nested": [True, {"value": 2}],
+        }
+        assert encode(JsonValue(object())) == "<object has no JSON representation>"
+
+        cycle_list: list[object] = []
+        cycle_list.append(cycle_list)
+        cycle_mapping: dict[str, object] = {}
+        cycle_mapping["self"] = cycle_mapping
+        assert encode(JsonValue(cycle_list)) == ["<cyclic value>"]
+        assert encode(JsonValue(cycle_mapping)) == {"self": "<cyclic value>"}
+
+        array = ArrayValue([])
+        array.elements.append(array)
+        dictionary = DictValue()
+        dictionary.entries["self"] = dictionary
+        record = RecordValue(NominalId(5), {})
+        record.fields["self"] = record
+        exception = ExceptionValue(NominalId(6), {})
+        exception.fields["cause"] = exception
+        assert encode(array) == ["<cyclic value>"]
+        assert encode(dictionary) == {"self": "<cyclic value>"}
+        assert encode(record) == {"self": "<cyclic value>"}
+        assert encode(exception) == {"cause": "<cyclic value>"}
+
+        assert encode(UnitValue()) == "<unit has no JSON representation>"
+        assert encode(ConstructorValue(NominalId(7))) == "<constructor has no JSON representation>"
+        assert encode(IrClosureValue(FunctionId(1), ())) == "<function has no JSON representation>"
+        assert encode(IteratorValue(elements=[])) == "<iterator has no JSON representation>"
+        assert encode(ContractValue(ContractId(1))) == "<contract has no JSON representation>"
+
     def test_run_start_record_present(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)

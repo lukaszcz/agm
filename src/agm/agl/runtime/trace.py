@@ -161,6 +161,9 @@ class TraceStore:
         *,
         command: str | None = None,
         function: str | None = None,
+        arguments: Mapping[str, object] | None = None,
+        parameters: Mapping[str, object] | None = None,
+        config: Mapping[str, object] | None = None,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
         if self._path is None:
@@ -170,6 +173,12 @@ class TraceStore:
             extra["command"] = command
         if function is not None:
             extra["function"] = function
+        if arguments is not None:
+            extra["arguments"] = dict(arguments)
+        if parameters is not None:
+            extra["parameters"] = dict(parameters)
+        if config is not None:
+            extra["config"] = dict(config)
         self._emit("run_start", extra, span)
 
     def run_end(self, *, ok: bool) -> None:

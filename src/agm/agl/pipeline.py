@@ -79,6 +79,13 @@ if TYPE_CHECKING:
 _ResultT = TypeVar("_ResultT")
 
 
+def _trace_binding_label(key: "StaticBindingKey") -> str:
+    """Return the stable qualified spelling of a host-seeded binding."""
+    module_id, scope_path, name = key
+    declaration_path = "::".join((*scope_path, name))
+    return f"{module_id.display()}::{declaration_path}"
+
+
 class ArtifactProvenanceError(Exception):
     """A cached compiler artifact does not belong to the prepared source it is
     handed back with.
@@ -655,12 +662,6 @@ class PipelineDriver:
                 mkdir(options.trace_file.parent, parents=True, exist_ok=True)
             except OSError as exc:
                 trace.disable(exc)
-        trace.run_start(
-            command=options.invoked_command,
-            function=options.program_function,
-            span=options.program_span,
-        )
-
         if options.host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
@@ -681,6 +682,53 @@ class PipelineDriver:
             # both routes: it is the more specific host declaration.
             for key, value in options.builtin_var_seeds.items():
                 interpreter_builtin_settings[key] = value
+
+        if trace.path is not None:
+            from agm.agl.ir.builtin_vars import builtin_var_key
+            from agm.agl.ir.program import ValueDescriptors
+            from agm.agl.modules.ids import STD_CONFIG_ID
+            from agm.agl.runtime.serialize import value_to_trace_json_obj
+
+            descriptors = ValueDescriptors.from_program(executable)
+            signature = (
+                executable.program_signatures.get(program_symbol, ())
+                if program_symbol is not None
+                else ()
+            )
+            traced_arguments = {
+                param.name: value_to_trace_json_obj(value, descriptors, executable.builtin_nominals)
+                for param, value in zip(signature, arguments)
+                if not isinstance(value, UseDefault)
+            }
+            traced_parameters = {
+                _trace_binding_label(key): value_to_trace_json_obj(
+                    value, descriptors, executable.builtin_nominals
+                )
+                for key, value in (options.param_seeds or {}).items()
+            }
+            normalized_settings = {
+                (builtin_var_key(STD_CONFIG_ID, (), key) if isinstance(key, str) else key): value
+                for key, value in interpreter_builtin_settings.items()
+            }
+            traced_config = {
+                _trace_binding_label(key): value_to_trace_json_obj(
+                    value, descriptors, executable.builtin_nominals
+                )
+                for key, value in normalized_settings.items()
+            }
+        else:
+            traced_arguments = None
+            traced_parameters = None
+            traced_config = None
+
+        trace.run_start(
+            command=options.invoked_command,
+            function=options.program_function,
+            arguments=traced_arguments,
+            parameters=traced_parameters,
+            config=traced_config,
+            span=options.program_span,
+        )
 
         try:
             interp = IrInterpreter(

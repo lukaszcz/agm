@@ -501,16 +501,20 @@ While tracing is active, a conforming host writes one JSON object per line.
 Every record starts with `kind`, `ts`, `file`, `line`, and `col`, in that
 order. `ts` is an ISO-8601 local timestamp with an offset; `file`, `line`, and
 `col` identify the source location when known and are `null` otherwise. Source
-columns are 1-based. `run_start` also records the invoked `command` and
-selected `function` when the host knows them. Run boundaries delimit each
+columns are 1-based. `run_start` records the invoked `command` and selected
+`function` when known. It also includes `arguments` by program parameter name,
+`parameters` for host-seeded `@param` bindings, and `config` for other
+host-seeded values. Parameter and config keys use qualified binding names;
+enum values retain their `$case` tag, and decimal values are exact text strings.
+Cycles and non-data values degrade to markers. Run boundaries delimit each
 execution, including entries appended to a shared file. Positional source
 writes may enable or disable tracing, so records outside the active interval
 (including run start or end) can be absent.
 
 Tracing records only observable boundaries:
 
-- run start (with the invoked command and selected `program def` function when
-  known) and end (with success/failure);
+- run start (with the invoked command, selected `program def` function, and
+  host-supplied values when known) and end (with success/failure);
 - stdout emitted by `print`;
 - each agent request and response. A request records the fully composed prompt,
   the selected `Agent` value as given (`agent`, variant and payload), the agent

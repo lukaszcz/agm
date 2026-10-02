@@ -4,6 +4,10 @@ build:
   os: ubuntu-24.04
   tools:
     python: '3.14'
+  jobs:
+    build:
+      html:
+        - NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs build --strict --site-dir "$READTHEDOCS_OUTPUT/html"
 
 python:
   install:

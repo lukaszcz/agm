@@ -11,7 +11,8 @@ Start at the [documentation landing page](docs/index.md) for the language refere
 command reference, and architecture guide. Sources remain Markdown under `docs/`.
 
 Run `just docs-build` to build into `site/`, or `just docs-serve` for a live preview at
-<http://127.0.0.1:8000>. These commands install the locked documentation dependencies;
+<http://0.0.0.0:8000>, accessible over the LAN at `http://<host-ip>:8000`.
+These commands install the locked documentation dependencies;
 pass server options with `just docs-serve --dev-addr 127.0.0.1:8080`.
 
 Read the Docs uses `.readthedocs.yaml` and `mkdocs.yml`. Import this repository into

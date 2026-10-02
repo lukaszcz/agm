@@ -15,11 +15,11 @@ setup:
 
 # Build the Markdown documentation into site/
 docs-build:
-    uv run --locked --group docs mkdocs build --strict
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs build --strict
 
-# Serve the documentation with live reload (default: http://127.0.0.1:8000)
+# Serve the documentation with live reload on all interfaces
 docs-serve *args:
-    uv run --locked --group docs mkdocs serve --strict {{args}}
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs serve --strict --dev-addr 0.0.0.0:8000 {{args}}
 
 check_coverage := "100"
 

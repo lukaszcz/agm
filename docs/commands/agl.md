@@ -74,9 +74,9 @@ a direct `agm repl` entry is a static error.
 
 - `--echo` / `--no-echo`: Echo live agent progress and the final response to stderr. When tracing
   is enabled, intermediate progress and stderr chunks are grouped in the `intermediate_output`
-  array on the agent response record, independent of echo. Progress items include a `type`
-  (`message`, `tool_call`, or `tool_result`) when available, and may include `tool_name` and
-  `tool_call_id`; final output is recorded as `content`.
+  array on the agent response record, independent of echo. Each item has a `type` (`message`,
+  `tool_call`, `tool_result`, `progress` for unclassified output, or `stderr`) and text, and may
+  include `tool_name` and `tool_call_id`; final output is recorded as `content`.
   `--echo` overrides `[exec] echo` (default off).
 - `-c SOURCE`, `--code SOURCE`: AgL program source text, instead of `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` by declaration path (`main`,

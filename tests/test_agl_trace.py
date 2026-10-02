@@ -316,13 +316,12 @@ class TestAgentCallRecord:
         response = next(record for record in records if record["kind"] == "agent_response")
         assert response["intermediate_output"] == [
             {
-                "phase": "progress",
                 "type": "tool_call",
                 "tool_name": "Read",
                 "tool_call_id": "call-1",
                 "text": "[Read]\n",
             },
-            {"phase": "stderr", "text": "log\n"},
+            {"type": "stderr", "text": "log\n"},
         ]
         assert response["content"] == "done"
         assert all(record["kind"] != "agent_output" for record in records)
@@ -622,7 +621,7 @@ class TestRetryRecords:
         assert response["exit_code"] == 9
         assert response["elapsed"] == 1.5
         assert response["stderr_tail"] == "too slow"
-        assert response["intermediate_output"] == [{"phase": "progress", "text": "started\n"}]
+        assert response["intermediate_output"] == [{"type": "progress", "text": "started\n"}]
 
     def test_successful_response_carries_sandboxed_and_permission_mode(
         self, tmp_path: Path

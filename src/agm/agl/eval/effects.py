@@ -275,9 +275,8 @@ class EffectHandlers:
                 return
             with self._output_lock:
                 if trace and phase != "final":
-                    item = {"phase": phase, "text": text}
-                    if event_type is not None:
-                        item["type"] = event_type
+                    output_type = "stderr" if phase == "stderr" else event_type or "progress"
+                    item = {"type": output_type, "text": text}
                     if tool_name is not None:
                         item["tool_name"] = tool_name
                     if tool_call_id is not None:

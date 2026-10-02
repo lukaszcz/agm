@@ -190,3 +190,17 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     assert invocation.exit_code == 0, invocation.output
     assert "AgentCommand" in invocation.output
     assert "mock" in invocation.output
+
+
+def test_exec_agent_failure_displays_captured_stderr(
+    tmp_path: Path, fake_agent_transport: FakeAgentTransport
+) -> None:
+    program = tmp_path / "program.agl"
+    write_file_program(program, 'let answer: text = AgentCodex().ask("review")\nprint answer\n')
+    diagnostic = "failed printing to stdout: Resource temporarily unavailable (os error 11)"
+    fake_agent_transport.queue(fake_agent_transport.failure(returncode=101, stderr=diagnostic))
+
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
+
+    assert result.exit_code != 0
+    assert diagnostic in result.output

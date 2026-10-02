@@ -287,6 +287,7 @@ class EffectHandlers:
                         f"Agent {agent_label!r} failed: {error.cause}"
                         + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
                         + (f": {error.detail}" if error.detail else "")
+                        + (f"\n{error.stderr_tail}" if error.stderr_tail else "")
                     ),
                     "agent": agent,
                     "cause": TextValue(error.cause),

@@ -676,6 +676,8 @@ output surfaces as `cause = "protocol_failure"`, with the message giving the
 byte offset of the first invalid byte; the stderr tail in `metadata` is `""`
 if it is itself undecodable. It is catchable and is never retried by
 `parse-error-retries`, with no opt-out: agent CLIs are specified to emit UTF-8.
+The exception message includes the captured stderr tail when available; the same
+tail is retained in `metadata`.
 **`SessionError`** instead reports a session lifecycle, capability, or
 non-ask backend failure: opening or using a closed session, a sandbox
 preparation failure at open, an unsupported operation or transport, and failed

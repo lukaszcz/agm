@@ -46,6 +46,7 @@ def _run_request(
         result_stderr_tail,
         run_prepared_prompt_result,
     )
+    from agm.agent.spec import AgentCodex
     from agm.util.interp import InterpolationError
 
     temp_files: list[Path] = []
@@ -63,6 +64,7 @@ def _run_request(
             prepared,
             idle_timeout=idle_timeout,
             stdout_callback=stdout_callback,
+            stdout_to_file=isinstance(request.agent, AgentCodex),
             stderr_callback=(
                 None if output_callback is None else lambda text: output_callback("stderr", text)
             ),

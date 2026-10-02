@@ -119,6 +119,7 @@ def _patch_start_process(
         isolate_process_group: bool,
         stdin_text: str | None,
         interrupt_cleanup_cmd: list[str] | None = None,
+        stdout_to_file: bool = False,
     ) -> tuple[
         subprocess.Popen[bytes],
         list[threading.Thread],

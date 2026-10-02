@@ -16,6 +16,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryFile
 from types import FrameType
 from typing import IO, NoReturn, TextIO
 
@@ -228,6 +229,30 @@ def _read_pipe_chunks(
         output_queue.put((name, None))
 
 
+def _read_file_chunks(
+    stream: IO[bytes],
+    process: subprocess.Popen[bytes],
+    *,
+    output_queue: queue.Queue[tuple[str, bytes | None]],
+) -> None:
+    """Tail captured stdout without sharing the child's file position."""
+    offset = 0
+    try:
+        while True:
+            exited = process.poll() is not None
+            chunk = os.pread(stream.fileno(), 65_536, offset)
+            if chunk:
+                offset += len(chunk)
+                output_queue.put(("stdout", chunk))
+            elif exited:
+                return
+            else:
+                time.sleep(0.01)
+    finally:
+        stream.close()
+        output_queue.put(("stdout", None))
+
+
 def _drain_process_streams(
     process: subprocess.Popen[bytes],
     readers: list[threading.Thread],
@@ -368,16 +393,17 @@ def _start_process_with_readers(
     isolate_process_group: bool,
     stdin_text: str | None,
     interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_to_file: bool = False,
 ) -> tuple[
     subprocess.Popen[bytes],
     list[threading.Thread],
     queue.Queue[tuple[str, bytes | None]],
     threading.Thread | None,
 ]:
-    """Spawn the process and start pipe-reader threads.
+    """Spawn the process and start output-reader threads.
 
     Return ``(process, readers, queue, stdin_writer)`` where ``readers`` contains
-    only the stdout/stderr pipe-reader threads (each posts to *queue*).
+    only the stdout/stderr reader threads (each posts to *queue*).
     ``stdin_writer`` is a separate thread that writes *stdin_text* to the process
     stdin pipe — it does NOT post to *queue* and must be joined separately after
     draining.  It is ``None`` when *stdin_text* is ``None``."""
@@ -389,13 +415,19 @@ def _start_process_with_readers(
     process: subprocess.Popen[bytes] | None = None
     stdin_writer: threading.Thread | None = None
     readers: list[threading.Thread] = []
+    stdout_file: IO[bytes] | None = None
     try:
+        if stdout_to_file:
+            stdout_file = TemporaryFile()
+        stdout_target: IO[bytes] | int | None = stdout_file
+        if stdout_target is None and need_stdout_pipe:
+            stdout_target = subprocess.PIPE
         # core.env imports this module, so it cannot import resolve_env here without a cycle
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=os.environ if env is None else env,
-            stdout=subprocess.PIPE if need_stdout_pipe else None,
+            stdout=stdout_target,
             stderr=subprocess.PIPE if need_stderr_pipe else None,
             stdin=stdin_pipe,
             text=False,
@@ -430,11 +462,16 @@ def _start_process_with_readers(
                 )
                 stdin_writer.start()
 
-            if process.stdout is not None:
+            stdout_stream = stdout_file if stdout_file is not None else process.stdout
+            if stdout_stream is not None:
                 reader = threading.Thread(
                     target=partial(
+                        _read_file_chunks, stdout_stream, process, output_queue=stream_queue
+                    )
+                    if stdout_file is not None
+                    else partial(
                         _read_pipe_chunks,
-                        process.stdout,
+                        stdout_stream,
                         name="stdout",
                         output_queue=stream_queue,
                     ),
@@ -475,6 +512,8 @@ def _start_process_with_readers(
             for pipe in (process.stdin, process.stdout, process.stderr):
                 if pipe is not None:
                     pipe.close()
+        if stdout_file is not None:
+            stdout_file.close()
         raise
 
 
@@ -490,6 +529,7 @@ def _running_process(
     isolate_process_group: bool,
     stdin_text: str | None,
     interrupt_cleanup_cmd: list[str] | None,
+    stdout_to_file: bool = False,
 ) -> Iterator[
     tuple[subprocess.Popen[bytes], list[threading.Thread], queue.Queue[tuple[str, bytes | None]]]
 ]:
@@ -508,6 +548,7 @@ def _running_process(
                 isolate_process_group=isolate_process_group,
                 stdin_text=stdin_text,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                stdout_to_file=stdout_to_file,
             )
         yield process, readers, stream_queue
     except BaseException:
@@ -798,6 +839,7 @@ def _run_capture_result_impl(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    stdout_to_file: bool = False,
 ) -> tuple[ProcessCaptureResult, OSError | ValueError | None]:
     """Internal implementation of ``run_capture_result``.
 
@@ -823,6 +865,7 @@ def _run_capture_result_impl(
                     capture_output=True,
                     stdout_callback=stdout_callback,
                     stderr_callback=stderr_callback,
+                    stdout_to_file=stdout_to_file,
                     isolate_process_group=isolate_process_group,
                     stdin_text=stdin_text,
                     interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -907,6 +950,7 @@ def run_capture_result(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    stdout_to_file: bool = False,
 ) -> ProcessCaptureResult:
     """Run *cmd* and return a :class:`ProcessCaptureResult`.
 
@@ -918,6 +962,9 @@ def run_capture_result(
     Parameters match :func:`run_capture` where applicable:
     *idle_timeout* (seconds), *cwd*, *env*, *stdin_text*, *isolate_process_group*,
     *interrupt_cleanup_cmd*, *stdout_callback*, *stderr_callback*.
+
+    *stdout_to_file* tails an anonymous temporary file instead of a pipe,
+    preventing pipe backpressure from failing a child's nonblocking writes.
     """
     result, _ = _run_capture_result_impl(
         cmd,
@@ -929,6 +976,7 @@ def run_capture_result(
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        stdout_to_file=stdout_to_file,
     )
     return result
 

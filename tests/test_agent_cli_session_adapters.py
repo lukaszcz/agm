@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,6 +120,46 @@ def _open(
             env=env or {},
         )
     )
+
+
+@pytest.mark.parametrize("single_prompt", [False, True])
+@pytest.mark.parametrize("echo", [False, True])
+def test_codex_captures_large_events_from_nonblocking_stdout(
+    tmp_path: Path, single_prompt: bool, echo: bool
+) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        "os.set_blocking(1, False)\n"
+        "answer = 'x' * 2_000_000\n"
+        "if '--json' in sys.argv:\n"
+        "    output = json.dumps({'type': 'thread.started', 'thread_id': 'thread'}) + '\\n'\n"
+        "    output += json.dumps({'type': 'item.completed', 'item': "
+        "{'type': 'agent_message', 'text': answer}}) + '\\n'\n"
+        "else:\n"
+        "    output = answer\n"
+        "data = output.encode()\n"
+        "if os.write(1, data) != len(data):\n"
+        "    sys.stderr.write('stdout backpressure\\n')\n"
+        "    sys.exit(101)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("", ""), single_prompt=single_prompt, env={"PATH": str(tmp_path)})
+    events: list[tuple[str, str]] = []
+    request = SessionAskRequest(
+        "question",
+        output_callback=(lambda phase, text: events.append((phase, text))) if echo else None,
+    )
+
+    assert backend.ask(request).content == "x" * 2_000_000
+    if not single_prompt:
+        assert backend.ask(request).content == "x" * 2_000_000
+    assert not any(phase == "stderr" for phase, _ in events)
+    backend.close()
 
 
 def _file_prompt_argv(argv: list[str], command: list[str]) -> None:

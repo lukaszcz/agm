@@ -27,7 +27,8 @@ from tests._proc_helpers import wait_for_signal_ignored_script
 
 @pytest.mark.parametrize("boundary", ["spawn", "unmask", "reader", "reader-failure"])
 @pytest.mark.parametrize(
-    ("mode", "isolate"), [("foreground", True), ("capture", True), ("stdin", False)]
+    ("mode", "isolate"),
+    [("foreground", True), ("capture", True), ("stdin", False), ("file", True)],
 )
 def test_startup_interrupt_reaps_child_and_runs_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, mode: str, isolate: bool
@@ -74,6 +75,9 @@ def test_startup_interrupt_reaps_child_and_runs_cleanup(
             if mode == "stdin":
                 options["stdin_text"] = "input"
                 run = run_capture
+            elif mode == "file":
+                options["stdout_to_file"] = True
+                run = run_capture_result
             else:
                 options["capture_output"] = mode == "capture" or boundary.startswith("reader")
                 run = process_mod.run_subprocess
@@ -131,6 +135,44 @@ def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Pat
     stderr_chunks = [chunk for stream, chunk, _ in events if stream == "stderr"]
     assert "".join(stdout_chunks) == stdout
     assert "".join(stderr_chunks) == stderr
+
+
+def test_file_capture_streams_before_exit_and_preserves_final_output(tmp_path: Path) -> None:
+    released = tmp_path / "released"
+    script = (
+        "import pathlib, sys, time\n"
+        "sys.stdout.write('first\\n'); sys.stdout.flush()\n"
+        "while not pathlib.Path(sys.argv[1]).exists(): time.sleep(0.01)\n"
+        "sys.stdout.write('last'); sys.stderr.write('diagnostic')\n"
+        "sys.exit(7)\n"
+    )
+    chunks: list[str] = []
+
+    def progress(chunk: str) -> None:
+        chunks.append(chunk)
+        released.touch()
+
+    result = run_capture_result(
+        [sys.executable, "-c", script, str(released)],
+        stdout_to_file=True,
+        stdout_callback=progress,
+        idle_timeout=5,
+        isolate_process_group=True,
+    )
+
+    assert result.returncode == 7
+    assert result.stdout.text() == "first\nlast"
+    assert "".join(chunks) == result.stdout.text()
+    assert result.stderr.text() == "diagnostic"
+
+
+@pytest.mark.parametrize("command", [["/missing/executable"], ["invalid\x00command"]])
+def test_file_capture_reports_spawn_failure(command: list[str]) -> None:
+    result = run_capture_result(command, stdout_to_file=True)
+
+    assert result.spawn_error is not None
+    assert result.returncode is None
+    assert result.stdout.data == b""
 
 
 def test_run_foreground_preserves_controlling_terminal_for_interactive_prompts(

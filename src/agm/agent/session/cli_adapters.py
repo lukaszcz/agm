@@ -123,6 +123,7 @@ class _CliPromptBackend(SandboxFixture):
         stdout_callback: Callable[[str], None] | None = None,
         stdout_finalizer: Callable[[], None] | None = None,
         decode_stdout: Callable[[str], str] | None = None,
+        stdout_to_file: bool = False,
     ) -> SessionAskResponse:
         """Run one prepared prompt and translate process failures for sessions."""
         temp_files: list[Path] = []
@@ -143,6 +144,7 @@ class _CliPromptBackend(SandboxFixture):
                     prepared,
                     idle_timeout=self._idle_timeout,
                     stdout_callback=stdout_callback,
+                    stdout_to_file=stdout_to_file,
                     stderr_callback=(
                         None
                         if output_callback is None
@@ -505,7 +507,10 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
 
 
 class CodexCliSessionBackend(_CliPromptBackend):
-    """Start Codex threads from JSONL, then resume them through plaintext output."""
+    """Start Codex threads from JSONL, then resume them through plaintext output.
+
+    File capture avoids EAGAIN on large writes to nonblocking stdout pipes.
+    """
 
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
 
@@ -548,6 +553,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
                     permission_mode=self._permission_mode, json_output=stream_output
                 ),
                 delivery=PromptDelivery.STDIN,
+                stdout_to_file=True,
                 permission_mode=self._permission_mode,
                 sandbox=self._sandbox,
                 output_callback=request.output_callback,
@@ -582,6 +588,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
                     json_output=json_output if request.output_callback is not None else None,
                 ),
                 delivery=PromptDelivery.STDIN,
+                stdout_to_file=True,
                 permission_mode=self._permission_mode,
                 sandbox=self._sandbox,
                 output_callback=request.output_callback,

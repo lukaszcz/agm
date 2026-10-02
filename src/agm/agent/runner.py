@@ -700,6 +700,7 @@ def run_prepared_prompt_result(
     idle_timeout: float | None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    stdout_to_file: bool = False,
 ) -> PromptRunResult:
     """Run a prepared runner invocation and return a structured result.
 
@@ -711,6 +712,8 @@ def run_prepared_prompt_result(
     instead of being attached via placeholder or ``@<path>`` — it is
     delivered directly from the already-rendered text rather than read back
     off disk.
+
+    *stdout_to_file* preserves streaming without pipe backpressure.
 
     When ``prepared.sandbox`` is a ``PreparedSandboxCommand``, the subprocess
     primitive receives its ``env``, ``cwd``, and ``interrupt_cleanup_cmd``, and
@@ -760,6 +763,7 @@ def run_prepared_prompt_result(
             interrupt_cleanup_cmd=interrupt_cleanup_cmd,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
+            stdout_to_file=stdout_to_file,
         )
     finally:
         if sandbox is not None:

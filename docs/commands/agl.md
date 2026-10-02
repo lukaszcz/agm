@@ -565,6 +565,8 @@ the status; an out-of-range value is a runtime error, not a termination.
 - Error diagnostics (static errors, including non-exhaustive or redundant `case` arms, host
   configuration errors, program-argument failures) and uncaught AgL exceptions go to stderr and
   set the exit code.
+- Agent transport failures include the captured stderr tail in the exception message,
+  even when agent output echo and tracing are disabled.
 - Advisory **warnings** go to stderr as `warning: line N: message` and never affect the exit
   code; the program runs to completion.
 - Program `print` output goes to stdout, free of diagnostics.

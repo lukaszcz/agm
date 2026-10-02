@@ -1,0 +1,26 @@
+# Library module completing the cycle with `left`. Each of its aliases names
+# a record directly, the last two `left`'s own.
+import left::*
+
+record Other
+  y: int
+
+type Rt0 = Other
+
+type Rt1 = Other
+
+type Rt2 = Base
+
+type Rt3 = Base
+
+def Rt1::rt1(self) -> int = self.y + self.o5()
+
+def Rt3::rt3(self) -> int = self.l3() + 100
+
+def Rt2::Deep::upper() -> int = 5
+
+def Rt0::Deep::second() -> int = L5::Deep::first() + 1
+
+record Rt1::Deep::Pair
+  a: int
+  b: int

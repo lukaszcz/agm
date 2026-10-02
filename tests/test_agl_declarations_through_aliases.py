@@ -956,6 +956,130 @@ _SCENARIOS["a-method-beneath-an-imported-alias-reads-no-enum-member-injected-abo
 )
 
 
+_NESTED_ALIAS = "scope Zz\n  type Gb = Base\nend Zz"
+"""An alias of ``Base`` whose scope path sorts after every path beneath ``Ga`` or ``S``."""
+_BOTH_ALIASES = ("Ga", "Base", "Zz::Gb")
+
+_SCENARIOS |= {
+    "a-path-through-one-alias-reads-a-type-declared-through-a-later-spelled-one": Scenario(
+        modules=_MODULES,
+        header=(
+            "import base::*",
+            "type Ga = Base",
+            f"{_NESTED_ALIAS}\nrecord Zz::Gb::T\n  y: int",
+            "def Ga::T::k() -> int = 4\ndef Ga::T::U::j() -> int = 5",
+        ),
+        probes={
+            f"{spelling}-{name}": accepted(f"{spelling}::{read}", "int")
+            for spelling in _BOTH_ALIASES
+            for name, read in (
+                ("beneath", "T::k()"),
+                ("nested", "T::U::j()"),
+                ("type", "T(y = 1).y"),
+            )
+        },
+    ),
+    "paths-through-two-aliases-beneath-one-nested-type-are-one-path": Scenario(
+        modules=_MODULES,
+        header=(
+            "import base::*",
+            "type Ga = Base",
+            _NESTED_ALIAS,
+            "def Zz::Gb::Inner::j() -> int = 5\ndef Ga::Inner::k() -> int = 4",
+        ),
+        probes={
+            f"{spelling}-{name}": accepted(f"{spelling}::Inner{read}", "int")
+            for spelling in _BOTH_ALIASES
+            for name, read in (("first", "::j()"), ("second", "::k()"), ("type", "(y = 1).y"))
+        },
+    ),
+    "a-used-path-reads-a-type-declared-through-a-later-spelled-alias": Scenario(
+        modules=_MODULES,
+        header=(
+            "import base::*",
+            f"{_NESTED_ALIAS}\nrecord Zz::Gb::T\n  y: int",
+            "scope S\n  use Base::{T}\n  def make() -> T = T(y = 3)\nend S",
+            "def S::T::k() -> int = 4",
+        ),
+        probes={
+            "target": accepted("Base::T::k()", "int"),
+            "alias": accepted("Zz::Gb::T::k()", "int"),
+            "inside-the-use": accepted("S::make().y", "int"),
+            # The use exposes ``T`` inside ``S`` alone: no path of ``S`` spells it.
+            "used-path": rejected("S::T::k()", UnknownMemberError, "S::T::k"),
+            "used-constructor": rejected("S::T(y = 1)", UnknownMemberError, "S::T"),
+        },
+    ),
+}
+
+_MANY = 5
+_MANY_ALIASES = "\n".join(
+    (*(f"type A{i} = Base" for i in range(_MANY - 1)), f"type A{_MANY - 1} = A{_MANY - 2}")
+)
+"""Aliases of one type, the last through the one before."""
+_MANY_DECLARED = "\n".join(
+    (
+        "def A0::f0() -> int = 0",
+        *(f"def A{i}::f{i}() -> int = A{i - 1}::f{i - 1}() + 1" for i in range(1, _MANY)),
+    )
+)
+"""One function beneath each alias, calling the one beneath the alias before it."""
+
+_SCENARIOS["declared-through-many-aliases-of-one-type"] = Scenario(
+    header=(
+        "record Base\n  x: int",
+        _MANY_ALIASES,
+        _MANY_DECLARED,
+        f"def A{_MANY - 1}::Inner::k() -> int = 1\ndef A2::Inner::j() -> int = A0::Inner::k()\n"
+        "record A3::Inner::T\n  y: int",
+    ),
+    probes={
+        "target-reaches-the-last": accepted(f"Base::f{_MANY - 1}()", "int"),
+        "first-reaches-the-last": accepted(f"A0::f{_MANY - 1}()", "int"),
+        "last-reaches-the-first": accepted(f"A{_MANY - 1}::f0()", "int"),
+        "nested-through-the-target": accepted("Base::Inner::k()", "int"),
+        "nested-through-another": accepted(f"A{_MANY - 1}::Inner::j()", "int"),
+        "nested-type": accepted("A1::Inner::T(y = 1).y", "int"),
+        "nested-type-position": accepted(
+            "(fn(p: A2::Inner::T) => p.y)(Base::Inner::T(y = 2))", "int"
+        ),
+        "undeclared": rejected("A4::zz()", UnknownMemberError, "A4::zz"),
+    },
+)
+
+_CYCLE = {
+    "ca": (
+        "import cb::*\nrecord Ra\n  x: int\ntype Tb = Rb\n"
+        "def Tb::fa() -> int = 1\ndef Tb::Inner::ka() -> int = 2\n"
+    ),
+    "cb": (
+        "import ca::*\nrecord Rb\n  y: int\ntype Ta = Ra\n"
+        "def Ta::fb() -> int = 3\ndef Ta::Inner::kb() -> int = 4\n"
+    ),
+}
+"""Two modules importing each other, each declaring beneath an alias of the other's type."""
+
+_SCENARIOS["declared-through-aliases-of-types-of-modules-importing-each-other"] = Scenario(
+    modules=_CYCLE,
+    header=(
+        "import ca::*\nimport cb::*",
+        "type Xa = Ta\ntype Xb = Tb",
+        "def Xa::g() -> int = 5\ndef Xb::Inner::h() -> int = 6",
+    ),
+    probes={
+        "one-through-its-target": accepted("Rb::fa()", "int"),
+        "other-through-its-target": accepted("Ra::fb()", "int"),
+        "one-nested": accepted("Tb::Inner::ka()", "int"),
+        "other-nested-through-an-own-alias": accepted("Xa::Inner::kb()", "int"),
+        "own-through-its-target": accepted("Ra::g()", "int"),
+        "own-through-an-imported-alias": accepted("Ta::g()", "int"),
+        "own-nested-through-its-target": accepted("Rb::Inner::h()", "int"),
+        "one-nested-through-an-own-alias": accepted("Xb::Inner::ka()", "int"),
+        "beneath-the-other-type": rejected("Xa::fa()", UnknownMemberError, "Xa::fa"),
+    },
+)
+
+
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, the file part and every REPL grouping."""
 

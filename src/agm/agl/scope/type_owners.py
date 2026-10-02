@@ -11,7 +11,7 @@ declaration is presumed constructible, leaving the verdict to typecheck.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import Protocol
 
@@ -190,6 +190,8 @@ class TypeOwnerIndex:
         self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
         # Aliases and enums being resolved (:meth:`settled`).
         self._resolving: set[QName] = set()
+        # Every type path resolved, in order (:meth:`resolved_since`).
+        self._resolved: list[QName] = []
 
     def with_retained(
         self, module_id: ModuleId, retained: Mapping[ScopePath, TypeOwner]
@@ -354,17 +356,20 @@ class TypeOwnerIndex:
         return reachable, hidden
 
     def _alias_chain(self, qname: QName) -> Iterator[tuple[QName, TypeOwner]]:
-        """Yield *qname* and each alias target along its chain, with what each selects.
+        """Yield *qname* and each alias target along its chain, with what each declares.
 
         The chain ends at a path naming no type, an alias with no nominal
         target, a target a later REPL entry redeclared (a retained alias's
-        frozen target), or a path it passed before.
+        frozen target), or a path it passed before. A retained alias's
+        declaration and target are what it declared (:meth:`owner`): what
+        its spelling selects now is not read.
         """
         seen: set[QName] = set()
         current, expected = qname, None
         while current not in seen:
             seen.add(current)
-            owner = self.owner(current)
+            retained = None if current in self._all_public_types else self._retained_owner(current)
+            owner = self.owner(current) if retained is None else retained
             if owner is None or (expected is not None and owner.decl_node_id != expected):
                 return
             yield current, owner
@@ -471,8 +476,11 @@ class TypeOwnerIndex:
         it, along the chain (:meth:`_alias_chain`); any other alias is a type
         of its own.
         """
-        named = self._named(qname)
-        return qname if named is None else named[0]
+        named = qname
+        for named, owner in self._alias_chain(qname):
+            if owner.alias is not None and not renames_target(owner.alias):
+                break
+        return named
 
     def denotation(self, qname: QName) -> Denoted | None:
         """The type the alias declared at *qname* denotes, unless it renames its target.
@@ -536,24 +544,13 @@ class TypeOwnerIndex:
 
         A member an alias selects is the target's member.
         """
-        named = self._named(constructor.qname)
-        if named is not None and constructor.member is not None:
-            return named[1].members[constructor.member]
-        if named is None or named[0] == constructor.qname or named[1].constructor is None:
+        named = self.identity(constructor.qname)
+        owner = self.owner(named)
+        if owner is not None and constructor.member is not None:
+            return owner.members[constructor.member]
+        if owner is None or named == constructor.qname or owner.constructor is None:
             return constructor
-        return named[1].constructor
-
-    def _named(self, qname: QName) -> tuple[QName, TypeOwner] | None:
-        """Return the declaration *qname* names (:meth:`identity`) and what it selects.
-
-        ``None`` when *qname* names no type.
-        """
-        named = None
-        for current, owner in self._alias_chain(qname):
-            named = current, owner
-            if owner.alias is not None and not renames_target(owner.alias):
-                break
-        return named
+        return owner.constructor
 
     def declared_owner(
         self, qname: QName, declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias
@@ -563,6 +560,7 @@ class TypeOwnerIndex:
         if owner is None:
             owner = self._resolve(qname, declaration)
             self._owners[qname] = owner
+            self._resolved.append(qname)
         return owner
 
     @property
@@ -581,6 +579,14 @@ class TypeOwnerIndex:
         return qname not in self._resolving and (
             not self._resolving or qname in self._owners or qname not in self._all_public_types
         )
+
+    def resolved_since(self, count: int) -> Sequence[QName]:
+        """The type paths resolved after the first *count* were, in order.
+
+        While a type is being resolved, one not :meth:`settled` becomes so
+        only once it is resolved.
+        """
+        return self._resolved[count:]
 
     def alias_constructor(self, alias: TypeAlias, qname: QName) -> ConstructorRef | None:
         """Return alias *qname*'s constructor, unless it denotes a structural type or an enum."""

@@ -1,0 +1,32 @@
+# Library module forming a cyclic import with `right`. Its aliases chain: each
+# names the one before, the last two reaching `right`'s own record.
+import right::*
+
+record Base
+  x: int
+
+type L0 = Base
+
+type L1 = L0
+
+type L2 = L1
+
+type L3 = L2
+
+type L4 = Other
+
+type L5 = L4
+
+def L0::l0(self) -> int = self.x
+
+def L1::l1(self) -> int = self.l0() + 1
+
+def L2::l2(self) -> int = self.l1() + 1
+
+def L3::l3(self) -> int = self.l2() + 1
+
+def L5::o5(self) -> int = self.y * 2
+
+def L4::Deep::first() -> int = 10
+
+def L3::Deep::lower() -> int = Rt2::Deep::upper() + 1

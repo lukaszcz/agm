@@ -9,6 +9,8 @@ declares what it reads of them.
 
 from __future__ import annotations
 
+import bisect
+import heapq
 import itertools
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import replace
@@ -178,6 +180,7 @@ class SourcesHost(Protocol):
     _root_scope: ScopeNode
     _scope_nodes: dict[ScopePath, ScopeNode]
     _declarations: dict[DeclarationKey, BindingRef]
+    _scope_entity_kinds: dict[DeclarationKey, str]
     _import_decl_scope_paths: dict[int, ScopePath]
     _type_declarations: list[tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]]
     _scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]]
@@ -217,27 +220,37 @@ class ModuleSources(SourcesHost):
         self._enum_member_index: dict[str, dict[QName, ConstructorRef]] | None = None
         # Import declaration id -> the declarations its ``hiding`` removes, by identity.
         self._hidden_by: dict[int, frozenset[DeclarationKey]] = {}
-        # The full path each own scope path spelled otherwise declares (an
-        # alias segment stands for its target's path), and those declaring
-        # each; recorded as lookups first read them, once every module's
-        # headers are prepared, since reading an alias needs them
-        # (``_declare_scope_paths``).
+        # The full path each own scope path declares (an alias segment stands
+        # for its target's path); recorded as lookups first read them, once
+        # every module's headers are prepared, since reading an alias needs
+        # them (``_declare_scope_paths``).
         self._declared_paths: dict[ScopePath, QName] = {}
-        self._declaring_paths: dict[QName, tuple[ScopePath, ...]] = {}
-        self._undeclared_scope_paths: list[ScopePath] = []
-        self._recording_scope_paths = False
+        # The own scope paths to read, shorter first (a heap of sort keys);
+        # those waiting on the type each selects, and how many resolved types
+        # they were released for; and the one being read, if any.
+        self._undeclared_scope_paths: list[tuple[int, ScopePath]] = []
+        self._waiting_scope_paths: dict[QName, list[ScopePath]] = {}
+        self._resolved_seen = 0
+        self._recording_scope_path: ScopePath | None = None
         self._scope_paths_settled = False
+        # The own scope paths declared otherwise than spelled, shorter first,
+        # by what each declares and each name spelled beneath it
+        # (``_declaring_spellings``); and those names, collected on first use.
+        self._declaring_named: dict[tuple[QName | NameAtom, str], list[ScopePath]] = {}
+        self._names_beneath: dict[ScopePath, set[str]] | None = None
+        # The scope paths whose reading read each entry of the two recorded
+        # tables: each is read again when the entry changes.
+        self._declared_readers: dict[ScopePath, set[ScopePath]] = {}
+        self._declaring_readers: dict[tuple[QName | NameAtom, str], set[ScopePath]] = {}
         # Once the tables the resolver collects are complete (:meth:`_keep_readings`),
         # the contributions at each full path, and the own types, by what they are read with.
         self._keeping_readings = False
         self._kept_contributions: dict[tuple[ScopePath, ScopePath, LookupKind], Reading] = {}
         self._kept_own_types: dict[ScopePath, Reading] = {}
 
-    def _own_scope_paths(self) -> list[ScopePath]:
-        """Return every own scope path, the shorter ones last."""
-        return sorted(
-            (path for path in self._scope_nodes if path), key=scope_path_sort_key, reverse=True
-        )
+    def _own_scope_paths(self) -> list[tuple[int, ScopePath]]:
+        """Return every own scope path to read, shorter first (a heap of sort keys)."""
+        return sorted(scope_path_sort_key(path) for path in self._scope_nodes if path)
 
     def _declare_scope_paths(self) -> None:
         """Record the full path each own scope path declares.
@@ -250,36 +263,33 @@ class ModuleSources(SourcesHost):
         ``text::f``). Own scope paths declaring one path are one path: a
         spelling of any reaches what the others declare (:meth:`own_at`).
 
-        The first lookup reading them records them, in rounds: a round
-        records the paths shorter first, reading which paths the previous
-        rounds recorded as declaring one path, as does any lookup made while
-        it runs. A round recording a path declared otherwise, which may
-        change what another selects, is followed by one recording every path
-        again, until a round changes nothing. A path beneath one not recorded
-        yet waits for it; so does one selecting a type not
-        :meth:`~TypeOwnerIndex.settled` yet, until a later lookup.
+        The first lookup reading them reads the paths shorter first, each
+        reading what is recorded so far, as does any lookup made meanwhile. A
+        path beneath one not recorded yet is read once that one is; one
+        selecting a type not :meth:`~TypeOwnerIndex.settled` yet waits, for a
+        later lookup to read it once the type is resolved. A path is read
+        again whenever an entry it read of the recorded tables changes, and
+        recorded anew when it declares another path then.
 
-        Own scope paths never change after collection, so once a round
-        leaves nothing waiting, the recorded tables are final: later calls
-        return at once rather than re-reading every own type again.
+        Own scope paths never change after collection, so once none waits,
+        the recorded tables are final: later calls return at once rather than
+        re-reading every own type again.
         """
-        if self._recording_scope_paths or self._scope_paths_settled:
+        if self._recording_scope_path is not None or self._scope_paths_settled:
             return
-        if not self._type_owners.resolving:
-            # A lookup the round makes would resolve an own alias reading the
-            # paths half recorded; while a type resolves, the round waits on it.
+        owners = self._type_owners
+        settled = not owners.resolving
+        if settled:
+            # A lookup reading a path would resolve an own alias reading the
+            # paths half recorded; while a type resolves, the path waits on it.
             self._declared_type_owners()
-        self._recording_scope_paths = True
-        declaring = dict(self._declaring_paths)
-        self._record_scope_paths(declaring)
-        while declaring != self._declaring_paths:
-            self._declaring_paths = declaring
-            self._declared_paths = {}
-            self._undeclared_scope_paths = self._own_scope_paths()
-            declaring = {}
-            self._record_scope_paths(declaring)
-        self._recording_scope_paths = False
-        self._scope_paths_settled = not self._undeclared_scope_paths
+        resolved = owners.resolved_since(self._resolved_seen)
+        self._resolved_seen += len(resolved)
+        for qname in tuple(self._waiting_scope_paths) if settled else resolved:
+            for path in self._waiting_scope_paths.pop(qname, ()):
+                heapq.heappush(self._undeclared_scope_paths, scope_path_sort_key(path))
+        self._record_scope_paths()
+        self._scope_paths_settled = not self._waiting_scope_paths
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -290,14 +300,15 @@ class ModuleSources(SourcesHost):
             for declaration, path in self._type_declarations
         }
 
-    def _record_scope_paths(self, declaring: dict[QName, tuple[ScopePath, ...]]) -> None:
-        """Record the waiting scope paths, adding those declared otherwise to *declaring*."""
-        waiting: list[ScopePath] = []
-        while self._undeclared_scope_paths:
-            path = self._undeclared_scope_paths.pop()
+    def _record_scope_paths(self) -> None:
+        """Read the own scope paths to read, shorter first, recording what each declares."""
+        unread = self._undeclared_scope_paths
+        while unread:
+            _, path = heapq.heappop(unread)
+            self._recording_scope_path = path
             parent = path[:-1]
+            self._note_read(self._declared_readers, parent)
             if parent and parent not in self._declared_paths:
-                waiting.append(path)
                 continue
             found = lookup_declared(
                 self,
@@ -308,7 +319,7 @@ class ModuleSources(SourcesHost):
             )
             key = found.key if isinstance(found, QualifiedTarget) else None
             if key is not None and not self._type_owners.settled(_key_qname(key)):
-                waiting.append(path)
+                self._waiting_scope_paths.setdefault(_key_qname(key), []).append(path)
                 continue
             owner = None if key is None else self._type_owners.owner(_key_qname(key))
             builtin = None if owner is None else owner.builtin_name
@@ -317,10 +328,83 @@ class ModuleSources(SourcesHost):
             else:
                 module_id, atom = self._declared_paths.get(parent, (self._module_id, ()))
                 qname = (module_id, _bare_atom((*_bare_path(atom), builtin or path[-1])))
-            self._declared_paths[path] = qname
-            if qname != (self._module_id, _bare_atom(path)):
-                declaring[qname] = (*declaring.get(qname, ()), path)
-        self._undeclared_scope_paths.extend(reversed(waiting))
+            self._record_scope_path(path, qname)
+        self._recording_scope_path = None
+
+    def _record_scope_path(self, path: ScopePath, declared: QName) -> None:
+        """Record that own scope path *path* declares *declared*.
+
+        Every scope path that read an entry this changes is read again.
+        """
+        recorded = self._declared_paths.get(path)
+        if recorded == declared:
+            return
+        self._declared_paths[path] = declared
+        readers = self._declared_readers.pop(path, set())
+        for key in self._declaring_keys(path, recorded):
+            self._declaring_named[key].remove(path)
+            readers |= self._declaring_readers.pop(key, set())
+        for key in self._declaring_keys(path, declared):
+            bisect.insort(self._declaring_named.setdefault(key, []), path, key=scope_path_sort_key)
+            readers |= self._declaring_readers.pop(key, set())
+        for reader in readers:
+            heapq.heappush(self._undeclared_scope_paths, scope_path_sort_key(reader))
+
+    def _declaring_keys(
+        self, path: ScopePath, declared: QName | None
+    ) -> Iterator[tuple[QName | NameAtom, str]]:
+        """The entries listing own scope path *path* when it declares *declared*.
+
+        None for a path not recorded or declaring its own spelling
+        (:meth:`_declaring_spellings`).
+        """
+        if declared is None or declared == (self._module_id, _bare_atom(path)):
+            return
+        module_id, atom = declared
+        for name in self._names_spelled_beneath(path):
+            yield declared, name
+            if module_id != self._module_id:
+                yield atom, name
+
+    def _names_spelled_beneath(self, path: ScopePath) -> Collection[str]:
+        """Every name a declaration or scope path is spelled with beneath own scope path *path*.
+
+        Those this module collects, which claim a scoped ``let`` or ``var``
+        before the walk binds it, and those earlier REPL entries retained.
+        """
+        names = self._names_beneath
+        if names is None:
+            names = self._names_beneath = {}
+            retained = self._repl_session_type_paths
+            spelled = (
+                *((*scope, name) for _module_id, scope, name in self._scope_entity_kinds),
+                *(
+                    (*scope, name)
+                    for scope, node in self._scope_nodes.items()
+                    for name in node.members
+                ),
+                *retained,
+                *((*scope, name) for scope, owner in retained.items() for name in owner.members),
+            )
+            for spelling in spelled:
+                names.setdefault(spelling[:-1], set()).add(spelling[-1])
+        return names.get(path, ())
+
+    def _declaring_spellings(self, declared: QName | NameAtom, name: str) -> tuple[ScopePath, ...]:
+        """The own scope paths spelled otherwise declaring *declared*, with *name* spelled beneath.
+
+        *declared* is a full path, or the path alone of ones in other
+        modules. Shorter spellings first.
+        """
+        key = (declared, name)
+        self._note_read(self._declaring_readers, key)
+        return tuple(self._declaring_named.get(key, ()))
+
+    def _note_read[K](self, readers: dict[K, set[ScopePath]], key: K) -> None:
+        """Note in *readers* that the scope path being read, if any, read recorded entry *key*."""
+        reader = self._recording_scope_path
+        if reader is not None:
+            readers.setdefault(key, set()).add(reader)
 
     def declared_scope(self, path: ScopePath) -> QName | None:
         """The full path own scope path *path* declares, when it or a scope above declares another.
@@ -330,6 +414,7 @@ class ModuleSources(SourcesHost):
         """
         self._declare_scope_paths()
         for end in range(len(path), 0, -1):
+            self._note_read(self._declared_readers, path[:end])
             declared = self._declared_paths.get(path[:end])
             if declared is not None and declared != (self._module_id, _bare_atom(path[:end])):
                 module_id, atom = declared
@@ -357,11 +442,6 @@ class ModuleSources(SourcesHost):
         while path not in self._scope_nodes:
             path = path[:-1]
         return path
-
-    def _declaring(self) -> Mapping[QName, tuple[ScopePath, ...]]:
-        """Map each full path that own scope paths spelled otherwise declare to those paths."""
-        self._declare_scope_paths()
-        return self._declaring_paths
 
     def _declares(self, qname: QName) -> bool:
         """Whether a declaration of any kind stands at full path *qname*."""
@@ -559,12 +639,13 @@ class ModuleSources(SourcesHost):
         parent = path[:-1]
         if not parent:
             return reading
-        declaring = self._declaring()
+        self._declare_scope_paths()
+        self._note_read(self._declared_readers, parent)
         declared = self._declared_paths.get(parent, (self._module_id, _bare_atom(parent)))
         return sum(
             (
                 self._own_spelled_at((*spelling, path[-1]), kind)
-                for spelling in declaring.get(declared, ())
+                for spelling in self._declaring_spellings(declared, path[-1])
                 if spelling != parent
             ),
             reading,
@@ -580,15 +661,14 @@ class ModuleSources(SourcesHost):
         parent = path[:-1]
         if not parent:
             return reading
-        declaring = self._declaring()
+        self._declare_scope_paths()
+        self._note_read(self._declared_readers, parent)
         if parent in self._declared_paths:
             return reading
         return sum(
             (
                 self._own_spelled_at((*spelling, path[-1]), kind)
-                for (module_id, atom), spellings in declaring.items()
-                if module_id != self._module_id and atom == _bare_atom(parent)
-                for spelling in spellings
+                for spelling in self._declaring_spellings(_bare_atom(parent), path[-1])
             ),
             reading,
         )
@@ -814,11 +894,12 @@ class ModuleSources(SourcesHost):
         if not routed and declared[0] != self._module_id:
             module_id, atom = declared
             placed = (module_id, _bare_atom((*_bare_path(atom), *rest)))
+            self._declare_scope_paths()
             own = sum(
                 (
                     *(
                         self.own_at((*spelling, *rest), kind)
-                        for spelling in self._declaring().get(declared, ())
+                        for spelling in self._declaring_spellings(declared, rest[0])
                     ),
                     *(self._own_spelled_at(path, kind) for path in self._placed.get(placed, ())),
                 ),

@@ -1,0 +1,60 @@
+{
+  "scenarios": [
+    {
+      "name": "chained_aliases",
+      "module_roots": [
+        "program_modules/modules/declarations_through_alias_chains/chained"
+      ],
+      "params": {
+        "x": 1,
+        "y": 2
+      },
+      "expect": {
+        "stdout": "110\n6\n14\n21\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "chained_aliases_other_values",
+      "module_roots": [
+        "program_modules/modules/declarations_through_alias_chains/chained"
+      ],
+      "params": {
+        "x": 10,
+        "y": -4
+      },
+      "expect": {
+        "stdout": "119\n-12\n17\n30\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "direct_aliases",
+      "module_roots": [
+        "program_modules/modules/declarations_through_alias_chains/direct"
+      ],
+      "params": {
+        "x": 1,
+        "y": 2
+      },
+      "expect": {
+        "stdout": "112\n6\n14\n23\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "direct_aliases_other_values",
+      "module_roots": [
+        "program_modules/modules/declarations_through_alias_chains/direct"
+      ],
+      "params": {
+        "x": 10,
+        "y": -4
+      },
+      "expect": {
+        "stdout": "139\n-12\n17\n50\n",
+        "calls": {}
+      }
+    }
+  ]
+}

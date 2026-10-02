@@ -53,14 +53,15 @@ class ClaudeOutputStream:
         if not isinstance(raw_event, dict):
             return
         stream_event = cast(dict[str, object], raw_event)
-        if stream_event.get("type") == "content_block_start":
+        stream_event_type = stream_event.get("type")
+        if stream_event_type == "content_block_start":
             block = stream_event.get("content_block")
             if isinstance(block, dict) and cast(dict[str, object], block).get("type") == "tool_use":
                 block = cast(dict[str, object], block)
                 name = block.get("name")
                 if isinstance(name, str) and name:
                     self._callback("progress", f"[{name}]\n")
-        elif stream_event.get("type") == "content_block_delta":
+        elif stream_event_type == "content_block_delta":
             delta = stream_event.get("delta")
             if (
                 isinstance(delta, dict)
@@ -70,6 +71,12 @@ class ClaudeOutputStream:
                 text = delta.get("text")
                 if isinstance(text, str):
                     self._assistant_text.append(text)
+        elif stream_event_type == "message_delta":
+            delta = stream_event.get("delta")
+            if isinstance(delta, dict):
+                stop_reason = cast(dict[str, object], delta).get("stop_reason")
+                if stop_reason is not None:
+                    self._classify_assistant_text(stop_reason)
 
     def _assistant_message(self, event: dict[str, object]) -> None:
         message = event.get("message")
@@ -77,6 +84,11 @@ class ClaudeOutputStream:
             return
         message = cast(dict[str, object], message)
         stop_reason = message.get("stop_reason")
+        if stop_reason is None:
+            return
+        self._classify_assistant_text(stop_reason)
+
+    def _classify_assistant_text(self, stop_reason: object) -> None:
         if stop_reason not in ("end_turn", "stop_sequence"):
             text = "".join(self._assistant_text)
             if text:
@@ -110,7 +122,7 @@ class ClaudeOutputStream:
 def decode_claude_stream_json(output: str) -> str:
     """Extract the final assistant response from Claude's stream-json output."""
     final_response: str | None = None
-    for line in output.splitlines():
+    for line in output.split("\n"):
         if not line.strip():
             continue
         try:
@@ -137,6 +149,7 @@ class CodexOutputStream:
         self._callback = callback
         self._buffer = ""
         self._command_outputs: dict[str, str] = {}
+        self._pending_agent_message: str | None = None
 
     def feed(self, chunk: str) -> None:
         """Consume complete JSONL records from one process chunk."""
@@ -169,7 +182,16 @@ class CodexOutputStream:
             return
         item = cast(dict[str, object], item)
         item_type = item.get("type")
-        if not isinstance(item_type, str) or item_type == "agent_message":
+        if not isinstance(item_type, str):
+            return
+        if event_type == "item.completed" and item_type == "agent_message":
+            self._emit_pending_agent_message()
+            text = item.get("text")
+            self._pending_agent_message = text if isinstance(text, str) else None
+            return
+        if event_type in {"item.started", "item.updated", "item.completed"}:
+            self._emit_pending_agent_message()
+        if item_type == "agent_message":
             return
         if event_type == "item.started":
             self._item_started(item_type, item)
@@ -183,10 +205,22 @@ class CodexOutputStream:
             command = item.get("command")
             if isinstance(command, str) and command:
                 self._callback("progress", f"$ {command}\n")
-        elif item_type in {"web_search", "mcp_tool_call"}:
+        elif item_type == "web_search":
             title = item.get("query") or item.get("name")
             if isinstance(title, str) and title:
                 self._callback("progress", f"[{title}]\n")
+        elif item_type == "mcp_tool_call":
+            tool = item.get("tool")
+            if isinstance(tool, str) and tool:
+                server = item.get("server")
+                title = f"{server}.{tool}" if isinstance(server, str) and server else tool
+                self._callback("progress", f"[{title}]\n")
+
+    def _emit_pending_agent_message(self) -> None:
+        text = self._pending_agent_message
+        self._pending_agent_message = None
+        if text:
+            self._callback("progress", text)
 
     def _item_completed(self, item_type: str, item: dict[str, object]) -> None:
         if item_type == "command_execution":

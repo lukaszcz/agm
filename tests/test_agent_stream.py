@@ -10,7 +10,7 @@ from agm.agent.stream import ClaudeOutputStream, CodexOutputStream, decode_claud
 
 
 def _jsonl(value: object) -> str:
-    return json.dumps(value) + "\n"
+    return json.dumps(value, ensure_ascii=False) + "\n"
 
 
 def test_claude_stream_separates_progress_from_final_response() -> None:
@@ -42,6 +42,7 @@ def test_claude_stream_separates_progress_from_final_response() -> None:
             "type": "stream_event",
             "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta"}},
         },
+        {"type": "stream_event", "event": {"type": "message_delta"}},
         {
             "type": "stream_event",
             "event": {
@@ -98,9 +99,56 @@ def test_claude_stream_separates_progress_from_final_response() -> None:
     ]
 
 
+def test_claude_stream_waits_for_message_delta_before_classifying_text() -> None:
+    output: list[tuple[str, str]] = []
+    stream = ClaudeOutputStream(lambda phase, text: output.append((phase, text)))
+    events = [
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "I will inspect."},
+            },
+        },
+        {"type": "assistant", "message": {"stop_reason": None}},
+        {
+            "type": "stream_event",
+            "event": {"type": "message_delta", "delta": {"stop_reason": None}},
+        },
+        {
+            "type": "stream_event",
+            "event": {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+        },
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "The final answer."},
+            },
+        },
+        {"type": "assistant", "message": {"stop_reason": None}},
+        {
+            "type": "stream_event",
+            "event": {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+        },
+    ]
+
+    stream.feed("".join(_jsonl(event) for event in events))
+    stream.finish()
+
+    assert output == [("progress", "I will inspect.")]
+
+
 def test_claude_final_response_is_decoded_from_result_event() -> None:
     output = "\n  \n" + _jsonl({"type": "system"}) + _jsonl({"type": "result", "result": "answer"})
     assert decode_claude_stream_json(output) == "answer"
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_claude_final_response_preserves_unicode_jsonl_separators(separator: str) -> None:
+    result = f"left{separator}right"
+
+    assert decode_claude_stream_json(_jsonl({"type": "result", "result": result})) == result
 
 
 @pytest.mark.parametrize(
@@ -116,6 +164,15 @@ def test_codex_stream_echoes_tool_progress_but_not_final_message() -> None:
     output: list[tuple[str, str]] = []
     stream = CodexOutputStream(lambda phase, text: output.append((phase, text)))
     events = [
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": ""},
+        },
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "I will inspect."},
+        },
+        {"type": "item.started", "item": {"type": "agent_message"}},
         {"type": "item.started", "item": {"type": "command_execution", "command": "ls"}},
         {
             "type": "item.updated",
@@ -142,7 +199,12 @@ def test_codex_stream_echoes_tool_progress_but_not_final_message() -> None:
             },
         },
         {"type": "item.started", "item": {"type": "web_search", "query": "AGM"}},
-        {"type": "item.started", "item": {"type": "mcp_tool_call", "name": "lookup"}},
+        {
+            "type": "item.started",
+            "item": {"type": "mcp_tool_call", "server": "docs", "tool": "lookup"},
+        },
+        {"type": "item.started", "item": {"type": "mcp_tool_call", "tool": "search"}},
+        {"type": "item.started", "item": {"type": "mcp_tool_call"}},
         {
             "type": "item.completed",
             "item": {
@@ -190,11 +252,13 @@ def test_codex_stream_echoes_tool_progress_but_not_final_message() -> None:
     stream.finish()
 
     assert output == [
+        ("progress", "I will inspect."),
         ("progress", "$ ls\n"),
         ("progress", "one\n"),
         ("progress", "two\n"),
         ("progress", "[AGM]\n"),
-        ("progress", "[lookup]\n"),
+        ("progress", "[docs.lookup]\n"),
+        ("progress", "[search]\n"),
         ("progress", "tool result\n"),
         ("progress", "revised\n"),
         ("progress", "without id\n"),

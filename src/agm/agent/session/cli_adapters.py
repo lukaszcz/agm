@@ -728,7 +728,7 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
     """
     thread_id: str | None = None
     messages: list[str] = []
-    for line in output.splitlines():
+    for line in output.split("\n"):
         if not line.strip():
             continue
         try:
@@ -765,7 +765,7 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
         raise _CodexProtocolError("Codex did not report a session id")
     if not messages:
         raise _CodexProtocolError("Codex did not complete an assistant message")
-    return thread_id, "\n".join(messages)
+    return thread_id, messages[-1]
 
 
 def _codex_turn_failure(event: dict[str, object]) -> str:

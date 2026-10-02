@@ -384,6 +384,8 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
     output = "\n".join(
         [
             '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"I will inspect the files."}}',
             '{"type":"item.started","item":{"type":"command_execution","command":"ls"}}',
             '{"type":"item.completed","item":{"type":"command_execution",'
             '"aggregated_output":"file.txt\\n"}}',
@@ -393,6 +395,8 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
     resumed_output = "\n".join(
         [
             '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"I will check one more thing."}}',
             '{"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}',
         ]
     )
@@ -412,6 +416,7 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
 
     assert response.content == "final"
     assert output_chunks == [
+        ("progress", "I will inspect the files."),
         ("progress", "$ ls\n"),
         ("progress", "file.txt\n"),
         ("stderr", "codex log\n"),
@@ -725,6 +730,25 @@ def test_codex_reply_combines_a_surrogate_escape_pair(monkeypatch: pytest.Monkey
     _open(backend, AgentCodex("m", "t"))
 
     assert backend.ask(SessionAskRequest("hello")).content == "\U0001f600"
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_codex_reply_preserves_unicode_jsonl_separators(
+    monkeypatch: pytest.MonkeyPatch, separator: str
+) -> None:
+    expected = f"left{separator}right"
+    output = (
+        '{"type":"thread.started","thread_id":"first"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"'
+        f"{expected}"
+        '"}}'
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("m", "t"))
+
+    assert backend.ask(SessionAskRequest("hello")).content == expected
 
 
 @pytest.mark.parametrize(

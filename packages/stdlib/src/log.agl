@@ -40,9 +40,7 @@ def print-nl(lvl: Level) -> unit =
 
 def print-heading[T](lvl: Level, val: T) -> unit =
   print-nl(lvl)
-  print-sep(lvl)
-  ::print(lvl, val)
-  print-sep(lvl)
+  ::print(lvl, "## %{val}")
   print-nl(lvl)
 
 def error[T](val: T) -> unit =

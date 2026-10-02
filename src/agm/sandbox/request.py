@@ -82,7 +82,7 @@ class SandboxRequest:
     home: Path
     proj_dir: Path | None
     spec: SandboxSpec
-    # Only ever set by `agm run`: aliases never apply to agent or `exec` argv.
+    # Aliases apply only to `agm run`; PTYs also support interactive agent chats.
     alias_name: str | None = None
     pty: bool = False
     sandboxed: bool = True

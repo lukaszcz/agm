@@ -9557,6 +9557,36 @@ def _install_transparent_sandbox_shims(
 class TestExecCommand:
     """agm exec: run an AgL workflow program through the checkout CLI."""
 
+    @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+    def test_chat_inherits_stdio_and_resumes_after_the_agent_exits(
+        self, tmp_path: Path, env: dict[str, str], agent: str
+    ) -> None:
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name=agent,
+            script='printf "agent UI: %s\\n" "$*"\n'
+            'read -r response\nprintf "input: %s\\n" "$response"\n',
+        )
+        program = tmp_path / "chat.agl"
+        program.write_text(
+            "program def main() -> unit =\n"
+            '  chat("Help me debug this", sandbox = Disabled)\n'
+            '  print "resumed"\n'
+        )
+        completed = subprocess.run(
+            _agm_argv(["exec", "--no-trace", "--default-agent", agent, str(program)]),
+            env=_agm_env(env),
+            cwd=tmp_path,
+            input="user reply\n",
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout == "agent UI: -- Help me debug this\ninput: user reply\nresumed\n"
+
     @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1)))
     def test_exec_removes_temp_paths_when_terminated_unless_debugging(
         self, tmp_path: Path, env: dict[str, str], flags: list[str], kept: int

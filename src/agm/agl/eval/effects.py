@@ -219,7 +219,18 @@ class EffectHandlers:
         outer call's span), never unconditionally by this call.
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.companion_name)
-        with self._ctx._extern_call_window():
+        from agm.agl.runtime.host_agents import HostAgentServices, active_agent_services
+
+        with (
+            self._ctx._extern_call_window(),
+            active_agent_services(
+                HostAgentServices(
+                    self._ctx._program.builtin_nominals,
+                    self._ctx._resolve_agent_spec,
+                    self._ctx._get_sandbox_context,
+                )
+            ),
+        ):
             return self._ctx._extern_registry.invoke(
                 extern.name,
                 fn,

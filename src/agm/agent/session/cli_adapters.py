@@ -564,7 +564,9 @@ class CodexCliSessionBackend(_CliPromptBackend):
                 return response
             try:
                 _, content = _parse_codex_jsonl(response.content)
-            except (_CodexProtocolError, _CodexTurnFailedError) as exc:
+            except _CodexTurnFailedError as exc:
+                raise _codex_ask_error(response, "nonzero_exit", exc) from exc
+            except _CodexProtocolError as exc:
                 raise _codex_ask_error(response, "protocol_failure", exc) from exc
             return replace(response, content=content)
         if session.session_id is None and session.started:

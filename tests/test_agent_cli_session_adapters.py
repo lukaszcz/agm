@@ -520,6 +520,29 @@ def test_codex_single_prompt_echo_rejects_malformed_jsonl(
     assert raised.value.cause == "protocol_failure"
 
 
+def test_codex_single_prompt_echo_reports_turn_failure_as_agent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        (
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"turn.failed","error":{"message":"upstream rate limit"}}',
+        )
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
+
+    assert raised.value.cause == "nonzero_exit"
+    assert "upstream rate limit" in raised.value.stderr_tail
+
+
 def test_pi_forks_immediately_after_open_then_child_starts_independently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

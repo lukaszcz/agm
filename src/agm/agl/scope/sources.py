@@ -227,12 +227,14 @@ class ModuleSources(SourcesHost):
         self._declared_paths: dict[ScopePath, QName] = {}
         # The own scope paths to read, shorter first (a heap of sort keys);
         # those waiting on the type each selects, and how many resolved types
-        # they were released for; and the one being read, if any.
+        # they were released for; the one being read, if any; and how many
+        # readings recorded another path than was.
         self._undeclared_scope_paths: list[tuple[int, ScopePath]] = []
         self._waiting_scope_paths: dict[QName, list[ScopePath]] = {}
         self._resolved_seen = 0
         self._recording_scope_path: ScopePath | None = None
         self._scope_paths_settled = False
+        self._recorded_changes = 0
         # The own scope paths declared otherwise than spelled, shorter first,
         # by what each declares and each name spelled beneath it
         # (``_declaring_spellings``); and those names, collected on first use.
@@ -340,6 +342,7 @@ class ModuleSources(SourcesHost):
         if recorded == declared:
             return
         self._declared_paths[path] = declared
+        self._recorded_changes += 1
         readers = self._declared_readers.pop(path, set())
         for key in self._declaring_keys(path, recorded):
             self._declaring_named[key].remove(path)
@@ -405,6 +408,14 @@ class ModuleSources(SourcesHost):
         reader = self._recording_scope_path
         if reader is not None:
             readers.setdefault(key, set()).add(reader)
+
+    def read_view(self) -> object:
+        """What reads made now see of the uses and the recorded scope paths.
+
+        Reads with equal views see the same of both, and are noted for the
+        same scope path being read (:meth:`_note_read`).
+        """
+        return self._uses.reading, self._recorded_changes, self._recording_scope_path
 
     def declared_scope(self, path: ScopePath) -> QName | None:
         """The full path own scope path *path* declares, when it or a scope above declares another.

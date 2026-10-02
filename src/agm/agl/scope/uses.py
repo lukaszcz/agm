@@ -149,6 +149,8 @@ class UseReader:
         self._horizon: int | None = None
         # What the outermost read in progress has learned about each use.
         self._reads: _UseReads | None = None
+        # How many outermost reads began: what each learned is its own.
+        self._outermost_reads = 0
         # Whether each use is a single-item rename, the target it names, and
         # the declarations its ``hiding`` removes.
         self._renamed: dict[int, bool] = {}
@@ -159,6 +161,15 @@ class UseReader:
     def reads_every_use(self) -> bool:
         """Whether a read now sees every use, as no use's own read is in progress."""
         return self._horizon is None
+
+    @property
+    def reading(self) -> tuple[int | None, int | None]:
+        """The use bounding what a read now sees, and which outermost read it is part of.
+
+        Reads sharing both see the same uses, and what the outermost read
+        learned about them.
+        """
+        return self._horizon, None if self._reads is None else self._outermost_reads
 
     def write(self, layer: ScopeNode, decl: UseDecl) -> None:
         """Record *decl*, which this entry writes in *layer*."""
@@ -173,6 +184,8 @@ class UseReader:
         """
         horizon, reads = self._horizon, self._reads
         current: _UseReads = {} if reads is None else reads
+        if reads is None:
+            self._outermost_reads += 1
         self._horizon, self._reads = decl.node_id, current
         try:
             yield current

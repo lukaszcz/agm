@@ -12,6 +12,7 @@ declaration is presumed constructible, leaving the verdict to typecheck.
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Protocol
 
@@ -121,6 +122,13 @@ DeclaredPaths = Callable[[ModuleId], Mapping[BareAtom, QName]]
 """
 
 
+ReadView = Callable[[ModuleId], object]
+"""What reads made now in module *module_id* see of its uses and recorded scope paths.
+
+Reads with equal views see the same of both.
+"""
+
+
 class BuiltinScopes(Protocol):
     """The scope paths built-in type *name* names as a qualifier where alias *qname* is declared.
 
@@ -155,10 +163,11 @@ class TypeOwnerIndex:
     the scopes an alias of a built-in type reads paths beneath;
     *current_selection* what a retained alias's spelling or an enum's member
     reference selects now; *declared_paths* the declarations a module
-    writes beneath another path, and the full paths they are declared at.
-    *retained* supplies the owners of *retained_module*'s paths that earlier
-    REPL entries declared, already resolved against the declarations they
-    saw.
+    writes beneath another path, and the full paths they are declared at;
+    *read_view* what tells a read of a module from a later one seeing
+    otherwise. *retained* supplies the owners of *retained_module*'s paths
+    that earlier REPL entries declared, already resolved against the
+    declarations they saw.
     """
 
     def __init__(
@@ -172,6 +181,7 @@ class TypeOwnerIndex:
         builtin_scopes: BuiltinScopes,
         current_selection: CurrentTypeSelection,
         declared_paths: DeclaredPaths,
+        read_view: ReadView,
         retained_module: ModuleId | None = None,
         retained: Mapping[ScopePath, TypeOwner] | None = None,
     ) -> None:
@@ -183,6 +193,7 @@ class TypeOwnerIndex:
         self._builtin_scopes = builtin_scopes
         self._current_selection = current_selection
         self._declared_paths = declared_paths
+        self._read_view = read_view
         self._retained_module = retained_module
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
@@ -192,6 +203,9 @@ class TypeOwnerIndex:
         self._resolving: set[QName] = set()
         # Every type path resolved, in order (:meth:`resolved_since`).
         self._resolved: list[QName] = []
+        # What the outermost read of a retained alias in progress projected,
+        # by alias and the view it was projected under (:meth:`_view`).
+        self._projected: dict[tuple[QName, object], TypeOwner] | None = None
 
     def with_retained(
         self, module_id: ModuleId, retained: Mapping[ScopePath, TypeOwner]
@@ -206,6 +220,7 @@ class TypeOwnerIndex:
             builtin_scopes=self._builtin_scopes,
             current_selection=self._current_selection,
             declared_paths=self._declared_paths,
+            read_view=self._read_view,
             retained_module=module_id,
             retained=retained,
         )
@@ -302,9 +317,48 @@ class TypeOwnerIndex:
         the uses the read asking for it sees: a use's own, only those written
         before it.
         """
-        alias, target = retained.alias, retained.target
+        alias = retained.alias
         if alias is None:
             return retained
+        with self._projecting() as projected:
+            key = (qname, self._view(qname[0]))
+            found = projected.get(key)
+            if found is None:
+                found = projected[key] = self._projected_owner(qname, retained, alias)
+            return found
+
+    @contextmanager
+    def _projecting(self) -> Iterator[dict[tuple[QName, object], TypeOwner]]:
+        """Keep what one outermost read of a retained alias projects until it ends.
+
+        Projecting an alias reads each path beneath its target through the
+        alias before it on its chain, which projects that one again.
+        """
+        projected = self._projected
+        if projected is not None:
+            yield projected
+            return
+        self._projected = projected = {}
+        try:
+            yield projected
+        finally:
+            self._projected = None
+
+    def _view(self, module_id: ModuleId) -> object:
+        """What a read made now in *module_id* sees that another of the same outermost read may not.
+
+        The module's uses and recorded scope paths (*read_view*), and which
+        types are resolved and which presumed (:meth:`settled`): types
+        resolve in order and those being resolved nest, so the two counts
+        name both. One outermost read changes nothing else a projection
+        reads, and a count once passed never returns: a projection is found
+        again only where reading it afresh gives the same.
+        """
+        return self._read_view(module_id), len(self._resolved), len(self._resolving)
+
+    def _projected_owner(self, qname: QName, retained: TypeOwner, alias: TypeAlias) -> TypeOwner:
+        """Project retained alias *alias* at *qname* (:meth:`_current_retained_owner`)."""
+        target = retained.target
         if target is None:
             return self._builtin_owner(qname, alias, retained, every_use=False)
         current = self.owner(target.qname)

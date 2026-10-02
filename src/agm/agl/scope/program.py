@@ -1370,6 +1370,7 @@ def resolve_program(
         builtin_scopes=builtin_scopes,
         current_selection=current_selection,
         declared_paths=lambda module_id: declared_at.get(module_id, {}),
+        read_view=lambda module_id: resolvers[module_id].read_view(),
     )
 
     # What earlier REPL entries retain stays current unless the entry

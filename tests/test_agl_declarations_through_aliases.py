@@ -1012,7 +1012,7 @@ _SCENARIOS |= {
     ),
 }
 
-_MANY = 5
+_MANY = 12
 _MANY_ALIASES = "\n".join(
     (*(f"type A{i} = Base" for i in range(_MANY - 1)), f"type A{_MANY - 1} = A{_MANY - 2}")
 )
@@ -1044,6 +1044,33 @@ _SCENARIOS["declared-through-many-aliases-of-one-type"] = Scenario(
             "(fn(p: A2::Inner::T) => p.y)(Base::Inner::T(y = 2))", "int"
         ),
         "undeclared": rejected("A4::zz()", UnknownMemberError, "A4::zz"),
+    },
+)
+
+_CHAIN = 8
+_CHAIN_HALVES = tuple(
+    "\n".join(f"type C{i} = {'Base' if i == 0 else f'C{i - 1}'}" for i in half)
+    for half in (range(_CHAIN // 2), range(_CHAIN // 2, _CHAIN))
+)
+"""A chain of aliases, each of the one before, the first of ``Base``; written in two halves."""
+_LAST = f"C{_CHAIN - 1}"
+
+_SCENARIOS["declared-through-a-chain-of-aliases"] = Scenario(
+    header=(
+        "record Base\n  x: int",
+        *_CHAIN_HALVES,
+        "\n".join(f"def C{i}::g{i}() -> int = {i}" for i in range(_CHAIN)),
+    ),
+    probes={
+        "target-reaches-the-last": accepted(f"Base::g{_CHAIN - 1}()", "int"),
+        "first-reaches-the-last": accepted(f"C0::g{_CHAIN - 1}()", "int"),
+        "last-reaches-the-first": accepted(f"{_LAST}::g0()", "int"),
+        "declared-through-the-last": accepted(f"def {_LAST}::h() -> int = 7\nC0::h()", "int"),
+        "nested-through-the-last": accepted(
+            f"def {_LAST}::Inner::k() -> int = 8\nC1::Inner::k()", "int"
+        ),
+        "value": accepted(f"{_LAST}(x = 1).x", "int"),
+        "undeclared": rejected(f"{_LAST}::zz()", UnknownMemberError, f"{_LAST}::zz"),
     },
 )
 
@@ -1197,6 +1224,31 @@ def test_rebinding_the_alias_leaves_a_binding_declared_through_it_at_its_old_tar
         {
             "static": accepted("Base::v", "int"),
             "through-the-new-target": rejected("Geo::v", UnknownMemberError, "Geo::v"),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ["let Base::v = 2", "var Geo::v = 2", "scope Geo\n  let v = 2\nend Geo"],
+    ids=["let", "var", "a-region"],
+)
+def test_an_earlier_entrys_alias_reaches_a_binding_its_path_was_read_hidden_before(
+    tmp_path: Path, binding: str
+) -> None:
+    """Until an entry binds ``v``, its reads through the alias find only the path a use hides."""
+    assert_repl_verdicts(
+        tmp_path,
+        {},
+        (
+            "use Sc::* hiding Base::v\n\nscope Sc\n  def Base::v() -> int = 1\nend Sc",
+            "record Base\n  x: int",
+            "type Geo = Base",
+        ),
+        {
+            "through-the-alias": accepted(f"{binding}\nGeo::v", "int"),
+            "through-the-target": accepted(f"{binding}\nBase::v", "int"),
+            "unbound": rejected("Geo::v", UnknownMemberError, "Geo::v"),
         },
     )
 

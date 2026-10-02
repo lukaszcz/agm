@@ -10,7 +10,7 @@ The context locates the directories that contribute configuration. The project d
 
 ## AGM Home and the Standard Library
 
-One AGM home holds config, prompts, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. `just install` populates the prefix tree and installs the config templates from the repository's `config/`.
+One AGM home holds config, prompts, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. Setup copies the config templates from the repository's `config/` into the AGM home.
 
 The AgL standard library resolves from `AGM_STDLIB` (an unchecked escape hatch), then a development `std` checkout whose module tree holds the invocation's anchor (the entry file, or the working directory) so the library is checked and run from the tree being edited, then the active managed `std` store package, which must exactly match the running AGM version, then the shipped fallback tree that `stdlib_locator.py` finds at the repository root in a checkout or bundled inside the wheel. See [package-store.md](package-store.md) for the managed package.
 
@@ -49,4 +49,4 @@ Sandbox settings follow their own discovery and merge chain across the same scop
 - `src/agm/config/engine_keys.py` — the engine-key catalog; `src/agm/config/qualified_keys.py` — qualified AgL config-key routing; `src/agm/cli_support/param_config.py` — module-parameter and selected-program-route resolution.
 - `src/agm/config/module_roots.py` — AgL module roots from `[modules]` and the `AGM_STDLIB` override; `src/agm/stdlib_locator.py` — the shipped stdlib tree.
 - `src/agm/config/sandbox/` — SRT sandbox settings discovery and merging.
-- `src/agm/commands/config/` — the `agm config` commands; `config/` (repository root) — the templates `just install` copies into the AGM home.
+- `src/agm/commands/config/` — the `agm config` commands; `config/` (repository root) — templates copied into the AGM home during setup.

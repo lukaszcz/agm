@@ -121,8 +121,7 @@ values incomparably (such as `os_name ~= "posix"`) — are manifest errors. A di
 listed more than once, for example with markers selecting per-environment variants.
 Requirements are stored verbatim, as declared, and are part of the package's content hash.
 [`install`](#commands) and [`sync`](#commands) install unsatisfied requirements into that
-environment (`just install` reinstalls the repository packages, then runs `agm pkg sync`);
-[`check`](#commands) and
+environment; [`check`](#commands) and
 [`info`](#commands) only report them. The activation index is the source of truth: `sync` installs
 only the requirements of active packages. A program whose run imports one of the package's
 companions while a requirement is unsatisfied fails before running, with an error naming the
@@ -362,8 +361,7 @@ when some `[python]` requirement of an active package (store or editable) is uns
 union of every active package's requirements is installed exactly as `install` does, and each
 previously unsatisfied requirement is listed; otherwise it reports that all are satisfied and runs
 no installer. An installer failure exits non-zero. `--dry-run` prints the installer command
-instead of running it. `just install` reinstalls every package under the repository's
-`packages/` directory with the freshly installed CLI, then runs `agm pkg sync`.
+instead of running it.
 
 ## Version pins
 
@@ -384,9 +382,8 @@ execution root still takes precedence.
 
 ## The `std` package
 
-The standard library is a managed package at the running AGM's version. `just install` installs
-the shipped source with `agm pkg install --reinstall`; another source or version is rejected, and
-the package cannot be uninstalled.
+The standard library is a managed package at the running AGM's version. Installation accepts
+only the shipped source at that version, and the package cannot be uninstalled.
 
 ## Limits
 

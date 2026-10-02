@@ -25,14 +25,12 @@ just setup
 ```
 
 Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
-environment and copy AGM config files,
-prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
-`$HOME/.agm/` by default). It also installs and activates the lockstep immutable
-`std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL editor
-support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when an
-`emacs` binary is available — the AgL Emacs mode (skipped with a notice
-otherwise). It ends by running the installed `agm pkg sync`, restoring the active
-packages' Python requirements into the reinstalled environment:
+environment and copy AGM config files, prompts, and sandbox templates into the selected
+AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). After installing the CLI, it
+reinstalls every package under `packages/` with `agm pkg install --reinstall`, then runs
+`agm pkg sync` to restore the active packages' Python requirements. It also installs the
+AgL editor support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when
+an `emacs` binary is available — the AgL Emacs mode (skipped with a notice otherwise):
 
 ```bash
 just install

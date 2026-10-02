@@ -158,8 +158,8 @@ install-prefix *args:
         if [[ "$arg" != -* ]]; then echo "$arg"; break; fi; \
     done
 
-# Install agm, its user config, and the editor modes, then sync the active
-# packages' Python requirements into the freshly installed agm's environment
+# Install agm, its user config, editor modes, and repository packages, then sync
+# the active packages' Python requirements into the freshly installed environment
 install *args:
     test -d "{{prompts_dir}}"
     just install-agm {{args}}
@@ -167,7 +167,18 @@ install *args:
     just setup-emacs-optional {{args}}
     install_prefix="$(just install-prefix {{args}})"; \
     if [[ -n "$install_prefix" ]]; then \
-        AGM_HOME="$install_prefix/.agm" "$install_prefix/bin/agm" pkg sync; \
+        agm="$install_prefix/bin/agm"; \
+        export AGM_HOME="$install_prefix/.agm"; \
     else \
-        "$(uv tool dir --bin)/agm" pkg sync; \
-    fi
+        agm="$(uv tool dir --bin)/agm"; \
+    fi; \
+    packages_dir="{{justfile_directory()}}/packages"; \
+    if [[ -f "$packages_dir/stdlib/package.toml" ]]; then \
+        "$agm" pkg install --reinstall "$packages_dir/stdlib"; \
+    fi; \
+    for package in "$packages_dir"/*; do \
+        [[ "$package" == "$packages_dir/stdlib" ]] && continue; \
+        [[ -f "$package/package.toml" ]] || continue; \
+        "$agm" pkg install --reinstall "$package"; \
+    done; \
+    "$agm" pkg sync

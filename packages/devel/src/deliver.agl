@@ -116,14 +116,19 @@ def Session::deliver-plan(self, plan-file: path, tasks-dir: path, impl-agent: Ag
   var next-task: Option[path] = self.select-next-task(None, tasks-dir)
   while next-task is Some do
     let task-file = next-task.unwrap()
+    log::info("\nImplementing task %{task-file}")
     impl-agent.implement-task(task-file, None)
     if verify =>
       do
+        log::info("Verifying task %{task-file}")
         let r = self.verify-task(task-file, tasks-dir)
         case r of
           | Complete(next-task-file) =>
+            log::info("Task complete")
             next-task := next-task-file
           | Incomplete(reason) =>
+            log::info("Task incomplete: %{reason}")
+            log::info("Revising implementation of %{task-file}")
             impl-agent.implement-task(task-file, Some(reason))
       until r is Complete
     else =>
@@ -171,7 +176,9 @@ program def deliver-main(
   log::info("tasks-dir: %{tasks-dir}")
   log::info("orchestrator: %{agent}")
   log::info("executor: %{impl-agent}")
+  log::info-nl()
   if not fs::is-file("%{tasks-dir}/PROGRESS.md") =>
+    log::info("Preparing task files...")
     agent.make-tasks(plan-file, tasks-dir)
   let session = session::Session::open(agent)
   session.deliver-plan(plan-file, tasks-dir, impl-agent, review-agent, revise-agent, verify, max-refine-steps, save-reviews)

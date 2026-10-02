@@ -1,0 +1,8 @@
+# Library module completing the cycle with `a`. Its alias `G` of `a`'s own
+# `Base` hosts a method keyed beneath `Base`'s declared path, called back
+# across the cycle on a `Base` value by `a`'s own function.
+import a::*
+
+type G = Base
+
+def G::h(self) -> int = self.x + 1

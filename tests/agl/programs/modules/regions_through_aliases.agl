@@ -1,0 +1,29 @@
+# A region written through an alias opens its target's scope: what it declares,
+# imports, uses and re-exports is written beneath the target, and is read
+# under either spelling.
+import shapes::*
+import aliases::*
+import forwarded
+
+scope Geo
+  import measures::{pace}
+  use measures::Units
+
+  let origin = 1
+
+  def doubled(self) -> int = self.side * 2 * pace()
+
+  def scaled(side: int) -> int = Units::scale(side) + origin
+
+  scope Corner
+    def sharp(self) -> bool = self.angle < 90
+  end Corner
+end Geo
+
+def Shape::tripled(self) -> int = self.doubled() + self.side + origin
+
+program def main(side: int) -> unit =
+  let shape = Shape(side = side)
+  print("%{shape.doubled()} %{shape.tripled()} %{Geo::scaled(side)} %{Shape::scaled(side)}")
+  print("%{Shape::Corner(angle = side * 20).sharp()} %{Geo::origin + Shape::origin}")
+  print(forwarded::Shape::pace())

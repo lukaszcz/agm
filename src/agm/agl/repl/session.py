@@ -1274,10 +1274,10 @@ class ReplSession:
                 )
         # ``required_scope_paths`` is prefix-closed: its seed,
         # ``promoted_scope_region_paths``, is prefix-closed by construction
-        # (region nesting plus the frontier monotonicity `collect_regions`
-        # guarantees in ``lower/repl.py``), and both loops above add every
-        # ancestor of the paths they contribute, so a retained path's parent
-        # is always retained first.
+        # (`collect_regions` in ``lower/repl.py`` reaches every path above a
+        # region's scope path where it reaches that), and both loops above
+        # add every ancestor of the paths they contribute, so a retained
+        # path's parent is always retained first.
         for path, node in checked.resolved.scope_nodes.items():
             if (
                 path in self._session_scope_nodes

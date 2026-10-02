@@ -6,7 +6,9 @@ spellings reach the declaration in every position, whichever spelling
 declared it, the alias own or imported and its target own or imported. It is
 keyed, displayed and retained at that path: two declarations of one name
 beneath the two spellings are one path declared twice in one entry, and a
-later REPL entry declaring it beneath either spelling supersedes it.
+later REPL entry declaring it beneath either spelling supersedes it. A region
+written through the alias opens its target's scope and no scope of the alias's
+name, as a path written through it declares none.
 
 Every probe is checked in the file part and in every legal REPL grouping of its
 scenario's header (see :mod:`tests.agl.qualifier_support`).
@@ -23,6 +25,7 @@ from agm.agl.scope.symbols import (
     DuplicateDeclarationError,
     TypeArgumentsError,
     UnknownMemberError,
+    UnknownQualifierError,
 )
 from tests.agl.qualifier_support import (
     Probe,
@@ -45,6 +48,12 @@ _OWN_ALIAS = ("import base::*", "type Geo = Base")
 _IMPORTED_ALIAS = ("import al::*",)
 _ROUTED_ALIAS = ("import base", "import base::*", "type Geo = base::Base")
 _LOCAL_TARGET = ("record Base\n  x: int\nrecord Base::Inner\n  y: int", "type Geo = Base")
+_ALIASES = (
+    ("an-own-alias", _OWN_ALIAS),
+    ("an-imported-alias", _IMPORTED_ALIAS),
+    ("an-alias-of-an-own-type", _LOCAL_TARGET),
+)
+"""Each way ``Geo`` aliases ``Base``: an own alias, an imported one, an own one of an own type."""
 
 
 def _declarations(spelling: str) -> str:
@@ -204,11 +213,7 @@ _SCENARIOS = (
             header=header,
             probes=_duplicate_probes("Base", "Geo") | _duplicate_probes("Geo", "Base"),
         )
-        for name, header in (
-            ("an-own-alias", _OWN_ALIAS),
-            ("an-imported-alias", _IMPORTED_ALIAS),
-            ("an-alias-of-an-own-type", _LOCAL_TARGET),
-        )
+        for name, header in _ALIASES
     }
 )
 
@@ -564,6 +569,392 @@ _SCENARIOS |= {
     ),
 }
 
+_REDECLARED = {
+    "": 'def Geo::f() -> text = "own"',
+    "-in-a-region": 'scope Geo\n  def f() -> text = "own"\nend Geo',
+}
+"""``base``'s ``Base::f`` declared again through ``Geo``, by a shorthand path and in a region."""
+
+_SCENARIOS |= {
+    f"an-anchored-qualifier-reaches-{name}-redeclared-through-it{form}": Scenario(
+        modules=_MODULES,
+        header=(*header, redeclared),
+        probes={
+            # An own alias is an own name: ``::Geo`` reads it like any other.
+            "anchored-alias-accepted": accepted("::Geo::f()", "text"),
+            "anchored-alias-unknown-member-rejected": rejected(
+                "::Geo::zz()", UnknownMemberError, "::Geo::zz"
+            ),
+            "anchored-target-accepted": accepted("::Base::f()", "text"),
+        },
+    )
+    for name, header in (("an-own-alias", _OWN_ALIAS), ("an-alias-of-an-own-type", _LOCAL_TARGET))
+    for form, redeclared in _REDECLARED.items()
+}
+
+_SCENARIOS |= {
+    f"an-anchored-qualifier-never-reaches-an-imported-alias-redeclared-through-it{form}": Scenario(
+        modules=_MODULES,
+        header=(*_IMPORTED_ALIAS, redeclared),
+        probes={
+            "anchored-alias-rejected": rejected("::Geo::f()", UnknownQualifierError, "::Geo::f"),
+            "anchored-alias-unknown-member-rejected": rejected(
+                "::Geo::zz()", UnknownQualifierError, "::Geo::zz"
+            ),
+            "anchored-nested-alias-rejected": rejected(
+                "::Geo::Inner(y = 1)", UnknownQualifierError, "::Geo::Inner"
+            ),
+            "anchored-target-accepted": accepted("::Base::f()", "text"),
+        },
+    )
+    for form, redeclared in _REDECLARED.items()
+}
+
+_SCENARIOS |= {
+    f"an-anchored-qualifier-still-reaches-its-own-declaration-beside-a-routed-one{form}": Scenario(
+        modules=_MODULES,
+        header=(
+            "import base",
+            *_IMPORTED_ALIAS,
+            redeclared,
+            'def Geo::g() -> text = "g"',
+        ),
+        probes={
+            "base-static": accepted("Base::f()", "text"),
+            "geo-static": accepted("Geo::f()", "text"),
+            "anchored-target": accepted("::Base::f()", "text"),
+            "anchored-alias-rejected": rejected("::Geo::f()", UnknownQualifierError, "::Geo::f"),
+            "base-g": accepted("Base::g()", "text"),
+            "routed-target-unaffected": accepted("base::Base::f()", "int"),
+        },
+    )
+    for form, redeclared in _REDECLARED.items()
+}
+
+
+def _beside_ordinary_probes(spelling: str) -> dict[str, Probe]:
+    """A member declared beneath *spelling* of the imported alias, beside an ordinary declaration.
+
+    Only the declared path ``Base`` is the module's own: an ordinary ``Geo``
+    never clashes, an ordinary ``Base`` always does, in either order, whether
+    a shorthand path or a region declares the member.
+    """
+    member = f"def {spelling}::g() -> int = 1"
+    nested = f"def {spelling}::Inner::k() -> int = 4"
+    region = f"scope {spelling}\n  def g() -> int = 1\nend {spelling}"
+    empty = f"scope {spelling}\nend {spelling}"
+    return {
+        f"{spelling}-method-then-alias-spelling": accepted(
+            f"{member}\ndef Geo() -> int = 2\n1", "int"
+        ),
+        f"{spelling}-alias-spelling-then-method": accepted(
+            f"def Geo() -> int = 2\n{member}\n1", "int"
+        ),
+        f"{spelling}-method-then-let": accepted(f"{member}\nlet Geo = 2\n1", "int"),
+        f"{spelling}-let-then-method": accepted(f"let Geo = 2\n{member}\n1", "int"),
+        f"{spelling}-nested-then-alias-spelling": accepted(
+            f"{nested}\ndef Geo() -> int = 2\n1", "int"
+        ),
+        f"{spelling}-method-then-target-spelling": rejected(
+            f"{member}\ndef Base() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Base() -> int = 2",
+        ),
+        f"{spelling}-target-spelling-then-method": rejected(
+            f"def Base() -> int = 2\n{member}\n1", DuplicateDeclarationError, member
+        ),
+        f"{spelling}-nested-then-target-spelling": rejected(
+            f"{nested}\ndef Base() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Base() -> int = 2",
+        ),
+        f"{spelling}-region-then-alias-spelling": accepted(
+            f"{region}\ndef Geo() -> int = 2\n1", "int"
+        ),
+        f"{spelling}-alias-spelling-then-region": accepted(
+            f"def Geo() -> int = 2\n{region}\n1", "int"
+        ),
+        f"{spelling}-empty-region-then-alias-spelling": accepted(
+            f"{empty}\ndef Geo() -> int = 2\n1", "int"
+        ),
+        f"{spelling}-region-then-target-spelling": rejected(
+            f"{region}\ndef Base() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Base() -> int = 2",
+        ),
+        f"{spelling}-target-spelling-then-region": rejected(
+            f"def Base() -> int = 2\n{region}\n1", DuplicateDeclarationError, region
+        ),
+        f"{spelling}-empty-region-then-target-spelling": rejected(
+            f"{empty}\ndef Base() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Base() -> int = 2",
+        ),
+    }
+
+
+_SCENARIOS["declared-through-an-imported-alias-beside-an-ordinary-declaration"] = Scenario(
+    modules=_MODULES,
+    header=_IMPORTED_ALIAS,
+    probes=_beside_ordinary_probes("Geo") | _beside_ordinary_probes("Base"),
+)
+
+_SCENARIOS |= {
+    f"{form}-through-an-imported-alias-{order}-an-ordinary-declaration-of-its-name": Scenario(
+        modules=_MODULES,
+        header=(*_IMPORTED_ALIAS, *entries),
+        probes={
+            "member": accepted("Base::g()", "int"),
+            "ordinary": accepted("Geo()", "int"),
+            "anchored-ordinary": accepted("::Geo()", "int"),
+        },
+    )
+    for form, member in (
+        ("a-path", "def Geo::g() -> int = 1"),
+        ("a-region", "scope Geo\n  def g() -> int = 1\nend Geo"),
+        ("an-empty-region", "scope Geo\nend Geo\n\ndef Base::g() -> int = 1"),
+    )
+    for order, entries in (
+        ("before", (member, "def Geo() -> int = 2")),
+        ("after", ("def Geo() -> int = 2", member)),
+    )
+}
+
+_SCENARIOS["an-own-alias-clashes-with-an-ordinary-declaration-of-its-name"] = Scenario(
+    modules=_MODULES,
+    header=("import base::*",),
+    probes={
+        "alias-method-then-ordinary": rejected(
+            "type Geo = Base\ndef Geo::g() -> int = 1\ndef Geo() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Geo() -> int = 2",
+        ),
+        "ordinary-then-alias-method": rejected(
+            "def Geo() -> int = 2\ntype Geo = Base\ndef Geo::g() -> int = 1\n1",
+            DuplicateDeclarationError,
+            "type Geo = Base",
+        ),
+        "alias-region-then-ordinary": rejected(
+            "type Geo = Base\n\n"
+            "scope Geo\n  def g() -> int = 1\nend Geo\n\n"
+            "def Geo() -> int = 2\n1",
+            DuplicateDeclarationError,
+            "def Geo() -> int = 2",
+        ),
+        "ordinary-then-alias-region": rejected(
+            "def Geo() -> int = 2\ntype Geo = Base\n\n"
+            "scope Geo\n  def g() -> int = 1\nend Geo\n\n1",
+            DuplicateDeclarationError,
+            "type Geo = Base",
+        ),
+    },
+)
+
+_SHAPES = {
+    "functions": (
+        (
+            "def Geo::g() -> int = 7\n"
+            "def Geo::k() -> int = g()\n"
+            "def Base::j() -> int = g()\n"
+            "def Geo::fact(n: int) -> int = if n <= 1 => 1 else => n * fact(n - 1)"
+        ),
+        ("k()", "j()", "fact(3)"),
+    ),
+    "bindings": (
+        (
+            "let Geo::v = 2\n"
+            "var Geo::w = 3\n"
+            "\n"
+            "scope Geo\n  let rv = 4\n  var rw = 5\n  def r() -> int = rv + rw + v + w\nend Geo"
+        ),
+        ("v", "w", "rv", "rw", "r()"),
+    ),
+    "types": (
+        (
+            "scope Geo\n"
+            "  enum E\n"
+            "    | A\n"
+            "    | B\n\n"
+            "  record R\n"
+            "    a: int\n\n"
+            "  def k(e: Base::E) -> int = case e of\n"
+            "    | A => 1\n"
+            "    | B => 2\n\n"
+            "  def m(r: R) -> int = r.a\n\n"
+            "  def n() -> int = m(R(a = 3)) + k(A)\n"
+            "end Geo"
+        ),
+        ("k(Geo::E::B)", "k(Base::E::A)", "m(Geo::R(a = 1))", "m(Base::R(a = 2))", "n()"),
+    ),
+}
+"""Declarations through ``Geo``, each reading its siblings bare, and the reads after them."""
+
+_SCENARIOS |= {
+    f"{shape}-declared-through-{name}-read-their-siblings-bare": Scenario(
+        modules=_MODULES,
+        header=(*header, declarations),
+        probes={
+            f"{spelling}-{read}": accepted(f"{spelling}::{read}", "int")
+            for spelling in ("Base", "Geo")
+            for read in reads
+        },
+    )
+    for shape, (declarations, reads) in _SHAPES.items()
+    for name, header in _ALIASES
+}
+
+_REGION_MODULES = {
+    **_MODULES,
+    "gen": _APPLIED_MODULES["gen"],
+    "lib": "scope S\n  def top() -> int = 5\nend S\n\ndef free() -> int = 6\n",
+}
+
+
+def _region_probes(spelling: str) -> dict[str, Probe]:
+    """A region spelled *spelling* opens ``Base``: what it writes is written there.
+
+    Its uses and imports, its nested regions, and the heads of the
+    declarations in it read as in the region the target's spelling opens.
+    """
+
+    def region(body: str, then: str) -> str:
+        return f"scope {spelling}\n{body}\nend {spelling}\n{then}"
+
+    nested = "  scope N\n    def k() -> int = 4\n  end N"
+    member = "  enum E\n    | A(a: int)\n    | B\n\n  def A::m(self) -> int = self.a"
+    return {
+        f"{spelling}-empty": accepted(f"scope {spelling}\nend {spelling}\n1", "int"),
+        f"{spelling}-empty-nested": accepted(
+            f"scope {spelling}::Deep\nend {spelling}::Deep\n1", "int"
+        ),
+        f"{spelling}-use": accepted(
+            region("  use lib::S\n  def h() -> int = S::top()", "Base::h()"), "int"
+        ),
+        f"{spelling}-import": accepted(
+            region("  import lib::*\n  def h() -> int = free()", "Geo::h()"), "int"
+        ),
+        **{
+            f"{spelling}-use-read-beneath-{other}": accepted(
+                region("  use lib::S", f"def {other}::h() -> int = S::top()\nBase::h()"), "int"
+            )
+            for other in ("Base", "Geo")
+        },
+        **{
+            f"{spelling}-nested-read-by-{name}": accepted(region(nested, read), "int")
+            for name, read in (
+                ("target", "Base::N::k()"),
+                ("alias", "Geo::N::k()"),
+                ("anchored-target", "::Base::N::k()"),
+            )
+        },
+        f"{spelling}-method": accepted(
+            region("  def m(self) -> int = self.x", "Base(x = 1).m()"), "int"
+        ),
+        f"{spelling}-nested-method": accepted(
+            region(
+                "  scope Inner\n    def m(self) -> int = self.y\n  end Inner",
+                "Base::Inner(y = 1).m()",
+            ),
+            "int",
+        ),
+        f"{spelling}-member-receiver": accepted(region(member, "Base::E::A(a = 1).m()"), "int"),
+        f"{spelling}-unknown-receiver": rejected(
+            region("  def A::m(self) -> int = 1", "1"), AglScopeError, "self"
+        ),
+        f"{spelling}-unknown-receiver-path": rejected(
+            region("  scope Inner\n    def A::B::m(self) -> int = 1\n  end Inner", "1"),
+            UnknownMemberError,
+            "A::B",
+        ),
+        f"{spelling}-builtin-alias-receiver": rejected(
+            region("  def T2::m(self) -> int = 1", "1"), AglScopeError, "self"
+        ),
+    }
+
+
+_SCENARIOS |= {
+    f"a-region-through-{name}-opens-its-target": Scenario(
+        modules=_REGION_MODULES,
+        header=("import lib", *header, "type T2 = text"),
+        probes=_region_probes("Base") | _region_probes("Geo"),
+    )
+    for name, header in _ALIASES
+}
+
+_SCENARIOS |= {
+    f"declared-beneath-an-applied-alias-declared-beneath-{name}": Scenario(
+        modules=_REGION_MODULES,
+        header=("import gen::*", *header, "type Base::IB = Box[int]"),
+        probes={
+            f"{spelling}-{position}": rejected(text, TypeArgumentsError, "IB")
+            for spelling in ("Base", "Geo")
+            for position, text in {
+                "static": f"def {spelling}::IB::k() -> int = 1",
+                "method": f"def {spelling}::IB::m(self) -> int = 1",
+                "record": f"record {spelling}::IB::R\n  z: int",
+                "in-a-region": f"scope {spelling}\n  def IB::k() -> int = 1\nend {spelling}",
+                "region": f"scope {spelling}::IB\n  def k() -> int = 1\nend {spelling}::IB",
+            }.items()
+        },
+    )
+    for name, header in _ALIASES
+}
+
+_SCENARIOS |= {
+    f"an-empty-region-through-{spelling}-of-an-imported-alias-is-the-targets-own-path": Scenario(
+        modules=_MODULES,
+        header=(*_IMPORTED_ALIAS, f"scope {spelling}\nend {spelling}"),
+        probes={
+            "anchored-target-is-own": rejected("::Base::zz()", UnknownMemberError, "::Base::zz"),
+            "anchored-alias-is-not": rejected("::Geo::zz()", UnknownQualifierError, "::Geo::zz"),
+            "ordinary-target-spelling": rejected(
+                "def Base() -> int = 2\n1", DuplicateDeclarationError, "def Base() -> int = 2"
+            ),
+            "ordinary-alias-spelling": accepted("def Geo() -> int = 2\nGeo()", "int"),
+        },
+    )
+    for spelling in ("Base", "Geo")
+}
+
+
+def _exported_probes(member: str | None) -> dict[str, Probe]:
+    """What ``thr`` exports beneath ``Base``, however it spelled the path it declared at."""
+    return {
+        "alias-spelling-is-no-scope": rejected("Geo::zz()", UnknownQualifierError, "Geo::zz"),
+        "alias-spelling-is-not-exported": rejected(
+            "use thr::Geo\n1", UnknownMemberError, "use thr::Geo"
+        ),
+        "target-spelling-is-exported": accepted("use thr::Base\n1", "int"),
+        **({} if member is None else {"member": accepted(f"Base::{member}()", "int")}),
+    }
+
+
+_SCENARIOS |= {
+    f"{form}-through-{spelling}-elsewhere-exports-the-targets-scope": Scenario(
+        modules={**_REGION_MODULES, "thr": f"import al::*\n{declared.format(spelling)}\n"},
+        header=("import thr::*\nimport thr",),
+        probes=_exported_probes(member),
+    )
+    for spelling in ("Base", "Geo")
+    for form, declared, member in (
+        ("a-path", "def {0}::h() -> int = 3", "h"),
+        ("a-region", "scope {0}\n  def h() -> int = 3\nend {0}", "h"),
+        ("an-empty-region", "scope {0}\nend {0}", None),
+        ("an-export-in-a-region", "scope {0}\n  export lib::{{free}}\nend {0}", "free"),
+    )
+}
+
+_SCENARIOS["a-method-beneath-an-imported-alias-reads-no-enum-member-injected-above-it"] = Scenario(
+    modules=_MODULES,
+    header=(*_IMPORTED_ALIAS, "enum Color\n  | T3(a: int)\n  | Blue", "type Base::T3 = text"),
+    probes={
+        f"through-{spelling}": rejected(
+            f"def {spelling}::T3::m(self) -> int = 1", AglScopeError, "self"
+        )
+        for spelling in ("Base", "Geo")
+    },
+)
+
 
 class TestDeclarationsThroughAliases:
     """Declarations through an alias, the file part and every REPL grouping."""
@@ -653,6 +1044,35 @@ def test_rebinding_the_alias_leaves_earlier_declarations_at_its_old_target(
                 "Base::R",
                 "Base::R is a record type.\nType:\n  record Base::R\nLocation: <repl>:2:1",
             ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ["let Geo::v = 2", "var Geo::v = 2", "scope Geo\n  let v = 2\nend Geo"],
+    ids=["let", "var", "a-region"],
+)
+@pytest.mark.parametrize(
+    "header",
+    [_OWN_ALIAS, _LOCAL_TARGET],
+    ids=["an-own-alias", "an-alias-of-an-own-type"],
+)
+def test_rebinding_the_alias_leaves_a_binding_declared_through_it_at_its_old_target(
+    tmp_path: Path, header: tuple[str, ...], binding: str
+) -> None:
+    assert_repl_verdicts(
+        tmp_path,
+        _MODULES,
+        (
+            *header,
+            binding,
+            "record Other\n  w: int",
+            "type Geo = Other",
+        ),
+        {
+            "static": accepted("Base::v", "int"),
+            "through-the-new-target": rejected("Geo::v", UnknownMemberError, "Geo::v"),
         },
     )
 

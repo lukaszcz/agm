@@ -1,12 +1,32 @@
 {
   "scenarios": [
     {
-      "name": "cycle_converges_and_reads_final_keyed_exports",
+      "name": "declared_spelling_reads_final_keyed_exports",
       "module_roots": [
-        "program_modules/modules/import_cycle_through_alias"
+        "program_modules/modules/import_cycle_through_alias/declared_spelling"
       ],
       "expect": {
         "stdout": "2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "alias_spelling_reads_final_keyed_exports",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias/alias_spelling"
+      ],
+      "expect": {
+        "stdout": "2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "method_through_alias_is_called_on_the_target_value",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias/method_call"
+      ],
+      "expect": {
+        "stdout": "3\n",
         "calls": {}
       }
     }

@@ -366,10 +366,35 @@ def _static_binding_atom(item: LetDecl | VarDecl) -> NameAtom | None:
     return _atom((*tuple(segment.name for segment in item.scope_path), name))
 
 
+def _regions(
+    items: Iterable[Item], parent: ScopePath = ()
+) -> Iterator[tuple[ScopeRegion, ScopePath]]:
+    """Yield every region among *items*, nested ones too, with the path it is written at."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            path = (*parent, item.segment.name)
+            yield item, path
+            yield from _regions(item.items, path)
+
+
+def _export_scopes(program: Program, scopes: Mapping[int, ScopePath]) -> dict[int, ScopePath]:
+    """Map each export of *program* in a region *scopes* maps to the scope path it opens."""
+    return {
+        item.node_id: scopes[region.node_id]
+        for region, _written in _regions(program.body.items)
+        if region.node_id in scopes
+        for item in region.items
+        if isinstance(item, ExportDecl)
+    }
+
+
 def _compute_local_scope_exports(
-    self_id: ModuleId, program: Program
+    self_id: ModuleId, program: Program, scopes: Mapping[int, ScopePath]
 ) -> dict[NameAtom, ScopeOrigins]:
-    """Collect public named-scope identities from regions and shorthand paths."""
+    """Collect public named-scope identities from regions and shorthand paths.
+
+    *scopes* maps each region opening another scope path than written to it.
+    """
     result: dict[NameAtom, ScopeOrigins] = {}
 
     def add_path(path: PathAtom) -> None:
@@ -377,15 +402,8 @@ def _compute_local_scope_exports(
             atom = _atom(path[:length])
             result[atom] = frozenset({(self_id, atom)})
 
-    def collect_regions(items: Iterable[object], parent: PathAtom) -> None:
-        for item in items:
-            if not isinstance(item, ScopeRegion):
-                continue
-            path = (*parent, item.segment.name)
-            add_path(path)
-            collect_regions(item.items, path)
-
-    collect_regions(program.body.items, ())
+    for region, written in _regions(program.body.items):
+        add_path(scopes.get(region.node_id, written))
     for item in static_items(program.body.items):
         if isinstance(
             item,
@@ -589,6 +607,7 @@ def _resolve_reexports(
     component: tuple[ModuleId, ...],
     through: Through,
     placements: Placements,
+    export_scopes: Mapping[int, ScopePath],
     *,
     validate: bool,
 ) -> None:
@@ -600,7 +619,9 @@ def _resolve_reexports(
     target module's exported names into the current module's export map with
     their origin :data:`QName` preserved; an item written through an alias the
     target exports names the declarations *through* reaches beneath its
-    target. When *validate*, an item naming nothing is then an error. What
+    target; a region-scoped export forwards beneath the scope path its
+    region opens (*export_scopes*, where not the written one). When
+    *validate*, an item naming nothing is then an error. What
     each re-exported atom's export ``hiding`` removes, by *placements*, is
     recorded in *withheld*:
     an atom several export declarations forward withholds only what each
@@ -624,6 +645,7 @@ def _resolve_reexports(
     def additions(decl: ExportDecl, target_mid: ModuleId, *, allow_missing: bool) -> _Additions:
         return _compute_reexport_additions(
             decl,
+            export_scopes.get(decl.node_id, tuple(segment.name for segment in decl.scope_path)),
             export_maps[target_mid],
             scope_export_maps[target_mid],
             withheld[target_mid],
@@ -709,6 +731,7 @@ class _Additions:
 
 def _compute_reexport_additions(
     decl: ExportDecl,
+    region_prefix: ScopePath,
     target_exports: Mapping[NameAtom, QName],
     target_scopes: Mapping[NameAtom, ScopeOrigins],
     target_withheld: Mapping[NameAtom, frozenset[QName]],
@@ -717,7 +740,7 @@ def _compute_reexport_additions(
     *,
     allow_missing: bool = False,
 ) -> _Additions:
-    """Compute declaration and scope identities forwarded by one export.
+    """Compute declaration and scope identities forwarded by one export beneath *region_prefix*.
 
     An item matching nothing the target exports names what *through* reaches
     beneath an alias the target exports, less what the target withholds
@@ -732,7 +755,6 @@ def _compute_reexport_additions(
     result: dict[NameAtom, QName] = {}
     withheld_result: dict[NameAtom, frozenset[QName]] = {}
     scope_result: dict[NameAtom, ScopeOrigins] = {}
-    region_prefix = tuple(segment.name for segment in decl.scope_path)
 
     def beneath_any(origin: QName, removed: Collection[QName]) -> bool:
         """Whether *origin*'s declaration, or where it is placed, is or lies beneath *removed*."""
@@ -909,24 +931,33 @@ def _declaration_atoms(
 
 
 def _declared_keys(
-    module_id: ModuleId, program: Program, declared: Mapping[NameAtom, QName]
+    module_id: ModuleId,
+    program: Program,
+    declared: Mapping[NameAtom, QName],
+    regions: Mapping[ScopePath, QName],
 ) -> tuple[dict[int, ScopePath], dict[DeclarationKey, QName]]:
-    """Key *module_id*'s declarations by the paths they are declared at.
+    """Key *module_id*'s declarations and regions by the paths they declare.
 
     *declared* maps each declaration written otherwise than declared to the
     full path it is declared at (``def Geo::m`` with ``type Geo = Base`` at
-    ``Base::m``, in ``Base``'s module). Returns the scope path, by node id,
-    each declaration of *program* written otherwise is keyed at, and where
-    each one keyed beneath another module's path is placed.
+    ``Base::m``, in ``Base``'s module); *regions* each region path written
+    otherwise to the full path it declares (``scope Geo`` to ``Base``).
+    Returns the scope path, by node id, each declaration of *program* written
+    otherwise is keyed at and each such region opens, and where each
+    declaration keyed beneath another module's path is placed.
     """
 
     def keyed(atom: NameAtom) -> ScopePath:
         placed_module, placed = declared[atom]
         path = _path(placed)
-        if placed_module != module_id:
+        return (*scope(placed_module, path[:-1]), path[-1])
+
+    def scope(module: ModuleId, path: ScopePath) -> ScopePath:
+        """Return the scope path full path *path* of *module* is keyed at here."""
+        if module != module_id:
             return path
         # An own path is keyed where the longest declaration above it is.
-        for end in range(len(path) - 1, 0, -1):
+        for end in range(len(path), 0, -1):
             prefix = _atom(path[:end])
             if prefix in declared:
                 return (*keyed(prefix), *path[end:])
@@ -942,6 +973,13 @@ def _declared_keys(
             scopes[item.node_id] = path[:-1]
         if declared[atom][0] != module_id:
             placements[module_id, path[:-1], path[-1]] = declared[atom]
+    for region, written in _regions(program.body.items):
+        if written not in regions:
+            continue
+        module, atom = regions[written]
+        path = scope(module, _path(atom))
+        if path != written:
+            scopes[region.node_id] = path
     return scopes, placements
 
 
@@ -949,7 +987,7 @@ def _key_declarations(program: Program, scopes: Mapping[int, ScopePath]) -> Prog
     """Return *program* with each declaration in *scopes* written at the scope path it maps to.
 
     Regions keep their spelling: a region is where names are written, not a
-    declaration.
+    declaration; the scope path one opens is published beside the program.
     """
 
     def keyed[I: Item](item: I) -> I:
@@ -1013,8 +1051,13 @@ class _ModuleTables:
     constructor_refs: dict[QName, ConstructorRef]
 
 
-def _module_tables(mid: ModuleId, program: Program) -> _ModuleTables:
-    """Collect *mid*'s exports, declarations and declaration metadata from *program*."""
+def _module_tables(
+    mid: ModuleId, program: Program, scopes: Mapping[int, ScopePath]
+) -> _ModuleTables:
+    """Collect *mid*'s exports, declarations and declaration metadata from *program*.
+
+    *scopes* maps each region opening another scope path than written to it.
+    """
     funcs: dict[QName, FuncDef] = {}
     types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
     decl_info: _DeclInfo = {}
@@ -1068,7 +1111,7 @@ def _module_tables(mid: ModuleId, program: Program) -> _ModuleTables:
                 )
     return _ModuleTables(
         exports=_compute_local_exports(mid, program),
-        scope_exports=_compute_local_scope_exports(mid, program),
+        scope_exports=_compute_local_scope_exports(mid, program, scopes),
         type_origins=frozenset(types),
         alias_origins=frozenset(
             qname for qname, item in types.items() if isinstance(item, TypeAlias)
@@ -1175,10 +1218,20 @@ def resolve_program(
     # keys a declaration written otherwise at its declared path.
     # A reusable resolution brings its keyed declarations.
     programs: dict[ModuleId, Program] = {}
+    tables: dict[ModuleId, _ModuleTables] = {}
+    # The scope path each region-scoped export forwards beneath, where its
+    # region opens another than written.
+    export_scopes: dict[int, ScopePath] = {}
     for mid, loaded in graph.modules.items():
         cached = _reusable(cached_modules, mid, loaded)
-        programs[mid] = loaded.program if cached is None else cached.resolved.program
-    tables = {mid: _module_tables(mid, program) for mid, program in programs.items()}
+        if cached is None:
+            programs[mid] = loaded.program
+            tables[mid] = _module_tables(mid, loaded.program, {})
+        else:
+            programs[mid] = cached.resolved.program
+            scopes = cached.resolved.region_scopes
+            tables[mid] = _module_tables(mid, programs[mid], scopes)
+            export_scopes.update(_export_scopes(programs[mid], scopes))
     export_maps = {mid: dict(table.exports) for mid, table in tables.items()}
     scope_export_maps = {mid: dict(table.scope_exports) for mid, table in tables.items()}
     withheld: Withheld = {mid: {} for mid in tables}
@@ -1436,6 +1489,14 @@ def resolve_program(
             return resolved_modules[mid].resolved.declared_paths
         return resolver.declared_paths()
 
+    def declared_regions(mid: ModuleId) -> Mapping[ScopePath, QName]:
+        """Each region path of *mid* written otherwise, to the full path it declares.
+
+        None of a reused resolution, whose regions' scope paths its tables read.
+        """
+        resolver = resolvers.get(mid)
+        return {} if resolver is None else resolver.declared_regions()
+
     def reexport(members: tuple[ModuleId, ...], *, validate: bool) -> None:
         """Resolve *members*' re-exports afresh through their prepared aliases.
 
@@ -1463,6 +1524,7 @@ def resolve_program(
             members,
             through,
             type_owners,
+            export_scopes,
             validate=validate,
         )
 
@@ -1513,6 +1575,7 @@ def resolve_program(
                 members,
                 _reaches_nothing,
                 _Unresolved(),
+                export_scopes,
                 validate=False,
             )
             settling.update(members)
@@ -1539,9 +1602,13 @@ def resolve_program(
         # at, so every later reading -- exports, typecheck, display, REPL
         # retention -- sees the one key. Each member keyed afresh is prepared
         # again over its keyed declarations, as are its component's others,
-        # which read them.
+        # which read them; so is each member whose ordinary declaration met a
+        # scope path before its declared scopes were decided, which decides
+        # the meeting.
         for mid in members:
-            declared_scopes[mid], placed = _declared_keys(mid, programs[mid], declared_paths(mid))
+            declared_scopes[mid], placed = _declared_keys(
+                mid, programs[mid], declared_paths(mid), declared_regions(mid)
+            )
             if declared_scopes[mid]:
                 programs[mid] = _key_declarations(programs[mid], declared_scopes[mid])
             placements[mid] = (
@@ -1549,11 +1616,17 @@ def resolve_program(
                 if mid == graph.entry_id
                 else placed
             )
-        keyed = [mid for mid in members if declared_scopes[mid]]
+        keyed = [
+            mid
+            for mid in members
+            if declared_scopes[mid]
+            or (mid in resolvers and resolvers[mid].meets_undecided_scope_path)
+        ]
         if keyed:
             for mid in keyed:
                 remove_tables(tables[mid])
-                tables[mid] = _module_tables(mid, programs[mid])
+                tables[mid] = _module_tables(mid, programs[mid], declared_scopes[mid])
+                export_scopes.update(_export_scopes(programs[mid], declared_scopes[mid]))
                 add_tables(tables[mid])
                 local_exports[mid] = tables[mid].exports
                 local_scope_exports[mid] = tables[mid].scope_exports

@@ -322,6 +322,20 @@ class ModuleSources(SourcesHost):
                 declaring[qname] = (*declaring.get(qname, ()), path)
         self._undeclared_scope_paths.extend(reversed(waiting))
 
+    def declared_scope(self, path: ScopePath) -> QName | None:
+        """The full path own scope path *path* declares, when it or a scope above declares another.
+
+        ``scope Geo`` with ``type Geo = Base`` declares ``Base``, in ``Base``'s
+        module. ``None`` for a scope path declaring its own spelling.
+        """
+        self._declare_scope_paths()
+        for end in range(len(path), 0, -1):
+            declared = self._declared_paths.get(path[:end])
+            if declared is not None and declared != (self._module_id, _bare_atom(path[:end])):
+                module_id, atom = declared
+                return module_id, _bare_atom((*_bare_path(atom), *path[end:]))
+        return None
+
     def declared_path(self, path: ScopePath) -> QName | None:
         """The full path own declaration *path* is declared at, when a scope above declares another.
 
@@ -332,29 +346,17 @@ class ModuleSources(SourcesHost):
         placed = self._placements.get((self._module_id, path[:-1], path[-1]))
         if placed is not None:
             return placed
-        self._declare_scope_paths()
-        for end in range(len(path) - 1, 0, -1):
-            declared = self._declared_paths.get(path[:end])
-            if declared is not None and declared != (self._module_id, _bare_atom(path[:end])):
-                module_id, atom = declared
-                return module_id, _bare_atom((*_bare_path(atom), *path[end:]))
-        return None
+        scope = self.declared_scope(path[:-1])
+        if scope is None:
+            return None
+        module_id, atom = scope
+        return module_id, _bare_atom((*_bare_path(atom), path[-1]))
 
-    def declared_scope_path(self, path: ScopePath) -> ScopePath:
-        """Canonicalize an own scope path through any alias prefix it is spelled otherwise by.
-
-        A step into a named scope region or a declaration's own body reads
-        the same declared path a declaration written there would
-        (:meth:`declared_path`): ``scope G`` with ``type G = Base`` steps
-        into ``Base``. Safe only once declarations are fully collected (every
-        own type is known), never mid-collection, which stays alias-agnostic
-        so a forward reference resolves regardless of source order. *path* is
-        never empty: its one caller always appends a region's own segment,
-        collected -- and so present here -- by the same pass that collects
-        *path*'s own parent.
-        """
-        self._declare_scope_paths()
-        return _bare_path(self._declared_paths[path][1])
+    def nearest_scope(self, path: ScopePath) -> ScopePath:
+        """See :meth:`~agm.agl.scope.lookup.PathSources.nearest_scope`."""
+        while path not in self._scope_nodes:
+            path = path[:-1]
+        return path
 
     def _declaring(self) -> Mapping[QName, tuple[ScopePath, ...]]:
         """Map each full path that own scope paths spelled otherwise declare to those paths."""

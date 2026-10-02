@@ -1,0 +1,5 @@
+def pace() -> int = 3
+
+scope Units
+  def scale(n: int) -> int = n * 10
+end Units

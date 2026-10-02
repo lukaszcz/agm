@@ -8356,6 +8356,22 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
 
+    def test_method_path_through_a_region_holding_a_retained_use_declares_its_own_type(
+        self,
+    ) -> None:
+        session = open_session()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
+
+        declared = session.eval_entry(
+            "record Outer::Source\n  x: int\ndef Outer::Source::m(self) -> int = self.x"
+        )
+
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::Source(x = 2).m()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
     def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok

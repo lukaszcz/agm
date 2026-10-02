@@ -328,6 +328,14 @@ class PathSources(DeclarationNames, Protocol):
         """Whether a ``hiding`` visible at *step* removed full *path* from its contribution."""
         ...
 
+    def nearest_scope(self, path: ScopePath) -> ScopePath:
+        """The nearest scope path of the module's own at or above *path*.
+
+        A path spelled through an alias, a module route or a contributed type
+        is that one's path, never a scope path of the module's own.
+        """
+        ...
+
     def routed_hidden(self, chain: QualifierChain, path: ScopePath) -> bool:
         """Whether a ``hiding`` removed *path* from *chain*'s leading module route."""
         ...
@@ -425,17 +433,24 @@ def lookup_declared(
     """Return the declaration of *kind* at full *path*, read at its parent step alone.
 
     A declaration at *path* is what a declaring path (a receiver's) names, so
-    no step further out is tried. *written* is the qualifier chain spelling
-    the last names of *path*, if any; the types its prefixes select add what
-    their own member tables select. Finding nothing is then an owner-table
-    refusal, a hidden member when a ``hiding`` removed *path*, else an
-    unknown member of it, since every prefix of a declaring path is a scope
-    path of the module's own. A bare value spelling (no *written*) also reads
-    the enum members injected at the parent step, as :func:`lookup_bare`
-    does. *span* locates a bare spelling's ambiguity.
+    no step further out is tried. A parent no scope path of the module's own
+    spells -- one written through an alias, a module route or a contributed
+    type -- anchors nothing itself: its step is the nearest own scope path
+    above it, which injects nothing beneath it. *written* is the qualifier
+    chain spelling the last names of *path*, if any; the types its prefixes
+    select add what their own member tables select. Finding nothing is then
+    an owner-table refusal, a hidden member when a ``hiding`` removed *path*,
+    else an unknown member of it. A bare value spelling (no *written*) also
+    reads the enum members injected at the parent step, as
+    :func:`lookup_bare` does. *span* locates a bare spelling's ambiguity.
     """
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
-    parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
+    at = sources.nearest_scope(path[:-1])
+    parent = _step(
+        sources,
+        at,
+        injects=written is None and kind is LookupKind.VALUE and at == path[:-1],
+    )
     step = replace(parent, path=path[: len(path) - len(names)])
     walk = _Walk(sources, step.path, (step,), (), written, names, span)
     found = walk.find(kind)
@@ -580,7 +595,8 @@ def _step(
     injected at *step*, an own one winning like an own declaration. Without
     *contributions*, only the own ones are read. Every type a prefix reaches
     owns what its member table selects, the contributed ones beside an own
-    one included.
+    one included: those anchored above the prefix, which may itself lie at or
+    above *step* (:func:`lookup_declared`).
     """
 
     def read(path: ScopePath, kind: LookupKind) -> Reading:
@@ -596,7 +612,7 @@ def _step(
 
     def owners(path: ScopePath) -> Reading:
         return sources.own_at(path, LookupKind.TYPE) + sources.contributed_at(
-            step, path, LookupKind.TYPE
+            step[: len(path) - 1], path, LookupKind.TYPE
         )
 
     return _Step(step, read, owners)

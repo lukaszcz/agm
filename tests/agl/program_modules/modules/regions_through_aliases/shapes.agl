@@ -1,0 +1,5 @@
+record Shape
+  side: int
+
+record Shape::Corner
+  angle: int

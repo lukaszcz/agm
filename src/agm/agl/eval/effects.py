@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ContextManager, Literal, NoReturn, Protocol, assert_never, cast
 
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
-from agm.agent.transport import AgentOutputCallback
+from agm.agent.transport import AgentOutputCallback, AgentOutputType
 from agm.agent.values import agent_spec_shape
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name
 from agm.agl.ir.ids import ContractId, Location
@@ -263,12 +263,26 @@ class EffectHandlers:
         if not echo and not trace:
             return None
 
-        def emit(phase: Literal["progress", "final", "stderr"], text: str) -> None:
+        def emit(
+            phase: Literal["progress", "final", "stderr"],
+            text: str,
+            *,
+            event_type: AgentOutputType | None = None,
+            tool_name: str | None = None,
+            tool_call_id: str | None = None,
+        ) -> None:
             if not text:
                 return
             with self._output_lock:
                 if trace and phase != "final":
-                    intermediate_output.append({"phase": phase, "text": text})
+                    item = {"phase": phase, "text": text}
+                    if event_type is not None:
+                        item["type"] = event_type
+                    if tool_name is not None:
+                        item["tool_name"] = tool_name
+                    if tool_call_id is not None:
+                        item["tool_call_id"] = tool_call_id
+                    intermediate_output.append(item)
                 if echo:
                     sys.stderr.write(text)
                     sys.stderr.flush()

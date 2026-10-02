@@ -718,7 +718,7 @@ def test_claude_agent_dispatch_echoes_progress_and_decodes_the_final_response(
             agent=AgentClaude("sonnet", "medium"),
             prompt="hello",
             env={},
-            output_callback=lambda phase, text: output.append((phase, text)),
+            output_callback=lambda phase, text, **_metadata: output.append((phase, text)),
         )
     )
 
@@ -763,7 +763,7 @@ def test_claude_agent_dispatch_reports_malformed_echo_stream_as_protocol_failure
                 agent=AgentClaude("sonnet", "medium"),
                 prompt="hello",
                 env={},
-                output_callback=lambda _phase, _text: None,
+                output_callback=lambda _phase, _text, **_metadata: None,
             )
         )
 

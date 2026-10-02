@@ -633,7 +633,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_pi_output_helpers_handle_empty_and_closed_output_channels() -> None:
     output: list[tuple[str, str]] = []
 
-    def callback(phase: AgentOutputPhase, text: str) -> None:
+    def callback(phase: AgentOutputPhase, text: str, **_metadata: object) -> None:
         output.append((phase, text))
 
     assistant_progress = ["pending"]
@@ -684,7 +684,7 @@ def test_pi_output_helpers_handle_empty_and_closed_output_channels() -> None:
 
     child = _child(object())
 
-    def closed_channel(_phase: str, _text: str) -> None:
+    def closed_channel(_phase: str, _text: str, **_metadata: object) -> None:
         raise BrokenPipeError
 
     child.output_callback = closed_channel
@@ -703,7 +703,7 @@ def test_finish_stderr_delivery_drains_pending_pipe_bytes() -> None:
     stream = os.fdopen(read_fd, "rb", buffering=0)
     child = _child(_StderrProcess(stream))
     output: list[tuple[str, str]] = []
-    child.output_callback = lambda phase, text: output.append((phase, text))
+    child.output_callback = lambda phase, text, **_metadata: output.append((phase, text))
     os.write(write_fd, b"pending diagnostic")
     os.close(write_fd)
 
@@ -720,7 +720,7 @@ def test_finish_stderr_delivery_drains_pending_pipe_bytes() -> None:
 def test_finish_stderr_delivery_handles_missing_or_closed_streams() -> None:
     for stream in (None, io.BytesIO()):
         child = _child(_StderrProcess(stream))
-        child.output_callback = lambda _phase, _text: None
+        child.output_callback = lambda _phase, _text, **_metadata: None
 
         rpc._finish_stderr_delivery(child)
 

@@ -211,7 +211,7 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
     agent = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(agent, "Rpc", env={})
 
-    def callback(_phase: AgentOutputPhase, _text: str) -> None:
+    def callback(_phase: AgentOutputPhase, _text: str, **_metadata: object) -> None:
         return None
 
     response = host.ask_request(

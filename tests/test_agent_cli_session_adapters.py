@@ -152,7 +152,9 @@ def test_codex_captures_large_events_from_nonblocking_stdout(
     events: list[tuple[str, str]] = []
     request = SessionAskRequest(
         "question",
-        output_callback=(lambda phase, text: events.append((phase, text))) if echo else None,
+        output_callback=(lambda phase, text, **_metadata: events.append((phase, text)))
+        if echo
+        else None,
     )
 
     assert backend.ask(request).content == "x" * 2_000_000
@@ -388,7 +390,8 @@ def test_claude_echo_stream_decodes_final_response_and_reports_progress(
 
     response = backend.ask(
         SessionAskRequest(
-            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
         )
     )
 
@@ -414,7 +417,9 @@ def test_claude_echo_stream_rejects_an_undecodable_final_response(
     _open(backend, AgentClaude("m", "t"))
 
     with pytest.raises(SessionAskError) as raised:
-        backend.ask(SessionAskRequest("question", output_callback=lambda _phase, _text: None))
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
 
     assert raised.value.cause == "protocol_failure"
 
@@ -451,7 +456,8 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
 
     response = backend.ask(
         SessionAskRequest(
-            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
         )
     )
 
@@ -463,7 +469,9 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
         ("stderr", "codex log\n"),
     ]
     assert transport.calls[0][0][:4] == ["codex", "exec", "--json", "--model"]
-    resumed = backend.ask(SessionAskRequest("again", output_callback=lambda _phase, _text: None))
+    resumed = backend.ask(
+        SessionAskRequest("again", output_callback=lambda _phase, _text, **_metadata: None)
+    )
     assert resumed.content == "resumed"
     assert transport.calls[1][0][:5] == ["codex", "exec", "resume", "thread-1", "--json"]
 
@@ -486,7 +494,8 @@ def test_codex_single_prompt_echo_decodes_jsonl_final_response(
 
     response = backend.ask(
         SessionAskRequest(
-            "question", output_callback=lambda phase, text: output_chunks.append((phase, text))
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
         )
     )
 
@@ -504,7 +513,9 @@ def test_codex_single_prompt_echo_rejects_malformed_jsonl(
     _open(backend, AgentCodex("m", "t"), single_prompt=True)
 
     with pytest.raises(SessionAskError) as raised:
-        backend.ask(SessionAskRequest("question", output_callback=lambda _phase, _text: None))
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
 
     assert raised.value.cause == "protocol_failure"
 

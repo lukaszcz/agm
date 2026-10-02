@@ -309,22 +309,60 @@ def test_echo_streams_pi_tool_progress_and_stderr_without_replacing_final_respon
         },
     )
     backend = open_backend()
-    output: list[tuple[str, str]] = []
+    output: list[dict[str, str]] = []
 
-    response = backend.ask(
-        SessionAskRequest(
-            "question", output_callback=lambda phase, text: output.append((phase, text))
-        )
-    )
+    def collect_output(
+        phase: str,
+        text: str,
+        *,
+        event_type: str | None = None,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> None:
+        event = {"phase": phase, "text": text}
+        for key, value in (
+            ("type", event_type),
+            ("tool_name", tool_name),
+            ("tool_call_id", tool_call_id),
+        ):
+            if value is not None:
+                event[key] = value
+        output.append(event)
+
+    response = backend.ask(SessionAskRequest("question", output_callback=collect_output))
 
     assert response.content == "done"
-    assert [text for phase, text in output if phase == "stderr"] == ["pi diagnostic\n"]
-    assert [text for phase, text in output if phase == "progress"] == [
-        "Checking",
-        "[bash]\n",
-        "one",
-        " two",
-        "!",
+    assert output == [
+        {"phase": "stderr", "text": "pi diagnostic\n"},
+        {"phase": "progress", "type": "message", "text": "Checking"},
+        {
+            "phase": "progress",
+            "type": "tool_call",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "[bash]\n",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "one",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": " two",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "!",
+        },
     ]
     backend.close()
 
@@ -400,7 +438,10 @@ def test_prompt_waits_for_stderr_already_read_by_the_reader(
             answers.append(
                 backend.ask(
                     SessionAskRequest(
-                        "question", output_callback=lambda phase, text: output.append((phase, text))
+                        "question",
+                        output_callback=lambda phase, text, **_metadata: output.append(
+                            (phase, text)
+                        ),
                     )
                 ).content
             )

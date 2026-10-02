@@ -60,7 +60,14 @@ class ClaudeOutputStream:
                 block = cast(dict[str, object], block)
                 name = block.get("name")
                 if isinstance(name, str) and name:
-                    self._callback("progress", f"[{name}]\n")
+                    call_id = block.get("id")
+                    self._callback(
+                        "progress",
+                        f"[{name}]\n",
+                        event_type="tool_call",
+                        tool_name=name,
+                        tool_call_id=call_id if isinstance(call_id, str) and call_id else None,
+                    )
         elif stream_event_type == "content_block_delta":
             delta = stream_event.get("delta")
             if (
@@ -92,7 +99,7 @@ class ClaudeOutputStream:
         if stop_reason not in ("end_turn", "stop_sequence"):
             text = "".join(self._assistant_text)
             if text:
-                self._callback("progress", text)
+                self._callback("progress", text, event_type="message")
         self._assistant_text.clear()
 
     def _tool_result(self, event: dict[str, object]) -> None:
@@ -109,14 +116,27 @@ class ClaudeOutputStream:
             if block.get("type") != "tool_result":
                 continue
             result = block.get("content")
+            call_id = block.get("tool_use_id")
             if isinstance(result, str) and result:
-                self._callback("progress", result)
+                self._callback(
+                    "progress",
+                    result,
+                    event_type="tool_result",
+                    tool_call_id=call_id if isinstance(call_id, str) and call_id else None,
+                )
             elif isinstance(result, list):
                 for item in result:
                     if isinstance(item, dict):
                         item = cast(dict[str, object], item)
                         if isinstance(item.get("text"), str):
-                            self._callback("progress", cast(str, item["text"]))
+                            self._callback(
+                                "progress",
+                                cast(str, item["text"]),
+                                event_type="tool_result",
+                                tool_call_id=(
+                                    call_id if isinstance(call_id, str) and call_id else None
+                                ),
+                            )
 
 
 def decode_claude_stream_json(output: str) -> str:
@@ -201,26 +221,46 @@ class CodexOutputStream:
             self._item_completed(item_type, item)
 
     def _item_started(self, item_type: str, item: dict[str, object]) -> None:
+        call_id = item.get("id")
+        tool_call_id = call_id if isinstance(call_id, str) else None
         if item_type == "command_execution":
             command = item.get("command")
             if isinstance(command, str) and command:
-                self._callback("progress", f"$ {command}\n")
+                self._callback(
+                    "progress",
+                    f"$ {command}\n",
+                    event_type="tool_call",
+                    tool_name=item_type,
+                    tool_call_id=tool_call_id,
+                )
         elif item_type == "web_search":
             title = item.get("query") or item.get("name")
             if isinstance(title, str) and title:
-                self._callback("progress", f"[{title}]\n")
+                self._callback(
+                    "progress",
+                    f"[{title}]\n",
+                    event_type="tool_call",
+                    tool_name=item_type,
+                    tool_call_id=tool_call_id,
+                )
         elif item_type == "mcp_tool_call":
             tool = item.get("tool")
             if isinstance(tool, str) and tool:
                 server = item.get("server")
                 title = f"{server}.{tool}" if isinstance(server, str) and server else tool
-                self._callback("progress", f"[{title}]\n")
+                self._callback(
+                    "progress",
+                    f"[{title}]\n",
+                    event_type="tool_call",
+                    tool_name=title,
+                    tool_call_id=tool_call_id,
+                )
 
     def _emit_pending_agent_message(self) -> None:
         text = self._pending_agent_message
         self._pending_agent_message = None
         if text:
-            self._callback("progress", text)
+            self._callback("progress", text, event_type="message")
 
     def _item_completed(self, item_type: str, item: dict[str, object]) -> None:
         if item_type == "command_execution":
@@ -237,6 +277,7 @@ class CodexOutputStream:
         if not isinstance(output, str) or not output:
             return
         item_id = item.get("id")
+        tool_call_id = item_id if isinstance(item_id, str) else None
         if not isinstance(item_id, str) or not item_id:
             added = output
         else:
@@ -244,12 +285,26 @@ class CodexOutputStream:
             added = output[len(previous) :] if output.startswith(previous) else output
             self._command_outputs[item_id] = output
         if added:
-            self._callback("progress", added)
+            self._callback(
+                "progress",
+                added,
+                event_type="tool_result",
+                tool_name="command_execution",
+                tool_call_id=tool_call_id,
+            )
 
     def _emit_mcp_result(self, item: dict[str, object]) -> None:
         result = item.get("result")
         if not isinstance(result, dict):
             return
+        server = item.get("server")
+        tool = item.get("tool")
+        if isinstance(tool, str) and tool:
+            tool_name = f"{server}.{tool}" if isinstance(server, str) and server else tool
+        else:
+            tool_name = None
+        item_id = item.get("id")
+        tool_call_id = item_id if isinstance(item_id, str) else None
         content = cast(dict[str, object], result).get("content")
         if not isinstance(content, list):
             return
@@ -258,4 +313,10 @@ class CodexOutputStream:
                 continue
             block = cast(dict[str, object], block)
             if block.get("type") == "text" and isinstance(block.get("text"), str):
-                self._callback("progress", cast(str, block["text"]))
+                self._callback(
+                    "progress",
+                    cast(str, block["text"]),
+                    event_type="tool_result",
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                )

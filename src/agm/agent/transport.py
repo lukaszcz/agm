@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 
 AgentOutputPhase: TypeAlias = Literal["progress", "final", "stderr"]
-AgentOutputCallback: TypeAlias = Callable[[AgentOutputPhase, str], None]
+AgentOutputType: TypeAlias = Literal["message", "tool_call", "tool_result"]
+
+
+class AgentOutputCallback(Protocol):
+    def __call__(
+        self,
+        phase: AgentOutputPhase,
+        text: str,
+        *,
+        event_type: AgentOutputType | None = None,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> None: ...
+
 
 AgentTransportFailureCause: TypeAlias = Literal[
     "spawn_failure", "timeout", "nonzero_exit", "interpolation_failure", "protocol_failure"

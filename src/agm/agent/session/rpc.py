@@ -352,6 +352,7 @@ class PiRpcSessionBackend(SandboxFixture):
         text_length = 0
         assistant_progress: list[str] = []
         tool_output_lengths: dict[str, str] = {}
+        tool_names: dict[str, str] = {}
         response: dict[str, object] | None = None
         state_request_id: str | None = None
         streaming: bool | None = None
@@ -374,6 +375,7 @@ class PiRpcSessionBackend(SandboxFixture):
                         delta=delta,
                         assistant_progress=assistant_progress,
                         tool_output_lengths=tool_output_lengths,
+                        tool_names=tool_names,
                         callback=output_callback,
                     )
                 if event["type"] == "response":
@@ -436,6 +438,7 @@ class PiRpcSessionBackend(SandboxFixture):
                     terminal_error = None
                     assistant_progress.clear()
                     tool_output_lengths.clear()
+                    tool_names.clear()
                 else:
                     if authoritative_text is not None:
                         text = [authoritative_text]
@@ -858,6 +861,7 @@ def _emit_pi_progress(
     delta: str | None,
     assistant_progress: list[str],
     tool_output_lengths: dict[str, str],
+    tool_names: dict[str, str] | None = None,
     callback: AgentOutputCallback,
 ) -> None:
     """Echo Pi tool activity and assistant messages that invoke a tool."""
@@ -876,13 +880,22 @@ def _emit_pi_progress(
             if stop_reason not in ("stop", "length", "error"):
                 text = "".join(assistant_progress)
                 if text:
-                    callback("progress", text)
+                    callback("progress", text, event_type="message")
         assistant_progress.clear()
         return
     if event_type == "tool_execution_start":
         name = event.get("toolName")
+        call_id = event.get("toolCallId")
+        if tool_names is not None and isinstance(call_id, str) and isinstance(name, str):
+            tool_names[call_id] = name
         if isinstance(name, str) and name:
-            callback("progress", f"[{name}]\n")
+            callback(
+                "progress",
+                f"[{name}]\n",
+                event_type="tool_call",
+                tool_name=name,
+                tool_call_id=call_id if isinstance(call_id, str) else None,
+            )
         return
     if event_type not in {"tool_execution_update", "tool_execution_end"}:
         return
@@ -897,7 +910,13 @@ def _emit_pi_progress(
     added = current[len(previous) :] if current.startswith(previous) else current
     tool_output_lengths[call_id] = current
     if added:
-        callback("progress", added)
+        callback(
+            "progress",
+            added,
+            event_type="tool_result",
+            tool_name=None if tool_names is None else tool_names.get(call_id),
+            tool_call_id=call_id,
+        )
 
 
 def _rpc_result_text(value: object) -> str:

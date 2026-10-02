@@ -278,7 +278,9 @@ class TestExecCommandRecord:
 
 
 class TestAgentCallRecord:
-    @pytest.mark.parametrize(("echo", "expected_stderr"), [(True, "work\nlog\ndone"), (False, "")])
+    @pytest.mark.parametrize(
+        ("echo", "expected_stderr"), [(True, "[Read]\nlog\ndone"), (False, "")]
+    )
     def test_agent_turn_output_is_echoed_and_traced(
         self,
         tmp_path: Path,
@@ -291,7 +293,13 @@ class TestAgentCallRecord:
         def agent(request: AgentRequest) -> AgentResponse:
             if request.output_callback is not None:
                 request.output_callback("progress", "")
-                request.output_callback("progress", "work\n")
+                request.output_callback(
+                    "progress",
+                    "[Read]\n",
+                    event_type="tool_call",
+                    tool_name="Read",
+                    tool_call_id="call-1",
+                )
                 request.output_callback("stderr", "log\n")
             return AgentResponse(content="done")
 
@@ -307,7 +315,13 @@ class TestAgentCallRecord:
         records = _load_jsonl(trace_path)
         response = next(record for record in records if record["kind"] == "agent_response")
         assert response["intermediate_output"] == [
-            {"phase": "progress", "text": "work\n"},
+            {
+                "phase": "progress",
+                "type": "tool_call",
+                "tool_name": "Read",
+                "tool_call_id": "call-1",
+                "text": "[Read]\n",
+            },
             {"phase": "stderr", "text": "log\n"},
         ]
         assert response["content"] == "done"

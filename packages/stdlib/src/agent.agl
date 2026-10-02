@@ -61,6 +61,7 @@ builtin def ask[T](
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
+
 @doc("""
   Ask an agent and parse its response as the requested type.
 
@@ -76,6 +77,7 @@ builtin def Agent::ask[T](
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> T
+
 @doc("Build an agent request for the requested response type without invoking the agent.")
 builtin def Agent::ask-request[T](
   self,
@@ -85,6 +87,7 @@ builtin def Agent::ask-request[T](
   parse-error-retries: int = std/config::parse-error-retries,
   sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
+
 @doc("Build an agent request for the requested response type without invoking the agent.")
 builtin def ask-request[T](
   prompt: text,

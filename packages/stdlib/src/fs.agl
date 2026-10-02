@@ -11,56 +11,66 @@ exception FsError extends Exception
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def read(path: path) -> text
+
 @doc("""
   Write UTF-8 content, creating missing parent directories.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def write(path: path, content: text) -> unit
+
 @doc("""
   Append UTF-8 content, creating the file and missing parent directories.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def append(path: path, content: text) -> unit
+
 @doc("Check if `path` exists.")
 extern def exists(path: path) -> bool
+
 @doc("""
   Return immediate child paths of `path`.
 
   Raises `FsError` if any entry's name is not valid Unicode.
 """)
 extern def list(path: path) -> array[path]
+
 @doc("""
   Create the directory and any missing parent directories.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def mkdir(path: path) -> unit
+
 @doc("""
   Remove a file, symbolic link, or directory tree.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def remove(path: path) -> unit
+
 @doc("""
   Copy a file, creating missing parent directories at the destination.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def copy(source: path, destination: path) -> unit
+
 @doc("""
   Move a file or directory, creating missing parent directories at the destination.
 
   Raises `FsError` when the filesystem operation fails.
 """)
 extern def move(source: path, destination: path) -> unit
+
 @doc("""
   Return paths matching a shell-style `pattern`.
 
   Raises `FsError` if any match's name is not valid Unicode.
 """)
 extern def glob(pattern: text) -> array[path]
+
 @extern-name("temp_file")
 @doc("""
   Create an empty temporary file with the given suffix.
@@ -70,6 +80,7 @@ extern def glob(pattern: text) -> array[path]
   not valid Unicode.
 """)
 extern def temp-file(suffix: text = "") -> path
+
 @extern-name("temp_dir")
 @doc("""
   Create a temporary directory.
@@ -87,6 +98,7 @@ def try-read(path: path) -> Result[text, FsError] =
 @extern-name("is_file")
 @doc("Check if `path` is a regular file.")
 extern def is-file(path: path) -> bool
+
 @extern-name("is_dir")
 @doc("Check if `path` is a directory.")
 extern def is-dir(path: path) -> bool

@@ -8,6 +8,7 @@ end IntInternals
 scope DecimalInternals
   @doc("Return the square root.")
   extern def sqrt(self: decimal) -> decimal
+
   @doc("Raise the value to the integer exponent.")
   extern def pow(self: decimal, exponent: int) -> decimal
 end DecimalInternals
@@ -71,10 +72,13 @@ def decimal::sign(self) -> int =
     | else => 0
 @doc("Round down to the nearest integer.")
 extern def decimal::floor(self) -> int
+
 @doc("Round up to the nearest integer.")
 extern def decimal::ceil(self) -> int
+
 @doc("Round to the given number of decimal places using half-even rounding.")
 extern def decimal::round(self, digits: int = 0) -> decimal
+
 @doc("""
   Return the square root.
 

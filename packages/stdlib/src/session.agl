@@ -36,6 +36,7 @@ builtin def Session::open(
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> Session
+
 @doc("""
   Return the host's default session, creating it on first use.
 
@@ -43,6 +44,7 @@ builtin def Session::open(
   unavailable.
 """)
 builtin def Session::default() -> Session
+
 @doc("""
   Ask the session's agent and parse its response as the requested type.
 
@@ -56,36 +58,42 @@ builtin def Session::ask[T](
   strict-json: bool = false,
   parse-error-retries: int = std/config::parse-error-retries,
 ) -> T
+
 @doc("""
   Compact the session's conversation using the optional instructions.
 
   Raises `SessionError` when compaction fails or is unsupported.
 """)
 builtin def Session::compact(self, instructions: text = "") -> unit
+
 @doc("""
   Clear the session's conversation.
 
   Raises `SessionError` when resetting fails or is unsupported.
 """)
 builtin def Session::reset(self) -> unit
+
 @doc("""
   Create a new session from the current conversation.
 
   Raises `SessionError` when forking fails or is unsupported.
 """)
 builtin def Session::fork(self) -> Session
+
 @doc("""
   Return the session's token usage, cost, and context usage.
 
   Raises `SessionError` when statistics are unavailable.
 """)
 builtin def Session::stats(self) -> SessionStats
+
 @doc("""
   Set the session's display name.
 
   Raises `SessionError` when renaming fails or is unsupported.
 """)
 builtin def Session::set-name(self, name: text) -> unit
+
 @doc("""
   Close the agent session.
 

@@ -7,6 +7,7 @@ import std/path::path
   exist inside that directory; invalid paths fail before execution.
 """)
 builtin def resource(path: path) -> path
+
 @doc("""
   Return the declaring package's root, or the module directory for an unpackaged module.
 

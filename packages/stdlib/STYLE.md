@@ -47,6 +47,9 @@ bind an argument.
 
 ## Declarations
 
+- Separate extern and builtin function declarations with a blank line before the next
+  declaration's attributes.
+
 - Document functions with `@doc` on a separate line before the declaration.
   Start with one concise sentence describing the function. Put exception
   conditions and other notes in separate paragraphs; use a block string for

@@ -3,18 +3,23 @@ import std/errors::IndexError
 
 @doc("Reset this module's pseudo-random sequence to `value`.")
 extern def seed(value: int) -> unit
+
 @doc("Return an integer in the half-open interval `[0, upper)`.")
 extern def below(upper: int) -> int
+
 @doc("Return an integer in the closed interval `[lower, upper]`.")
 extern def between(lower: int, upper: int) -> int
+
 @doc("Return a decimal in the half-open interval `[0, 1)`.")
 extern def uniform() -> decimal
+
 @doc("""
   Return a randomly selected element.
 
   Raises `IndexError` when the array is empty.
 """)
 extern def choice[T](values: array[T]) -> T
+
 @doc("Return a randomly selected element, or `None` when the array is empty.")
 def choice?[T](values: array[T]) -> Option[T] =
   try Some(choice(values)) catch IndexError as _ => None
@@ -22,5 +27,6 @@ def choice?[T](values: array[T]) -> Option[T] =
 @extern-name("shuffle_in_place")
 @doc("Shuffle the array in place.")
 extern def shuffle![T](values: array[T]) -> unit
+
 @doc("Return a cryptographically random UUIDv4, independent of `seed`.")
 extern def uuid() -> text

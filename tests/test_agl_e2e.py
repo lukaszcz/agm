@@ -89,6 +89,7 @@ builtin def Session::open(
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> Session
+
 builtin def Session::default() -> Session
 """
 

@@ -35,6 +35,7 @@ exception UrlParseError extends Exception
   and their order survive a round trip.
 """)
 extern def parse(value: url) -> Url
+
 @doc("Parse an absolute URL, returning `UrlParseError` as `Err`.")
 def try-parse(value: url) -> Result[Url, UrlParseError] =
   try Ok(parse(value)) catch UrlParseError as e => Err(e)
@@ -74,6 +75,7 @@ extern def join(base: url, reference: text) -> url
   Encodes spaces as `%20`.
 """)
 extern def encode(value: text) -> text
+
 @doc("""
   Percent-decode text as UTF-8.
 
@@ -88,6 +90,7 @@ extern def decode(value: text) -> text
   Encodes spaces as `+`.
 """)
 extern def encode-query(fields: array[Pair[text, text]]) -> text
+
 @extern-name("parse_query")
 @doc("""
   Decode a query string into ordered key-value pairs.

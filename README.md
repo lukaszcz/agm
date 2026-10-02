@@ -26,10 +26,11 @@ just setup
 
 Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
 environment and copy AGM config files, prompts, and sandbox templates into the selected
-AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). After installing the CLI, it
-reinstalls every package under `packages/` with `agm pkg install --reinstall`, then runs
-`agm pkg sync` to restore the active packages' Python requirements. It also installs the
-AgL editor support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when
+AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). The config installer refreshes the
+managed standard library; the recipe reinstalls the other packages under `packages/` with
+`agm pkg install --reinstall`, then runs `agm pkg sync` to restore the active packages'
+Python requirements. It also installs the AgL editor support: the Micro syntax file into
+`$HOME/.config/micro/syntax/`, and — when
 an `emacs` binary is available — the AgL Emacs mode (skipped with a notice otherwise):
 
 ```bash

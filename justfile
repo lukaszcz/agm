@@ -173,9 +173,6 @@ install *args:
         agm="$(uv tool dir --bin)/agm"; \
     fi; \
     packages_dir="{{justfile_directory()}}/packages"; \
-    if [[ -f "$packages_dir/stdlib/package.toml" ]]; then \
-        "$agm" pkg install --reinstall "$packages_dir/stdlib"; \
-    fi; \
     for package in "$packages_dir"/*; do \
         [[ "$package" == "$packages_dir/stdlib" ]] && continue; \
         [[ -f "$package/package.toml" ]] || continue; \

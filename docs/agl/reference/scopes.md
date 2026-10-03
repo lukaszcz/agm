@@ -41,8 +41,12 @@ above, or share the header's own layout level. Both spell the same region; the
 closer stands at the header's column either way. The indented form is the one
 this project writes.
 
-Repeating a region, or mixing a region with declaration paths, extends the same
-scope:
+A scope path is part of a declaration's name: `scope Agent` containing
+`def f()` declares `Agent::f`, exactly as `def Agent::f()` does, and
+`def Point::norm(self)` beside `record Point` declares `Point::norm`. A region
+is not itself an entity — it never competes with, stops, or hides any other
+declaration. Repeating a region, or mixing a region with declaration paths,
+therefore extends the same scope:
 
 ```agl
 scope Text
@@ -54,6 +58,38 @@ def Text::display(value: text) -> text = "[%{normalize(value)}]"
 program def main() -> unit =
   print(Text::display("ready"))
 ```
+
+For the same reason, scopes of one path combine across modules. A module may
+declare more members beneath a scope or type path an import also provides,
+and both sets are reachable through the one path:
+
+<!-- agl-check: fragment -->
+```agl
+# In m.agl
+scope Agent
+  def f() -> int = 1
+end Agent
+
+record Geo
+  x: int
+
+# In entry.agl
+import m::*
+
+scope Agent
+  def g() -> int = 2
+end Agent
+
+scope Geo
+  def make() -> int = 3
+end Geo
+
+def h() -> int = Agent::f() + Agent::g()   # f from m, g declared here
+def k(p: Geo) -> int = Geo::make()          # the type Geo from m, Geo::make here
+```
+
+The own `scope Geo` region never hides the imported type `Geo`: a type
+position looks for a type at that path, and the region declares none.
 
 A region contains nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (`def`, `program def`, `extern def`,
@@ -159,10 +195,39 @@ modules regardless of scoping; `std/config` owns engine settings — see
 
 ## Names and visibility
 
-A declaration belongs to its complete scope path. Members of the same scope are
-visible by their bare names within that scope; enclosing scopes are considered
-outward, then the module root and imported bare names. `::name` starts at the
-module root, so it bypasses a nearer scoped member.
+A declaration belongs to its complete scope path. Inside `scope S1::S2`, a
+spelling `p` — bare or qualified — is tried as `S1::S2::p`, then `S1::p`, then
+`p`. Each step reads the module's own declarations at that full path together
+with what the imports and `use` declarations written in that scope or an
+enclosing one (the module root included) provide at that path, and the first
+step that finds a declaration decides:
+
+- the module's own declaration at that path wins;
+- otherwise the one declaration the imports and uses provide there is
+  selected, however many routes reach it;
+- two or more distinct provided declarations are an ambiguity, reported where
+  the spelling is used.
+
+A nearer step therefore beats an enclosing one even when the nearer
+declaration is provided by a `use` and the enclosing one is the module's own:
+
+<!-- agl-check: fragment -->
+```agl
+import lib
+
+def f() -> int = 2
+
+scope S
+  use lib::*
+
+  def g() -> int = f()   # lib::f: step S finds it first
+end S
+```
+
+Function parameters and the `let`/`var` bindings of a function body are nearer
+than every step and shadow as usual. `::name` reads only the module's own
+declarations from the root, so it bypasses every step, every nearer binding,
+and every import and `use`.
 
 A static declaration (`def` or a type) is visible throughout its
 scope regardless of textual order, matching the module root, where a `def` may
@@ -201,7 +266,9 @@ a root-level `let` raises. Assigning to a path that names a `def` or a type is
 likewise rejected as immutable, and a path with no such member is a focused
 error.
 
-Outside a scope, qualify a member with its exact path. Scope paths never use
+Outside a scope, qualify a member with its exact path; it is looked up by that
+whole path against the module's own declarations, imports, and uses, with the
+same own-first rule. Scope paths never use
 suffix matching: `Outer::Inner::work` does not make `Inner::work` available at
 the module root. The leading `::` form makes an in-module path absolute, as in
 `::Outer::Inner::work`. Module routes and scope paths share qualifier-chain
@@ -238,20 +305,31 @@ program def main() -> unit =
   print(shifted.total())
 ```
 
-A plain scope hosts methods for its resolved record, enum, enum member, or
-exception. The receiver may be declared locally or supplied by exactly one bare
-import reaching the method's region; a qualified-only import supplies no
-receiver name. Built-in receiver heads are the exception: `array[E]::name` and
+A method's receiver is the type declared at its scope path — the method's
+whole path without its own name — read at that path's parent: a type the
+module declares there, or the one type an import or `use` written in that
+scope or an enclosing one provides there; two distinct provided types are
+ambiguous. There is no outward fallback: inside `scope r`, `def Geo::m(self)`
+extends `r::Geo`, never a root `Geo`, and a qualified-only import supplies no
+receiver name. A receiver may be spelled through a type alias: with
+`type Geo = Base`, `def Geo::m(self)` declares the method `Base::m`, reachable
+as both `Base::m` and `Geo::m` (see [Type aliases](types.md#type-aliases)).
+Built-in receiver heads are the exception: `array[E]::name` and
 `dict[K, V]::name` declare methods for those generic receiver types, while
-`text`, `json`, `int`, `decimal`, and `bool` are bare receiver heads. A type
-alias may be used as a target type, but its scope cannot declare methods.
-`Point::norm(p)` written bare follows ordinary scope-path rules, while
+`text`, `json`, `int`, `decimal`, and `bool` are bare receiver heads; only
+these builtin heads, written directly or through an alias, take type
+arguments in a declaration path, and only on a method. `Point::norm(p)` written bare follows ordinary scope-path rules, while
 `p.norm()` aggregates visible method declarations across modules.
 
-An enum member's terminal name is an injected bare constructor candidate. In
-ordinary value position, scope resolution requires it to be the only visible
-constructor candidate with that name: several candidates are a static scope
-ambiguity, even when an expected enum type contains one of them. The expected
+An enum member's terminal name is an injected bare constructor candidate at
+the enum's own scope path: inside `scope S`, `enum Color = Red | Green` makes
+`Red` bare within `S` (and its nested regions), whether the enum is declared
+there or provided there by an import, but declares no `S::Red`. A declaration
+the module itself makes claims the spelling over an injected member, and an
+injected member's name is never a type. In ordinary value position, scope
+resolution requires it to be the only visible constructor candidate with that
+name: several candidates are a static scope ambiguity, even when an expected
+enum type contains one of them. The expected
 type checks the constructor after scope has selected it; it does not select a
 same-named member. Enum-member patterns and `is` tests are different: their
 scrutinee's static enum type selects the member. Module-root record and
@@ -293,7 +371,17 @@ program def main() -> unit =
 `::*` selects every member. Brace tails select relative paths, and `hiding`
 removes members from a glob. `as` adds a renamed bare route while leaving the
 original path reachable. A use in a scope region contributes only to that
-region and its nested regions.
+region and its nested regions, as a bare-name convenience: it never adds to
+the region's own qualified surface, so after `scope S` writes
+`use lib::{Geo}`, `S::Geo` names nothing outside `S`.
+
+A use target is looked up by its whole path like any other qualified
+spelling, so it reaches every scope of that path at once: `use X::*`, where the
+module declares `scope X` and an import also provides a scope `X`, exposes
+every `X::p` either side declares. Per member path the module's own
+declaration wins, otherwise the one provided declaration is exposed, and two
+distinct provided declarations make that bare name ambiguous where it is used,
+not at the `use`.
 
 A use reaches a scope in another module through an existing import route:
 
@@ -304,9 +392,10 @@ use geo/shapes::Point::* hiding internal-distance
 ```
 
 A use neither exports its contributions nor makes another module's uses
-transitive. If several contributions provide the same bare name, the ambiguity
-is reported when that name is used. Import selection and cross-module reach
-are described in [Modules](modules.md).
+transitive. If several contributions provide distinct declarations under the
+same bare name, the ambiguity is reported when that name is used; several
+routes to one declaration are that one declaration. Import selection and
+cross-module reach are described in [Modules](modules.md).
 
 ## REPL
 
@@ -323,3 +412,11 @@ cannot reuse the name `A`, and once an entry declares a root `let A`/`var A`,
 a later entry cannot reopen it as `scope A` — the same restriction governs a
 retained `def` or type name against a later `scope` declaration, and vice
 versa.
+
+A retained region stays at the scope path it opened when its entry ran. A
+region written through a type alias opens its target's scope (`scope G` with
+`type G = Base` opens `Base`), and re-pointing the alias later leaves the
+region, its declarations, and its imports and uses at `Base`. An `import` in a
+later region of the same scope path replaces an earlier region import of the
+same module, whichever spelling — alias or target — each region was written
+with.

@@ -248,13 +248,27 @@ foo/bar::Geometry::Point    # module route, then scope members
 
 A slash-separated path before the first `::` is a module route. A leading `/`
 anchors that route to the complete module path; otherwise it may be a suffix
-route or an alias. Subsequent `::` segments name scopes or types. A single
-leading segment can be either a local scope/type or a module route; use `/` for
-the module reading or `::` for the current-module reading when both would
-resolve. When both readings exist, the spelling is ambiguous in every position
-if the route resolves the name (exposes it, or injects it as an [enum
-member](modules.md#module-qualified-enum-members) directly before it) or the
-segment is a plain scope not declaring it. Scope segments never suffix-match.
+route or an alias. Subsequent `::` segments name scopes or types.
+
+A chain is looked up as its **whole path**: a scope path is part of a
+declaration's name, so `Geometry::Point` names the declaration whose full path
+is `Geometry::Point`, wherever it comes from. Every source is read at once —
+the module's own declarations, its imports, and its `use` declarations — and
+the module's own declaration at that path wins; otherwise the one declaration
+the imports and uses provide there is selected, and two distinct ones are
+ambiguous. A leading segment naming both an own scope or type and a module
+route therefore needs no repair when the module declares the path: an own
+`scope mylib` declaring `x` makes `mylib::x` the own member, while
+`/mylib::x` reaches the module. `/route::x` and a multi-segment route read only
+that module, and `::x` reads only the current module's own declarations. Inside
+a scope region, an unanchored chain is tried at each enclosing scope path in
+turn ([Names and visibility](scopes.md#names-and-visibility)).
+
+Only a scope path, a type, a type alias, or a module route qualifies. A chain
+whose prefix names a function, a binding, or an injected enum member reports
+an unknown qualifier. A segment naming a type alias stands for its target's
+path ([Type aliases](types.md#type-aliases)). Scope segments never
+suffix-match.
 
 Every route and chain segment is byte-adjacent through `::`: `foo/bar::thing`
 is a qualifier, while `foo / bar::thing` is division followed by a separate
@@ -272,9 +286,12 @@ let s = a/ b         # error: reads as a path, but the segments are split
 let t = a /b         # error: same
 ```
 
-A type-owning chain segment may carry type arguments, as in
-`Option[int]::Some`; type arguments on a plain scope segment are a static
-error. The type-argument form `callee::[T]` and typed-call form
+A chain segment may carry type arguments, as in `Option[int]::Some`, only when
+its full path selects a generic type of matching arity and the next segment
+selects one of that type's inline members (a record's own name counts:
+`Box[int]::Box`). Type arguments on any other segment — a plain scope, a
+non-generic type, or a type followed by another declaration beneath it — are a
+static error. The type-argument form `callee::[T]` and typed-call form
 `callee::[T](args)` (e.g. `ask::[Review](…)`) instead apply to the
 complete callee and are not qualifier segments.
 ## Identifiers

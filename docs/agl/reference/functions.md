@@ -249,14 +249,20 @@ a receiver type — a record, enum, enum member, exception, or builtin receiver
 dynamically dispatched.
 
 The receiver part of `def Type::f(self)` (or `scope Type` containing that
-`def`) resolves as a type name in the module containing the declaration. A
-locally declared record, enum, enum member, or exception wins. Otherwise, exactly one
-type made bare-visible in that region by an import tail or `use` must provide
-the name. Renamed contributions may provide that spelling. A qualified import
-alone provides no bare receiver name, and a type alias cannot name a method
-receiver. The declaration extends the resolved type's plain scope in the
-module that contains the `def`; it does not add a declaration to the type's
-home module.
+`def`) is the type declared at that scope path — the method's whole path
+without its own name — read at the path's parent step in the module
+containing the declaration ([Names and
+visibility](scopes.md#names-and-visibility)). A record, enum, enum member, or
+exception the module declares there wins. Otherwise, exactly one type an
+import tail or `use` written in that scope or an enclosing one provides there
+must supply it; renamed contributions may provide that spelling, and two
+distinct provided types are ambiguous. There is no outward fallback, and a
+qualified import alone provides no bare receiver name. The receiver may be
+spelled through a type alias: with `type Geo = Base`, `def Geo::f(self)`
+declares `Base::f`, reachable through either spelling, and an alias of a
+builtin type names that builtin receiver. The declaration extends the
+resolved type's plain scope in the module that contains the `def`; it does
+not add a declaration to the type's home module.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -359,7 +365,12 @@ binds its receiver key and value parameters; `dict[text, V]::name` binds only
 the value parameter and applies only to `text`-keyed dicts; `text`, `json`,
 `int`, `decimal`, and `bool` are bare receivers. Otherwise a builtin receiver
 must use its bare generic form, so `array[int]::name`, `dict[int, V]::name`,
-and `dict[text, array[int]]::name` are invalid. As with a nominal generic
+and `dict[text, array[int]]::name` are invalid. An alias of a builtin type
+names that builtin receiver (`type Arr[E] = array[E]` admits
+`def Arr[E]::second(self)`). These builtin heads are the only declaration-path
+segments that take type arguments, and only for a method: `def array[E]::f()`
+and `def Box[int]::f()` are invalid, as is a declaration beneath an alias of
+an applied type. As with a nominal generic
 receiver, `_` may occupy an unused receiver slot; it binds a private rigid
 parameter and cannot be named by the method body. A `{…}` constraint block may
 bound the receiver's key, element, or value parameter the same way it bounds a

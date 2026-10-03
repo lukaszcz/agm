@@ -65,8 +65,10 @@ fails, previously completed bindings and function closures remain available.
 binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
 binding at that path rather than in the module root namespace. The prefix is
 an ordinary declaration path, not a module route or a type-argument-applied
-segment. See [Named scopes](scopes.md#binder-paths) for declaring a binder
-inside a `scope` region.
+segment; a prefix written through a type alias declares at the target's path
+(`let G::v = 4` with `type G = Base` declares `Base::v`). See
+[Named scopes](scopes.md#binder-paths) for declaring a binder inside a `scope`
+region.
 
 A module-root or scope-region single-name binding may be marked `@param` to
 admit a host-supplied initial value. It remains an ordinary `let` or `var` in
@@ -414,6 +416,10 @@ Where no value of that spelling is visible, using the name as a value,
 qualifying a constructor with it, or calling it is a static type error,
 whether the name is declared locally or imported.
 
+A named scope region occupies neither namespace: it only prefixes the names of
+the declarations inside it. Beside an own `scope Geo`, an imported type `Geo`
+stays visible in type position, and an imported value `Geo` in value position.
+
 ### Constructors in the value namespace
 
 Record constructors and injected enum-member constructors are normal bindings
@@ -436,6 +442,17 @@ required. See [Expressions](expressions.md#fieldless-constructor-references)
 and [Generics](generics.md) for constructor typing and inference.
 
 ### Overload sets, shadowing, and ambiguity
+
+A spelling is decided at the first [lookup
+step](scopes.md#names-and-visibility) that finds anything for it: a
+declaration of the module itself at that path wins; otherwise exactly one
+distinct declaration provided by the imports and `use` declarations there is
+selected, however many routes reach it; two or more distinct provided
+declarations are a **static scope ambiguity error**, reported at the
+reference. A spelling reached through a rename — a type alias, `import … as`,
+`use … as` — is its target, so reaching one declaration both directly and
+through a rename, or through two renames, is never an ambiguity ([Type
+aliases](types.md#type-aliases) covers aliases of applied types).
 
 Several visible constructors may share an unqualified member name. In ordinary
 value position, a bare reference must resolve to exactly one constructor
@@ -465,6 +482,9 @@ An enum member's bare spelling is an injected convenience, so among the names
 one import surface exposes it yields to a record or exception constructor
 declaring that very name, whichever module declares each: bare `Abort` is the
 prelude's exception, while the member stays reachable as `ParsePolicy::Abort`.
+A declaration of the module itself claims the spelling over any member an
+import injects, and a member of an enum the module declares claims it over an
+imported declaration.
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `Tagged` hides the outer
@@ -510,7 +530,8 @@ end Collision
 ```
 
 Use [`::name`](modules.md) to reach the module's own top-level declaration past
-any shadowing:
+any shadowing: it skips every nearer binding and lookup step and reads none of
+the module's imports or uses:
 
 <!-- agl-check: fragment -->
 ```agl

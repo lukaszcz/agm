@@ -24,7 +24,8 @@ A file must declare at least one `program def`. `exec` initializes the linked pr
 invokes its sole entry, or the one selected with `-p` by declaration path (`review::main`).
 Inline source without a `program def` is wrapped in a synthetic `program def main`; inline
 source declaring one is an ordinary module with a static root, so its statements and
-non-constant bindings belong in the program body.
+non-constant bindings belong in the program body. Either way, inline source resolves in source
+order and reports the same diagnostics as the same declarations in a file.
 
 ### Module resolution
 
@@ -543,6 +544,12 @@ must be closed yourself.
 Each loaded program gets the automatic prelude as in `agm exec`, so `Option`, `Some`, `None`,
 etc. are unqualified from a fresh prompt.
 
+An entry resolves like a module, except that its imports are hoisted: an `import` written after
+a declaration in the same entry still applies to the whole entry. How the same source is split
+into entries never changes what a name selects. Retained imports and `use` declarations, and
+which later ones replace them, are described under
+[Modules: REPL](../agl/reference/modules.md#repl).
+
 When the REPL first loads a module with `@param` bindings, it seeds them from that module's
 module route. It does not read program routes and offers no module-parameter flags. A seeded
 `var` keeps later writes for the session; `:reset` restores the configured initial value when
@@ -599,7 +606,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
 | `:reset` | Clear the whole session (bindings, types, declarations, imports, and uses) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
-| `:info NAME` | Show the current binding, function, or type as concise AgL; the rich console highlights it |
+| `:info NAME` | Show the current binding, function, constructor, or type as concise AgL; the rich console highlights it |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:set echo on\|off` | Toggle result echoing |
 | `:set echo-unit on\|off` | Toggle echoing `unit`-typed entries too (off by default) |
@@ -634,9 +641,16 @@ Meta-commands start with `:`, which never collides with AgL syntax:
   (`Tools::twice declared`) or `scope … end` region (`Tools declared`). `import`, `use`,
   `export`, and fixity declarations echo nothing.
 - **Bare type expressions** (`int`, a declared `enum`/`record`/`type` name, `array[int]`,
-  `(int) -> bool`) echo the resolved type (`<type: int>`) instead of ``'X' is not defined.``; an
-  unapplied generic such as `Option` shows its generic definition. A REPL convenience only; names
-  that are also values (a record constructor, a binding) evaluate normally.
+  `(int) -> bool`, or a qualified spelling such as `lib::Agent::Mood`) echo the resolved type
+  (`<type: int>`) instead of ``'X' is not defined.``; an unapplied generic such as `Option` shows
+  its generic definition, and an alias shows the type it denotes. The name is looked up exactly
+  as in an annotation. A REPL convenience only; names that are also values (a record
+  constructor, a binding) evaluate normally.
+- **`:info NAME`** reads `NAME` exactly as an entry would: bare, qualified, applied-owner
+  (`Slot[int]::Filled`), and alias-qualified spellings select what they select in an
+  expression or type, and a hidden, unknown, or ambiguous name reports that error. A declaration
+  is shown by its declared path — scope path and name in its declaring module — whichever
+  spelling reached it: with `type G = Base`, `:info G::h` shows `def Base::h`.
 - **Engine settings**: import `std/config` and write a qualified target
   (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
   it even if a later expression in the same entry fails; `trace`/`trace-file` writes reconfigure the

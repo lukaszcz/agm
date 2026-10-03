@@ -250,8 +250,8 @@ one or more `key = value` entries, comma-separated and optionally spanning
 several lines with a trailing comma, and is legal only on a `program def`, at
 most once.
 
-Each `key` is an ordinary AgL reference — bare, suffix-qualified, fully
-qualified, anchored with a leading `::`, or a scope path — resolved by
+Each `key` is an ordinary AgL reference — bare, qualified relative to the
+enclosing scopes, anchored with a leading `::`, or a module route — resolved by
 ordinary scope lookup in the scope that declares the `program def` (not its
 own parameter scope). The same visibility and import rules apply as for any
 reference: a target reached only through another module still needs that

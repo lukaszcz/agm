@@ -223,8 +223,10 @@ let named-err = Outcome::Err(reason = "bad", fatal = false)
 
 ### Unqualified member ambiguity
 
-If two or more visible constructor candidates have the same unqualified name,
-a bare reference in ordinary value position is a **static scope ambiguity
+If two or more distinct constructor candidates have the same unqualified name
+at the [lookup step](scopes.md#names-and-visibility) that decides it — two of
+the module's own, or two contributed ones when the module declares none — a
+bare reference in ordinary value position is a **static scope ambiguity
 error**, even in a context with an expected enum type. Scope reports the
 ambiguity before type checking can use that type. Disambiguate by qualifying
 with the member's declaring record or, for an inline member, its owning enum:

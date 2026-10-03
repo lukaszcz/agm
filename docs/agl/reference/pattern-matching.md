@@ -143,7 +143,12 @@ declaration the alias denotes, at the alias's type arguments (see
 [Type aliases](types.md#type-aliases)).
 
 Constructor ownership in patterns is directed by the scrutinee's static
-nominal type, among the constructors visible where the pattern is written. A
+nominal type, among the constructors visible where the pattern is written —
+at every [lookup step](scopes.md#names-and-visibility) there, not only the
+nearest one that has the spelling, so a same-named member of an enum in a
+nearer scope never hides the scrutinee's own member. Candidates constructing
+one declaration at the scrutinee's type arguments, such as a member reached
+through two aliases, are one candidate. A
 spelling no visible constructor of that type shares is a static error, even
 when the type has a member of that name — for instance when only a function
 returning the type was imported. When two enums contribute the same
@@ -180,10 +185,10 @@ qualification itself uses `::`, never `.`. A named scope qualifies a pattern,
 or an `is`/`is not` right-hand side ([Expressions](expressions.md)), through
 the same chain, so a scoped constructor or exception is written with its
 exact path (`Shapes::Point(x)`, `mylib::Shapes::Point(x)`); see
-[Scopes](scopes.md). A leading segment naming both a local scope or type and a
-module route is ambiguous, as in a value, when the route also resolves the
-name or the scope does not declare it; `/` or `::` selects the reading
-([Lexical structure](lexical-structure.md#qualifier-chains)).
+[Scopes](scopes.md). A qualified pattern spelling is looked up by its whole
+path exactly as in a value: the module's own declaration at that path wins,
+else the one imported or `use`-provided one, and `/` or `::` anchors the
+reading ([Lexical structure](lexical-structure.md#qualifier-chains)).
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 

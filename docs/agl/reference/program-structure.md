@@ -74,8 +74,11 @@ no entries; their `program def`s stay ordinary functions. A run initializes
 every module's static bindings, then calls the selected program.
 
 Inline `-c` source without a `program def` is wrapped in a synthetic
-parameterless `program def main`. The REPL has no entry: a `program def`
-declared there is an ordinary function.
+parameterless `program def main`. Its statements and declarations are
+resolved in source order, with the same verdicts as the same declarations in
+a file: a root `let`/`var` is a declaration whose name collides with a scope
+path or another declaration's path exactly as there, and `::x` reaches it. The
+REPL has no entry: a `program def` declared there is an ordinary function.
 
 ### Parameters
 

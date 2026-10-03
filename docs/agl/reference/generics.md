@@ -595,8 +595,10 @@ Schema](agent-calls.md#derived-json-schema) for a recursive type uses
 
 ## Unqualified member ambiguity
 
-If multiple visible constructor candidates share an unqualified member name,
-a reference in ordinary value position is a **static scope ambiguity error**.
+If multiple distinct constructor candidates share an unqualified member name
+at the [lookup step](scopes.md#names-and-visibility) that decides it — two of
+the module's own, or two contributed ones when the module declares none — a
+reference in ordinary value position is a **static scope ambiguity error**.
 This is resolved before type checking, so an expected enum type cannot choose
 one candidate; it can only infer type arguments after scope has selected an
 unambiguous constructor. Disambiguate an inline member by qualifying it with

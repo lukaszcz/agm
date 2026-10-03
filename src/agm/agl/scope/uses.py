@@ -118,6 +118,13 @@ class UseSources(PathSources, Protocol):
         """The binding an enum member *constructor*, injected bare at *span*, is read through."""
         ...
 
+    def removed_with(self, qname: QName) -> frozenset[DeclarationKey]:
+        """What a ``hiding`` naming *qname* removes, by identity.
+
+        The declaration itself, and what a path beneath it reaches.
+        """
+        ...
+
     def enum_members_named(self, name: str) -> Mapping[QName, ConstructorRef]:
         """The enums, of any module this one reads, with a member named *name*, and that member."""
         ...
@@ -440,19 +447,23 @@ class UseReader:
         return Candidate(target, layer, contribution_origin(declaration, layer), hiding)
 
     def _use_hidden(self, site: ScopePath, decl: UseDecl) -> frozenset[DeclarationKey]:
-        """The declarations *decl*'s ``hiding``, read in region *site*, names, by identity."""
+        """What *decl*'s ``hiding``, read in region *site*, removes, by identity.
+
+        Each declaration an item names, and what a path beneath it reaches.
+        """
         found = self._hidden_by.get(decl.node_id)
         if found is None:
             target = _use_target(decl)
             with self._reading_use(decl):
                 found = frozenset(
-                    self._sources.identity(key)
+                    removed
                     for item in decl.hidden
                     for kind in LookupKind
                     for candidate in self._use_path_reached(
                         site, decl, (*target, *_item_path(item)), kind, len(target)
                     )
                     if (key := candidate.target.key) is not None
+                    for removed in self._sources.removed_with(_key_qname(key))
                 )
             self._hidden_by[decl.node_id] = found
         return found

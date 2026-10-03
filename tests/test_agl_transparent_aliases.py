@@ -687,6 +687,60 @@ _SCENARIOS |= {
 }
 
 
+def _use_hidden_reach_probes(region: str, hidden: Collection[str]) -> dict[str, Probe]:
+    """What a use hiding the aliases *hidden* of :data:`_REACHING` removes, read in *region*.
+
+    *region* places a call: a format string with ``{call}``. Each alias
+    hidden removes what its target's path reaches where it is declared, under
+    every spelling the use contributes; the paths of an alias kept stay, and
+    the ``hid`` route still reaches every one.
+    """
+    paths = {"HGeo": ("Base::j", "HGeo::j"), "T2": ("text::lt", "T2::lt")}
+    return (
+        {
+            path: (
+                rejected(region.format(call=f"{path}()"), HiddenMemberError, path)
+                if alias in hidden
+                else accepted(region.format(call=f"{path}()"), "int")
+            )
+            for alias, spelled in paths.items()
+            for path in spelled
+        }
+        | {
+            f"{path}-routed": accepted(region.format(call=f"hid::{path}()"), "int")
+            for spelled in paths.values()
+            for path in spelled
+        }
+        | {
+            "kept": accepted(region.format(call="other()"), "int"),
+            "builtin-kept": accepted(region.format(call='text::size("ab")'), "int"),
+        }
+    )
+
+
+_SCENARIOS |= {
+    f"a-use-hiding-{'-'.join(hidden).lower()}-removes-what-its-site-reaches": Scenario(
+        modules={"base": _BASE, "hid": _REACHING},
+        header=(f"import hid\nuse hid::* hiding {', '.join(hidden)}",),
+        probes=_use_hidden_reach_probes("{call}", hidden),
+    )
+    for hidden in (("HGeo", "T2"), ("HGeo",), ("T2",))
+} | {
+    f"a-use-in-a-region-hiding-{'-'.join(hidden).lower()}-removes-what-its-site-reaches": (
+        Scenario(
+            modules={"base": _BASE, "hid": _REACHING},
+            header=("import hid",),
+            probes=_use_hidden_reach_probes(
+                f"scope R\n  use hid::* hiding {', '.join(hidden)}\n"
+                "  def q() -> int = {call}\nend R\n\nR::q()",
+                hidden,
+            ),
+        )
+    )
+    for hidden in (("HGeo", "T2"), ("HGeo",), ("T2",))
+}
+
+
 _PLACED = {"G": ("Base", "h"), "T2": ("text", "s"), "Arr": ("array", "z")}
 """Each alias ``pl`` declares beneath, with its target and the member the items name."""
 _ITEMS = {

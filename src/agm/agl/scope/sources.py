@@ -1128,6 +1128,17 @@ class ModuleSources(SourcesHost):
                 pending.extend(reached)
         return frozenset(found)
 
+    def removed_with(self, qname: QName) -> frozenset[DeclarationKey]:
+        """What a ``hiding`` naming *qname* removes, by identity.
+
+        The declaration itself, and the scopes and types a path beneath it is
+        read in (:meth:`reached_beneath`).
+        """
+        return frozenset(
+            self.identity(_qname_decl_key(reached))
+            for reached in (qname, *self.reached_beneath(qname))
+        )
+
     @staticmethod
     def _hidden_beneath(chain: QualifierChain, path: ScopePath) -> HiddenMemberError:
         """The refusal of *path*, which *chain* spells beneath an alias, as hidden."""
@@ -1508,15 +1519,12 @@ class ModuleSources(SourcesHost):
     def _named_by(self, named: ItemDeclaration) -> frozenset[DeclarationKey]:
         """The declarations import item *named* names, by identity.
 
-        An alias names too the scopes and types a path beneath it is read in
-        (:meth:`reached_beneath`). A path it names beneath an exported alias
+        An alias names too what a path beneath it reaches
+        (:meth:`removed_with`). A path it names beneath an exported alias
         must name a declaration there (:meth:`_named_beneath`).
         """
         if not named.beneath:
-            return frozenset(
-                self.identity(_qname_decl_key(qname))
-                for qname in (named.declaration, *self.reached_beneath(named.declaration))
-            )
+            return self.removed_with(named.declaration)
         keys = self._named_beneath(named, ())
         if not keys:
             raise UnknownMemberError(

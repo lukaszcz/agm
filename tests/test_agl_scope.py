@@ -810,13 +810,10 @@ class TestScopedBindingUsePrecedence:
 
 
 class TestScopedConstructorCandidateUnion:
-    """``_owned_scope_constructor_candidates`` unions every same-named candidate.
+    """A bare constructor pattern's candidates union every same-named constructor in scope.
 
-    A scope's own directly-declared constructor and every child enum's
-    variant sharing a name are all candidates, in declaration order, rather
-    than whichever the resolver happens to find first while scanning a set
-    -- ``_type_declarations`` is a plain list, so the result no longer
-    depends on ``PYTHONHASHSEED``.
+    A scope's own directly-declared constructor, every child enum's variant
+    sharing its name, and each enclosing scope layer's are all candidates.
     """
 
     def _pattern(self, resolved: ModuleResolution) -> ConstructorPattern:

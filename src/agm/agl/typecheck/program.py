@@ -95,7 +95,7 @@ from agm.agl.artifact_cache import (
     retained_module_sources,
 )
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import CycleAlias, Diagnostic, alias_cycle_error
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
@@ -149,7 +149,6 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
     CheckedModuleImage,
-    CycleAlias,
     DeclaredHeaderSeed,
     EnvironmentFacts,
     FunctionSignature,
@@ -160,7 +159,6 @@ from agm.agl.typecheck.env import (
     PublishedModuleSurface,
     TypeEnvironment,
     _assert_checked_types_closed,
-    alias_cycle_error,
     assert_checked_module_output_closed,
     dereference_slot_constructor_ref,
 )
@@ -596,12 +594,15 @@ def _build_program_type_table(
         item = alias_decls[key]
         if key in resolving_aliases:
             raise alias_cycle_error(
-                CycleAlias(
-                    (module_order[cyclic[0]], alias_decls[cyclic].span.start_offset),
-                    "::".join((*cyclic[1], cyclic[2])),
-                    alias_decls[cyclic].span,
-                )
-                for cyclic in resolving_aliases[resolving_aliases.index(key) :]
+                AglTypeError,
+                (
+                    CycleAlias(
+                        (module_order[cyclic[0]], alias_decls[cyclic].span.start_offset),
+                        "::".join((*cyclic[1], cyclic[2])),
+                        alias_decls[cyclic].span,
+                    )
+                    for cyclic in resolving_aliases[resolving_aliases.index(key) :]
+                ),
             )
         resolving_aliases.append(key)
         try:

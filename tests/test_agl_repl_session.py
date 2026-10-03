@@ -75,6 +75,7 @@ from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
 from tests.agl.qualifier_support import (
+    accepted,
     all_groupings,
     assert_repl_verdicts,
     eval_grouped_final,
@@ -8269,6 +8270,20 @@ class TestImports:
         assert aliased.ok, aliased.diagnostics
         assert aliased.value == IntValue(3)
         assert session.eval_entry("old()").value == IntValue(1)
+
+    def test_a_rename_spelled_through_a_retained_rename_of_its_name_keeps_it(
+        self, tmp_path: Path
+    ) -> None:
+        """``use M::Inner as M`` reads through the retained ``M``, so it never replaces it."""
+        assert_repl_verdicts(
+            tmp_path,
+            {
+                "lib": "scope S\n  def g() -> int = 2\n\n  scope Inner\n    def f() -> int = 1\n"
+                "  end Inner\nend S"
+            },
+            ("import lib", "use lib::S as M", "use M::Inner as M"),
+            {"inner": accepted("M::f()", "int"), "outer": accepted("M::g()", "int")},
+        )
 
     def test_a_nested_rename_keeps_the_retained_tail_use_of_its_target(
         self, tmp_path: Path

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import CycleAlias, Diagnostic, alias_cycle_error
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -1025,27 +1025,6 @@ class CheckedModuleImage(_Record):
         return module
 
 
-class CycleAlias(NamedTuple):
-    """One alias of a cycle: its declaration order, spelling and declaration span."""
-
-    order: tuple[int, ...]
-    spelling: str
-    span: SourceSpan
-
-
-def _declaration_order(alias: CycleAlias) -> tuple[int, ...]:
-    return alias.order
-
-
-def alias_cycle_error(cycle: Iterable[CycleAlias]) -> AglTypeError:
-    """The error for an alias cycle, reported at its alias declared first.
-
-    Each alias of a cycle denotes no type.
-    """
-    _order, spelling, span = min(cycle, key=_declaration_order)
-    return AglTypeError(f"Type alias '{spelling}' is part of a cycle.", span=span)
-
-
 @_pickles_by_name
 @dataclass(frozen=True, slots=True)
 class DeclaredHeaderSeed(_Record):
@@ -2004,8 +1983,13 @@ class TypeEnvironment:
     def _alias_cycle(self, name: str, resolving: tuple[str, ...]) -> AglTypeError:
         """The error for re-entering alias *name* while resolving *resolving*, outermost first."""
         return alias_cycle_error(
-            CycleAlias((self._alias_spans[alias].start_offset,), alias, self._alias_spans[alias])
-            for alias in resolving[resolving.index(name) :]
+            AglTypeError,
+            (
+                CycleAlias(
+                    (self._alias_spans[alias].start_offset,), alias, self._alias_spans[alias]
+                )
+                for alias in resolving[resolving.index(name) :]
+            ),
         )
 
     def _instantiate_local_alias(

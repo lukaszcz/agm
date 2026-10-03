@@ -618,7 +618,7 @@ def _owner_qualified_probes() -> dict[str, Probe]:
                 f"{spelling}::Gen[int, int]::Gen(v = 1).v", TypeArgumentsError, "Gen[int, int]"
             ),
             "applied-enum-segment": accepted(f"{spelling}::Opt[int]::Som(v = 1).v", "int"),
-            "enum-value": rejected(f"[{spelling}::Opt]", HiddenMemberError, f"{spelling}::Opt"),
+            "enum-value": rejected(f"[{spelling}::Opt]", AglTypeError, f"{spelling}::Opt"),
             "plain": accepted(f"{spelling}::In::In(w = 1).w", "int"),
             "exception": accepted(f'{spelling}::Ex::Ex(message = "m").message', "text"),
             "pattern": accepted(
@@ -647,6 +647,63 @@ _SCENARIOS |= {
         ("imported-alias", ("import oqa::*",)),
     )
 }
+
+_VALUELESS = (
+    "enum Top = A | B\nrecord Base\n  x: int\nenum Base::E = C | D\n"
+    "enum Base::Opt[T] = Som(v: T) | Non\ntype Base::TI = int"
+)
+"""Types naming no value: a root enum, and beneath ``Base`` an enum, a generic one and an alias."""
+
+
+def _type_name_probes(hidden: bool) -> dict[str, Probe]:
+    """Each valueless type spelled as a value, through both spellings; *hidden* by an import."""
+    nested = HiddenMemberError if hidden else AglTypeError
+    return {"root": rejected("[Top]", AglTypeError, "Top")} | {
+        f"{spelling}-{name}": rejected(f"[{spelling}::{name}]", nested, f"{spelling}::{name}")
+        for spelling in ("Base", "Geo")
+        for name in ("E", "Opt", "TI")
+    }
+
+
+_SCENARIOS |= (
+    {
+        f"a-type-spelled-as-a-value-is-a-type-name-{name}": Scenario(
+            modules={
+                "vt": f"{_VALUELESS}\n",
+                "vta": "import vt::*\nexport vt::{Base}\ntype Geo = Base\n",
+            },
+            header=header,
+            probes=_type_name_probes(hidden=False),
+        )
+        for name, header in (
+            ("own", (_VALUELESS, "type Geo = Base")),
+            ("imported-target", ("import vt::*", "type Geo = Base")),
+            ("imported-alias", ("import vta::*\nimport vt::*",)),
+        )
+    }
+    | {
+        "a-type-spelled-as-a-value-is-hidden-where-its-import-hides-it": Scenario(
+            modules={"vt": f"{_VALUELESS}\n"},
+            header=("import vt::* hiding Base::E, Base::Opt, Base::TI", "type Geo = Base"),
+            probes=_type_name_probes(hidden=True),
+        )
+    }
+    | {
+        f"a-type-spelled-as-a-value-through-a-route-{name}": Scenario(
+            modules={"vt": f"{_VALUELESS}\n"},
+            header=(f"import vt{hiding}",),
+            probes={
+                "root": rejected("[vt::Top]", AglTypeError, "vt::Top"),
+                "nested": rejected("[vt::Base::Opt]", nested, "vt::Base::Opt"),
+                "slash": rejected("[/vt::Base::Opt]", nested, "/vt::Base::Opt"),
+            },
+        )
+        for name, hiding, nested in (
+            ("unhidden", "", AglTypeError),
+            ("hidden", " hiding Base::Opt", HiddenMemberError),
+        )
+    }
+)
 
 _CAPTURING = "record X\n  a: int\ntype A[T] = X\ntype C[X] = A[int]\ntype D = C[text]"
 """``C`` applies ``A``, which stands for ``X``, with a parameter spelled ``X`` of its own."""
@@ -1342,6 +1399,25 @@ _SCENARIOS["declared-through-a-chain-of-aliases"] = Scenario(
     },
 )
 
+_SCENARIOS |= {
+    f"a-type-declared-through-{name}-is-at-its-module-anchored-path": Scenario(
+        modules=_MODULES,
+        header=(*header, "record Geo::Own\n  y: int"),
+        probes={
+            **type_positions("anchored", "::Base::Own", "Base::Own"),
+            "anchored-value": accepted("::Base::Own(y = 1).y", "int"),
+            "declared-through-an-alias-of-it": accepted(
+                "type K = ::Base::Own\ndef K::k() -> int = 4\n::Base::Own::k()", "int"
+            ),
+        },
+    )
+    for name, header in (
+        ("an-own-alias", _OWN_ALIAS),
+        ("an-imported-alias", _IMPORTED_ALIAS),
+        ("an-alias-of-a-routed-target", _ROUTED_ALIAS),
+    )
+}
+
 _CYCLE = {
     "ca": (
         "import cb::*\nrecord Ra\n  x: int\ntype Tb = Rb\n"
@@ -1371,6 +1447,28 @@ _SCENARIOS["declared-through-aliases-of-types-of-modules-importing-each-other"] 
         "own-nested-through-its-target": accepted("Rb::Inner::h()", "int"),
         "one-nested-through-an-own-alias": accepted("Xb::Inner::ka()", "int"),
         "beneath-the-other-type": rejected("Xa::fa()", UnknownMemberError, "Xa::fa"),
+    },
+)
+
+_SCENARIOS["what-a-cycle-member-declared-through-an-alias-is-re-exported-at-its-path"] = Scenario(
+    modules={
+        "base": _BASE,
+        "dg": (
+            "import xi\nimport xw\nimport base::*\ntype Geo = Base\n"
+            "def Geo::m() -> int = 1\nrecord Geo::R\n  y: int\n"
+        ),
+        "xi": "import dg\nexport dg::{Base::m, Base::R}\n",
+        "xw": "import dg\nexport dg::{Base}\n",
+        "dr": "import xr\nimport base::*\ntype Geo = Base\n\nscope Geo::S\nend Geo::S\n",
+        "xr": "import dr\nexport dr::{Base::S}\n",
+    },
+    header=("import xi\nimport xw\nimport xr",),
+    probes={
+        "item-function": accepted("xi::Base::m()", "int"),
+        "item-type": accepted("xi::Base::R(y = 1).y", "int"),
+        "whole-function": accepted("xw::Base::m()", "int"),
+        "whole-type": accepted("xw::Base::R(y = 1).y", "int"),
+        "region": accepted("use xr::Base::S\n1", "int"),
     },
 )
 
@@ -1462,6 +1560,34 @@ _SCENARIOS |= {
     for form, (export, forwarded) in _REGION_EXPORTS.items()
     for target, declaring in (("imported", "import base::*"), ("own", "record Base\n  x: int"))
     for reader, header, route in (("route", "import al", "al::"), ("importer", "import al::*", ""))
+}
+
+_ALIASING_ANOTHER_BASE = (
+    "import tb\n\nrecord Base\n  y: int\n\ndef Base::q() -> int = 7\n"
+    "type Geo = tb::Base\ndef Geo::m() -> int = 1"
+)
+"""Aliases ``tb``'s ``Base`` as ``Geo`` beside an own ``Base`` declaring ``q``."""
+
+
+def _another_base_probes(route: str, *, hidden: bool) -> dict[str, Probe]:
+    """What *route* reaches beneath the own ``Base`` and through ``Geo``; ``q`` *hidden*."""
+    return {
+        "own-type": rejected(f"{route}Base::q()", HiddenMemberError, f"{route}Base::q")
+        if hidden
+        else accepted(f"{route}Base::q()", "int"),
+        "through-the-alias": rejected(f"{route}Geo::q()", UnknownMemberError, f"{route}Geo::q"),
+        "declared-through-the-alias": accepted(f"{route}Geo::m()", "int"),
+    }
+
+
+_SCENARIOS |= {
+    f"a-route-reads-nothing-beneath-another-type-its-target-path-names-{reader}{suffix}": Scenario(
+        modules={"tb": "record Base\n  x: int", "sa": _ALIASING_ANOTHER_BASE},
+        header=(f"{header}{hiding}",),
+        probes=_another_base_probes(route, hidden=bool(hiding)),
+    )
+    for reader, header, route in (("route", "import sa", "sa::"), ("importer", "import sa::*", ""))
+    for suffix, hiding in (("", ""), ("-hiding-its-path", " hiding Base::q"))
 }
 
 _HIDDEN_PATH = (
@@ -1659,6 +1785,31 @@ def test_a_later_entry_beneath_the_other_spelling_supersedes(
                 "Geo::R is a record type.\nType:\n  record Base::R\n    z: int\n"
                 "Location: <repl>:3:1",
             ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "record Base\n  x: int\ntype Geo = Base\nrecord Geo::R\n  y: int\ntype Geo::H = Geo::R\n"
+        "def Geo::H::k() -> int = 1",
+        "record Base\n  x: int\ntype Geo = Base\n\nscope Geo\n  record R\n    y: int\n\n"
+        "  type H = R\n\n  def H::k() -> int = 1\nend Geo",
+    ],
+    ids=["declarations", "a-region"],
+)
+def test_a_declaration_through_an_alias_of_a_type_declared_through_one_is_superseded_at_its_path(
+    tmp_path: Path, declared: str
+) -> None:
+    """It is declared at the full path the type is declared at, as is a later entry spelled so."""
+    assert_repl_verdicts(
+        tmp_path,
+        {},
+        (declared, 'def Base::R::k() -> text = "2"'),
+        {
+            spelling: accepted(f"{spelling}::k()", "text")
+            for spelling in ("Base::R", "Geo::R", "Geo::H", "Base::H")
         },
     )
 

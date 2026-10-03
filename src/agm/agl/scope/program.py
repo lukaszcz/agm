@@ -389,6 +389,42 @@ def _export_scopes(program: Program, scopes: Mapping[int, ScopePath]) -> dict[in
     }
 
 
+def _open_own_scopes(
+    scopes: dict[NameAtom, ScopeOrigins], self_id: ModuleId, path: PathAtom
+) -> None:
+    """Record each named scope *self_id* opens down to *path* in *scopes*, as its own.
+
+    *scopes* holds own scopes only and stays prefix-closed: each scope
+    recorded has its enclosing ones recorded too.
+    """
+    for length in range(len(path), 0, -1):
+        atom = _atom(path[:length])
+        if atom in scopes:
+            return
+        scopes[atom] = frozenset({(self_id, atom)})
+
+
+def _declared_scope_exports(
+    self_id: ModuleId,
+    written: Mapping[NameAtom, ScopeOrigins],
+    declared: Mapping[NameAtom, QName],
+    regions: Mapping[ScopePath, QName],
+) -> dict[NameAtom, ScopeOrigins]:
+    """The named scopes *self_id* opens at the paths its declarations are declared at.
+
+    Before its declarations are keyed, *written* holds the scopes at the paths
+    spelled; each declaration *declared* maps elsewhere opens the scopes
+    enclosing its declared path too, and each region *regions* maps elsewhere
+    the scopes down to its declared one.
+    """
+    result = dict(written)
+    for _module, declared_atom in declared.values():
+        _open_own_scopes(result, self_id, _path(declared_atom)[:-1])
+    for _module, declared_atom in regions.values():
+        _open_own_scopes(result, self_id, _path(declared_atom))
+    return result
+
+
 def _compute_local_scope_exports(
     self_id: ModuleId, program: Program, scopes: Mapping[int, ScopePath]
 ) -> dict[NameAtom, ScopeOrigins]:
@@ -397,23 +433,17 @@ def _compute_local_scope_exports(
     *scopes* maps each region opening another scope path than written to it.
     """
     result: dict[NameAtom, ScopeOrigins] = {}
-
-    def add_path(path: PathAtom) -> None:
-        for length in range(1, len(path) + 1):
-            atom = _atom(path[:length])
-            result[atom] = frozenset({(self_id, atom)})
-
     for region, written in _regions(program.body.items):
-        add_path(scopes.get(region.node_id, written))
+        _open_own_scopes(result, self_id, scopes.get(region.node_id, written))
     for item in static_items(program.body.items):
         if isinstance(
             item,
             (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, LetDecl, VarDecl),
         ):
             scope_path = tuple(segment.name for segment in item.scope_path)
-            add_path(scope_path)
+            _open_own_scopes(result, self_id, scope_path)
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                add_path((*scope_path, item.name))
+                _open_own_scopes(result, self_id, (*scope_path, item.name))
     return result
 
 
@@ -1607,7 +1637,8 @@ def resolve_program(
         """Resolve *members*' re-exports afresh through their prepared aliases.
 
         A module exports each own declaration at the path it is declared at
-        (``def Geo::m`` with ``type Geo = Base`` as ``Base::m``).
+        (``def Geo::m`` with ``type Geo = Base`` as ``Base::m``), and the
+        scopes reaching it there.
         """
         for mid in members:
             declared = declared_paths(mid)
@@ -1617,7 +1648,9 @@ def resolve_program(
                 for atom, qname in local_exports[mid].items()
             }
             local_atoms[mid] = frozenset(export_maps[mid])
-            scope_export_maps[mid] = dict(local_scope_exports[mid])
+            scope_export_maps[mid] = _declared_scope_exports(
+                mid, local_scope_exports[mid], declared, declared_regions(mid)
+            )
             withheld[mid] = {}
         _resolve_reexports(
             export_maps,

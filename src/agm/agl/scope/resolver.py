@@ -53,7 +53,9 @@ from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import (
     AglError,
+    CycleAlias,
     HiddenMemberError,
+    alias_cycle_error,
     not_a_type,
     static_root_message,
     type_name_not_a_value,
@@ -1687,12 +1689,12 @@ class _Resolver(ModuleSources):
         """Return *existing* with *cref* joining it, or replacing a built-in in place.
 
         The same declaration contributed twice (over overlapping import
-        routes) joins once.
+        routes) joins once: under one name, a declaration contributes one
+        constructor.
         """
         if any(
             candidate.owner_module_id == cref.owner_module_id
             and candidate.owner_decl_node_id == cref.owner_decl_node_id
-            and candidate.member == cref.member
             for candidate in existing
         ):
             return existing
@@ -2227,17 +2229,22 @@ class _Resolver(ModuleSources):
                 self._validate_type_decl(node)
 
     def _reject_alias_cycles(self) -> None:
-        """Reject the first own alias whose target leads back to it: it denotes no type.
+        """Reject the own aliases whose targets lead back to them: they denote no type.
 
         Reported where it is declared before anything reads it, by this module or another.
         """
-        for declaration, path in self._type_declarations:
-            if isinstance(declaration, TypeAlias) and self._type_owners.cyclic(
-                (self._module_id, _bare_atom((*path, declaration.name)))
-            ):
-                raise AglScopeError(
-                    f"Type alias '{declaration.name}' is part of a cycle.", span=declaration.span
-                )
+        cyclic = [
+            CycleAlias(
+                (declaration.span.start_offset,),
+                "::".join((*path, declaration.name)),
+                declaration.span,
+            )
+            for declaration, path in self._type_declarations
+            if isinstance(declaration, TypeAlias)
+            and self._type_owners.cyclic((self._module_id, _bare_atom((*path, declaration.name))))
+        ]
+        if cyclic:
+            raise alias_cycle_error(AglScopeError, cyclic)
 
     def alias_target(
         self, qname: QName, alias: TypeAlias, spelling: NameT | AppliedT, *, validate: bool

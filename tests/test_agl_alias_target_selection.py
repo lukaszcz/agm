@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.scope.symbols import AmbiguousQualificationError
+from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
 from tests.agl.qualifier_support import (
     Part,
     Phase,
@@ -25,6 +25,7 @@ from tests.agl.qualifier_support import (
     assert_verdicts,
     info,
     probe_table,
+    rejected,
     verdict_parts,
 )
 
@@ -223,6 +224,30 @@ class TestUseSpelledThroughARetainedAlias:
                 "member": accepted("Red", "record Color::Red"),
                 "unrelated": accepted("1 + 1", "int"),
                 "alias": info("C", "C is a type alias.\nType:\n  type C = Color"),
+            },
+        )
+
+
+class TestUseThroughARetainedAliasOfABuiltinType:
+    """A use through a retained alias of a built-in type reads the uses written before it.
+
+    As a use spelling the built-in's name does: ``text`` names a scope a later
+    use opens only for what follows that use.
+    """
+
+    def test_entries(self, tmp_path: Path) -> None:
+        assert_repl_verdicts(
+            tmp_path,
+            {"lib": "scope text\n  def lf() -> int = 1\nend text\n"},
+            ("import lib", "type T = text"),
+            {
+                "before": rejected(
+                    "use T::{lf}\nuse lib::{text}\nlf()", UnknownMemberError, "use T::{lf}"
+                ),
+                "builtin-before": rejected(
+                    "use text::{lf}\nuse lib::{text}\nlf()", UnknownMemberError, "use text::{lf}"
+                ),
+                "after": accepted("use lib::{text}\nuse T::{lf}\nlf()", "int"),
             },
         )
 

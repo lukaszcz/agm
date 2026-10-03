@@ -557,6 +557,22 @@ _SCENARIOS["an-item-naming-an-alias-of-an-enum-injects-its-members"] = Scenario(
     },
 )
 
+_REFERENCING_A = "scope R\n  record A\n    v: int\nend R\n\nenum E\n  | R::A\n  | B\n\ntype C = E\n"
+"""An enum referencing a record declared elsewhere, beside an alias of it."""
+_RECORD_A = "record rf::R::A\n  v: int"
+
+_SCENARIOS["an-item-naming-an-alias-of-an-enum-injects-its-referenced-members"] = Scenario(
+    modules={"rf": _REFERENCING_A},
+    header=(),
+    probes={
+        "tail": accepted("import rf::{C}\nA(v = 1)", _RECORD_A),
+        "tail-in-a-region": accepted(_in_region("import rf::{C}", "A(v = 1)"), _RECORD_A),
+        "use-tail": accepted(f"import rf\n{_in_region('use rf::{C}', 'A(v = 1)')}", _RECORD_A),
+        "use-rename": accepted(f"import rf\n{_in_region('use rf::C as K', 'A(v = 1)')}", _RECORD_A),
+        "use-whole": accepted(f"import rf\n{_in_region('use rf::C', 'A(v = 1)')}", _RECORD_A),
+    },
+)
+
 _DECLARING_BENEATH = (
     "import base\nimport base::*\nexport base::{Base}\ntype Geo = base::Base\n"
     "def Base::h() -> int = 3\ndef Geo::k() -> int = 4\n"

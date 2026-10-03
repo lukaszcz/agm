@@ -16,9 +16,10 @@ for backward compatibility (the lexer and other callers use
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, NamedTuple, Sequence
 
 # Re-export the canonical definition so existing callers keep working.
 from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
@@ -266,6 +267,28 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
         "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
         span=span,
     )
+
+
+class CycleAlias(NamedTuple):
+    """One alias of a cycle: its declaration order, declared path and declaration span."""
+
+    order: tuple[int, ...]
+    spelling: str
+    span: SourceSpan
+
+
+def _declaration_order(alias: CycleAlias) -> tuple[int, ...]:
+    return alias.order
+
+
+def alias_cycle_error[E: AglError](error: type[E], cycle: Iterable[CycleAlias]) -> E:
+    """Return the *error* for an alias cycle, reported at its alias declared first.
+
+    Each alias of a cycle denotes no type: scope decides a cycle of nominal
+    targets, typecheck one through a structural target.
+    """
+    _order, spelling, span = min(cycle, key=_declaration_order)
+    return error(f"Type alias '{spelling}' is part of a cycle.", span=span)
 
 
 def unknown_type(name: str, span: SourceSpan | None) -> AglTypeError:

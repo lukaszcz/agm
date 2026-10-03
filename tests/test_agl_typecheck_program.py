@@ -2209,6 +2209,28 @@ def test_cross_module_alias_cycle_is_rejected_where_declared(tmp_path: Path, ent
     )
 
 
+def test_cross_module_structural_alias_cycle_is_rejected_in_the_module_ordered_first(
+    tmp_path: Path,
+) -> None:
+    """A structural cycle is reported at its alias in the module ordered first, not the nearest."""
+    declaration = "type A = array[m2::B]"
+    with pytest.raises(AglTypeError) as raised:
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": "import m1\nprogram def main() -> unit = print(1)",
+                "m1": f"import m2\nlet pad = 1\n{declaration}",
+                "m2": "import m1\ntype B = m1::A",
+            },
+        )
+    span = raised.value.span
+    assert span is not None
+    assert Path(span.source.label).stem == "m1"
+    assert (tmp_path / span.source.label).read_text()[
+        span.start_offset : span.end_offset
+    ] == declaration
+
+
 def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
     """A bare generic nominal type exposed by an import tail is not concrete."""
     with pytest.raises(AglTypeError, match="'Box'"):

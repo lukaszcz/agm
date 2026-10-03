@@ -1136,15 +1136,6 @@ class ModuleResolution:
         The segments of every path the module declares -- a REPL session's
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
         data a diagnostic spelling another module's declaration anchors by.
-    ``declared_paths``
-        Maps the path of each declaration the module writes beneath a scope
-        path declaring another -- through an alias, or beneath another
-        module's type -- to the full path it is declared at (``def Geo::m``
-        with ``type Geo = Base`` is declared at ``Base::m``).
-    ``region_scopes``
-        Maps each region's node id to the scope path it opens: as written,
-        unless written through a path declaring another (``scope Geo`` with
-        ``type Geo = Base`` opens ``Base``).
     """
 
     program: Program
@@ -1175,8 +1166,6 @@ class ModuleResolution:
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
     replaced_uses: dict[int, frozenset[int]] = field(default_factory=dict)
     declared_segments: frozenset[str] = frozenset()
-    declared_paths: dict[BareAtom, QName] = field(default_factory=dict)
-    region_scopes: dict[int, ScopePath] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

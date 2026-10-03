@@ -27,7 +27,7 @@ Design
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -60,15 +60,13 @@ from agm.agl.scope.imports import (
     build_import_env,
     declares_bare_constructor,
     matching_atoms,
-    target_modules,
     validate_import_items,
 )
-from agm.agl.scope.resolver import _Resolver
+from agm.agl.scope.resolver import _Resolver, reject_declaring_beneath_retained
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
-    DeclarationKey,
     DeclInfo,
     DuplicateDeclarationError,
     MissRepair,
@@ -106,7 +104,6 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     ScopeRegion,
-    ScopeSegment,
     TypeAlias,
     VarDecl,
     VariantDef,
@@ -146,9 +143,6 @@ class ResolvedModule:
         Named-scope export map. Scope identities are separate from declaration
         exports because an empty scope is public without denoting a value.
         Re-exports preserve and merge the scope's original module/path origins.
-    ``loaded_program``
-        The program as loaded: ``resolved.program`` keys each declaration
-        written otherwise at the path it is declared at.
     """
 
     module_id: ModuleId
@@ -157,7 +151,6 @@ class ResolvedModule:
     exports: dict[NameAtom, QName]
     scope_exports: dict[NameAtom, ScopeOrigins]
     source_text: str
-    loaded_program: Program
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,17 +371,6 @@ def _regions(
             yield from _regions(item.items, path)
 
 
-def _export_scopes(program: Program, scopes: Mapping[int, ScopePath]) -> dict[int, ScopePath]:
-    """Map each export of *program* in a region *scopes* maps to the scope path it opens."""
-    return {
-        item.node_id: scopes[region.node_id]
-        for region, _written in _regions(program.body.items)
-        if region.node_id in scopes
-        for item in region.items
-        if isinstance(item, ExportDecl)
-    }
-
-
 def _open_own_scopes(
     scopes: dict[NameAtom, ScopeOrigins], self_id: ModuleId, path: PathAtom
 ) -> None:
@@ -404,37 +386,13 @@ def _open_own_scopes(
         scopes[atom] = frozenset({(self_id, atom)})
 
 
-def _declared_scope_exports(
-    self_id: ModuleId,
-    written: Mapping[NameAtom, ScopeOrigins],
-    declared: Mapping[NameAtom, QName],
-    regions: Mapping[ScopePath, QName],
-) -> dict[NameAtom, ScopeOrigins]:
-    """The named scopes *self_id* opens at the paths its declarations are declared at.
-
-    Before its declarations are keyed, *written* holds the scopes at the paths
-    spelled; each declaration *declared* maps elsewhere opens the scopes
-    enclosing its declared path too, and each region *regions* maps elsewhere
-    the scopes down to its declared one.
-    """
-    result = dict(written)
-    for _module, declared_atom in declared.values():
-        _open_own_scopes(result, self_id, _path(declared_atom)[:-1])
-    for _module, declared_atom in regions.values():
-        _open_own_scopes(result, self_id, _path(declared_atom))
-    return result
-
-
 def _compute_local_scope_exports(
-    self_id: ModuleId, program: Program, scopes: Mapping[int, ScopePath]
+    self_id: ModuleId, program: Program
 ) -> dict[NameAtom, ScopeOrigins]:
-    """Collect public named-scope identities from regions and shorthand paths.
-
-    *scopes* maps each region opening another scope path than written to it.
-    """
+    """Collect public named-scope identities from regions and shorthand paths."""
     result: dict[NameAtom, ScopeOrigins] = {}
-    for region, written in _regions(program.body.items):
-        _open_own_scopes(result, self_id, scopes.get(region.node_id, written))
+    for _region, written in _regions(program.body.items):
+        _open_own_scopes(result, self_id, written)
     for item in static_items(program.body.items):
         if isinstance(
             item,
@@ -577,19 +535,15 @@ alias or the alias's module is not resolved yet.
 """
 
 
-class Placements(Protocol):
-    """What declaration a full path names, and where (:class:`TypeOwnerIndex`)."""
+class Denotations(Protocol):
+    """What declaration a full path names (:class:`TypeOwnerIndex`)."""
 
     def declaration(self, qname: QName) -> QName:
         """The declaration full path *qname* names."""
         ...
 
-    def placement(self, qname: QName) -> QName:
-        """The full path the declaration at *qname* is declared at."""
-        ...
-
     def scopes_of(self, qname: QName) -> frozenset[QName]:
-        """The scopes type *qname* stands for beside its path: an alias of a built-in type's."""
+        """The scopes alias *qname* stands for beside its path, where its sites declare."""
         ...
 
 
@@ -607,12 +561,9 @@ def _reaches_nothing(_module: ModuleId, _path: PathAtom) -> Mapping[PathAtom, QN
 
 
 class _Unresolved:
-    """:class:`Placements` before any alias is resolvable: each path names itself."""
+    """:class:`Denotations` before any alias is resolvable: each path names itself."""
 
     def declaration(self, qname: QName) -> QName:
-        return qname
-
-    def placement(self, qname: QName) -> QName:
         return qname
 
     def scopes_of(self, qname: QName) -> frozenset[QName]:
@@ -638,8 +589,7 @@ def _resolve_reexports(
     graph: ModuleGraph,
     component: tuple[ModuleId, ...],
     through: Through,
-    placements: Placements,
-    export_scopes: Mapping[int, ScopePath],
+    denotations: Denotations,
     *,
     validate: bool,
 ) -> None:
@@ -651,13 +601,10 @@ def _resolve_reexports(
     target module's exported names into the current module's export map with
     their origin :data:`QName` preserved; an item written through an alias the
     target exports names the declarations *through* reaches beneath its
-    target; a region-scoped export forwards beneath the scope path its
-    region opens (*export_scopes*, where not the written one). When
-    *validate*, an item naming nothing is then an error. What
-    each re-exported atom's export ``hiding`` removes, by *placements*, is
-    recorded in *withheld*:
-    an atom several export declarations forward withholds only what each
-    does, and a module's own (*local_atoms*) nothing.
+    target. When *validate*, an item naming nothing is then an error. What
+    each re-exported atom's export ``hiding`` removes, by *denotations*, is
+    recorded in *withheld*: an atom several export declarations forward
+    withholds only what each does, and a module's own (*local_atoms*) nothing.
 
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
@@ -677,12 +624,11 @@ def _resolve_reexports(
     def additions(decl: ExportDecl, target_mid: ModuleId, *, allow_missing: bool) -> _Additions:
         return _compute_reexport_additions(
             decl,
-            export_scopes.get(decl.node_id, tuple(segment.name for segment in decl.scope_path)),
             export_maps[target_mid],
             scope_export_maps[target_mid],
             withheld[target_mid],
             lambda path: through(target_mid, path),
-            placements,
+            denotations,
             allow_missing=allow_missing,
         )
 
@@ -774,38 +720,35 @@ class _Additions:
 
 def _compute_reexport_additions(
     decl: ExportDecl,
-    region_prefix: ScopePath,
     target_exports: Mapping[NameAtom, QName],
     target_scopes: Mapping[NameAtom, ScopeOrigins],
     target_withheld: Mapping[NameAtom, frozenset[QName]],
     through: Callable[[PathAtom], Mapping[PathAtom, QName]],
-    placements: Placements,
+    denotations: Denotations,
     *,
     allow_missing: bool = False,
 ) -> _Additions:
-    """Compute declaration and scope identities forwarded by one export beneath *region_prefix*.
+    """Compute declaration and scope identities forwarded by one export.
 
     An item matching nothing the target exports names what *through* reaches
     beneath an alias the target exports, less what the target withholds
     beneath it, and forwards it. A ``hiding`` item removes the declarations
     it names, every one beneath them and beneath the scopes an alias of a
-    built-in type among them stands for, whatever atom spells them or
-    wherever it is placed (by *placements*), and each
-    forwarded atom withholds them beneath it too; an atom a whole-module
-    export's ``hiding`` removes, or the target's did, is recorded removed.
-    With *allow_missing*, a
-    selected item matching nothing forwards nothing, and a ``hiding`` item
-    matching nothing withholds the whole export.
+    built-in type among them stands for, whatever atom spells them (by
+    *denotations*), and each forwarded atom withholds them beneath it too; an
+    atom a whole-module export's ``hiding`` removes, or the target's did, is
+    recorded removed. With *allow_missing*, a selected item matching nothing
+    forwards nothing, and a ``hiding`` item matching nothing withholds the
+    whole export.
     """
     result: dict[NameAtom, QName] = {}
     withheld_result: dict[NameAtom, frozenset[QName]] = {}
     scope_result: dict[NameAtom, ScopeOrigins] = {}
+    region_prefix = tuple(segment.name for segment in decl.scope_path)
 
     def beneath_any(origin: QName, removed: Collection[QName]) -> bool:
-        """Whether *origin*'s declaration, or where it is placed, is or lies beneath *removed*."""
-        return _is_beneath_any(placements.declaration(origin), removed) or _is_beneath_any(
-            placements.placement(origin), removed
-        )
+        """Whether *origin*'s declaration is or lies beneath one of *removed*."""
+        return _is_beneath_any(denotations.declaration(origin), removed)
 
     def withheld_through(prefix: PathAtom) -> frozenset[QName]:
         """What the target withholds beneath the exported alias a prefix of *prefix* spells."""
@@ -851,7 +794,7 @@ def _compute_reexport_additions(
         path
         for declarations, _scopes, reached in hidden_items
         for origin in (*(target_exports[source] for source in declarations), *reached.values())
-        for path in (placements.declaration(origin), *placements.scopes_of(origin))
+        for path in (denotations.declaration(origin), *denotations.scopes_of(origin))
     )
     hidden_scopes = {source for _declarations, scopes, _named in hidden_items for source in scopes}
 
@@ -962,177 +905,6 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
     )
 
 
-def _declaration_atoms(
-    program: Program,
-) -> Iterator[
-    tuple[
-        FuncDef
-        | RecordDef
-        | EnumDef
-        | ExceptionDef
-        | TypeAlias
-        | BuiltinVarDecl
-        | LetDecl
-        | VarDecl,
-        NameAtom,
-    ]
-]:
-    """Yield every declaration of *program* that claims a path, with the path it is written at."""
-    for item in static_items(program.body.items):
-        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, BuiltinVarDecl)):
-            yield item, _item_atom(item)
-        elif isinstance(item, (LetDecl, VarDecl)):
-            atom = _static_binding_atom(item)
-            if atom is not None:
-                yield item, atom
-
-
-def _declared_keys(
-    module_id: ModuleId,
-    program: Program,
-    declared: Mapping[NameAtom, QName],
-    regions: Mapping[ScopePath, QName],
-) -> tuple[dict[int, ScopePath], dict[DeclarationKey, QName]]:
-    """Key *module_id*'s declarations and regions by the paths they declare.
-
-    *declared* maps each declaration written otherwise than declared to the
-    full path it is declared at (``def Geo::m`` with ``type Geo = Base`` at
-    ``Base::m``, in ``Base``'s module); *regions* each region path written
-    otherwise to the full path it declares (``scope Geo`` to ``Base``).
-    Returns the scope path, by node id, each declaration of *program* written
-    otherwise is keyed at and each such region opens, and where each
-    declaration keyed beneath another module's path is placed.
-    """
-
-    def keyed(atom: NameAtom) -> ScopePath:
-        placed_module, placed = declared[atom]
-        path = _path(placed)
-        return (*scope(placed_module, path[:-1]), path[-1])
-
-    def scope(module: ModuleId, path: ScopePath) -> ScopePath:
-        """Return the scope path full path *path* of *module* is keyed at here."""
-        if module != module_id:
-            return path
-        # An own path is keyed where the longest declaration above it is.
-        for end in range(len(path), 0, -1):
-            prefix = _atom(path[:end])
-            if prefix in declared:
-                return (*keyed(prefix), *path[end:])
-        return path
-
-    scopes: dict[int, ScopePath] = {}
-    placements: dict[DeclarationKey, QName] = {}
-    for item, atom in _declaration_atoms(program):
-        if atom not in declared:
-            continue
-        path = keyed(atom)
-        if path != _path(atom):
-            scopes[item.node_id] = path[:-1]
-        if declared[atom][0] != module_id:
-            placements[module_id, path[:-1], path[-1]] = declared[atom]
-    for region, written in _regions(program.body.items):
-        if written not in regions:
-            continue
-        module, atom = regions[written]
-        path = scope(module, _path(atom))
-        if path != written:
-            scopes[region.node_id] = path
-    return scopes, placements
-
-
-def _anchored_regions(
-    program: Program, retained: Mapping[int, ScopePath], scopes: Mapping[int, ScopePath]
-) -> dict[int, ScopePath]:
-    """*scopes*, but each region of *program* in *retained* opening the scope path it maps to.
-
-    *retained* holds the regions a REPL session retained from earlier
-    entries, each at the scope path it opened then, however its spelling
-    reads now.
-    """
-    anchored = dict(scopes)
-    for region, written in _regions(program.body.items):
-        opened = retained.get(region.node_id)
-        if opened == written:
-            anchored.pop(region.node_id, None)
-        elif opened is not None:
-            anchored[region.node_id] = opened
-    return anchored
-
-
-def _superseded_imports(
-    program: Program,
-    scopes: Mapping[int, ScopePath],
-    retained: Collection[int],
-    targets: Mapping[int, ImportTarget],
-) -> frozenset[int]:
-    """The imports of *program*'s *retained* regions an import of its other regions replaces.
-
-    One naming the same module at the scope path its region opens (*scopes*,
-    else as written) replaces them, as a later REPL entry's import does.
-    """
-    written: set[tuple[ScopePath, ModuleId]] = set()
-    kept: list[tuple[int, ScopePath, tuple[ModuleId, ...]]] = []
-    for region, path in _regions(program.body.items):
-        opened = scopes.get(region.node_id, path)
-        for item in region.items:
-            if not isinstance(item, ImportDecl):
-                continue
-            modules = target_modules(targets[item.node_id])
-            if region.node_id in retained:
-                kept.append((item.node_id, opened, modules))
-            else:
-                written.update((opened, module) for module in modules)
-    return frozenset(
-        node_id
-        for node_id, opened, modules in kept
-        if any((opened, module) in written for module in modules)
-    )
-
-
-def _key_declarations(program: Program, scopes: Mapping[int, ScopePath]) -> Program:
-    """Return *program* with each declaration in *scopes* written at the scope path it maps to.
-
-    Regions keep their spelling: a region is where names are written, not a
-    declaration; the scope path one opens is published beside the program.
-    """
-
-    def keyed[I: Item](item: I) -> I:
-        if isinstance(item, ScopeRegion):
-            return replace(item, items=tuple(keyed(child) for child in item.items))
-        if (
-            not isinstance(
-                item,
-                (
-                    FuncDef,
-                    RecordDef,
-                    EnumDef,
-                    ExceptionDef,
-                    TypeAlias,
-                    BuiltinVarDecl,
-                    LetDecl,
-                    VarDecl,
-                ),
-            )
-            or item.node_id not in scopes
-        ):
-            return item
-        path = scopes[item.node_id]
-        written = item.scope_path
-        segments = tuple(
-            ScopeSegment(
-                name,
-                span=written[min(index, len(written) - 1)].span,
-                node_id=written[min(index, len(written) - 1)].node_id,
-            )
-            for index, name in enumerate(path)
-        )
-        return replace(item, scope_path=segments)
-
-    return replace(
-        program, body=replace(program.body, items=tuple(keyed(item) for item in program.body.items))
-    )
-
-
 # ---------------------------------------------------------------------------
 # Cross-module decl info type aliases
 # ---------------------------------------------------------------------------
@@ -1157,13 +929,8 @@ class _ModuleTables:
     constructor_refs: dict[QName, ConstructorRef]
 
 
-def _module_tables(
-    mid: ModuleId, program: Program, scopes: Mapping[int, ScopePath]
-) -> _ModuleTables:
-    """Collect *mid*'s exports, declarations and declaration metadata from *program*.
-
-    *scopes* maps each region opening another scope path than written to it.
-    """
+def _module_tables(mid: ModuleId, program: Program) -> _ModuleTables:
+    """Collect *mid*'s exports, declarations and declaration metadata from *program*."""
     funcs: dict[QName, FuncDef] = {}
     types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
     decl_info: _DeclInfo = {}
@@ -1217,7 +984,7 @@ def _module_tables(
                 )
     return _ModuleTables(
         exports=_compute_local_exports(mid, program),
-        scope_exports=_compute_local_scope_exports(mid, program, scopes),
+        scope_exports=_compute_local_scope_exports(mid, program),
         type_origins=frozenset(types),
         alias_origins=frozenset(
             qname for qname, item in types.items() if isinstance(item, TypeAlias)
@@ -1256,7 +1023,7 @@ def _reusable(
     splice or a redeclaration produces a different node and misses.
     """
     cached = cached_modules.get(module_id) if cached_modules is not None else None
-    if cached is not None and cached.loaded_program is loaded.program:
+    if cached is not None and cached.resolved.program is loaded.program:
         return cached
     return None
 
@@ -1267,8 +1034,6 @@ def resolve_program(
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
-    entry_repl_session_placements: Mapping[ScopePath, QName] | None = None,
-    entry_repl_session_regions: Mapping[int, ScopePath] | None = None,
     cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
@@ -1289,15 +1054,6 @@ def resolve_program(
         :class:`~agm.agl.scope.symbols.TypeOwner` resolved when it was declared,
         so an alias keeps the target it resolved to then. The entry derives
         its retained constructors from these owners.
-    entry_repl_session_placements:
-        Each retained declaration keyed beneath another module's path, by
-        its full path, mapped to the full path it is placed at there, as
-        decided when it was declared.
-    entry_repl_session_regions:
-        Each region retained from a prior REPL entry to hold its imports, by
-        node id, mapped to the scope path it opened then: it opens that path
-        still, and its imports yield to an import this entry writes of the
-        same module at it.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -1326,24 +1082,7 @@ def resolve_program(
         reusable.update(cached_modules)
     cached_modules = reusable
 
-    # Each module's declarations, keyed at their written paths until step 5
-    # keys a declaration written otherwise at its declared path.
-    # A reusable resolution brings its keyed declarations.
-    programs: dict[ModuleId, Program] = {}
-    tables: dict[ModuleId, _ModuleTables] = {}
-    # The scope path each region-scoped export forwards beneath, where its
-    # region opens another than written.
-    export_scopes: dict[int, ScopePath] = {}
-    for mid, loaded in graph.modules.items():
-        cached = _reusable(cached_modules, mid, loaded)
-        if cached is None:
-            programs[mid] = loaded.program
-            tables[mid] = _module_tables(mid, loaded.program, {})
-        else:
-            programs[mid] = cached.resolved.program
-            scopes = cached.resolved.region_scopes
-            tables[mid] = _module_tables(mid, programs[mid], scopes)
-            export_scopes.update(_export_scopes(programs[mid], scopes))
+    tables = {mid: _module_tables(mid, loaded.program) for mid, loaded in graph.modules.items()}
     export_maps = {mid: dict(table.exports) for mid, table in tables.items()}
     scope_export_maps = {mid: dict(table.scope_exports) for mid, table in tables.items()}
     withheld: Withheld = {mid: {} for mid in tables}
@@ -1386,20 +1125,6 @@ def resolve_program(
         cross_module_type_owners.update(table.type_owners)
         cross_module_constructor_refs.update(table.constructor_refs)
 
-    def remove_tables(table: _ModuleTables) -> None:
-        for funcs_key in table.funcs:
-            del all_public_funcs[funcs_key]
-        for types_key in table.types:
-            del all_public_types[types_key]
-        for info_key in table.decl_info:
-            del decl_info[info_key]
-        type_origins.difference_update(table.type_origins)
-        alias_origins.difference_update(table.alias_origins)
-        for owner_key in table.type_owners:
-            del cross_module_type_owners[owner_key]
-        for constructor_key in table.constructor_refs:
-            del cross_module_constructor_refs[constructor_key]
-
     for table in tables.values():
         add_tables(table)
 
@@ -1414,9 +1139,6 @@ def resolve_program(
     settling: set[ModuleId] = set()
 
     declared_in_program = _declarations_beneath(decl_info)
-    # Each module's declarations written beneath another path, with the full
-    # path each is declared at; recorded as its exports are (``reexport``).
-    declared_at: dict[ModuleId, Mapping[NameAtom, QName]] = {}
 
     def declared_beneath(qname: QName) -> Collection[ScopePath]:
         resolver = resolvers.get(qname[0])
@@ -1481,12 +1203,17 @@ def resolve_program(
         reached_paths=reached_paths,
         builtin_scopes=builtin_scopes,
         current_selection=current_selection,
-        declared_paths=lambda module_id: declared_at.get(module_id, {}),
         read_view=lambda module_id: resolvers[module_id].read_view(),
     )
 
     # What earlier REPL entries retain stays current unless the entry
     # redeclares its path or retires the member scope it lies in.
+    if entry_repl_session_scope_nodes is not None:
+        reject_declaring_beneath_retained(
+            graph.modules[graph.entry_id].program,
+            entry_repl_session_scope_nodes,
+            entry_repl_session_type_paths or {},
+        )
     declared = declared_member_scopes(graph.modules[graph.entry_id].program.body.items)
     retired = retired_member_scopes(entry_repl_session_type_paths or {}, declared)
     retained_type_owners = (
@@ -1523,7 +1250,12 @@ def resolve_program(
             module, atom = named
             # Where the alias is declared, a site's own declaration wins its path.
             for site in reach.sites:
-                for relative in type_owners.written_beneath(site, named):
+                spelled = type_owners.site_spelling(site, named)
+                if spelled is None:
+                    continue
+                if spelled in decl_info:
+                    reached.setdefault((), spelled)
+                for relative in declared_in_program(spelled):
                     reached.setdefault(relative, (site, _atom((*_path(atom), *relative))))
             if named in decl_info:
                 reached.setdefault((), named)
@@ -1532,33 +1264,6 @@ def resolve_program(
         return reached
 
     import_envs: dict[ModuleId, ImportEnv] = {}
-    # Step 5 keys a declaration written otherwise at the scope path it is
-    # declared at (by node id), and records where each one keyed beneath
-    # another module's path is placed.
-    declared_scopes: dict[ModuleId, Mapping[int, ScopePath]] = {}
-    placements: dict[ModuleId, Mapping[DeclarationKey, QName]] = {}
-
-    def retained_placements(program: Program) -> dict[DeclarationKey, QName]:
-        """Return what earlier REPL entries placed, but at paths *program* does not declare."""
-        declared = {_path(atom) for _item, atom in _declaration_atoms(program)}
-        return {
-            (graph.entry_id, path[:-1], path[-1]): placement
-            for path, placement in (entry_repl_session_placements or {}).items()
-            if path not in declared
-        }
-
-    placements[graph.entry_id] = retained_placements(programs[graph.entry_id])
-    retained_regions = entry_repl_session_regions or {}
-
-    def current_imports(mid: ModuleId) -> tuple[ImportDecl, ...]:
-        """*mid*'s imports, but those of retained REPL regions an entry import replaces."""
-        imports = graph.modules[mid].imports
-        if mid != graph.entry_id:
-            return imports
-        superseded = _superseded_imports(
-            programs[mid], declared_scopes.get(mid, {}), retained_regions, all_targets
-        )
-        return tuple(decl for decl in imports if decl.node_id not in superseded)
 
     def prepare(mid: ModuleId) -> None:
         """Build *mid*'s import environment and resolver over the current exports."""
@@ -1572,7 +1277,7 @@ def resolve_program(
             import_envs[mid] = cached.import_env
             resolved_modules[mid] = cached
             return
-        imports = current_imports(mid)
+        imports = loaded.imports
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in imports
         }
@@ -1609,48 +1314,19 @@ def resolve_program(
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
             ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
-            placements=placements.get(mid),
-            declared_scopes=declared_scopes.get(mid),
         )
 
     def validate_imports(mid: ModuleId) -> None:
         """Reject an import item of *mid* naming nothing, over the exports as they now stand."""
         validate_import_items(
-            current_imports(mid), all_targets, export_maps, scope_export_maps, alias_origins
+            graph.modules[mid].imports, all_targets, export_maps, scope_export_maps, alias_origins
         )
 
-    def declared_paths(mid: ModuleId) -> Mapping[NameAtom, QName]:
-        resolver = resolvers.get(mid)
-        if resolver is None:
-            return resolved_modules[mid].resolved.declared_paths
-        return resolver.declared_paths()
-
-    def declared_regions(mid: ModuleId) -> Mapping[ScopePath, QName]:
-        """Each region path of *mid* written otherwise, to the full path it declares.
-
-        None of a reused resolution, whose regions' scope paths its tables read.
-        """
-        resolver = resolvers.get(mid)
-        return {} if resolver is None else resolver.declared_regions()
-
     def reexport(members: tuple[ModuleId, ...], *, validate: bool) -> None:
-        """Resolve *members*' re-exports afresh through their prepared aliases.
-
-        A module exports each own declaration at the path it is declared at
-        (``def Geo::m`` with ``type Geo = Base`` as ``Base::m``), and the
-        scopes reaching it there.
-        """
+        """Resolve *members*' re-exports afresh through their prepared aliases."""
         for mid in members:
-            declared = declared_paths(mid)
-            declared_at[mid] = declared
-            export_maps[mid] = {
-                (declared[atom][1] if atom in declared else atom): qname
-                for atom, qname in local_exports[mid].items()
-            }
-            local_atoms[mid] = frozenset(export_maps[mid])
-            scope_export_maps[mid] = _declared_scope_exports(
-                mid, local_scope_exports[mid], declared, declared_regions(mid)
-            )
+            export_maps[mid] = dict(local_exports[mid])
+            scope_export_maps[mid] = dict(local_scope_exports[mid])
             withheld[mid] = {}
         _resolve_reexports(
             export_maps,
@@ -1663,16 +1339,15 @@ def resolve_program(
             members,
             through,
             type_owners,
-            export_scopes,
             validate=validate,
         )
 
     def settle(members: tuple[ModuleId, ...]) -> SourceSpan | None:
         """Prepare *members* over their exports and re-resolve them.
 
-        Returns where the first member whose exports changed links into its
-        cycle -- its first export, or else its first real declaration -- or
-        ``None`` when none changed.
+        Returns the first export of the first member whose exports changed,
+        or ``None`` when none changed: only export declarations change a
+        module's exports.
         """
         read = [(export_maps[mid], scope_export_maps[mid], withheld[mid]) for mid in members]
         for mid in members:
@@ -1686,11 +1361,7 @@ def resolve_program(
         if not changed:
             return None
         type_owners.forget(members)
-        loaded = graph.modules[changed[0]]
-        if loaded.export_decls:
-            return loaded.export_decls[0].span
-        first = next((item.span for item, _atom in _declaration_atoms(loaded.program)), None)
-        return first if first is not None else loaded.imports[0].span
+        return graph.modules[changed[0]].export_decls[0].span
 
     # ------------------------------------------------------------------
     # Step 5: Per strongly-connected component, dependencies first: prepare
@@ -1714,22 +1385,10 @@ def resolve_program(
                 members,
                 _reaches_nothing,
                 _Unresolved(),
-                export_scopes,
                 validate=False,
             )
             settling.update(members)
-            # The pre-pass above never resolves an alias, so a component's
-            # own first settling round always differs from it -- reading an
-            # own alias for the first time, never a cyclic re-export change.
-            # That one priming round is never counted against how many more
-            # a genuine cyclic re-export chain can still take: a monotone
-            # measure over the component's own declared atoms, which bounds
-            # how many of them a further round can still redirect.
-            settle(members)
-            _converge(
-                partial(settle, members),
-                _export_count(graph, members) + sum(len(local_atoms[mid]) for mid in members),
-            )
+            _converge(partial(settle, members), _export_count(graph, members))
             settling.difference_update(members)
             # Its items name what its modules export once those settle.
             for mid in members:
@@ -1737,57 +1396,6 @@ def resolve_program(
         else:
             prepare(members[0])
         reexport(members, validate=True)
-        # A declaration written otherwise is keyed at the path it is declared
-        # at, so every later reading -- exports, typecheck, display, REPL
-        # retention -- sees the one key. Each member keyed afresh is prepared
-        # again over its keyed declarations, as are its component's others,
-        # which read them; so is each member whose ordinary declaration met a
-        # scope path before its declared scopes were decided, which decides
-        # the meeting.
-        for mid in members:
-            declared_scopes[mid], placed = _declared_keys(
-                mid, programs[mid], declared_paths(mid), declared_regions(mid)
-            )
-            if mid == graph.entry_id:
-                declared_scopes[mid] = _anchored_regions(
-                    programs[mid], retained_regions, declared_scopes[mid]
-                )
-            if declared_scopes[mid]:
-                programs[mid] = _key_declarations(programs[mid], declared_scopes[mid])
-            placements[mid] = (
-                {**retained_placements(programs[mid]), **placed}
-                if mid == graph.entry_id
-                else placed
-            )
-        keyed = [
-            mid
-            for mid in members
-            if declared_scopes[mid]
-            or (mid in resolvers and resolvers[mid].meets_undecided_scope_path)
-        ]
-        if keyed:
-            for mid in keyed:
-                remove_tables(tables[mid])
-                tables[mid] = _module_tables(mid, programs[mid], declared_scopes[mid])
-                export_scopes.update(_export_scopes(programs[mid], declared_scopes[mid]))
-                add_tables(tables[mid])
-                local_exports[mid] = tables[mid].exports
-                local_scope_exports[mid] = tables[mid].scope_exports
-            prelude_static_decl_node_ids = _builtin_static_decl_node_ids(
-                all_public_funcs, all_public_types
-            )
-            declared_in_program = _declarations_beneath(decl_info)
-            # Export maps refresh over the rebuilt tables before anything
-            # forgets or re-prepares, so a member importing another one in
-            # this same component builds its import environment over the
-            # final keyed exports, never a stale pre-keying one; hiding is
-            # not validated yet, since that reads the type owners forgetting
-            # and re-preparing are about to rebuild over the keyed programs.
-            reexport(members, validate=False)
-            type_owners.forget(members)
-            for mid in members:
-                prepare(mid)
-            reexport(members, validate=True)
 
     # ------------------------------------------------------------------
     # Step 6: Resolve each prepared module's bodies against the type owners
@@ -1806,8 +1414,6 @@ def resolve_program(
             resolver.tail_removes,
         )
         resolved = resolver.resolve(ambient_constructor_candidates=cross_module_candidates or None)
-        if programs[mid] is not resolved.program:
-            resolved = replace(resolved, program=programs[mid])
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,
@@ -1815,7 +1421,6 @@ def resolve_program(
             exports=export_maps[mid],
             scope_exports=scope_export_maps[mid],
             source_text=graph.modules[mid].source_text,
-            loaded_program=graph.modules[mid].program,
         )
 
     resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}

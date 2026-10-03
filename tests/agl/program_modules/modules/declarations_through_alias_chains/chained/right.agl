@@ -1,5 +1,5 @@
 # Library module completing the cycle with `left`. Its aliases chain too, the
-# last two reaching `left`'s own record.
+# last reaching `left`'s own record.
 import left::*
 
 record Other
@@ -11,16 +11,10 @@ type Rt1 = Rt0
 
 type Rt2 = Base
 
-type Rt3 = Rt2
+def Other::rt1(self) -> int = self.y + L5::o5(self)
 
-def Rt1::rt1(self) -> int = self.y + self.o5()
+def Base::rt3(self) -> int = self.l3() + 100
 
-def Rt3::rt3(self) -> int = self.l3() + 100
+def Base::Deep::upper() -> int = 5
 
-def Rt2::Deep::upper() -> int = 5
-
-def Rt0::Deep::second() -> int = L5::Deep::first() + 1
-
-record Rt1::Deep::Pair
-  a: int
-  b: int
+def Other::Deep::second() -> int = Base::Deep::lower() + 1

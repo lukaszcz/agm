@@ -187,7 +187,8 @@ def test_unknown_applied_receiver_is_rejected_at_its_head(tmp_path: Path) -> Non
     assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 5, 13)
 
 
-def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
+def test_a_method_beneath_an_own_alias_named_as_a_builtin_type_is_rejected() -> None:
+    """The module declares ``array`` as an alias: nothing is declared beneath that name."""
     prepared = PipelineDriver.prepare_program(
         "type array[T] = int\n\ndef array[E]::constant(self) -> int = 1\n",
         default_stdlib=False,
@@ -195,7 +196,8 @@ def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
 
     discovery = PipelineDriver().discover_programs(prepared)
 
-    assert discovery.checked is not None, discovery.diagnostics
+    assert discovery.checked is None
+    assert [(d.line, d.column, d.end_column) for d in discovery.diagnostics] == [(3, 5, 13)]
 
 
 def test_generic_builtin_receiver_binds_its_receiver_slot(tmp_path: Path) -> None:

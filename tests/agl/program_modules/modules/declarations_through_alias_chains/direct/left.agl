@@ -1,5 +1,7 @@
-# Library module forming a cyclic import with `right`. Each of its aliases
-# names a record directly, the last two `right`'s own; one function differs.
+# Library module forming a cyclic import with `right`. Its aliases name a
+# record directly, the last `right`'s own. Methods are declared at their
+# records' own paths; what it declares beneath `right`'s aliases stands at
+# the path written.
 import right::*
 
 record Base
@@ -9,24 +11,22 @@ type L0 = Base
 
 type L1 = Base
 
-type L2 = Base
-
 type L3 = Base
-
-type L4 = Other
 
 type L5 = Other
 
-def L0::l0(self) -> int = self.x * 3
+def Base::l0(self) -> int = self.x * 3
 
-def L1::l1(self) -> int = self.l0() + 1
+def Base::l1(self) -> int = L0::l0(self) + 1
 
-def L2::l2(self) -> int = self.l1() + 1
+def Base::l3(self) -> int = L1::l1(self) + 1
 
-def L3::l3(self) -> int = self.l2() + 1
+def Other::o5(self) -> int = self.y * 2
 
-def L5::o5(self) -> int = self.y * 2
+def Rt0::Deep::first() -> int = 10
 
-def L4::Deep::first() -> int = 10
+def Base::Deep::lower() -> int = Rt2::Deep::upper() + 1
 
-def L3::Deep::lower() -> int = Rt2::Deep::upper() + 1
+record Rt1::Deep::Pair
+  a: int
+  b: int

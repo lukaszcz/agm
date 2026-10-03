@@ -2126,39 +2126,35 @@ class TestMethodReceiverClassification:
         }
 
     @pytest.mark.parametrize(
-        ("source", "alias", "target"),
+        ("source", "later"),
         (
-            ("type Count = int -> int\ndef Count::value(self) -> int = 1", "Count", "int -> int"),
-            # The alias below the method is still an alias scope: receiver
-            # classification reads the whole module, not the text above it.
-            ("def Count::value(self) -> int = 1\ntype Count = int -> int", "Count", "int -> int"),
+            ("type Count = int -> int\ndef Count::value(self) -> int = 1", "Count"),
+            (
+                "def Count::value(self) -> int = 1\ntype Count = int -> int",
+                "type Count = int -> int",
+            ),
+            ("record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1", "Alias"),
+            (
+                "def Alias::value(self) -> int = 1\ntype Alias = Target\nrecord Target",
+                "type Alias = Target",
+            ),
+            (
+                "record Target\ntype Via = Target\ntype Alias = Via\n"
+                "def Alias::value(self) -> int = 1",
+                "Alias",
+            ),
         ),
-        ids=("alias-above", "alias-below"),
+        ids=("structural-above", "structural-below", "above", "below", "chain"),
     )
-    def test_alias_scope_receiver_is_rejected_with_its_target(
-        self, source: str, alias: str, target: str
+    def test_a_method_beneath_an_own_alias_is_rejected_where_the_pair_completes(
+        self, source: str, later: str
     ) -> None:
         err = reject_scope(source)
 
-        _, message = diag(err)
-        assert alias in message
-        assert target in message
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
-            "def Alias::value(self) -> int = 1\ntype Alias = Target\nrecord Target",
-            "record Target\ntype Via = Target\ntype Alias = Via\ndef Alias::value(self) -> int = 1",
-        ),
-        ids=("alias-above", "alias-below", "alias-chain"),
-    )
-    def test_renaming_alias_receiver_declares_a_method_of_its_target(self, source: str) -> None:
-        resolved = parse_and_resolve(f"{source}\n()")
-
-        assert resolved.method_declarations == {
-            (ENTRY_ID, ("Target",), "value"): ReceiverOwner(ENTRY_ID, ("Target",)),
-        }
+        assert type(err) is AglScopeError
+        assert err.span is not None
+        start = source.rindex(later)
+        assert (err.span.start_offset, err.span.end_offset) == (start, start + len(later))
 
     def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:
         resolved = parse_and_resolve(

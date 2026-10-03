@@ -490,17 +490,15 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
-    def test_retained_alias_scope_rejects_a_method_with_its_structural_target(self) -> None:
+    def test_a_method_beneath_a_retained_alias_is_rejected(self) -> None:
         session = open_session()
         assert session.eval_entry("type Callback = (int) -> bool").ok
 
         rejected = session.eval_entry("def Callback::bad(self) -> int = 1")
 
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message
-        assert "alias scope" in message
-        assert "Callback" in message
-        assert "int -> bool" in message
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 5, 13)
 
     def test_retained_alias_redeclared_as_a_record_accepts_a_method_in_a_later_entry(
         self,
@@ -514,17 +512,27 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_record_redeclared_as_an_alias_still_rejects_a_method(self) -> None:
+    def test_retained_record_redeclared_as_an_alias_rejects_a_method_beneath_it(self) -> None:
         session = open_session()
         assert session.eval_entry("record Alias\n  x: int").ok
 
         rejected = session.eval_entry("type Alias = int -> int\ndef Alias::m(self) -> int = 1")
 
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message
-        assert "alias scope" in message
-        assert "Alias" in message
-        assert "int" in message
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (2, 5, 10)
+        assert session.eval_entry("Alias(x = 1).x").value == IntValue(1)
+
+    def test_an_alias_replacing_a_type_with_a_declaration_beneath_it_is_rejected(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record Box\n  x: int\nrecord Box::Extra").ok
+
+        rejected = session.eval_entry("type Box = int")
+
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 1, 15)
+        assert session.eval_entry("Box(x = 1).x").value == IntValue(1)
 
     def test_method_named_after_a_builtin_call_does_not_shadow_the_builtin(
         self, capsys: pytest.CaptureFixture[str]
@@ -1369,13 +1377,13 @@ _GROUPING_CASES: dict[
         ),
     ),
     "type-scope-owner-replaced": (
-        (*_BOX, "type Box = int"),
+        (*_BOX, "record Box\n  v: int"),
         ((1, 3), (2, 2), (3, 1), (1, 1, 2), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
         (
             ("let e: N = Extra\ne is Extra", BoolValue(True)),
             (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", IntValue(2)),
             (_OWN + "own is Extra", BoolValue(False)),
-            ("let b: Box = 3\nb", IntValue(3)),
+            ("Box(v = 3).v", IntValue(3)),
         ),
     ),
 }

@@ -80,7 +80,7 @@ _GENERIC = "record Outer\n  a: int\nenum Outer::Inner[T]\n  | A(v: T)\n  | B\n"
 _NESTED_UNDER_GENERICS = (
     "record Box[T]\n  v: T\nrecord Box::Inner\n  x: int\n"
     "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int\n"
-    "type Al[T] = Box[T]\nrecord Al::Own\n  x: int\n"
+    "type Al[T] = Box[T]\nrecord Box::Own\n  x: int\n"
     "enum Col\n  | Red\n  | Blue\nenum Two[A, B]\n  | L(l: A)\n  | R(r: B)"
 )
 _NESTED_Y = "scope G\n  record Y\n    b: int\nend G\n"
@@ -436,77 +436,65 @@ _SCENARIOS = {
         header=("import one::{C}", *_OWN_ALIASED_ENUM),
         probes={"member": accepted(_in_region("use C::*", "Red"), "record S::E::Red")},
     ),
-    "an-alias-member-path-is-declared-once": Scenario(
+    "nothing-is-declared-beneath-an-own-alias-of-an-enum": Scenario(
         header=_OWN_ALIASED_ENUM,
         probes={
             "scope-function": rejected(
-                "scope C\n  def Red() -> int = 1\nend C",
-                DuplicateDeclarationError,
-                "def Red() -> int = 1",
+                "scope C\n  def Red() -> int = 1\nend C", AglScopeError, "C"
             ),
-            "scope-binding": rejected(
-                "scope C\n  let Blue = 1\nend C", DuplicateDeclarationError, "let Blue = 1"
-            ),
-            "qualified-function": rejected(
-                "def C::Blue() -> int = 1", DuplicateDeclarationError, "def C::Blue() -> int = 1"
-            ),
-            "another-name": accepted(
-                "scope C\n  def Green() -> int = 1\nend C\n\nC::Green()", "int"
+            "scope-binding": rejected("scope C\n  let Blue = 1\nend C", AglScopeError, "C"),
+            "qualified-function": rejected("def C::Blue() -> int = 1", AglScopeError, "C"),
+            "qualified-type": rejected("record C::Red", AglScopeError, "C"),
+            "another-name": rejected(
+                "scope C\n  def Green() -> int = 1\nend C", AglScopeError, "C"
             ),
         },
     ),
-    # A later REPL entry's ``record S::E::Red`` replaces the inline member, so
-    # the record through the alias shares one entry with the enum.
-    "an-alias-member-path-is-declared-once-by-a-record": Scenario(
-        header=(),
-        probes={
-            "qualified-type": rejected(
-                "\n".join((*_OWN_ALIASED_ENUM, "record C::Red")),
-                DuplicateDeclarationError,
-                "record C::Red",
-            ),
-        },
-    ),
-    "an-alias-declared-after-its-member-path": Scenario(
+    "an-own-alias-of-an-enum-declared-after-its-member-path": Scenario(
         header=(_OWN_ALIASED_ENUM[0],),
         probes={
             "scope-function": rejected(
                 "scope C\n  def Red() -> int = 1\nend C\n\ntype C = S::E",
-                DuplicateDeclarationError,
-                "def Red() -> int = 1",
+                AglScopeError,
+                "type C = S::E",
             ),
         },
     ),
-    "an-alias-of-an-imported-enum-declares-beside-its-member-paths": Scenario(
+    "an-own-alias-of-an-imported-enum-reaches-what-is-declared-beside-its-member-paths": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{E}", "type C = E"),
         probes={
-            f"{declared}-{form}-then-{used}": accepted(f"{declaration}\n\n{used}::{name}()", "text")
-            for declared in ("C", "E")
+            f"E-{form}-then-{used}": accepted(f"{declaration}\n\n{used}::{name}()", "text")
             for used in ("C", "E")
             for form, name, declaration in (
-                ("region", "Red", f'scope {declared}\n  def Red() -> text = "own"\nend {declared}'),
-                ("qualified", "Blue", f'def {declared}::Blue() -> text = "own"'),
+                ("region", "Red", 'scope E\n  def Red() -> text = "own"\nend E'),
+                ("qualified", "Blue", 'def E::Blue() -> text = "own"'),
             )
         }
         | {
-            f"{declared}-type-then-{used}": accepted(
-                f"record {declared}::Red\n  q: bool\n{used}::Red(q = true)",
-                "record E::Red\n  q: bool",
+            f"E-type-then-{used}": accepted(
+                f"record E::Red\n  q: bool\n{used}::Red(q = true)", "record E::Red\n  q: bool"
             )
-            for declared in ("C", "E")
             for used in ("C", "E")
+        }
+        | {
+            f"C-{form}": rejected(declaration, AglScopeError, "C")
+            for form, declaration in (
+                ("region", 'scope C\n  def Red() -> text = "own"\nend C'),
+                ("qualified", 'def C::Blue() -> text = "own"'),
+                ("type", "record C::Red\n  q: bool"),
+            )
         },
     ),
-    "an-alias-of-an-imported-enum-declared-after-its-member-path": Scenario(
+    "an-own-alias-of-an-imported-enum-declared-after-its-member-path": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{E}",),
         probes={
-            f"then-{used}": accepted(
-                f'scope C\n  def Red() -> text = "own"\nend C\n\ntype C = E\n\n{used}::Red()',
-                "text",
-            )
-            for used in ("C", "E")
+            "region": rejected(
+                'scope C\n  def Red() -> text = "own"\nend C\n\ntype C = E',
+                AglScopeError,
+                "type C = E",
+            ),
         },
     ),
     "hiding-an-enum-member-path-removes-its-bare-spelling": Scenario(
@@ -823,6 +811,14 @@ _SCENARIOS = {
             ),
         },
     ),
+    "a-route-and-an-imported-scope-of-its-name-reaching-one-declaration-are-one": Scenario(
+        modules={
+            "lib": "def f() -> int = 1\n",
+            "fw": "import lib\n\nscope lib\n  export lib::{f}\nend lib\n",
+        },
+        header=("import fw::*\nimport lib",),
+        probes={"one-declaration": accepted("lib::f()", "int")},
+    ),
     "route-and-own-path": Scenario(
         modules={"lib": _ROUTED},
         header=(
@@ -894,9 +890,7 @@ _SCENARIOS = {
             "nested-value": accepted("G::Inner(y = 1)", "record Base::Inner\n  y: int"),
             **type_positions("nested", "G::Inner", "Base::Inner"),
             "function": accepted("G::f", "() -> int"),
-            "own-path-beside-the-target-paths": accepted(
-                "record G::Own\n  o: int\nG::Own(o = 1)", "record Base::Own\n  o: int"
-            ),
+            "nothing-declared-beneath-it": rejected("record G::Own\n  o: int", AglScopeError, "G"),
         },
     ),
     "a-generic-alias-segment-takes-type-arguments-only-for-an-inline-member": Scenario(
@@ -921,23 +915,15 @@ _SCENARIOS = {
             "unhidden-method": accepted("G::m", "al::Base -> int"),
         },
     ),
-    # A later REPL entry's declaration at one of the target's paths replaces
-    # it, so each declaration through the alias shares one entry with them.
-    "an-alias-declares-every-path-beneath-its-target-once": Scenario(
-        header=(),
+    "nothing-is-declared-beneath-an-own-alias-of-an-own-type": Scenario(
+        header=(_OWN_BASE, "type G = Base"),
         probes={
-            name: rejected(
-                f"{_OWN_BASE}\ntype G = Base\n{declaration}", DuplicateDeclarationError, span
-            )
-            for name, declaration, span in (
-                ("nested-type", "record G::Inner\n  q: int", "record G::Inner\n  q: int"),
-                ("function", "def G::f() -> int = 2", "def G::f() -> int = 2"),
-                ("scope-function", "scope G\n  def f() -> int = 2\nend G", "def f() -> int = 2"),
-            )
-        }
-        | {
-            "another-name": accepted(
-                f"{_OWN_BASE}\ntype G = Base\ndef G::g() -> int = 2\nG::g", "() -> int"
+            name: rejected(declaration, AglScopeError, "G")
+            for name, declaration in (
+                ("nested-type", "record G::Inner\n  q: int"),
+                ("function", "def G::f() -> int = 2"),
+                ("scope-function", "scope G\n  def f() -> int = 2\nend G"),
+                ("another-name", "def G::g() -> int = 2"),
             )
         },
     ),
@@ -984,14 +970,10 @@ _SCENARIOS = {
             ),
         },
     ),
-    "a-hidden-target-path-leaves-its-alias-path-free": Scenario(
+    "a-hidden-target-path-leaves-nothing-declarable-beneath-an-own-alias": Scenario(
         modules={"al": _ALIASED_BASE},
         header=("import al::* hiding Base::Inner", "type G = Base"),
-        probes={
-            "own-declaration": accepted(
-                "record G::Inner\n  q: int\nG::Inner(q = 1)", "record Base::Inner\n  q: int"
-            ),
-        },
+        probes={"own-declaration": rejected("record G::Inner\n  q: int", AglScopeError, "G")},
     ),
     "a-braced-use-renames-a-type": Scenario(
         modules={"e": _RENAMED},

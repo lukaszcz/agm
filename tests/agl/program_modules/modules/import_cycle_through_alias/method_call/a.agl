@@ -1,6 +1,6 @@
 # Library module forming a cyclic import with `b`, re-exporting `b`'s alias
 # `G` of this module's own `Base`. Its own function calls the method `b`
-# declares through that alias on a value of `Base`.
+# declares at `Base`'s path on a value of `Base`.
 import b::*
 export b::{G}
 

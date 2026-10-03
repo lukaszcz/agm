@@ -72,7 +72,8 @@ _SCENARIOS = {
         },
     ),
     "generic-alias-with-nested-record": Scenario(
-        header=("record Box[T]\n  v: T\ntype Al[T] = Box[T]\nrecord Al::Inner\n  x: int",),
+        modules={"bx": "record Box[T]\n  v: T\ntype Al[T] = Box[T]"},
+        header=("import bx::*\nrecord Al::Inner\n  x: int",),
         probes={
             "alias-pat": rejected(
                 "let i = Al::Inner(x = 1)\ncase i of\n  | Al[int]::Inner(x) => x",

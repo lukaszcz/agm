@@ -406,15 +406,13 @@ def _promotion_plan(
     region_indices: dict[tuple[str, ...], list[int]] = {}
     source_index = 0
 
-    def collect_regions(items: tuple[Item, ...]) -> None:
+    def collect_regions(items: tuple[Item, ...], parent: tuple[str, ...] = ()) -> None:
         nonlocal source_index
         for item in items:
             if isinstance(item, ScopeRegion):
-                # A region opens its scope path and every one above it.
-                path = checked.resolved.region_scopes[item.node_id]
-                for end in range(1, len(path) + 1):
-                    region_indices.setdefault(path[:end], []).append(source_index)
-                collect_regions(cast(tuple[Item, ...], item.items))
+                path = (*parent, item.segment.name)
+                region_indices.setdefault(path, []).append(source_index)
+                collect_regions(cast(tuple[Item, ...], item.items), path)
             else:
                 source_index += 1
 

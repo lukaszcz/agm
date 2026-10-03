@@ -102,7 +102,6 @@ from agm.agl.scope.symbols import (
     Ambiguity,
     AmbiguousConstructorError,
     AmbiguousQualificationError,
-    BareAtom,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -136,7 +135,6 @@ from agm.agl.scope.symbols import (
     undefined_name_message,
 )
 from agm.agl.scope.symbols import declaration_qname as _key_qname
-from agm.agl.scope.symbols import qname_declaration as _qname_decl_key
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
@@ -250,7 +248,6 @@ from agm.agl.syntax.types import (
     render_qualified_name,
     render_qualifier_path,
     render_type_expr,
-    substitute_type_names,
 )
 from agm.agl.syntax.visitor import SyntaxNode, walk
 
@@ -383,6 +380,90 @@ def _item_order(named: ItemDeclaration) -> PathAtom:
     return named.item
 
 
+_Declaration = (
+    FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl | LetDecl | VarDecl
+)
+"""A declaration claiming a path."""
+
+
+def _written_scope(item: _Declaration) -> ScopePath:
+    """The scope path *item* is written at, its enclosing regions' included."""
+    return tuple(segment.name for segment in item.scope_path)
+
+
+def _declaring_items(
+    items: Iterable[Item], scope: ScopePath = ()
+) -> Iterator[tuple[ScopeRegion | _Declaration, ScopePath]]:
+    """Yield every region and declaration among *items*, nested ones too.
+
+    Each with the path it declares beneath: a region's own, a declaration's
+    scope path.
+    """
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            path = (*scope, item.segment.name)
+            yield item, path
+            yield from _declaring_items(item.items, path)
+        elif isinstance(
+            item,
+            (
+                FuncDef,
+                RecordDef,
+                EnumDef,
+                ExceptionDef,
+                TypeAlias,
+                BuiltinVarDecl,
+                LetDecl,
+                VarDecl,
+            ),
+        ):
+            yield item, _written_scope(item)
+
+
+def _beneath_alias_error(alias_path: ScopePath, span: SourceSpan) -> AglScopeError:
+    """The rejection of declaring beneath *alias_path*, which the module declares as an alias."""
+    return AglScopeError(
+        f"Nothing can be declared beneath '{'::'.join(alias_path)}', "
+        "which this module declares as a type alias.",
+        span=span,
+    )
+
+
+def reject_declaring_beneath_retained(
+    program: Program,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    type_paths: Mapping[ScopePath, TypeOwner],
+) -> None:
+    """Reject an alias REPL entry *program* declares where an earlier entry declared beneath it.
+
+    Any retained scope path (*scope_nodes*) at or beneath its path completes
+    the pair, but for those of an earlier type at its path (*type_paths*):
+    that type's own scope, holding only its inline members, and their empty
+    scopes.
+    """
+    for item, path in _declaring_items(_root_items_as_written(program.body.items)[0]):
+        if not isinstance(item, TypeAlias):
+            continue
+        alias_path = (*path, item.name)
+        owner = type_paths.get(alias_path)
+        inline = frozenset(() if owner is None else owner.members)
+        for scope_path, node in scope_nodes.items():
+            beneath = scope_path[len(alias_path) :]
+            if scope_path[: len(alias_path)] != alias_path:
+                continue
+            own = owner is not None and (
+                not beneath or (len(beneath) == 1 and beneath[0] in inline)
+            )
+            allowed = frozenset() if beneath else inline
+            if (
+                not own
+                or not allowed.issuperset(node.members)
+                or node.bare_contributions
+                or node.uses
+            ):
+                raise _beneath_alias_error(alias_path, item.span)
+
+
 def _head_arguments(head: TypeExpr | None) -> tuple[TypeExpr, ...]:
     """The type arguments ``def`` head *head* is written applied to, which its type slots lead."""
     if isinstance(head, ArrayT):
@@ -447,23 +528,8 @@ class _Resolver(ModuleSources):
         repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
-        placements: Mapping[DeclarationKey, QName] | None = None,
-        declared_scopes: Mapping[int, ScopePath] | None = None,
     ) -> None:
-        super().__init__(placements or {})
-        # The scope path each declaration and region written otherwise is
-        # declared at, by node id: it is keyed there, and read there. ``None``
-        # until program resolution decides them from this very collection,
-        # which meanwhile takes every written path for its declared one.
-        self._declared_scopes = declared_scopes
-        # The scope path each region opens, by node id.
-        self._region_scopes: dict[int, ScopePath] = {}
-        # Where each region enclosing the item being resolved is written: its
-        # name beneath the scope path its own enclosing region opens.
-        self._regions: list[ScopePath] = []
-        # Whether an ordinary declaration met a scope path of its name while
-        # the declared scopes were undecided (:meth:`_meet_scope_path`).
-        self.meets_undecided_scope_path = False
+        super().__init__()
         # The REPL session layer is copied into this entry's own image, exactly
         # as a retained named layer already is (see ``_build_scope_nodes``), so
         # resolving this entry never mutates session state.
@@ -691,6 +757,7 @@ class _Resolver(ModuleSources):
 
         # Placement is legality, so it is reported before any name resolves.
         self._validate_item_placement(program.body.items)
+        self._reject_declaring_beneath_aliases(program.body.items)
 
         # Pre-pass 1: collect every named declaration and scope mention. This
         # establishes path-keyed membership before qualifier validation and the
@@ -704,9 +771,48 @@ class _Resolver(ModuleSources):
         self._uses = UseReader(
             self, self._module_id, self._scope_nodes, self._scope_entity_kinds, self._type_owners
         )
-        self._undeclared_scope_paths = self._own_scope_paths()
         self._at_root = True
         self._resolve_headers(program.body.items)
+
+    def _reject_declaring_beneath_aliases(self, items: tuple[Item, ...]) -> None:
+        """Reject declaring beneath a name this module declares as an alias, in either order.
+
+        A region opening an alias's path, or a declaration beneath it, meets
+        an alias written here or one an earlier REPL entry retained. Of the
+        pairs, the one completed first is reported: at the alias when it is
+        the later, else at the segment completing its path.
+        """
+        declaring = list(_declaring_items(_root_items_as_written(items)[0]))
+        aliases = {
+            (*path, item.name): item for item, path in declaring if isinstance(item, TypeAlias)
+        }
+        retained = [
+            path
+            for path, owner in self._repl_session_type_paths.items()
+            if owner.alias is not None and path not in aliases
+        ]
+        completed: tuple[int, ScopePath, SourceSpan] | None = None
+        for item, path in declaring:
+            for alias_path in (*aliases, *retained):
+                count = len(alias_path)
+                if path[:count] != alias_path or (
+                    isinstance(item, ScopeRegion) and len(path) != count
+                ):
+                    continue
+                alias = aliases.get(alias_path)
+                if alias is not None and alias.span.start_offset > item.span.start_offset:
+                    pair = (alias.span.start_offset, alias_path, alias.span)
+                else:
+                    segment = (
+                        item.segment
+                        if isinstance(item, ScopeRegion)
+                        else item.scope_path[count - 1]
+                    )
+                    pair = (item.span.start_offset, alias_path, segment.span)
+                if completed is None or pair[0] < completed[0]:
+                    completed = pair
+        if completed is not None:
+            raise _beneath_alias_error(completed[1], completed[2])
 
     def resolve(
         self,
@@ -803,41 +909,11 @@ class _Resolver(ModuleSources):
             owner_declarations=dict(self._owner_declarations),
             replaced_uses=self._replaced_uses(),
             declared_segments=self.reader().declared,
-            declared_paths=self.declared_paths(),
-            region_scopes=self._region_scopes,
         )
 
     # ------------------------------------------------------------------
     # Pre-passes
     # ------------------------------------------------------------------
-
-    def declared_paths(self) -> dict[BareAtom, QName]:
-        """Map each own declaration declared otherwise than spelled to its full path there.
-
-        Every declaration item, not only those a static-root module installs
-        early (:meth:`_register_static_binding_declaration`'s non-static-root
-        case): a REPL-walked scoped ``let``/``var`` is keyed exactly like one
-        a file declares. See
-        :meth:`~agm.agl.scope.sources.ModuleSources.declared_path`.
-        """
-        found: dict[BareAtom, QName] = {}
-        for _module_id, path, name in self._declaration_items:
-            declared = self.declared_path((*path, name))
-            if declared is not None:
-                found[_bare_atom((*path, name))] = declared
-        return found
-
-    def declared_regions(self) -> dict[ScopePath, QName]:
-        """Map each scope path a region opens, declaring another, to the full path it declares.
-
-        See :meth:`~agm.agl.scope.sources.ModuleSources.declared_scope`.
-        """
-        found: dict[ScopePath, QName] = {}
-        for path in self._region_scopes.values():
-            declared = self.declared_scope(path)
-            if declared is not None:
-                found[path] = declared
-        return found
 
     def _reachable_declarations(self) -> frozenset[DeclarationKey]:
         """Return local, imported, and retained declaration identities."""
@@ -869,16 +945,15 @@ class _Resolver(ModuleSources):
         collected like the root's own, in source order.
         """
         for item in _root_items_as_written(program.body.items)[0]:
-            self._collect_item_declaration(item, (), ())
+            self._collect_item_declaration(item, ())
 
-    def _collect_item_declaration(self, item: Item, written: ScopePath, scope: ScopePath) -> None:
-        """Collect *item*, in the regions spelling *written*, the innermost opening *scope*."""
+    def _collect_item_declaration(self, item: Item, scope: ScopePath) -> None:
+        """Collect *item*, written in the regions opening *scope*."""
         if isinstance(item, ScopeRegion):
-            written = (*written, item.segment.name)
-            scope = self._region_scopes[item.node_id] = self._keyed(item.node_id, written)
+            scope = (*scope, item.segment.name)
             self._ensure_scope_path(scope, item.segment.node_id, item.span)
             for child in item.items:
-                self._collect_item_declaration(child, written, scope)
+                self._collect_item_declaration(child, scope)
             return
         if isinstance(item, ImportDecl):
             self._import_decl_scope_paths[item.node_id] = scope
@@ -899,26 +974,6 @@ class _Resolver(ModuleSources):
                 return
             self._register_static_binding_declaration(item, path, name)
 
-    def _declared_scope(
-        self,
-        item: FuncDef
-        | RecordDef
-        | EnumDef
-        | ExceptionDef
-        | TypeAlias
-        | BuiltinVarDecl
-        | LetDecl
-        | VarDecl,
-    ) -> ScopePath:
-        """Return the scope path *item* is declared at: as written, unless written otherwise."""
-        return self._keyed(item.node_id, tuple(segment.name for segment in item.scope_path))
-
-    def _keyed(self, node_id: int, written: ScopePath) -> ScopePath:
-        """Return the scope path declaration or region *node_id*, *written* at one, is keyed at."""
-        if self._declared_scopes is None:
-            return written
-        return self._declared_scopes.get(node_id, written)
-
     def _declaration_scope(
         self,
         item: FuncDef
@@ -930,14 +985,10 @@ class _Resolver(ModuleSources):
         | LetDecl
         | VarDecl,
     ) -> ScopePath:
-        """Create the scope path *item* is declared at and return it.
-
-        Only the declared path is an own scope path: a path written through
-        an alias spells its target's, never one of this module's own.
-        """
-        declared = self._declared_scope(item)
-        self._ensure_scope_path(declared, item.node_id, item.span)
-        return declared
+        """Create the scope path *item* is written at and return it."""
+        written = _written_scope(item)
+        self._ensure_scope_path(written, item.node_id, item.span)
+        return written
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -947,30 +998,14 @@ class _Resolver(ModuleSources):
             key = (self._module_id, parent_path, name)
             existing = self._scope_entity_kinds.get(key)
             if existing == "ordinary" or scope_path in self._repl_session_ordinary_member_paths:
-                self._meet_scope_path(name, span)
+                raise DuplicateDeclarationError(name, span=span)
             self._scope_entity_kinds.setdefault(key, "scope")
             self._scope_paths.add(scope_path)
             self._scope_node_ids.setdefault(scope_path, node_id)
 
-    def _meet_scope_path(self, name: str, span: SourceSpan) -> None:
-        """Reject an ordinary declaration *name* meeting a scope path of its name, at *span*.
-
-        A duplicate once the declared scopes are decided. Until then a scope
-        path is collected as written, possibly an alias's spelling, which is
-        never an own path: the meeting is noted, and program resolution
-        decides it by collecting the module again over its decided declared
-        scopes.
-        """
-        if self._declared_scopes is not None:
-            raise DuplicateDeclarationError(name, span=span)
-        self.meets_undecided_scope_path = True
-
     def _claim_ordinary(self, key: DeclarationKey, span: SourceSpan) -> None:
         """Claim *key* for an ordinary declaration at *span*, rejecting any other there."""
-        existing = self._scope_entity_kinds.get(key)
-        if existing == "scope":
-            self._meet_scope_path(key[2], span)
-        elif existing is not None:
+        if self._scope_entity_kinds.get(key) is not None:
             raise DuplicateDeclarationError(key[2], span=span)
         self._scope_entity_kinds[key] = "ordinary"
 
@@ -1092,26 +1127,19 @@ class _Resolver(ModuleSources):
     def _classify_function_head(self, declaration: FuncDef, base: ScopePath) -> None:
         """Classify one ``def``'s head, written in scope *base*, and its receiver,
         after preceding lexical contributions are visible."""
-        written = declaration.receiver_type
-        own = declaration.scope_path[len(self._regions) :]
-        path = self._head_path(base, own)
-        applied = self._applied_builtin_head(declaration, path, own)
-        head = written if applied is None else applied
-        if head is None:
-            self._reject_unhosted_head(base, own)
-        elif not declaration.is_method:
-            raise TypeArgumentsError(declaration.scope_path[-1].name, None, span=head.span)
+        head = declaration.receiver_type
         if not declaration.is_method:
+            if head is not None:
+                raise TypeArgumentsError(declaration.scope_path[-1].name, None, span=head.span)
             return
         receiver = declaration.params[0]
+        path = _written_scope(declaration)
+        own = declaration.scope_path[len(base) :]
+        self._reject_alias_receiver(path, own, receiver.span)
         owner = (
-            self._receiver_head(
-                tuple(segment.name for segment in declaration.scope_path),
-                head,
-                _head_arguments(written),
-            )
+            self._receiver_head(path, head, _head_arguments(head))
             if head is not None
-            else self._receiver_owner(declaration.scope_path, receiver, path, own)
+            else self._receiver_owner(declaration.scope_path, receiver, own)
         )
         if owner is None:
             return
@@ -1120,21 +1148,7 @@ class _Resolver(ModuleSources):
                 f"Receiver 'self' for method '{declaration.name}' cannot have a default value.",
                 span=receiver.span,
             )
-        key = (self._module_id, self._declared_scope(declaration), declaration.name)
-        self._method_declarations[key] = owner
-
-    def _head_path(self, base: ScopePath, own: Sequence[ScopeSegment]) -> ScopePath:
-        """Return the full path a declaration's head is read at.
-
-        Its *own* qualifier beneath scope *base*, which it is written in;
-        without one, the innermost enclosing region's name where that is
-        written -- the empty path outside every region. An alias in it stands
-        where it is written: the scope a region written through one opens is
-        its target's, which *base* is.
-        """
-        if own:
-            return (*base, *(segment.name for segment in own))
-        return self._regions[-1] if self._regions else ()
+        self._method_declarations[(self._module_id, path, declaration.name)] = owner
 
     @staticmethod
     def _head_chain(written: Sequence[ScopeSegment]) -> QualifierChain | None:
@@ -1152,87 +1166,33 @@ class _Resolver(ModuleSources):
             written[-1].node_id,
         )
 
-    def _reject_unhosted_head(self, base: ScopePath, written: Sequence[ScopeSegment]) -> None:
-        """Reject a declaration path, *written* beneath scope *base*, through a type hosting none.
+    def _reject_alias_receiver(
+        self, path: ScopePath, own: Sequence[ScopeSegment], span: SourceSpan
+    ) -> None:
+        """Reject a method, receiver at *span*, whose path *path* selects a type through an alias.
 
-        A path beneath a segment selecting an applied alias reaches only the
-        application's inline members (the segment type-argument rule), which
-        no declaration names; a structural type hosts no paths at all. Each
-        prefix is read as the qualifier it is, an alias in it standing for
-        its target's path.
+        Each prefix of *path*, the whole one included, is read as the
+        qualifier it is (:func:`lookup_declared`), the ``def``'s *own*
+        segments -- those beyond its enclosing regions -- as written.
         """
-        for end in range(1, len(written) + 1):
-            segment = written[end - 1]
+        start = len(path) - len(own)
+        for end in range(1, len(path) + 1):
             found = lookup_declared(
                 self,
-                (*base, *(prefix.name for prefix in written[:end])),
-                self._head_chain(written[:end]),
+                path[:end],
+                self._head_chain(own[: end - start]),
                 LookupKind.TYPE,
-                span=segment.span,
-            )
-            if isinstance(found, QualifiedTarget) and found.key is not None:
-                self._reject_hosting_none(found.key, segment.name, segment.span)
-
-    def _reject_hosting_none(self, key: DeclarationKey, name: str, span: SourceSpan) -> None:
-        """Reject a declaration beneath type *key*, spelled *name* at *span*, if it hosts none."""
-        if self.applies(key):
-            raise TypeArgumentsError(name, None, span=span)
-        structural = self.structural(key)
-        if structural is not None:
-            raise AglScopeError(
-                f"Nothing can be declared in alias scope '{name}', which targets "
-                f"the structural type '{render_type_expr(structural)}'.",
                 span=span,
             )
-
-    def _reject_retained_beneath(self, path: ScopePath, alias: TypeAlias) -> None:
-        """Reject *alias*, declared at scope *path*, hosting none over declarations beneath it.
-
-        An earlier REPL entry declared them at its own path, which the alias
-        now spells: one entry declaring both is rejected at theirs.
-        """
-        own = (*path, alias.name)
-        if any(
-            scope_path[: len(own)] == own and node.members
-            for scope_path, node in self._repl_session_scope_nodes.items()
-        ):
-            self._reject_hosting_none((self._module_id, path, alias.name), alias.name, alias.span)
-
-    def _applied_builtin_head(
-        self, declaration: FuncDef, path: ScopePath, own: Sequence[ScopeSegment]
-    ) -> TypeExpr | None:
-        """Return the applied built-in type ``def`` *declaration*'s head spells through an alias.
-
-        Its one-segment head -- its *own* qualifier, else the whole path --
-        read at *path* (:meth:`_head_path`), selecting an alias of a built-in
-        type spells that type applied as the alias applies it (``IA`` with
-        ``type IA = array[int]``), or as its own written arguments, as many
-        as the alias takes, apply the alias (``Arr[E]`` with ``type Arr[T] =
-        array[T]`` spells ``array[E]``). ``None`` for any other head: one
-        spelling a built-in's bare name is read as that name
-        (:meth:`_receiver_type_owner`).
-        """
-        segments = declaration.scope_path
-        if len(own or segments) != 1:
-            return None
-        found = lookup_declared(self, path, None, LookupKind.TYPE, span=segments[-1].span)
-        owner = (
-            self._type_owners.owner(_key_qname(found.key))
-            if isinstance(found, QualifiedTarget) and found.key is not None
-            else None
-        )
-        if owner is None or owner.builtin is None or owner.alias is None:
-            return None
-        written = declaration.receiver_type
-        parameters = owner.alias.type_params
-        if not isinstance(written, AppliedT):
-            if parameters or not isinstance(owner.builtin, (ArrayT, DictT)):
-                return None
-            return replace(owner.builtin, span=segments[-1].span)
-        if len(written.args) != len(parameters):
-            raise TypeArgumentsError(written.name, len(parameters), span=written.span)
-        bound = dict(zip(parameters, written.args, strict=True))
-        return replace(substitute_type_names(owner.builtin, bound), span=written.span)
+            if not isinstance(found, QualifiedTarget) or found.key is None:
+                continue
+            owner = self._type_owners.owner(_key_qname(found.key))
+            if owner is not None and owner.alias is not None:
+                raise AglScopeError(
+                    f"'self' cannot declare a method in alias scope '{found.key[2]}', "
+                    f"which targets '{render_type_expr(owner.alias.type_expr)}'.",
+                    span=span,
+                )
 
     def _builtin_receiver(self, name: str, span: SourceSpan) -> ReceiverOwner:
         """Classify a method on built-in type *name*, spelled bare at *span*.
@@ -1280,21 +1240,19 @@ class _Resolver(ModuleSources):
         self,
         segments: tuple[ScopeSegment, ...],
         receiver: Param,
-        path: ScopePath,
         own: tuple[ScopeSegment, ...],
     ) -> ReceiverOwner | None:
         """Return the type method path *segments*' receiver attaches to, if any.
 
         An empty path has none. The receiver takes the type declared at the
-        whole path, read at *path* (:meth:`_receiver_type_owner`); the
-        ``def``'s *own* qualifier -- the segments beyond the enclosing
-        regions -- is what a miss is reported on. An unannotated receiver's
-        rejection is raised; an annotated one only makes the ``def`` an
-        ordinary function.
+        whole path (:meth:`_receiver_type_owner`); the ``def``'s *own*
+        qualifier -- the segments beyond the enclosing regions -- is what a
+        miss is reported on. An unannotated receiver's rejection is raised;
+        an annotated one only makes the ``def`` an ordinary function.
         """
         owner: ReceiverOwner | AglError | None = None
         if segments:
-            owner = self._receiver_type_owner(path, segments, own, receiver.span)
+            owner = self._receiver_type_owner(segments, own, receiver.span)
         if receiver.type_expr is not None:
             return owner if isinstance(owner, ReceiverOwner) else None
         if isinstance(owner, AglError):
@@ -1305,33 +1263,28 @@ class _Resolver(ModuleSources):
 
     def _receiver_type_owner(
         self,
-        path: ScopePath,
         segments: tuple[ScopeSegment, ...],
         written: tuple[ScopeSegment, ...],
         span: SourceSpan,
     ) -> ReceiverOwner | AglError | None:
         """Return the type declared at method path *segments*, or why none.
 
-        The whole path, at *path* (:meth:`_head_path`), is read at its parent
-        step alone (:func:`lookup_declared`); a qualifier *written* in the
-        ``def`` itself gets the verdict of a miss. A path declaring no type
-        may end in a constructor its parent step reads bare, whose owner the
-        bare value decision there selects; a one-segment head -- as written,
-        else the whole path -- may name a built-in receiver type, or an alias
-        of one, which is that type's name.
+        The whole path is read at its parent step alone
+        (:func:`lookup_declared`); a qualifier *written* in the ``def`` itself
+        gets the verdict of a miss. A path declaring no type may end in a
+        constructor its parent step reads bare, whose owner the bare value
+        decision there selects; a one-segment head -- as written, else the
+        whole path -- may name a built-in receiver type.
         """
+        path = tuple(segment.name for segment in segments)
         found = lookup_declared(self, path, self._head_chain(written), LookupKind.TYPE, span=span)
         if isinstance(found, AglError):
             return found
-        key = None if found is None else found.key
-        table = None if key is None else self._type_owners.owner(_key_qname(key))
-        builtin = None if table is None else table.builtin_name
-        owner = None if key is None or builtin is not None else self._receiver_key_owner(key, span)
+        owner = None if found is None or found.key is None else self._receiver_key_owner(found.key)
         if owner is not None:
             return owner
-        name = builtin or path[-1]
-        if len(written or segments) == 1 and name in BUILTIN_METHOD_RECEIVER_NAMES:
-            return self._builtin_receiver(name, (written or segments)[-1].span)
+        if len(written or segments) == 1 and path[-1] in BUILTIN_METHOD_RECEIVER_NAMES:
+            return self._builtin_receiver(path[-1], (written or segments)[-1].span)
         found = lookup_declared(self, path, None, LookupKind.VALUE, span=span)
         constructor = found.constructor if isinstance(found, QualifiedTarget) else None
         if constructor is None:
@@ -1340,32 +1293,19 @@ class _Resolver(ModuleSources):
             constructor.owner_module_id, (*constructor.owner_path, constructor.owner_name)
         )
 
-    def _receiver_key_owner(self, key: DeclarationKey, span: SourceSpan) -> ReceiverOwner | None:
-        """Return the receiver owner type *key* names, rejecting an alias of its own.
+    def _receiver_key_owner(self, key: DeclarationKey) -> ReceiverOwner | None:
+        """Return the receiver owner type *key* names.
 
-        A renaming alias names its target (:meth:`TypeOwnerIndex.identity`),
-        so its methods are the target's; any other alias is no receiver.
+        Never an alias: :meth:`_reject_alias_receiver` rejects those first.
         """
-        qname = self._type_owners.identity(_key_qname(key))
-        owner = self._type_owners.owner(qname)
-        if owner is not None and owner.alias is not None:
-            self._raise_alias_receiver(key[2], owner.alias, span)
-        module_id, path, name = _qname_decl_key(qname)
+        module_id, path, name = key
         if module_id == self._module_id:
             return (
                 ReceiverOwner(module_id, (*path, name))
-                if self._type_owners.is_declared(qname)
+                if self._type_owners.is_declared(_key_qname(key))
                 else None
             )
-        return self._cross_module_type_owners.get(qname)
-
-    def _raise_alias_receiver(self, name: str, alias: TypeAlias, span: SourceSpan) -> None:
-        """Reject a method receiver that names *alias*."""
-        raise AglScopeError(
-            f"'self' cannot declare a method in alias scope '{name}', "
-            f"which targets '{render_type_expr(alias.type_expr)}'.",
-            span=span,
-        )
+        return self._cross_module_type_owners.get(_key_qname(key))
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
         """Build named-scope layers and populate their declaration memberships."""
@@ -1478,7 +1418,7 @@ class _Resolver(ModuleSources):
         """Return whether *node* was classified as a method of a nominal owner."""
         return (
             self._module_id,
-            self._declared_scope(node),
+            _written_scope(node),
             node.name,
         ) in self._method_declarations
 
@@ -2129,7 +2069,7 @@ class _Resolver(ModuleSources):
             elif isinstance(item, ImportDecl) and item.scope_path:
                 self._contribute_regional_import_bare(item)
             elif isinstance(item, ScopeRegion):
-                with self._named_scope(self._region_scopes[item.node_id]):
+                with self._named_scope((*self._scope.scope_path, item.segment.name)):
                     self._resolve_headers(item.items)
 
     # ------------------------------------------------------------------
@@ -2169,12 +2109,8 @@ class _Resolver(ModuleSources):
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in the member layer of the scope path it opens."""
-        base = self._scope.scope_path
-        self._reject_unhosted_head(base, (region.segment,))
-        self._regions.append((*base, region.segment.name))
-        with self._named_scope(self._region_scopes[region.node_id]):
+        with self._named_scope((*self._scope.scope_path, region.segment.name)):
             self._resolve_block_items(region.items)
-        self._regions.pop()
 
     def _resolve_funcdef(self, node: FuncDef) -> None:
         """Resolve a ``def`` declaration (body + params).
@@ -2186,7 +2122,7 @@ class _Resolver(ModuleSources):
         """
         if node.scope_path:
             base = self._scope.scope_path
-            with self._named_scope(self._declared_scope(node)):
+            with self._named_scope(_written_scope(node)):
                 self._classify_function_head(node, base)
                 self._validate_qualifier_chains(node, node.type_params)
                 self._resolve_program_config(node)
@@ -2219,11 +2155,9 @@ class _Resolver(ModuleSources):
         # Type declarations do not otherwise participate in value resolution,
         # but their annotations still need qualifier validation in the actual
         # lexical owner layer.
-        path = self._declared_scope(node) if node.scope_path else self._named_scope_path()
-        self._reject_unhosted_head(self._scope.scope_path, node.scope_path[len(self._regions) :])
+        path = _written_scope(node) if node.scope_path else self._named_scope_path()
         if isinstance(node, TypeAlias):
             self._validate_alias(path, node)
-            self._reject_retained_beneath(path, node)
         else:
             with self._named_scope(path):
                 self._validate_type_decl(node)
@@ -2297,7 +2231,7 @@ class _Resolver(ModuleSources):
         if not node.scope_path:
             yield
             return
-        with self._named_scope(self._declared_scope(node)):
+        with self._named_scope(_written_scope(node)):
             self._validate_qualifier_chains(node)
             yield
 

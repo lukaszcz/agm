@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from typing import NamedTuple, Protocol, TypeAlias
 
 from agm.agl.diagnostics import AglError, HiddenMemberError
-from agm.agl.modules.ids import Reader
+from agm.agl.modules.ids import ModuleId, Reader
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
@@ -145,16 +145,12 @@ class DeclarationNames(Protocol):
         """
         ...
 
-    def placement(self, key: DeclarationKey) -> DeclarationKey:
-        """The full path *key*'s declaration is declared at.
-
-        One its module writes beneath another module's type, directly or
-        through an alias, is declared at that type's path there.
-        """
+    def scopes_of(self, key: DeclarationKey) -> frozenset[DeclarationKey]:
+        """The scopes alias *key* stands for beside its path, where its sites declare."""
         ...
 
-    def scopes_of(self, key: DeclarationKey) -> frozenset[DeclarationKey]:
-        """The scopes type *key* stands for beside its path: an alias of a built-in type's."""
+    def spelled_scope(self, module: ModuleId, key: DeclarationKey) -> DeclarationKey | None:
+        """The scope *module*'s own declarations beneath type *key* are in, if any."""
         ...
 
 
@@ -162,18 +158,24 @@ def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> boo
     """Whether every way of *hiding* removes the declaration *key* names, or one above it.
 
     *names* names it: an alias denoting the type a removed alias denotes is
-    removed too, and so is a declaration placed beneath a removed type (or
-    a scope a removed alias of a built-in type stands for), however spelled.
+    removed too, and so is a declaration beneath a scope a removed alias
+    stands for, or beneath its module's spelling of a removed type, however
+    spelled.
     """
     if hiding == NOT_HIDDEN:
         return False
     named = names.identity(key)
-    placed = names.placement(key)
     denoted = names.denotes(key)
     return all(
         any(
-            _beneath(named, hidden)
-            or any(_beneath(placed, above) for above in (hidden, *names.scopes_of(hidden)))
+            any(
+                above is not None and _beneath(named, above)
+                for above in (
+                    hidden,
+                    *names.scopes_of(hidden),
+                    names.spelled_scope(named[0], hidden),
+                )
+            )
             or (denoted != named and names.denotes(hidden) == denoted)
             for hidden in way
         )
@@ -246,15 +248,6 @@ class PathSources(DeclarationNames, Protocol):
 
     def own_at(self, path: ScopePath, kind: LookupKind) -> Reading:
         """The module's own declarations of *kind* at full *path*."""
-        ...
-
-    def own_root_at(self, path: ScopePath, kind: LookupKind) -> Reading:
-        """The module's own declarations of *kind* at *path* from its root (``::p``).
-
-        Those :meth:`own_at` reads, and those it declares at *path* beneath
-        another module's type (``def Geo::m`` with ``type Geo = Base``, at
-        ``::Base::m``).
-        """
         ...
 
     def contributed_at(self, step: ScopePath, path: ScopePath, kind: LookupKind) -> Reading:
@@ -337,22 +330,6 @@ class PathSources(DeclarationNames, Protocol):
 
     def hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
         """Whether a ``hiding`` visible at *step* removed full *path* from its contribution."""
-        ...
-
-    def nearest_scope(self, path: ScopePath) -> ScopePath:
-        """The nearest scope path of the module's own at or above *path*.
-
-        A path spelled through an alias, a module route or a contributed type
-        is that one's path, never a scope path of the module's own.
-        """
-        ...
-
-    def declaring_beside(self, path: ScopePath) -> tuple[ScopePath, ...]:
-        """The other scope paths of the module's own declaring what its scope path *path* does.
-
-        Own scope paths declaring one path are one path: what one anchors,
-        a declaring path beneath any of them reaches.
-        """
         ...
 
     def stands_for(self, key: DeclarationKey) -> tuple[AliasTarget, ...]:
@@ -481,22 +458,18 @@ def lookup_declared(
     """Return the declaration of *kind* at full *path*, read at its parent step alone.
 
     A declaration at *path* is what a declaring path (a receiver's) names, so
-    no step further out is tried (:func:`_declaring_step`). *written* is the
-    qualifier chain spelling the last names of *path*, if any; the types its
-    prefixes select add what their own member tables select, and an alias
-    among them stands for its target's path, read at that path's own parent
-    step. Finding nothing is then an owner-table refusal, a hidden member
-    when a ``hiding`` removed *path*, else an unknown member of it. A bare
-    value spelling (no *written*) also reads the enum members injected at
-    the parent step, as :func:`lookup_bare` does. *span* locates a bare
+    no step further out is tried. *written* is the qualifier chain spelling
+    the last names of *path*, if any; the types its prefixes select add what
+    their own member tables select, and an alias among them stands for its
+    target's path. Finding nothing is then an owner-table refusal, a hidden
+    member when a ``hiding`` removed *path*, else an unknown member of it. A
+    bare value spelling (no *written*) also reads the enum members injected
+    at the parent step, as :func:`lookup_bare` does. *span* locates a bare
     spelling's ambiguity.
     """
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
-    step = _declaring_step(
-        sources,
-        path[: len(path) - len(names)],
-        injects=written is None and kind is LookupKind.VALUE,
-    )
+    parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
+    step = replace(parent, path=path[: len(path) - len(names)])
     walk = _Walk(sources, step.path, (step,), (), written, names, span)
     found = walk.find(kind)
     if found is not None or written is None:
@@ -614,8 +587,8 @@ def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: Scop
     if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
         own = _Step(
             (),
-            sources.own_root_at,
-            lambda path: sources.own_root_at(path, LookupKind.TYPE),
+            sources.own_at,
+            lambda path: sources.own_at(path, LookupKind.TYPE),
             _nowhere,
         )
         return _Anchor((own,), lambda _step, path: sources.own_origins(path))
@@ -656,36 +629,6 @@ def _step(
         )
 
     return _Step(step, read, owners, lambda path: sources.hidden_at(step, path))
-
-
-def _declaring_step(sources: PathSources, base: ScopePath, *, injects: bool) -> _Step:
-    """Return the step the declaring paths written beneath *base* are read at.
-
-    Each full path is read at its parent step alone. A parent no scope path
-    of the module's own spells -- one written through an alias, a module
-    route or a contributed type -- anchors nothing itself: its step is the
-    nearest own scope path above it, which injects nothing beneath it. A
-    parent that is one also reads what every other own scope path declaring
-    its path anchors (:meth:`PathSources.declaring_beside`). When *injects*,
-    a parent step reads the enum members injected at it.
-    """
-
-    def parent(path: ScopePath) -> _Step:
-        at = sources.nearest_scope(path[:-1])
-        return _step(sources, at, injects=injects and at == path[:-1])
-
-    def read(path: ScopePath, kind: LookupKind) -> Reading:
-        reading = parent(path).read(path, kind)
-        for beside in sources.declaring_beside(path[:-1]):
-            reading += _step(sources, beside).read((*beside, path[-1]), kind)
-        return reading
-
-    return _Step(
-        base,
-        read,
-        lambda path: parent(path).owners(path),
-        lambda path: parent(path).hidden(path),
-    )
 
 
 class _Walk:
@@ -862,10 +805,12 @@ class _Walk:
     ) -> Reading:
         """What type *key*, which *owner* reached as the first *count* names at *step*, selects.
 
-        Its own member table selects for the rest of the names. Where an
-        alias's selects nothing, the path it stands for is read in its place
-        (:meth:`_beside`). An owner only a module route reached is read as
-        that module's alone.
+        Its own member table selects for the rest of the names, but this
+        module's own declarations beneath the spelling of another module's
+        type an alias stands for win the path (:meth:`_own_beside`). Where an
+        alias's table selects nothing, the path it stands for is read in its
+        place (:meth:`_beside`). An owner only a module route reached is read
+        as that module's alone.
         """
         sources = self._sources
         rest = self._names[count:]
@@ -874,6 +819,10 @@ class _Walk:
             return sources.beneath_applied(
                 applied.target, owner.layer, rest, chain, kind, routed=owner.routed
             )
+        if not owner.routed:
+            own = self._own_beside(step, key, count, kind)
+            if own.candidates:
+                return own
         reading = sources.projected(key, owner.layer, rest, chain, kind, routed=owner.routed)
         if reading.candidates or owner.routed:
             return reading
@@ -884,6 +833,30 @@ class _Walk:
             ),
             reading,
         )
+
+    def _own_beside(
+        self, step: _Step, key: DeclarationKey, count: int, kind: LookupKind
+    ) -> Reading:
+        """This module's own declarations beneath what alias *key* stands for, spelled at *step*.
+
+        Those at the path each type of another module it stands for is
+        spelled, where that spelling names only that type at *step*: the
+        module's own declarations there beat what the alias's table reaches.
+        """
+        sources, names = self._sources, self._names
+        reading = Reading()
+        for target in sources.stands_for(key):
+            declared = target.declared
+            if (
+                declared is None
+                or target.path == names[:count]
+                or declared in sources.own_origins(target.path)
+            ):
+                continue
+            spelled = (*step.path, *target.path)
+            if sources.names_only(target, step.owners(spelled)):
+                reading += sources.own_at((*spelled, *names[count:]), kind)
+        return reading
 
     def _beside(
         self,

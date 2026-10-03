@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "declared_spelling_reads_final_keyed_exports",
+      "name": "declared_spelling_reads_the_settled_exports",
       "module_roots": [
         "program_modules/modules/import_cycle_through_alias/declared_spelling"
       ],
@@ -11,7 +11,7 @@
       }
     },
     {
-      "name": "alias_spelling_reads_final_keyed_exports",
+      "name": "alias_spelling_reads_the_settled_exports",
       "module_roots": [
         "program_modules/modules/import_cycle_through_alias/alias_spelling"
       ],
@@ -21,7 +21,7 @@
       }
     },
     {
-      "name": "method_through_alias_is_called_on_the_target_value",
+      "name": "method_at_the_target_path_is_called_on_its_value",
       "module_roots": [
         "program_modules/modules/import_cycle_through_alias/method_call"
       ],

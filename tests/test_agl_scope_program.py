@@ -2441,7 +2441,9 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Tree", "Node"), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
+            (ENTRY_ID, ("A", "Tree", "Node"), "extract"): ReceiverOwner(
+                shapes_id, ("Tree", "Node")
+            ),
         }
 
     def test_use_exposes_an_imported_receiver(self, tmp_path: Path) -> None:
@@ -2458,7 +2460,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Geo", "Point"), "tag"): ReceiverOwner(
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(
                 ModuleId.from_path("shapes"), ("Geo", "Point")
             )
         }
@@ -2479,7 +2481,7 @@ class TestMethodOrphanRule:
         resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
+            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
         }
 
     def test_import_inside_receiver_scope_does_not_supply_its_owner(self, tmp_path: Path) -> None:
@@ -2669,30 +2671,18 @@ class TestMethodOrphanRule:
         }
         assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "self")
 
-    def test_foreign_renaming_alias_receiver_declares_a_method_of_its_target(
-        self, tmp_path: Path
-    ) -> None:
-        """An imported alias's method is its target's."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
-                "shapes": "record Actual\ntype Point = Actual",
-            },
-        )
-
-        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
-
-        assert resolved.method_declarations == {
-            (ENTRY_ID, ("Actual",), "tag"): ReceiverOwner(
-                ModuleId.from_path("shapes"), ("Actual",)
-            ),
+    def test_foreign_renaming_alias_receiver_is_rejected(self, tmp_path: Path) -> None:
+        """A receiver names its type directly, never through an imported alias."""
+        modules = {
+            "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
+            "shapes": "record Actual\ntype Point = Actual",
         }
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
 
     def test_local_nested_alias_is_rejected_as_a_multi_segment_receiver(
         self, tmp_path: Path
     ) -> None:
-        """A type alias reopened under its own type's scope still rejects a receiver."""
+        """Nothing is declared beneath an alias the module declares in its own type's scope."""
         modules = {
             "entry": (
                 "record Outer\n"
@@ -2705,7 +2695,7 @@ class TestMethodOrphanRule:
                 "def Outer::Inner::bad(self) -> int = 1"
             ),
         }
-        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "self")
+        assert _rejection(tmp_path, modules, "entry") == (AglScopeError, "Inner")
 
     def test_foreign_nested_alias_is_rejected_as_a_multi_segment_receiver(
         self, tmp_path: Path
@@ -3677,6 +3667,17 @@ class TestExportDecl:
             "value",
         )
 
+    def test_an_imported_alias_cycle_clashes_with_another_import_of_its_name(
+        self, tmp_path: Path
+    ) -> None:
+        modules = {
+            "entry": "import m::*\nimport c::*\ntype C = A\n()",
+            "m": "record A\n  x: int",
+            "c": "type A = B\ntype B = A",
+        }
+
+        assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "A")
+
     def test_reexport_cycle_keeps_a_hiding_of_a_module_outside_it(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
@@ -3714,16 +3715,18 @@ class TestExportDecl:
         ("b_source", "query"),
         [
             pytest.param(
-                "import a::*\ntype G = Base\n\ndef G::h() -> int = 2\n", "b::G::h()", id="alias"
+                "import a::*\ntype G = Base\n\ndef Base::h() -> int = 2\n", "b::G::h()", id="alias"
             ),
             pytest.param(
-                "import a\ntype G = a::Base\n\ndef G::h() -> int = 2\n",
-                "b::G::h()",
-                id="routed-alias-target",
+                "import a::*\ntype G = Base\n\ndef Base::h() -> int = 2\n",
+                "b::Base::h()",
+                id="target",
             ),
-            pytest.param("import a\ndef a::Base::h() -> int = 2\n", "b::Base::h()", id="direct"),
+            # A routed spelling written in a declaration is a scope of the module's own.
+            pytest.param("import a\ndef a::Base::h() -> int = 2\n", "b::a::Base::h()", id="routed"),
             pytest.param(
-                "import a::*\ntype G = Base\n\nrecord G::R\n  v: int\ndef r() -> int = G::R(v=2).v",
+                "import a::*\ntype G = Base\n\nrecord Base::R\n  v: int\n"
+                "def r() -> int = G::R(v=2).v",
                 "b::r()",
                 id="nested-record",
             ),
@@ -3732,7 +3735,7 @@ class TestExportDecl:
     def test_import_cycle_with_no_export_declarations_converges(
         self, tmp_path: Path, b_source: str, query: str
     ) -> None:
-        """A cycle keys declarations through an alias as part of its own fixpoint."""
+        """A cycle settles what a member declares at the other's type's path in its own fixpoint."""
         result = evaluate_ir_graph(
             f"import b\nlet result = {query}",
             {"a": "import b\nrecord Base\n  x: int\n", "b": b_source},
@@ -3744,22 +3747,22 @@ class TestExportDecl:
         ("af_source", "h_decl"),
         [
             pytest.param(
-                "def af() -> int = Base::h()", "def G::h() -> int = 2\n", id="declared-spelling"
+                "def af() -> int = Base::h()", "def Base::h() -> int = 2\n", id="declared-spelling"
             ),
             pytest.param(
-                "def af() -> int = G::h()", "def G::h() -> int = 2\n", id="alias-spelling"
+                "def af() -> int = G::h()", "def Base::h() -> int = 2\n", id="alias-spelling"
             ),
             pytest.param(
                 "def af(receiver: Base) -> int = receiver.h()",
-                "def G::h(self) -> int = 2\n",
+                "def Base::h(self) -> int = 2\n",
                 id="method-call",
             ),
         ],
     )
-    def test_import_cycle_builds_the_importer_env_over_final_keyed_exports(
+    def test_import_cycle_builds_the_importer_env_over_the_settled_exports(
         self, tmp_path: Path, af_source: str, h_decl: str
     ) -> None:
-        """A cycle's importer environment reads the keyed exports, not a stale pass."""
+        """A cycle's importer environment reads the settled exports, not a stale pass."""
         call = "a::af(a::Base(x = 1))" if "receiver" in af_source else "a::af()"
         result = evaluate_ir_graph(
             f"import a\nlet result = {call}",

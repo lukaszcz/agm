@@ -149,8 +149,8 @@ _SCENARIOS = {
         modules={"al": _AL},
         header=("import al::*",),
         probes={
-            # An alias's method is its target's.
-            "receiver": accepted("def Geo::m(self) -> int = self.x\nBase(x = 2).m()", "int"),
+            # A receiver names its type directly, never through an alias.
+            "receiver": rejected("def Geo::m(self) -> int = self.x", AglScopeError, "self"),
             "nope-val": rejected("Geo::Nope(y = 1)", UnknownMemberError, "Geo::Nope"),
             "nope-annot": rejected("fn(p: Geo::Nope) => 1", UnknownMemberError, "Geo::Nope"),
         },
@@ -389,7 +389,7 @@ _SCENARIOS = {
         modules={"al": _AL_2},
         header=("import al::*",),
         probes={
-            "receiver": accepted("def Geo::m(self) -> int = 1\nGeo::m(1)", "int"),
+            "receiver": rejected("def Geo::m(self) -> int = 1", AglScopeError, "self"),
             "method-val": rejected("Geo::m(1)", UnknownMemberError, "Geo::m"),
         },
     ),

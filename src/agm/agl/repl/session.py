@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
-    from agm.agl.scope.imports import QName
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import (
         BindingRef,
@@ -405,11 +404,6 @@ class ReplSession:
         # Each retained type-owned path maps to the owner it resolved to when
         # declared, so a retained alias keeps its target across entries.
         self._session_type_paths: dict[tuple[str, ...], TypeOwner] = {}
-        # Each declaration an entry keyed beneath another module's path, by its
-        # full path, mapped to where it is placed there: decided when declared,
-        # whatever its spelling reaches later. One no longer retained places
-        # nothing: only a retained declaration is read at its path.
-        self._session_placements: dict[tuple[str, ...], QName] = {}
         # Builtin type and def identities of the current declarations, keyed by
         # scoped name to the declaring module and its enclosing scope path. A
         # REPL entry's own source cannot see an earlier entry's builtin
@@ -460,9 +454,6 @@ class ReplSession:
         # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
-        # Each retained region, by node id, at the scope path it opened when
-        # written: it opens that path still, wherever its spelling now leads.
-        self._retained_region_scopes: dict[int, tuple[str, ...]] = {}
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). The module-graph
         # assembler merges it with each entry's import-visible fixities.
@@ -1110,7 +1101,7 @@ class ReplSession:
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
         from agm.agl.parser import resolve_infix_fixity
-        from agm.agl.scope.symbols import ScopeNode, to_bare_atom
+        from agm.agl.scope.symbols import ScopeNode
         from agm.agl.scope.type_owners import beneath
         from agm.agl.syntax.nodes import (
             EnumDef,
@@ -1238,10 +1229,6 @@ class ReplSession:
             if declared_name is None:
                 continue
             self._session_builtin_declarations.pop(declared_name, None)
-            self._session_placements.pop(declared_name, None)
-            placement = checked.resolved.declared_paths.get(to_bare_atom(declared_name))
-            if placement is not None:
-                self._session_placements[declared_name] = placement
             if is_builtin_bare_declaration(item):
                 self._session_builtin_declarations[declared_name] = (
                     entry_module_id,
@@ -1934,7 +1921,6 @@ class ReplSession:
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
-        self._session_placements = {}
         self._session_builtin_declarations = {}
         self._type_env = TypeEnvironment()
         self._type_env.seal()
@@ -1967,7 +1953,6 @@ class ReplSession:
         # it has to recompile the entry program.
         self._accumulated_imports = []
         self._accumulated_scoped_imports = []
-        self._retained_region_scopes = {}
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

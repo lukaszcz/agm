@@ -1024,19 +1024,22 @@ chains resolve transitively.
 
 A spelling through an alias means exactly what the same spelling through its
 target means at the alias's site, in every position — type, value,
-constructor, pattern, `is`, method receiver, `use` target, import and export
-items, and `hiding`. With `type Geo = Base`:
+constructor, pattern, `is`, `use` target, import and export items, and
+`hiding`. With `type Geo = Base`:
 
 - Every path beneath the target is reachable beneath the alias: `Geo::Inner`
   is `Base::Inner` and `Geo::f()` is `Base::f()`, whether `Base` is declared
   in the module, imported, or not nameable at all where `Geo` is read. The
   reading module's own declarations beneath the target are included.
-- A declaration written through the alias is declared at the target's path:
-  `def Geo::m(self)` declares the method `Base::m`, `record Geo::Part`
-  declares `Base::Part`, `let Geo::v = 1` declares `Base::v`, and a
-  `scope Geo` region opens `Base`'s scope. Either spelling reaches the result,
-  and declaring one name beneath both spellings in one module is a duplicate
-  declaration.
+- An alias declares no scope. Declaring beneath a name the module itself
+  declares as an alias — `def Geo::f()`, `let Geo::v = 1`, `record Geo::Part`,
+  or a `scope Geo` region — is an error, whichever comes first; in the REPL,
+  the entry completing the pair is rejected. Declare beneath the target
+  instead. Beneath the name of an imported alias, a module's own declaration
+  stands at its written path: `Geo::f` then reaches it as well as what the
+  alias reaches beneath its target, and the module's own declaration wins.
+- A method receiver names its type directly: `def Geo::m(self)` is an error
+  whether `Geo` is declared in the module or imported.
 - The alias and its target are one declaration: reaching it directly and
   through an alias, or through aliases declared in different modules, is never
   an ambiguity. Aliases of two distinct types still clash.
@@ -1055,16 +1058,16 @@ record Base::Inner
 
 type Geo = Base
 
-def Geo::m(self) -> int = self.x   # declares Base::m
+def Base::m(self) -> int = self.x
 
-scope Geo
-  def make() -> Geo = Geo(x = 2)   # declares Base::make
-end Geo
+scope Base
+  def make() -> Geo = Geo(x = 2)
+end Base
 
 def Base::twice(self) -> int = self.m() * 2
 
 program def main() -> unit =
-  let b = Base::make()
+  let b = Geo::make()
   let i: Geo::Inner = Base::Inner(y = 3)
   print(b.twice() + i.y + Geo::twice(b))
 ```

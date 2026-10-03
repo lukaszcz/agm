@@ -9,8 +9,6 @@ declares what it reads of them.
 
 from __future__ import annotations
 
-import bisect
-import heapq
 import itertools
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -54,7 +52,6 @@ from agm.agl.scope.lookup import (
     LookupKind,
     QualifiedTarget,
     Reading,
-    lookup_declared,
     removes,
 )
 from agm.agl.scope.symbols import (
@@ -108,13 +105,9 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     AppliedT,
     NameT,
-    TypeExpr,
     render_qualified_name,
     render_qualifier_path,
 )
-
-type _Declaring = tuple[QName | NameAtom, str | None]
-"""A full path (or the path alone of ones in other modules) declared, and a name beneath it."""
 
 type _Route = tuple[tuple[str, ...], bool]
 """A module route's spelling, and whether it is anchored."""
@@ -220,15 +213,7 @@ class SourcesHost(Protocol):
 class ModuleSources(SourcesHost):
     """The one lookup's reads for one module, by full path (:class:`PathSources`)."""
 
-    def __init__(self, placements: Mapping[DeclarationKey, QName]) -> None:
-        # Own declarations placed beneath another module's path, which their
-        # own path's spelling may not reach any more: decided where they were
-        # declared (an earlier REPL entry, or this module before its
-        # declarations were keyed by their declared paths).
-        self._placements = placements
-        self._placed: dict[QName, list[ScopePath]] = {}
-        for (_module_id, path, name), placement in placements.items():
-            self._placed.setdefault(placement, []).append((*path, name))
+    def __init__(self) -> None:
         # This module as diagnostics spell declarations for it (:meth:`reader`).
         self._reader: Reader | None = None
         # Every enum this module reads by the names of its members, built on
@@ -238,30 +223,6 @@ class ModuleSources(SourcesHost):
         self._hidden_by: dict[int, frozenset[DeclarationKey]] = {}
         # Whether what an alias reaches is being read (:meth:`_reaching`).
         self._reads_reach = False
-        # The full path each own scope path declares (an alias segment stands
-        # for its target's path); recorded as lookups first read them, once
-        # every module's headers are prepared, since reading an alias needs
-        # them (``_declare_scope_paths``).
-        self._declared_paths: dict[ScopePath, QName] = {}
-        # The own scope paths to read, shorter first (a heap of sort keys);
-        # those waiting on the type each selects, and how many resolved types
-        # they were released for; the one being read, if any; and how many
-        # readings recorded another path than was.
-        self._undeclared_scope_paths: list[tuple[int, ScopePath]] = []
-        self._waiting_scope_paths: dict[QName, list[ScopePath]] = {}
-        self._resolved_seen = 0
-        self._recording_scope_path: ScopePath | None = None
-        self._scope_paths_settled = False
-        self._recorded_changes = 0
-        # The own scope paths, shorter first, by what each declares; those
-        # declared otherwise than spelled also by each name spelled beneath
-        # them (``_declaring_spellings``); and those names, collected on first use.
-        self._declaring_named: dict[_Declaring, list[ScopePath]] = {}
-        self._names_beneath: dict[ScopePath, set[str]] | None = None
-        # The scope paths whose reading read each entry of the two recorded
-        # tables: each is read again when the entry changes.
-        self._declared_readers: dict[ScopePath, set[ScopePath]] = {}
-        self._declaring_readers: dict[_Declaring, set[ScopePath]] = {}
         # Once the tables the resolver collects are complete (:meth:`_keep_readings`),
         # the contributions at each full path, the own types, and what each
         # path beneath an alias stands for, by what they are read with.
@@ -269,49 +230,6 @@ class ModuleSources(SourcesHost):
         self._kept_contributions: dict[tuple[ScopePath, ScopePath, LookupKind], Reading] = {}
         self._kept_own_types: dict[ScopePath, Reading] = {}
         self._kept_stood_for: dict[_StandingFor, tuple[AliasReach, Reading]] = {}
-
-    def _own_scope_paths(self) -> list[tuple[int, ScopePath]]:
-        """Return every own scope path to read, shorter first (a heap of sort keys)."""
-        return sorted(scope_path_sort_key(path) for path in self._scope_nodes if path)
-
-    def _declare_scope_paths(self) -> None:
-        """Record the full path each own scope path declares.
-
-        A scope path whose whole spelling selects a type declares that type's
-        path: through an alias, its target's (``def Geo::m`` with ``type Geo
-        = Base`` declares ``Base::m``). Any other declares its parent's path
-        and its own name -- through an alias of a built-in type, the
-        built-in's name (``def T::f`` with ``type T = text`` declares
-        ``text::f``). Own scope paths declaring one path are one path: a
-        spelling of any reaches what the others declare (:meth:`own_at`).
-
-        The first lookup reading them reads the paths shorter first, each
-        reading what is recorded so far, as does any lookup made meanwhile. A
-        path beneath one not recorded yet is read once that one is; one
-        selecting a type not :meth:`~TypeOwnerIndex.settled` yet waits, for a
-        later lookup to read it once the type is resolved. A path is read
-        again whenever an entry it read of the recorded tables changes, and
-        recorded anew when it declares another path then.
-
-        Own scope paths never change after collection, so once none waits,
-        the recorded tables are final: later calls return at once rather than
-        re-reading every own type again.
-        """
-        if self._recording_scope_path is not None or self._scope_paths_settled:
-            return
-        owners = self._type_owners
-        settled = not owners.resolving
-        if settled:
-            # A lookup reading a path would resolve an own alias reading the
-            # paths half recorded; while a type resolves, the path waits on it.
-            self._declared_type_owners()
-        resolved = owners.resolved_since(self._resolved_seen)
-        self._resolved_seen += len(resolved)
-        for qname in tuple(self._waiting_scope_paths) if settled else resolved:
-            for path in self._waiting_scope_paths.pop(qname, ()):
-                heapq.heappush(self._undeclared_scope_paths, scope_path_sort_key(path))
-        self._record_scope_paths()
-        self._scope_paths_settled = not self._waiting_scope_paths
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -322,181 +240,9 @@ class ModuleSources(SourcesHost):
             for declaration, path in self._type_declarations
         }
 
-    def _record_scope_paths(self) -> None:
-        """Read the own scope paths to read, shorter first, recording what each declares."""
-        unread = self._undeclared_scope_paths
-        while unread:
-            _, path = heapq.heappop(unread)
-            self._recording_scope_path = path
-            parent = path[:-1]
-            self._note_read(self._declared_readers, parent)
-            if parent and parent not in self._declared_paths:
-                continue
-            found = lookup_declared(
-                self,
-                path,
-                None,
-                LookupKind.TYPE,
-                span=self._program.span,
-            )
-            key = found.key if isinstance(found, QualifiedTarget) else None
-            if key is not None and not self._type_owners.settled(_key_qname(key)):
-                self._waiting_scope_paths.setdefault(_key_qname(key), []).append(path)
-                continue
-            owner = None if key is None else self._type_owners.owner(_key_qname(key))
-            builtin = None if owner is None else owner.builtin_name
-            if key is not None and builtin is None:
-                qname = _key_qname(self.identity(key))
-            else:
-                module_id, atom = self._declared_paths.get(parent, (self._module_id, ()))
-                qname = (module_id, _bare_atom((*_bare_path(atom), builtin or path[-1])))
-            self._record_scope_path(path, qname)
-        self._recording_scope_path = None
-
-    def _record_scope_path(self, path: ScopePath, declared: QName) -> None:
-        """Record that own scope path *path* declares *declared*.
-
-        Every scope path that read an entry this changes is read again.
-        """
-        recorded = self._declared_paths.get(path)
-        if recorded == declared:
-            return
-        self._declared_paths[path] = declared
-        self._recorded_changes += 1
-        readers = self._declared_readers.pop(path, set())
-        for key in self._declaring_keys(path, recorded):
-            self._declaring_named[key].remove(path)
-            readers |= self._declaring_readers.pop(key, set())
-        for key in self._declaring_keys(path, declared):
-            bisect.insort(self._declaring_named.setdefault(key, []), path, key=scope_path_sort_key)
-            readers |= self._declaring_readers.pop(key, set())
-        for reader in readers:
-            heapq.heappush(self._undeclared_scope_paths, scope_path_sort_key(reader))
-
-    def _declaring_keys(self, path: ScopePath, declared: QName | None) -> Iterator[_Declaring]:
-        """The entries listing own scope path *path* when it declares *declared*.
-
-        None for a path not recorded; under no name alone for one declaring
-        its own spelling (:meth:`_declaring_spellings`).
-        """
-        if declared is None:
-            return
-        yield declared, None
-        if declared == (self._module_id, _bare_atom(path)):
-            return
-        module_id, atom = declared
-        for name in self._names_spelled_beneath(path):
-            yield declared, name
-            if module_id != self._module_id:
-                yield atom, name
-
-    def _names_spelled_beneath(self, path: ScopePath) -> Collection[str]:
-        """Every name a declaration or scope path is spelled with beneath own scope path *path*.
-
-        Those this module collects, which claim a scoped ``let`` or ``var``
-        before the walk binds it, and those earlier REPL entries retained.
-        """
-        names = self._names_beneath
-        if names is None:
-            names = self._names_beneath = {}
-            retained = self._repl_session_type_paths
-            spelled = (
-                *((*scope, name) for _module_id, scope, name in self._scope_entity_kinds),
-                *(
-                    (*scope, name)
-                    for scope, node in self._scope_nodes.items()
-                    for name in node.members
-                ),
-                *retained,
-                *((*scope, name) for scope, owner in retained.items() for name in owner.members),
-            )
-            for spelling in spelled:
-                names.setdefault(spelling[:-1], set()).add(spelling[-1])
-        return names.get(path, ())
-
-    def _declaring_spellings(
-        self, declared: QName | NameAtom, name: str | None
-    ) -> tuple[ScopePath, ...]:
-        """The own scope paths spelled otherwise declaring *declared*, with *name* spelled beneath.
-
-        *declared* is a full path, or the path alone of ones in other
-        modules. Under no *name*, every own scope path declaring full path
-        *declared*. Shorter spellings first.
-        """
-        key = (declared, name)
-        self._note_read(self._declaring_readers, key)
-        return tuple(self._declaring_named.get(key, ()))
-
-    def _note_read[K](self, readers: dict[K, set[ScopePath]], key: K) -> None:
-        """Note in *readers* that the scope path being read, if any, read recorded entry *key*."""
-        reader = self._recording_scope_path
-        if reader is None:
-            return
-        noted = readers.get(key)
-        if noted is None:
-            readers[key] = {reader}
-        else:
-            noted.add(reader)
-
     def read_view(self) -> object:
-        """What reads made now see of the uses and the recorded scope paths.
-
-        Reads with equal views see the same of both, and are noted for the
-        same scope path being read (:meth:`_note_read`).
-        """
-        return self._uses.reading, self._recorded_changes, self._recording_scope_path
-
-    def declared_scope(self, path: ScopePath) -> QName | None:
-        """The full path own scope path *path* declares, when it or a scope above declares another.
-
-        ``scope Geo`` with ``type Geo = Base`` declares ``Base``, in ``Base``'s
-        module. ``None`` for a scope path declaring its own spelling.
-        """
-        self._declare_scope_paths()
-        for end in range(len(path), 0, -1):
-            self._note_read(self._declared_readers, path[:end])
-            declared = self._declared_paths.get(path[:end])
-            if declared is not None and declared != (self._module_id, _bare_atom(path[:end])):
-                module_id, atom = declared
-                return module_id, _bare_atom((*_bare_path(atom), *path[end:]))
-        return None
-
-    def declared_path(self, path: ScopePath) -> QName | None:
-        """The full path own declaration *path* is declared at, when a scope above declares another.
-
-        ``def Geo::m`` with ``type Geo = Base`` is declared at ``Base::m``, in
-        ``Base``'s module. ``None`` for a declaration at its own spelling.
-        A declaration's recorded placement wins.
-        """
-        placed = self._placements.get((self._module_id, path[:-1], path[-1]))
-        if placed is not None:
-            return placed
-        scope = self.declared_scope(path[:-1])
-        if scope is None:
-            return None
-        module_id, atom = scope
-        return module_id, _bare_atom((*_bare_path(atom), path[-1]))
-
-    def nearest_scope(self, path: ScopePath) -> ScopePath:
-        """See :meth:`~agm.agl.scope.lookup.PathSources.nearest_scope`."""
-        while path not in self._scope_nodes:
-            path = path[:-1]
-        return path
-
-    def declaring_beside(self, path: ScopePath) -> tuple[ScopePath, ...]:
-        """See :meth:`~agm.agl.scope.lookup.PathSources.declaring_beside`.
-
-        The read is noted under what *path* declares, or under *path* while
-        it is not recorded.
-        """
-        self._declare_scope_paths()
-        declared = self._declared_paths.get(path)
-        if declared is None:
-            self._note_read(self._declared_readers, path)
-            return ()
-        return tuple(
-            beside for beside in self._declaring_spellings(declared, None) if beside != path
-        )
+        """What reads made now see of the uses: reads with equal views see the same of them."""
+        return self._uses.reading
 
     @staticmethod
     def _owner_member_error(
@@ -674,54 +420,10 @@ class ModuleSources(SourcesHost):
         return found
 
     def own_at(self, path: ScopePath, kind: LookupKind) -> Reading:
-        """This module's own declarations of *kind* at full *path*.
-
-        Those spelled *path*, and those beneath every own scope path spelled
-        otherwise that declares the path its parent does.
-        """
+        """This module's own declarations of *kind* at full *path*."""
         if kind is LookupKind.TYPE:
-            return self._kept(self._kept_own_types, path, lambda: self._own_at(path, kind))
-        return self._own_at(path, kind)
-
-    def _own_at(self, path: ScopePath, kind: LookupKind) -> Reading:
-        """Read :meth:`own_at`."""
-        reading = self._own_spelled_at(path, kind)
-        parent = path[:-1]
-        if not parent:
-            return reading
-        self._declare_scope_paths()
-        self._note_read(self._declared_readers, parent)
-        declared = self._declared_paths.get(parent, (self._module_id, _bare_atom(parent)))
-        return sum(
-            (
-                self._own_spelled_at((*spelling, path[-1]), kind)
-                for spelling in self._declaring_spellings(declared, path[-1])
-                if spelling != parent
-            ),
-            reading,
-        )
-
-    def own_root_at(self, path: ScopePath, kind: LookupKind) -> Reading:
-        """See :meth:`~agm.agl.scope.lookup.PathSources.own_root_at`.
-
-        Beneath a parent no own scope path spells, the own scope paths
-        declaring another module's path spelled so declare *path*.
-        """
-        reading = self.own_at(path, kind)
-        parent = path[:-1]
-        if not parent:
-            return reading
-        self._declare_scope_paths()
-        self._note_read(self._declared_readers, parent)
-        if parent in self._declared_paths:
-            return reading
-        return sum(
-            (
-                self._own_spelled_at((*spelling, path[-1]), kind)
-                for spelling in self._declaring_spellings(_bare_atom(parent), path[-1])
-            ),
-            reading,
-        )
+            return self._kept(self._kept_own_types, path, lambda: self._own_spelled_at(path, kind))
+        return self._own_spelled_at(path, kind)
 
     def _own_spelled_at(self, path: ScopePath, kind: LookupKind) -> Reading:
         """This module's own declaration of *kind* spelled *path*."""
@@ -935,42 +637,33 @@ class ModuleSources(SourcesHost):
         path beneath an alias is its target's (:meth:`_beneath_alias`), read
         as a declaration of *kind*.
 
-        This module's own declarations beneath an owner another module
-        declares, or the type its alias chain ends at, are read beneath every
-        own scope path declaring its path (``def Geo::m`` with ``Geo`` an alias
-        of an imported ``Base``), and win it, unless only a module route
-        reached the owner (*routed*), which reads that module's view alone;
-        an own owner's spellings are own scope paths, which :meth:`own_at`
-        reads. What an own alias reaches is own (*layer*), as its target's
-        spelling there would be.
+        What an own alias reaches is own (*layer*), as its target's spelling
+        there would be.
         """
-        if not routed:
-            self._declare_scope_paths()
-            declared_types = tuple(
-                declared
-                for declared in self._declared_types(owner)
-                if declared[0] != self._module_id
-            )
-            own = sum(
-                (
-                    *(
-                        self.own_at((*spelling, *rest), kind)
-                        for declared in declared_types
-                        for spelling in self._declaring_spellings(declared, rest[0])
-                    ),
-                    *(
-                        self._own_spelled_at(path, kind)
-                        for module_id, atom in declared_types
-                        for path in self._placed.get(
-                            (module_id, _bare_atom((*_bare_path(atom), *rest))), ()
-                        )
-                    ),
-                ),
-                Reading(),
-            )
-            if own.candidates:
-                return own
-        return self._selected_by_table(owner, layer, rest, chain, kind, routed=routed)
+        segments = chain.segments
+        start = len(segments) + 1 - len(rest)
+        current = _key_qname(owner)
+        for index, name in enumerate(rest, start):
+            reached = self._type_owners.owner(current)
+            if reached is None:
+                return Reading()
+            table = reached
+            error = self._owner_member_error(table, chain, index, name)
+            if error is not None:
+                return Reading(refusals=(error,))
+            if (table.target is not None or table.builtin is not None) and not (
+                index == len(segments)
+                and (name in table.members or table.select(name, segments[-1].name) is not None)
+            ):
+                return self._beneath_alias(
+                    current, table, rest[index - start :], layer, chain, kind, routed=routed
+                )
+            current = (current[0], _bare_atom((*_bare_path(current[1]), name)))
+        if (table.alias is None and name in table.members) or self._type_owners.is_declared(
+            current
+        ):
+            return Reading()
+        return self._selected_constructor(table, current, layer, chain)
 
     def _declared_types(self, key: DeclarationKey) -> tuple[QName, ...]:
         """The types whose paths type *key* stands for: its final declared type's, renamed first.
@@ -988,7 +681,7 @@ class ModuleSources(SourcesHost):
         (:attr:`~agm.agl.scope.type_owners.AliasChain.renamed`); the final
         type is the one its alias chain ends at, else the named type itself.
         """
-        chain = self._type_owners.chain(self._identity_path(key))
+        chain = self._type_owners.chain(self._type_owners.path_target(_key_qname(key)))
         return chain.identity, chain.renamed, chain.final or chain.identity
 
     def stands_for(self, key: DeclarationKey) -> tuple[AliasTarget, ...]:
@@ -1020,42 +713,6 @@ class ModuleSources(SourcesHost):
             )
         )
 
-    def _selected_by_table(
-        self,
-        owner: DeclarationKey,
-        layer: ContributionLayer,
-        rest: ScopePath,
-        chain: QualifierChain,
-        kind: LookupKind,
-        *,
-        routed: bool,
-    ) -> Reading:
-        """What type *owner*'s own member table selects for *rest* (:meth:`projected`)."""
-        segments = chain.segments
-        start = len(segments) + 1 - len(rest)
-        current = _key_qname(owner)
-        for index, name in enumerate(rest, start):
-            reached = self._type_owners.owner(current)
-            if reached is None:
-                return Reading()
-            table = reached
-            error = self._owner_member_error(table, chain, index, name)
-            if error is not None:
-                return Reading(refusals=(error,))
-            if (table.target is not None or table.builtin is not None) and not (
-                index == len(segments)
-                and (name in table.members or table.select(name, segments[-1].name) is not None)
-            ):
-                return self._beneath_alias(
-                    current, table, rest[index - start :], layer, chain, kind, routed=routed
-                )
-            current = (current[0], _bare_atom((*_bare_path(current[1]), name)))
-        if (table.alias is None and name in table.members) or self._type_owners.is_declared(
-            current
-        ):
-            return Reading()
-        return self._selected_constructor(table, current, layer, chain)
-
     @staticmethod
     def _selected_constructor(
         table: TypeOwner, member: QName, layer: ContributionLayer, chain: QualifierChain
@@ -1086,7 +743,7 @@ class ModuleSources(SourcesHost):
         target's member table selects for a path of several names as for the
         target's spelling (``Geo::In::In`` as ``Base::In::In``) -- for one
         name, the alias's own table, holding its target's members, names and
-        refusals, has decided (:meth:`_selected_by_table`); a path a
+        refusals, has decided (:meth:`projected`); a path a
         ``hiding`` at the alias's site removed is refused. An alias only a module route reached
         (*routed*) reads what that route reaches at the target's path too
         (``al::Geo::u`` as ``al::Base::u``, re-exports included).
@@ -1105,7 +762,7 @@ class ModuleSources(SourcesHost):
             return self._hidden_beneath(chain, path)
         if reach.target is None or len(path) == 1:
             return stood
-        return stood + self._selected_by_table(
+        return stood + self.projected(
             _qname_decl_key(reach.target), layer, path, chain, kind, routed=routed
         )
 
@@ -1208,9 +865,8 @@ class ModuleSources(SourcesHost):
 
         This module's own declaration at *qname* wins, whether *qname* names
         its own type or an imported one. Failing that: another module's --
-        the one it declares there, however spelled, and the one each of
-        *sites* writes declared there (:meth:`declared_path`), including a
-        foreign module writing a member beneath a type this module owns.
+        the one it declares there, and the one each of *sites* declares at
+        its spelling there (:meth:`~TypeOwnerIndex.site_spelling`).
         """
         module_id, atom = qname
         if module_id == self._module_id:
@@ -1223,13 +879,11 @@ class ModuleSources(SourcesHost):
             if own.candidates or not sites:
                 return own
         declared = [qname] if qname in self._decl_info else []
-        # A site writing a declaration at *qname*'s path, however it is
-        # spelled there, keys it at that one declared path in its own module.
         declared.extend(
-            (site, atom)
+            spelled
             for site in sites
             if site not in (module_id, self._module_id)
-            and () in self._type_owners.written_beneath(site, qname)
+            and (spelled := self._type_owners.site_spelling(site, qname)) in self._decl_info
         )
         candidates = (
             Candidate(
@@ -1298,19 +952,6 @@ class ModuleSources(SourcesHost):
             arity = parameter[1] if application is None else application.arity
             application = Application(_qname_decl_key(projected), arity)
         return application
-
-    def structural(self, key: DeclarationKey) -> TypeExpr | None:
-        """The structural type type *key* is an alias of, if it is one; it hosts no paths."""
-        owners = self._type_owners
-        reached = owners.owner(owners.identity(_key_qname(key)))
-        if (
-            reached is None
-            or reached.alias is None
-            or reached.target is not None
-            or reached.builtin is not None
-        ):
-            return None
-        return reached.stands_for
 
     def applies(self, key: DeclarationKey) -> bool:
         """Whether type *key* is an alias applying its target to type arguments of its own."""
@@ -1471,41 +1112,24 @@ class ModuleSources(SourcesHost):
     def identity(self, key: DeclarationKey) -> DeclarationKey:
         """The declaration *key* names: a renaming alias's is its target's.
 
-        A path beneath an alias is its target's path there, unless this
-        module declares it so.
+        A path beneath an alias is its target's path there: nothing is
+        declared beneath an alias of the module's own.
         """
-        return _qname_decl_key(self._type_owners.identity(self._identity_path(key)))
-
-    def _identity_path(self, key: DeclarationKey) -> QName:
-        """The full path whose identity *key*'s is (:meth:`identity`)."""
-        module_id, path, name = key
-        qname = _key_qname(key)
-        node = self._scope_nodes.get(path) if module_id == self._module_id else None
-        if node is None or name not in node.members:
-            return self._type_owners.path_target(qname)
-        return qname
+        return _qname_decl_key(self._type_owners.declaration(_key_qname(key)))
 
     def denotes(self, key: DeclarationKey) -> object:
         """What *key* names in an ambiguity: its identity, or what an alias denotes there."""
         denoted = self._type_owners.denotation(_key_qname(key))
         return self.identity(key) if denoted is None else denoted
 
-    def placement(self, key: DeclarationKey) -> DeclarationKey:
-        """See :meth:`~agm.agl.scope.lookup.DeclarationNames.placement`.
-
-        As :meth:`identity`, an own declaration is placed by this module's
-        scope paths alone.
-        """
-        module_id, path, name = key
-        node = self._scope_nodes.get(path) if module_id == self._module_id else None
-        if node is None or name not in node.members:
-            return _qname_decl_key(self._type_owners.placement(_key_qname(key)))
-        declared = self.declared_path((*path, name))
-        return key if declared is None else _qname_decl_key(declared)
-
     def scopes_of(self, key: DeclarationKey) -> frozenset[DeclarationKey]:
         """See :meth:`~agm.agl.scope.lookup.DeclarationNames.scopes_of`."""
         return frozenset(map(_qname_decl_key, self._type_owners.scopes_of(_key_qname(key))))
+
+    def spelled_scope(self, module: ModuleId, key: DeclarationKey) -> DeclarationKey | None:
+        """See :meth:`~agm.agl.scope.lookup.DeclarationNames.spelled_scope`."""
+        spelled = self._type_owners.spelled_scope(module, _key_qname(key))
+        return None if spelled is None else _qname_decl_key(spelled)
 
     def aliases(self, key: DeclarationKey) -> bool:
         """Whether *key* declares a type alias."""
@@ -1729,7 +1353,7 @@ class ModuleSources(SourcesHost):
         return frozenset(
             self.identity(key)
             for kind in LookupKind
-            for candidate in self._selected_by_table(
+            for candidate in self.projected(
                 _qname_decl_key(alias),
                 ContributionLayer.IMPORTED,
                 beneath,

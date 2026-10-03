@@ -33,9 +33,14 @@ _REJECTED: tuple[Phase, type[BaseException] | type[None]] = ("scope", TypeArgume
 _OWNERS = {
     "enum": "enum E[T]\n  | A(a: T)\n  | B\nrecord E::Inner\n  x: int",
     "record": "record E[T]\n  v: T\nrecord E::Inner\n  x: int",
-    "record-alias": "record Box[T]\n  v: T\ntype E[T] = Box[T]\nrecord E::Inner\n  x: int",
-    "enum-alias": "enum F[T]\n  | A(a: T)\n  | B\ntype E[T] = F[T]\nrecord E::Inner\n  x: int",
+    "record-alias": "import al::*\nrecord E::Inner\n  x: int",
+    "enum-alias": "import fl::*\nrecord E::Inner\n  x: int",
 }
+_ALIASES = {
+    "al": "record Box[T]\n  v: T\ntype E[T] = Box[T]",
+    "fl": "enum F[T]\n  | A(a: T)\n  | B\ntype E[T] = F[T]",
+}
+"""Imported aliases ``E`` an owner declares its ``E::Inner`` beneath."""
 
 _APPLIED_PROBES = {
     "call": "E[int]::Inner(x = 1)",
@@ -51,8 +56,8 @@ _PLAIN_PROBES = {
     "pattern": "let i = E::Inner(x = 1)\ncase i of\n  | E::Inner(x) => x",
     "annotation": "fn(p: E::Inner) => p.x",
 }
-_DECLARED_OWNERS = {"enum": "E", "record": "E", "record-alias": "Box", "enum-alias": "F"}
-"""The type each owner's ``E::Inner`` is declared beneath."""
+_DECLARED_OWNERS = {"enum": "E", "record": "E", "record-alias": "E", "enum-alias": "E"}
+"""The path each owner's ``E::Inner`` is declared beneath."""
 
 
 def _plain_identities(owner: str) -> dict[str, str]:
@@ -71,7 +76,7 @@ class TestNestedDeclarationBeneathAnAppliedOwner:
     def test_applied_owner_is_rejected(self, tmp_path: Path, owner: str) -> None:
         assert_verdicts(
             tmp_path,
-            {},
+            _ALIASES,
             (_OWNERS[owner],),
             probe_table(
                 _APPLIED_PROBES,
@@ -84,7 +89,7 @@ class TestNestedDeclarationBeneathAnAppliedOwner:
     def test_bare_owner_path_is_accepted(self, tmp_path: Path, owner: str) -> None:
         assert_verdicts(
             tmp_path,
-            {},
+            _ALIASES,
             (_OWNERS[owner],),
             probe_table(
                 _PLAIN_PROBES,

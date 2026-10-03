@@ -481,7 +481,7 @@ _SCENARIOS = {
         modules=_MODULES,
         header=("import al::*",),
         probes={
-            "receiver": accepted("def Geo::m(self) -> int = self.x\nGeo(x = 2).m()", "int"),
+            "receiver": rejected("def Geo::m(self) -> int = self.x", AglScopeError, "self"),
             "receiver-like-its-target": accepted(
                 "def Base::m(self) -> int = self.x\nBase(x = 2).m()", "int"
             ),
@@ -575,10 +575,9 @@ _SCENARIOS["an-item-naming-an-alias-of-an-enum-injects-its-referenced-members"] 
 
 _DECLARING_BENEATH = (
     "import base\nimport base::*\nexport base::{Base}\ntype Geo = base::Base\n"
-    "def Base::h() -> int = 3\ndef Geo::k() -> int = 4\n"
-    "type T2 = text\ntype U = text\ndef text::lt() -> int = 1\ndef T2::lu() -> int = 2\n"
+    "def Base::h() -> int = 3\ntype T2 = text\ntype U = text\ndef text::lt() -> int = 1\n"
 )
-"""Declares beneath ``base``'s ``Base`` and beneath ``text``, directly and through aliases."""
+"""Declares beneath ``base``'s ``Base`` and beneath ``text``, beside aliases of both."""
 
 
 def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
@@ -592,11 +591,9 @@ def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
             for routed, qualifier in (("", ""), ("-routed", f"{route}::"))
             for name, path in {
                 "direct": "Base::h",
-                "through-the-alias": "Base::k",
-                "by-the-alias": "Geo::k",
+                "by-the-alias": "Geo::h",
                 "beneath-a-builtin": "text::lt",
-                "beneath-a-builtin-through-the-alias": "text::lu",
-                "beneath-a-builtin-by-the-alias": "T2::lu",
+                "beneath-a-builtin-by-the-alias": "T2::lt",
             }.items()
         },
         "target": rejected("fn(x: Base) => x", AglTypeError, "Base"),
@@ -610,6 +607,15 @@ _SCENARIOS |= {
         modules={"base": _BASE, "ad": _DECLARING_BENEATH},
         header=("import ad::* hiding Geo, T2\nimport ad hiding Geo, T2",),
         probes=_beneath_hidden_alias_probes("ad"),
+    ),
+    "hiding-a-target-removes-what-its-module-declares-beneath-it-through-its-aliases": Scenario(
+        modules={"base": _BASE, "ad": _DECLARING_BENEATH},
+        header=("import ad::* hiding Base\nimport ad hiding Base",),
+        probes={
+            f"{name}{routed}": rejected(f"{qualifier}{path}()", HiddenMemberError, qualifier + path)
+            for routed, qualifier in (("", ""), ("-routed", "ad::"))
+            for name, path in (("direct", "Base::h"), ("by-the-alias", "Geo::h"))
+        },
     ),
     "an-export-hiding-an-alias-removes-what-its-module-declares-beneath-the-target": Scenario(
         modules={
@@ -635,14 +641,16 @@ _ITEMS = {
 def _placing(target: str) -> str:
     """Module ``pl``: aliases of ``base``'s ``Base`` (spelled *target*), ``text`` and ``array``.
 
-    It declares ``j`` and the member of :data:`_PLACED` beneath each, through the alias.
+    It declares ``j`` and the member of :data:`_PLACED` beneath each alias's target.
     """
     aliases = {"G": target, "T2": "text", "Arr[E]": "array[E]"}
-    return "import base\nimport base::*\n" + "".join(
-        f"type {alias} = {aliased}\n"
-        f"def {name}::{_PLACED[name][1]}() -> int = 2\ndef {name}::j() -> int = 4\n"
-        for alias, aliased in aliases.items()
-        for name in (alias.partition("[")[0],)
+    return (
+        "import base\nimport base::*\n"
+        + "".join(f"type {alias} = {aliased}\n" for alias, aliased in aliases.items())
+        + "".join(
+            f"def {aliased}::{member}() -> int = 2\ndef {aliased}::j() -> int = 4\n"
+            for aliased, member in _PLACED.values()
+        )
     )
 
 
@@ -719,6 +727,30 @@ _SCENARIOS |= {
     for target, placing in _PLACING.items()
     for spelled, items in _ITEMS.items()
 }
+
+_SCENARIOS["an-export-item-through-an-alias-reaches-what-its-module-declares-at-the-target"] = (
+    Scenario(
+        modules={
+            "base": _BASE,
+            "ps": (
+                "import base::*\ntype G = Base\n\n"
+                "scope Base::S\n  def s() -> int = 5\nend Base::S\n"
+            ),
+            "po": (
+                "import base\ntype G = base::Base\nrecord Base\n  z: int\n"
+                "def Base::h() -> int = 9\n"
+            ),
+            "ex": "import ps\nimport po\nexport ps::{G::S}\nexport po::{G::Inner}\n",
+        },
+        header=(_ROUTES,),
+        probes={
+            "a-scope-beneath-the-target": accepted("G::S::s()", "int"),
+            "a-scope-beneath-the-target-routed": accepted("ex::G::S::s()", "int"),
+            "beside-an-own-type-named-as-the-target": accepted("G::Inner(y = 1)", _INNER),
+            "own-type-path-unreached": rejected("G::h()", UnknownMemberError, "G::h"),
+        },
+    )
+)
 
 
 _REFERENCING = "record Box::Item\n  n: int\nenum Box = Empty | Box::Item"
@@ -1173,12 +1205,15 @@ _DENOTING_A = (
     "import gen::*\ntype IntBox = Box[int]\ntype F = int -> bool\ntype P = Box[path]\n"
     "type IntOpt = Opt[int]\ntype Arr = array[int]\ntype G[T] = Box[array[T]]\n"
     "type Txt = text\ntype Pair = dict[text, int]\ntype Bx = Box[int]\ntype R = Box[int]\n"
+    "type GA = G[int]\ntype Dk[V] = Box[dict[text, V]]\ntype DA = Dk[int]\n"
+    "type Fk[V] = Box[V -> bool]\ntype FA = Fk[int]\n"
 )
 _DENOTING_B = (
     "import gen::*\ntype B2[T] = Box[T]\ntype IntBox = B2[int]\ntype F = int -> bool\n"
     "type P = Box[text]\ntype IntOpt = Opt[int]\ntype Arr = array[int]\n"
     "type G[U] = Box[array[U]]\ntype Txt = path\ntype Pair = dict[text, bool]\n"
-    "type Bx[T] = Box[T]\nrecord R\n  v: int\n"
+    "type Bx[T] = Box[T]\nrecord R\n  v: int\ntype GA = Box[array[int]]\n"
+    "type DA = Box[dict[text, int]]\ntype FA = Box[int -> bool]\n"
 )
 """Same-named aliases: most denote one type (through a generic alias, ``path`` = ``text``,
 parameters renamed), ``Pair``, ``Bx`` and ``R`` distinct ones."""
@@ -1200,6 +1235,15 @@ _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
         "enum-member": accepted("IntOpt::Some(v = 1)", "record gen::Opt::Some[int]\n  v: int"),
         "array": accepted("fn(p: Arr) => p", "array[int] -> array[int]"),
         "generic": accepted("fn(p: G[int]) => p.v", "gen::Box[array[int]] -> array[int]"),
+        "generic-applied-by-an-alias": accepted(
+            "fn(p: GA) => p.v", "gen::Box[array[int]] -> array[int]"
+        ),
+        "generic-dict-applied-by-an-alias": accepted(
+            "fn(p: DA) => p.v", "gen::Box[dict[text, int]] -> dict[text, int]"
+        ),
+        "generic-function-applied-by-an-alias": accepted(
+            "fn(p: FA) => p.v(1)", "gen::Box[int -> bool] -> bool"
+        ),
         "builtin-alias": accepted("fn(p: Txt) => p", "text -> text"),
         "distinct-arguments-clash": rejected(
             "fn(p: Pair) => p", AmbiguousQualificationError, "Pair"
@@ -1246,7 +1290,10 @@ _SCENARIOS["a-generic-alias-normalizing-its-arguments-renames-its-target"] = Sce
     header=("import nm::*", "import g3::*"),
     probes={
         "reads-the-target": accepted("B3::g()", "int"),
-        "declares-at-the-target": accepted("def B3::k() -> int = 1\nBox::k()", "int"),
+        "declares-at-its-written-path": accepted("def B3::k() -> int = 1\nB3::k()", "int"),
+        "the-target-reaches-nothing-declared-beneath-the-alias": rejected(
+            "def B3::k() -> int = 1\nBox::k()", UnknownMemberError, "Box::k"
+        ),
         "one-type": accepted("(fn(b: B3[int]) => b.v)(Box(v = 1))", "int"),
         "enum-member": accepted("O3::Som(v = 1)", _SOM),
         "bare-enum-member": accepted("Som(v = 1)", _SOM),
@@ -1471,9 +1518,7 @@ _SCENARIOS["an-alias-reaches-what-its-reader-imports-beneath-the-target-path"] =
     probes={
         "forwarded": accepted("import fw::*\nGeo::free()", "int"),
         "forwarded-through-an-alias": accepted("import fg::*\nGeo::free()", "int"),
-        "forwarded-by-a-route": rejected(
-            "import fg\nfg::Geo::free()", UnknownMemberError, "fg::Geo::free"
-        ),
+        "forwarded-by-a-route": accepted("import fg\nfg::Geo::free()", "int"),
         "declared": accepted("import nb::*\nGeo::k()", "int"),
         "own-alias": accepted("import nb::*\ntype OG = Base\nOG::k()", "int"),
         "own-alias-of-own-root": rejected(

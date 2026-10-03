@@ -1,8 +1,8 @@
-# Library module completing the cycle with `a`. Its alias `G` of `a`'s own
-# `Base` hosts a declaration keyed beneath `Base`'s declared path, read back
-# across the cycle by `a`'s own function.
+# Library module completing the cycle with `a`. Beside its alias `G` of `a`'s
+# own `Base`, it declares a function at that type's path, read back across the
+# cycle by `a`'s own function through the alias.
 import a::*
 
 type G = Base
 
-def G::h() -> int = 2
+def Base::h() -> int = 2

@@ -10,7 +10,7 @@
         "y": 2
       },
       "expect": {
-        "stdout": "110\n6\n14\n21\n",
+        "stdout": "103\n6\n10\n19\n",
         "calls": {}
       }
     },
@@ -24,7 +24,7 @@
         "y": -4
       },
       "expect": {
-        "stdout": "119\n-12\n17\n30\n",
+        "stdout": "112\n-12\n13\n28\n",
         "calls": {}
       }
     },
@@ -38,7 +38,7 @@
         "y": 2
       },
       "expect": {
-        "stdout": "112\n6\n14\n23\n",
+        "stdout": "105\n6\n10\n21\n",
         "calls": {}
       }
     },
@@ -52,7 +52,7 @@
         "y": -4
       },
       "expect": {
-        "stdout": "139\n-12\n17\n50\n",
+        "stdout": "132\n-12\n13\n48\n",
         "calls": {}
       }
     }

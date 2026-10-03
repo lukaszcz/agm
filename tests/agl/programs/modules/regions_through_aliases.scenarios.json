@@ -9,7 +9,7 @@
         "side": 2
       },
       "expect": {
-        "stdout": "12 15 21 21\ntrue 2\n3\n"
+        "stdout": "12 15 21 12\ntrue 2\n3\n"
       }
     },
     {
@@ -21,7 +21,7 @@
         "side": 5
       },
       "expect": {
-        "stdout": "30 36 51 51\nfalse 2\n3\n"
+        "stdout": "30 36 51 30\nfalse 2\n3\n"
       }
     }
   ]

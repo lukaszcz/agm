@@ -363,7 +363,9 @@ _SCENARIOS = {
             "routed": accepted("ex::Geo::Inner(y = 1)", _INNER),
             "routed-rename": accepted("ex::I(y = 1)", _INNER),
             "alias-not-exposed": rejected("Geo(x = 1)", AglScopeError, "Geo"),
-            "info": info("I", "I is a constructor.\nSignature:\n  I(y: int) -> base::Base::Inner"),
+            "info": info(
+                "I", "I is a constructor.\nSignature:\n  Base::Inner(y: int) -> base::Base::Inner"
+            ),
         },
     ),
     "an-export-hiding-names-a-path-through-an-alias": Scenario(
@@ -1368,7 +1370,7 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
         ),
         "reached-beneath-at-the-alias-site": accepted("V2::sub::yy()", "int"),
         "info": info(
-            "T2::size", "T2::size is a function.\nSignature:\n  def T2::size(self: text) -> int"
+            "T2::size", "T2::size is a function.\nSignature:\n  def text::size(self: text) -> int"
         ),
     },
 )

@@ -210,16 +210,13 @@ def _format_repl_location(span: "SourceSpan") -> str:
     return f"{label}:{span.start_line}:{span.start_col}"
 
 
-def _info_spelling(
-    name: str, module_id: "ModuleId", scope_path: tuple[str, ...], decl_name: str
-) -> str:
-    """How ``:info name`` names the declaration *name* selects, at *scope_path*/*decl_name*.
+def _declared_spelling(scope_path: tuple[str, ...], decl_name: str) -> str:
+    """How ``:info`` names a declaration: its path *scope_path*/*decl_name* in its module.
 
-    A session declaration by the path it is declared at, as its type
-    displays (``def Base::h`` for ``def G::h`` with ``type G = Base``); any
-    other as *name* spells it.
+    Never the queried spelling nor module-qualified (``def Base::h`` for
+    ``G::h`` with ``type G = Base``, ``def print`` for ``log::print``).
     """
-    return "::".join((*scope_path, decl_name)) if module_id.is_entry else name
+    return "::".join((*scope_path, decl_name))
 
 
 def _format_repl_signature(signature: "FunctionSignature") -> str:
@@ -241,13 +238,19 @@ def _format_info_section(label: str, code: str, location: str | None = None) -> 
     return f"{label}:\n{indented_code}{location_line}"
 
 
-def _format_constructor_signature(name: str, signature: "ConstructorSignature") -> str:
-    """Render one constructor's AgL call signature for ``:info``."""
+def _format_constructor_signature(signature: "ConstructorSignature") -> str:
+    """Render one constructor's AgL call signature for ``:info``, headed by its declared path.
+
+    The path is the constructed record's or exception's (``Src::Mem`` for
+    ``C::Mem`` with ``type C = Src[int]``).
+    """
+    result = signature.result_template
+    name = _declared_spelling(result.scope_path, result.name)
     generic = f"[{', '.join(signature.type_params)}]" if signature.type_params else ""
     params = ", ".join(
         f"{field}: {typ!r}" for field, typ in zip(signature.field_names, signature.field_templates)
     )
-    return f"{name}{generic}({params}) -> {signature.result_template!r}"
+    return f"{name}{generic}({params}) -> {result!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1668,7 +1671,7 @@ class ReplSession:
             else None
         )
         if ref is not None and ref.kind.value != "constructor_binding":
-            declared = _info_spelling(name, ref.module_id, ref.scope_path, ref.name)
+            declared = _declared_spelling(ref.scope_path, ref.name)
             type_env = self._info_type_env(ref.module_id)
             signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
@@ -1714,7 +1717,7 @@ class ReplSession:
             (
                 f"{name} is a constructor.",
                 _format_info_section(
-                    "Signature", _format_constructor_signature(name, constructor_signature)
+                    "Signature", _format_constructor_signature(constructor_signature)
                 ),
             )
         )
@@ -1804,7 +1807,7 @@ class ReplSession:
         """
         from agm.agl.repl.type_display import (
             format_generic_type_def_for_repl,
-            format_type_for_repl,
+            format_type_def_for_repl,
         )
         from agm.agl.syntax.types import render_type_expr
 
@@ -1812,7 +1815,7 @@ class ReplSession:
         if key is None:
             return None
         module_id, scope_path, decl_name = key
-        declared = _info_spelling(name, module_id, scope_path, decl_name)
+        declared = _declared_spelling(scope_path, decl_name)
         alias = self._alias_declaration(key)
         if alias is not None:
             params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
@@ -1827,14 +1830,13 @@ class ReplSession:
             else None
         )
         type_env = self._info_type_env(module_id)
-        local_name = "::".join((*scope_path, decl_name))
         described = module_id.is_entry or reference.constructor is None
-        typ = type_env.get_type(local_name) if described else None
+        typ = type_env.get_type(declared) if described else None
         if typ is not None:
-            definition = format_type_for_repl(typ, self._type_env.type_table)
+            definition = format_type_def_for_repl(declared, typ, self._type_env.type_table)
             display = _format_info_section("Type", definition, location)
             return f"{name} is {_indefinite(typ.kind)} type.\n{display}"
-        generic = type_env.get_generic_type(local_name)
+        generic = type_env.get_generic_type(declared)
         if generic is None:
             return None
         definition = format_generic_type_def_for_repl(declared, generic, self._type_env.type_table)

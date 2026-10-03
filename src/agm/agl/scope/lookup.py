@@ -786,12 +786,29 @@ class _Walk:
         (:meth:`_beside`). When *injects*, a module qualifier's surface adds
         the enum member it injects.
         """
-        names = self._names
-        reading = step.read((*step.path, *names), kind)
+        reading = step.read((*step.path, *self._names), kind)
         chain = self._chain
         if chain is None:
             return reading
-        for count in range(step.start + 1, len(names)):
+        reading += self._through_prefixes(step, chain, kind, owners_within)
+        if (
+            injects
+            and kind is not LookupKind.TYPE
+            and not reading.candidates
+            and _is_module_qualifier(chain, step)
+        ):
+            reading += self._sources.surface_injected(chain, self._names[-1])
+        return reading
+
+    def _through_prefixes(
+        self, step: _Step, chain: QualifierChain, kind: LookupKind, owners_within: int
+    ) -> Reading:
+        """What each written prefix selects beneath it for the rest of the path.
+
+        As :meth:`_reading` reads it, *owners_within* as there.
+        """
+        reading = Reading()
+        for count in range(step.start + 1, len(self._names)):
             owners = self._owners(step, count)
             for owner in owners:
                 key = owner.target.key
@@ -804,13 +821,6 @@ class _Walk:
                     reading += _reached_as(
                         self._beside(step, standing, count, chain, kind), standing.owner
                     )
-        if (
-            injects
-            and kind is not LookupKind.TYPE
-            and not reading.candidates
-            and _is_module_qualifier(chain, step)
-        ):
-            reading += self._sources.surface_injected(chain, self._names[-1])
         return reading
 
     def _owners(self, step: _Step, count: int) -> tuple[Candidate, ...]:
@@ -1001,13 +1011,13 @@ class _Walk:
         for index in range(step.start, len(segments)):
             segment = segments[index]
             last = index == len(segments) - 1
-            prefix = (*step.path, *self._names[: index + 1])
-            owners = self._unremoved(
-                Reading(
-                    self._owners(step, index + 1)
-                    or tuple(standing.owner for standing in self._standing(index + 1))
-                )
-            ).candidates
+            owners = self._selecting(
+                chain,
+                step,
+                index + 1,
+                self._owners(step, index + 1)
+                or tuple(standing.owner for standing in self._standing(index + 1)),
+            )
             selected = _decided(owners, self._sources.denotes)
             applied = segment.type_args is not None or (
                 isinstance(selected, Candidate)
@@ -1021,7 +1031,14 @@ class _Walk:
                 target
                 if last
                 else _decided(
-                    self._unremoved(step.read((*prefix, member), LookupKind.TYPE)).candidates,
+                    self._selecting(
+                        chain,
+                        step,
+                        index + 2,
+                        step.read(
+                            (*step.path, *self._names[: index + 2]), LookupKind.TYPE
+                        ).candidates,
+                    ),
                     self._sources.denotes,
                 )
             )
@@ -1056,6 +1073,39 @@ class _Walk:
             if owner is None
             else replace(target, owner=OwnerMemberSelection(owner, self._names[-1]))
         )
+
+    def _selecting(
+        self, chain: QualifierChain, step: _Step, count: int, selecting: tuple[Candidate, ...]
+    ) -> tuple[Candidate, ...]:
+        """The types the first *count* names of *chain* select at *step*, unremoved.
+
+        *selecting*, those they reach; failing that, what an alias a shorter
+        prefix past the step's module route reaches selects beneath it, as
+        for its target's spelling. Where no shorter prefix reaches a type,
+        nothing is beneath one.
+        """
+        if not selecting and any(
+            self._owners(step, shorter) or self._standing(shorter)
+            for shorter in range(step.start + 1, count)
+        ):
+            prefix = replace(
+                chain, segments=chain.segments[: count - 1], member=self._names[count - 1]
+            )
+            walk = _Walk(
+                self._sources,
+                self._site,
+                (step,),
+                self._route,
+                prefix,
+                self._names[:count],
+                self._span,
+            )
+            # The prefixes it reads are this walk's own.
+            walk._reached = self._reached
+            selecting = walk._through_prefixes(
+                step, prefix, LookupKind.TYPE, owners_within=step.start
+            ).candidates
+        return self._unremoved(Reading(selecting)).candidates
 
     def _ambiguous(
         self, candidates: tuple[Candidate, ...], names: ScopePath, span: SourceSpan
@@ -1132,10 +1182,16 @@ def _decided(
     if len(competing) == 1:
         # A lone candidate is selected without reading what it names.
         return competing[0]
+    # Each declaration is read once, however often it is reached.
+    identities = {
+        key: identity(key)
+        for key in {candidate.target.key for candidate in competing}
+        if key is not None
+    }
     distinct: dict[object, list[Candidate]] = {}
     for candidate in competing:
         target = candidate.target
-        key = target.constructor if target.key is None else identity(target.key)
+        key = target.constructor if target.key is None else identities[target.key]
         distinct.setdefault(key, []).append(candidate)
     if len(distinct) > 1:
         return tuple(candidate for reached in distinct.values() for candidate in reached)

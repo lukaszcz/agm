@@ -87,7 +87,6 @@ from agm.agl.scope.symbols import qname_declaration as _qname_decl_key
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
-    MemberHidden,
     MemberReferenced,
     is_nominal_type_expr,
     owner_member_selection,
@@ -490,20 +489,22 @@ class ModuleSources(SourcesHost):
 
     @staticmethod
     def _owner_member_error(
-        owner: TypeOwner, spelling: str, member: str, span: SourceSpan | None
+        owner: TypeOwner, chain: QualifierChain, count: int, member: str
     ) -> AglError | None:
-        """Return why ``spelling::member`` is unreachable through *owner*'s own member table.
+        """Return why *member* is unreachable through *owner*'s own member table.
 
-        A :class:`ReferencedMemberError` for a member *owner* only
-        references, a :class:`HiddenMemberError` for one its alias's import
-        hides; ``None`` when the member is neither.
+        *chain*'s first *count* segments spell the owner. A
+        :class:`ReferencedMemberError` for a member *owner* only references,
+        a :class:`HiddenMemberError` for one its alias's import hides;
+        ``None`` when the member is neither.
         """
         selection = owner_member_selection(owner, member)
+        if selection is None:
+            return None
+        spelling = render_qualifier_path(replace(chain, segments=chain.segments[:count]))
         if isinstance(selection, MemberReferenced):
-            return ReferencedMemberError(spelling, member, span=span)
-        if isinstance(selection, MemberHidden):
-            return HiddenMemberError(spelling, member, span=span)
-        return None
+            return ReferencedMemberError(spelling, member, span=chain.span)
+        return HiddenMemberError(spelling, member, span=chain.span)
 
     def _reachable_decl_contributions[T](
         self, table: Mapping[int, Mapping[NameAtom, frozenset[T]]], path: ScopePath
@@ -1022,8 +1023,7 @@ class ModuleSources(SourcesHost):
             if reached is None:
                 return Reading()
             table = reached
-            spelling = render_qualifier_path(replace(chain, segments=segments[:index]))
-            error = self._owner_member_error(table, spelling, name, chain.span)
+            error = self._owner_member_error(table, chain, index, name)
             if error is not None:
                 return Reading(refusals=(error,))
             if (table.target is not None or table.builtin is not None) and not (
@@ -1037,6 +1037,7 @@ class ModuleSources(SourcesHost):
         if (table.alias is None and name in table.members) or self._type_owners.is_declared(
             current
         ):
+            spelling = render_qualifier_path(chain)
             return Reading(refusals=(HiddenMemberError(spelling, name, span=chain.span),))
         return self._selected_constructor(table, current, layer, chain)
 
@@ -1066,12 +1067,16 @@ class ModuleSources(SourcesHost):
         """What *path* beneath *alias* (whose owner is *table*) selects as a declaration of *kind*.
 
         An alias segment stands for its target's path, where the modules
-        declaring the aliases on the way reach what they declare too; a path
-        a ``hiding`` at the alias's site removed is refused. An alias of a
-        built-in type stands for each of its :attr:`~TypeOwner.scopes`, and,
-        unless only a module route reached it (*routed*), for this module's
-        own path its name spells, however this module spells the declarations
-        beneath.
+        declaring the aliases on the way reach what they declare too, and the
+        target's member table selects for it as for the target's spelling
+        (``Geo::In::In`` as ``Base::In::In``); a path a ``hiding`` at the
+        alias's site removed is refused. An alias only a module route reached
+        (*routed*) reads what that route reaches at the target's path too
+        (``al::Geo::u`` as ``al::Base::u``, re-exports included).
+        An alias of a built-in type stands for each of its
+        :attr:`~TypeOwner.scopes`, and, unless only a module route reached it
+        (*routed*), for this module's own path its name spells, however this
+        module spells the declarations beneath.
         """
         reach = self._alias_reach(alias, table, path, routed=routed)
         if reach.hidden:
@@ -1079,7 +1084,17 @@ class ModuleSources(SourcesHost):
         readings = [
             self._declared_at(qname, layer, kind, sites=reach.sites) for qname in reach.paths
         ]
-        return sum(readings[1:], readings[0]) if readings else Reading()
+        if routed:
+            readings.extend(
+                self.routed_at(chain, _bare_path(qname[1]), kind) for qname in reach.paths
+            )
+        if reach.target is not None:
+            readings.append(
+                self._selected_by_table(
+                    _qname_decl_key(reach.target), layer, path, chain, kind, routed=routed
+                )
+            )
+        return sum(readings, Reading())
 
     def _alias_reach(
         self, alias: QName, table: TypeOwner, path: ScopePath, *, routed: bool
@@ -1345,7 +1360,11 @@ class ModuleSources(SourcesHost):
         return self._route_hides(chain.leading_route, path, anchored=chain.anchored)
 
     def _route_hides(self, route: tuple[str, ...], path: ScopePath, *, anchored: bool) -> bool:
-        """Whether a ``hiding`` removed *path* from module *route*: it, or an alias above it."""
+        """Whether a ``hiding`` removed *path* from module *route*: it, or an alias above it.
+
+        Beneath an alias the route reaches, so did one removing the target's
+        path it stands for there (``al::Geo::w`` as ``al::Base::w``).
+        """
         env = self._import_env
         return (
             qualifier_hides(env, route, _bare_atom(path), anchored=anchored)
@@ -1354,6 +1373,15 @@ class ModuleSources(SourcesHost):
                 for node_id in qualifier_decls(env, route, anchored=anchored)
             )
             or self._withheld(qualifier_exposures(env, route, anchored=anchored), path)
+            or any(
+                self._route_hides(route, _bare_path(target[1]), anchored=anchored)
+                for end in range(1, len(path))
+                for qname in qualifier_member_decls(
+                    env, route, _bare_atom(path[:end]), anchored=anchored
+                )
+                if (table := self._type_owners.owner(qname)) is not None and table.alias is not None
+                for target in self._alias_reach(qname, table, path[end:], routed=True).paths
+            )
         )
 
     def reader(self) -> Reader:

@@ -169,12 +169,16 @@ class AliasReach(NamedTuple):
     ``paths`` are the full paths it stands for; ``sites`` the modules
     declaring the aliases on the way, the nearest first, each of which may
     write a declaration there (:meth:`TypeOwnerIndex.written_beneath`);
-    ``hidden`` whether a ``hiding`` at one of those aliases' sites removed it.
+    ``hidden`` whether a ``hiding`` at one of those aliases' sites removed it;
+    ``target`` the type whose member table the target's spelling reads the
+    path beneath (the alias of its own it renames, else the type its chain
+    ends at), if any.
     """
 
     paths: tuple[QName, ...]
     sites: tuple[ModuleId, ...]
     hidden: bool
+    target: QName | None = None
 
 
 class AliasChain(NamedTuple):
@@ -532,48 +536,42 @@ class TypeOwnerIndex:
                 (),
                 table.hides(path),
             )
-        beneath = self._target_beneath(alias, table, path)
-        if beneath is None:
-            return AliasReach((), (), False)
-        qname, hidden, sites, renamed = beneath
-        if renamed is None:
-            return AliasReach((qname,), sites, hidden)
-        module_id, atom = renamed
-        return AliasReach(((module_id, _atom((*_path(atom), *path))), qname), sites, hidden)
+        return self._target_beneath(alias, table, path)
 
-    def _target_beneath(
-        self, alias: QName, table: TypeOwner, path: ScopePath
-    ) -> tuple[QName, bool, tuple[ModuleId, ...], QName | None] | None:
-        """Return the full path *path* beneath alias *alias* stands for, if it is hidden, its sites.
+    def _target_beneath(self, alias: QName, table: TypeOwner, path: ScopePath) -> AliasReach:
+        """Return the full paths *path* beneath alias *alias* stands for, if hidden, and its sites.
 
         *table* is what *alias* selects. *path* is read beneath the type the
-        alias chain ends at, and a prefix of it there naming another alias
-        stands for that alias's target in turn. It is hidden when a ``hiding``
-        at one of those aliases' sites removed it or a prefix of it. The sites
-        are the modules declaring those aliases, the first passed first.
-        Last, *alias*'s :attr:`AliasChain.renamed`. ``None`` when an alias names
-        no nominal target.
+        alias chain ends at, as that target's path; a prefix of it there
+        naming another alias reaches in turn what that alias does
+        (:meth:`alias_reach`), as the target's path does where it is spelled.
+        An alias renaming another that is a type of its own
+        (:attr:`AliasChain.renamed`) stands for that one's own path first. It
+        is hidden when a ``hiding`` at one of those aliases' sites removed it
+        or a prefix of it. The sites are the modules declaring those aliases,
+        the first passed first. Nothing when *alias* names no nominal target.
         """
-        hidden = False
-        sites: dict[ModuleId, None] = {}
         chain = self.chain(alias)
+        if chain.final is None:
+            return AliasReach((), (), False)
+        hidden = table.hides(path)
         renamed = chain.renamed
-        while True:
-            hidden = hidden or table.hides(path)
-            if chain.final is None:
-                return None
-            for site in chain.sites:
-                sites[site] = None
-            module_id, atom = chain.final
-            base = _path(atom)
-            for end in range(1, len(path)):
-                inner = (module_id, _atom((*base, *path[:end])))
-                inner_table = self.owner(inner)
-                if inner_table is not None and inner_table.alias is not None:
-                    table, path, chain = inner_table, path[end:], self.chain(inner)
-                    break
-            else:
-                return (module_id, _atom((*base, *path))), hidden, tuple(sites), renamed
+        paths = () if renamed is None else ((renamed[0], _atom((*_path(renamed[1]), *path))),)
+        module_id, atom = chain.final
+        base = _path(atom)
+        paths = (*paths, (module_id, _atom((*base, *path))))
+        for end in range(1, len(path)):
+            inner = (module_id, _atom((*base, *path[:end])))
+            inner_table = self.owner(inner)
+            if inner_table is not None and inner_table.alias is not None:
+                reach = self.alias_reach(inner, inner_table, path[end:])
+                return AliasReach(
+                    (*paths, *reach.paths),
+                    (*chain.sites, *(site for site in reach.sites if site not in chain.sites)),
+                    hidden or reach.hidden,
+                    renamed or chain.final,
+                )
+        return AliasReach(paths, chain.sites, hidden, renamed or chain.final)
 
     def names_qualifier(self, qname: QName, sites: Iterable[ModuleId]) -> bool:
         """Whether full path *qname* is a type, or lies above a declaration.
@@ -621,8 +619,7 @@ class TypeOwnerIndex:
             alias = (module_id, _atom(path[:end]))
             owner = self.owner(alias)
             if owner is not None and owner.alias is not None:
-                beneath = self._target_beneath(alias, owner, path[end:])
-                return qname if beneath is None else beneath[0]
+                return next(reversed(self._target_beneath(alias, owner, path[end:]).paths), qname)
         return qname
 
     def identity(self, qname: QName) -> QName:

@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import HiddenMemberError
+from agm.agl.diagnostics import AglError, AglTypeError, HiddenMemberError
+from agm.agl.repl.session import ReplSession
 from agm.agl.scope.symbols import (
     AglScopeError,
     DuplicateDeclarationError,
@@ -28,6 +29,7 @@ from agm.agl.scope.symbols import (
     UnknownMemberError,
     UnknownQualifierError,
 )
+from tests._agl_helpers import repl_session_with_root
 from tests.agl.qualifier_support import (
     Probe,
     Scenario,
@@ -536,6 +538,114 @@ _SCENARIOS |= {
         header=("import pl::*\nimport pz::*",),
         probes=_renamed_type_of_its_own_probes(elsewhere=True),
     ),
+}
+
+_INNER_TYPES_OF_THEIR_OWN = (
+    "record Plain\n  x: int\ndef Plain::pm() -> int = 0\nrecord Base\n  y: int\n"
+    "record Mid\n  z: int\ntype Base::P[T] = Plain\ntype Base::Q[T] = Base::P[T]\n"
+    "type Base::K[T] = int\ntype Mid::P[T] = Plain\ntype Base::M = Mid\n"
+    "def Base::P::m() -> int = 1\ndef Base::Q::q() -> int = 2\ndef Base::K::k() -> int = 3\n"
+    "def Base::P::S::d() -> int = 4\n\nscope Base::P\n  def z() -> int = 5\nend Base::P\n\n"
+    "record Base::P::R\n  b: int\ndef Mid::P::n() -> int = 6"
+)
+"""Aliases beneath ``Base`` that are types of their own, one renamed, and declarations beneath."""
+
+
+def _inner_type_of_its_own_probes() -> dict[str, Probe]:
+    """Each declaration beneath an alias of its own beneath ``Base``, through both spellings."""
+    return {
+        f"{spelling}-{position}": probe
+        for spelling in ("Base", "Geo")
+        for position, probe in {
+            "own-path": accepted(f"{spelling}::P::m()", "int"),
+            "renamed-own-path": accepted(f"{spelling}::Q::m()", "int"),
+            "declared-through-a-renaming-name": accepted(f"{spelling}::Q::q()", "int"),
+            "renamed-through-the-renamed": accepted(f"{spelling}::P::q()", "int"),
+            "of-a-builtin-type": accepted(f"{spelling}::K::k()", "int"),
+            "nested": accepted(f"{spelling}::P::S::d()", "int"),
+            "region": accepted(f"{spelling}::P::z()", "int"),
+            "record": accepted(f"{spelling}::P::R(b = 1).b", "int"),
+            "record-type": accepted(f"(fn(r: {spelling}::P::R) => r.b)(Base::P::R(b = 1))", "int"),
+            "through-a-renaming-alias": accepted(f"{spelling}::M::P::n()", "int"),
+            "target-path": accepted(f"{spelling}::P::pm()", "int"),
+            "undeclared": rejected(
+                f"{spelling}::P::zz()", UnknownMemberError, f"{spelling}::P::zz"
+            ),
+        }.items()
+    }
+
+
+_SCENARIOS |= {
+    f"an-outer-alias-reaches-an-inner-alias-of-its-own-path-{name}": Scenario(
+        modules=modules,
+        header=header,
+        probes=_inner_type_of_its_own_probes(),
+    )
+    for name, modules, header in (
+        ("all-own", {}, (_INNER_TYPES_OF_THEIR_OWN, "type Geo = Base")),
+        (
+            "declared-elsewhere",
+            {"inn": f"{_INNER_TYPES_OF_THEIR_OWN}\n"},
+            ("import inn::*", "type Geo = Base"),
+        ),
+        (
+            "imported-alias",
+            {
+                "inn": f"{_INNER_TYPES_OF_THEIR_OWN}\n",
+                "ia": "import inn::*\nexport inn::{Base}\ntype Geo = Base\n",
+            },
+            ("import ia::*\nimport inn::*",),
+        ),
+    )
+}
+
+_OWNING = (
+    "record Base\n  x: int\nrecord Base::Gen[T]\n  v: T\nrecord Base::In\n  w: int\n"
+    "exception Base::Ex\nenum Base::Opt[T] = Som(v: T) | Non"
+)
+"""Types beneath ``Base`` a constructor is spelled beneath: generic, plain, exception and enum."""
+
+
+def _owner_qualified_probes() -> dict[str, Probe]:
+    """Each type's constructor qualified by its type, through both spellings, in every position."""
+    return {
+        f"{spelling}-{position}": probe
+        for spelling in ("Base", "Geo")
+        for position, probe in {
+            "generic": accepted(f"{spelling}::Gen::Gen(v = 1).v", "int"),
+            "applied-segment": accepted(f"{spelling}::Gen[int]::Gen(v = 1).v", "int"),
+            "applied-segment-arity": rejected(
+                f"{spelling}::Gen[int, int]::Gen(v = 1).v", TypeArgumentsError, "Gen[int, int]"
+            ),
+            "applied-enum-segment": accepted(f"{spelling}::Opt[int]::Som(v = 1).v", "int"),
+            "enum-value": rejected(f"[{spelling}::Opt]", HiddenMemberError, f"{spelling}::Opt"),
+            "plain": accepted(f"{spelling}::In::In(w = 1).w", "int"),
+            "exception": accepted(f'{spelling}::Ex::Ex(message = "m").message', "text"),
+            "pattern": accepted(
+                f"case Base::In(w = 2) of\n  | {spelling}::In::In(w = w) => w", "int"
+            ),
+            "is": accepted(f'Base::Ex(message = "m") is {spelling}::Ex::Ex', "bool"),
+            "type": rejected(
+                f"fn(p: {spelling}::In::In) => p",
+                AglTypeError,
+                f"p: {spelling}::In::In",
+                phase="typecheck",
+            ),
+        }.items()
+    }
+
+
+_SCENARIOS |= {
+    f"an-alias-reaches-a-constructor-qualified-by-its-type-{name}": Scenario(
+        modules={"oq": f"{_OWNING}\n", "oqa": "import oq::*\nexport oq::{Base}\ntype Geo = Base\n"},
+        header=header,
+        probes=_owner_qualified_probes(),
+    )
+    for name, header in (
+        ("own", (_OWNING, "type Geo = Base")),
+        ("imported-target", ("import oq::*", "type Geo = Base")),
+        ("imported-alias", ("import oqa::*",)),
+    )
 }
 
 _CAPTURING = "record X\n  a: int\ntype A[T] = X\ntype C[X] = A[int]\ntype D = C[text]"
@@ -1315,6 +1425,45 @@ for _name, (_header, _target, _spellings) in _RECEIVER_SCENARIOS.items():
             )
         )
 
+_REGION_EXPORTS = {
+    "items": ("util::{u}", {"u": "int", "v": UnknownMemberError, "w": UnknownMemberError}),
+    "renamed": ("util::{u as v}", {"u": UnknownMemberError, "v": "int", "w": UnknownMemberError}),
+    "whole": ("util", {"u": "int", "v": UnknownMemberError, "w": "int"}),
+    "hiding": ("util hiding w", {"u": "int", "v": UnknownMemberError, "w": HiddenMemberError}),
+    "wildcard": ("util/*", {"u": "int", "v": UnknownMemberError, "w": "int"}),
+}
+"""Each export a ``scope Geo`` region writes of ``util``, and what it forwards beneath ``Base``."""
+
+
+def _region_export_probes(
+    route: str, forwarded: dict[str, str | type[AglError]]
+) -> dict[str, Probe]:
+    """What a ``scope Geo`` region's export *forwarded*, and its own ``h``, read after *route*."""
+    return {
+        f"{spelling}-{name}": accepted(f"{route}{spelling}::{name}()", verdict)
+        if isinstance(verdict, str)
+        else rejected(f"{route}{spelling}::{name}()", verdict, f"{route}{spelling}::{name}")
+        for spelling in ("Base", "Geo")
+        for name, verdict in {**forwarded, "h": "int"}.items()
+    }
+
+
+_SCENARIOS |= {
+    f"a-region-through-an-alias-re-exports-beneath-its-target-{form}-{target}-{reader}": Scenario(
+        modules={
+            "base": "record Base\n  x: int",
+            "util": "def u() -> int = 5\ndef w() -> int = 6",
+            "al": f"{declaring}\ntype Geo = Base\n\nscope Geo\n  export {export}\n"
+            "  def h() -> int = 7\nend Geo",
+        },
+        header=(header,),
+        probes=_region_export_probes(route, forwarded),
+    )
+    for form, (export, forwarded) in _REGION_EXPORTS.items()
+    for target, declaring in (("imported", "import base::*"), ("own", "record Base\n  x: int"))
+    for reader, header, route in (("route", "import al", "al::"), ("importer", "import al::*", ""))
+}
+
 _HIDDEN_PATH = (
     "use Sc::* hiding Base::v\n\nscope Sc\n  def Base::v() -> int = 1\nend Sc",
     "record Base\n  x: int",
@@ -1404,6 +1553,76 @@ def test_info_describes_a_declaration_through_either_spelling_by_its_declared_pa
                 f"{spelling}::A is a type alias.\nType:\n  type Base::A[T] = array[T]",
             ),
         },
+    )
+
+
+def _session(tmp_path: Path, modules: dict[str, str], entries: tuple[str, ...]) -> ReplSession:
+    """A REPL session rooted at *tmp_path*, holding *modules*, after *entries*."""
+    for name, source in modules.items():
+        (tmp_path / f"{name}.agl").write_text(f"{source}\n")
+    session = repl_session_with_root(tmp_path)
+    session.open()
+    for entry in entries:
+        assert session.eval_entry(entry).ok
+    return session
+
+
+_DECLARED = (
+    "record Base\n  x: int\ndef Base::g() -> int = 2\nlet Base::v = 5\nrecord Base::Gen[T]\n"
+    "  v: T\ntype Base::A[T] = array[T]\nenum Base::E\n  | P\n  | Q"
+)
+"""A declaration of each kind beneath ``Base``."""
+
+
+@pytest.mark.parametrize("member", ["g", "v", "Gen", "A", "E", "E::P", "Gen::Gen"])
+@pytest.mark.parametrize("spelling", ["Base", "Geo"])
+def test_info_describes_an_imported_declaration_by_its_path_in_its_module(
+    tmp_path: Path, spelling: str, member: str
+) -> None:
+    """As the same declaration in the session, but unlocated and constructing an imported type."""
+    imported = _session(tmp_path, {"decl": _DECLARED}, ("import decl::*", "type Geo = Base"))
+    local = _session(tmp_path, {}, (_DECLARED, "type Geo = Base"))
+
+    described = imported.info_of(f"{spelling}::{member}")
+    declared = local.info_of(f"{spelling}::{member}")
+
+    assert described is not None
+    assert declared is not None
+    assert described.split(" -> ")[0] == declared.split("\nLocation:")[0].split(" -> ")[0]
+
+
+@pytest.mark.parametrize("member", ["Gen::Gen", "In::In", "Ex::Ex", "Opt::Som"])
+@pytest.mark.parametrize(
+    "header",
+    [
+        (_OWNING, "type Geo = Base"),
+        (
+            "record Base\n  x: int",
+            "type Geo = Base",
+            "record Geo::Gen[T]\n  v: T\nrecord Geo::In\n  w: int",
+            "exception Geo::Ex\nenum Geo::Opt[T] = Som(v: T) | Non",
+        ),
+        ("import oq::*", "type Geo = Base"),
+        ("import oqa::*",),
+    ],
+    ids=["own", "declared-through-the-alias", "imported-target", "imported-alias"],
+)
+def test_info_describes_a_constructor_qualified_through_the_alias_as_through_its_target(
+    tmp_path: Path, header: tuple[str, ...], member: str
+) -> None:
+    session = _session(
+        tmp_path,
+        {"oq": _OWNING, "oqa": "import oq::*\nexport oq::{Base}\ntype Geo = Base"},
+        header,
+    )
+
+    described = session.info_of(f"Geo::{member}")
+    declared = session.info_of(f"Base::{member}")
+
+    assert described is not None
+    assert declared is not None
+    assert described.replace(f"Geo::{member}", "N", 1) == declared.replace(
+        f"Base::{member}", "N", 1
     )
 
 

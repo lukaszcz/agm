@@ -228,11 +228,9 @@ def _renamed_type_probes(
         "local-annotation": accepted(
             in_t.format(use=local_use, value="fn(p: M) => p"), f"{local_path} -> {local_path}"
         ),
-        "info-enum": info(
-            "C", "C is an enum type.\nType:\n  enum e::Color\n    | Red\n    | Green"
-        ),
-        "info-record": info("R", "R is a constructor.\nSignature:\n  R(x: int) -> e::Pt"),
-        "info-alias": info("Q", "Q is a type alias.\nType:\n  type Q = Pt"),
+        "info-enum": info("C", "C is an enum type.\nType:\n  enum Color\n    | Red\n    | Green"),
+        "info-record": info("R", "R is a constructor.\nSignature:\n  Pt(x: int) -> e::Pt"),
+        "info-alias": info("Q", "Q is a type alias.\nType:\n  type P = Pt"),
     }
 
 
@@ -725,7 +723,7 @@ _SCENARIOS = {
             ),
             "info-imported-scoped-enum": info(
                 "Agent::Mood",
-                "Agent::Mood is an enum type.\nType:\n  enum M::Agent::Mood\n    | Up\n    | Down",
+                "Agent::Mood is an enum type.\nType:\n  enum Agent::Mood\n    | Up\n    | Down",
             ),
             **type_positions("imported-geo", "Geo", "M::Geo"),
             **type_positions("imported-scoped", "Agent::Mood", "M::Agent::Mood"),
@@ -775,11 +773,11 @@ _SCENARIOS = {
             "info-scoped-value": info_rejected("Agent::f", AmbiguousQualificationError, "Agent::f"),
             "info-type": info_rejected("Geo", AmbiguousConstructorError, "Geo"),
             "info-routed-value": info(
-                "M::Agent::f", "M::Agent::f is a function.\nSignature:\n  def M::Agent::f() -> int"
+                "M::Agent::f", "M::Agent::f is a function.\nSignature:\n  def Agent::f() -> int"
             ),
             "info-unique-scoped-enum": info(
                 "Agent::Mood",
-                "Agent::Mood is an enum type.\nType:\n  enum M::Agent::Mood\n    | Up\n    | Down",
+                "Agent::Mood is an enum type.\nType:\n  enum Agent::Mood\n    | Up\n    | Down",
             ),
         },
     ),
@@ -865,17 +863,18 @@ _SCENARIOS = {
             "own-spelling": accepted("Geo::Geo(x = 1)", "record al::Base\n  x: int"),
             "info-nested": info(
                 "Geo::Inner",
-                "Geo::Inner is a constructor.\nSignature:\n  Geo::Inner(y: int) -> al::Base::Inner",
+                "Geo::Inner is a constructor.\nSignature:\n"
+                "  Base::Inner(y: int) -> al::Base::Inner",
             ),
             "info-function": info(
-                "Geo::f", "Geo::f is a function.\nSignature:\n  def Geo::f() -> int"
+                "Geo::f", "Geo::f is a function.\nSignature:\n  def Base::f() -> int"
             ),
             "info-binding": info(
-                "Geo::b", "Geo::b is a binding.\nBinding:\n  let Geo::b\nType:\n  int\nValue:\n  5"
+                "Geo::b", "Geo::b is a binding.\nBinding:\n  let Base::b\nType:\n  int\nValue:\n  5"
             ),
             "info-nested-enum": info(
                 "Geo::Shape",
-                "Geo::Shape is an enum type.\nType:\n  enum al::Base::Shape\n    | Sq\n    | Ci",
+                "Geo::Shape is an enum type.\nType:\n  enum Base::Shape\n    | Sq\n    | Ci",
             ),
         },
     ),
@@ -1032,10 +1031,10 @@ _SCENARIOS = {
             "unknown-alias-member": rejected("C::Blue", UnknownMemberError, "C::Blue"),
             "info-routed-enum": info(
                 "e::Color",
-                "e::Color is an enum type.\nType:\n  enum e::Color\n    | Red\n    | Green",
+                "e::Color is an enum type.\nType:\n  enum Color\n    | Red\n    | Green",
             ),
             "info-use-alias-member": info(
-                "C::Red", "C::Red is a constructor.\nSignature:\n  C::Red() -> e::Color::Red"
+                "C::Red", "C::Red is a constructor.\nSignature:\n  Color::Red() -> e::Color::Red"
             ),
             "info-unknown-alias-member": info_rejected("C::Blue", UnknownMemberError, "C::Blue"),
         },
@@ -1076,7 +1075,7 @@ _SCENARIOS = {
             "info-route-not-hidden": info(
                 "tl::Geo::Inner",
                 "tl::Geo::Inner is a constructor.\nSignature:\n"
-                "  tl::Geo::Inner(y: int) -> tl::Geo::Inner",
+                "  Geo::Inner(y: int) -> tl::Geo::Inner",
             ),
             "info-unknown-member": info_rejected("Geo::Nope", UnknownMemberError, "Geo::Nope"),
             "info-unknown-qualifier": info_rejected(

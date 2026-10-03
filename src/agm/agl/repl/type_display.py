@@ -55,11 +55,19 @@ def format_type_text_echo_for_repl(rendered: str) -> str:
 
 def format_generic_type_def_for_repl(name: str, gdef: GenericTypeDef, table: TypeTable) -> str:
     """Return a declaration-like display for an unapplied generic type definition."""
-    display_name = f"{name}[{', '.join(gdef.type_params)}]"
-    template = gdef.template
-    if isinstance(template, RecordType):
-        return _format_record_type_with_name(template, display_name, table)
-    return _format_enum_type_with_name(template, display_name, table)
+    return format_type_def_for_repl(f"{name}[{', '.join(gdef.type_params)}]", gdef.template, table)
+
+
+def format_type_def_for_repl(name: str, typ: Type, table: TypeTable) -> str:
+    """Return a declaration-like display of nominal type *typ* declared as *name*.
+
+    An exception keeps its compact form: its name.
+    """
+    if isinstance(typ, RecordType):
+        return _format_record_type_with_name(typ, name, table)
+    if isinstance(typ, EnumType):
+        return _format_enum_type_with_name(typ, name, table)
+    return name
 
 
 def _format_record_type(typ: RecordType, table: TypeTable) -> str:

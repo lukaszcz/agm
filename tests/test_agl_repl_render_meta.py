@@ -628,7 +628,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "fs::read is a function.\nSignature:\n  def fs::read(path: text) -> text"
+            "fs::read is a function.\nSignature:\n  def read(path: text) -> text"
         )
 
     def test_info_resolves_an_unqualified_function_like_a_repl_expression(self) -> None:
@@ -645,8 +645,7 @@ class TestInfo:
 
         assert log.text is not None
         assert log.text.startswith(
-            "log::print is a function.\nSignature:\n  def log::print[T]"
-            "(lvl: std/log::Level, val: T)"
+            "log::print is a function.\nSignature:\n  def print[T](lvl: std/log::Level, val: T)"
         )
 
     @pytest.mark.parametrize(
@@ -743,7 +742,8 @@ class TestInfo:
         assert option.text.startswith("Option is a generic enum type.\nType:\n  enum Option[T]")
         assert some.text is not None
         assert some.text.startswith(
-            "Some is a constructor.\nSignature:\n  Some[T](value: T) -> std/option::Option::Some[T]"
+            "Some is a constructor.\nSignature:\n  "
+            "Option::Some[T](value: T) -> std/option::Option::Some[T]"
         )
 
     @pytest.mark.parametrize("name", ("None", "Option::None"))
@@ -752,7 +752,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            f"{name} is a constructor.\nSignature:\n  {name}() -> std/option::Option::None"
+            f"{name} is a constructor.\nSignature:\n  Option::None() -> std/option::Option::None"
         )
 
     def test_info_reports_a_constructor_exposed_by_a_repl_use(self) -> None:
@@ -763,7 +763,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "Nothing is a constructor.\nSignature:\n  Nothing() -> std/option::Option::None"
+            "Nothing is a constructor.\nSignature:\n  Option::None() -> std/option::Option::None"
         )
 
     @pytest.mark.parametrize("name", ("Ready", "Go"))
@@ -818,7 +818,7 @@ class TestInfo:
 
         assert described is not None
         assert declared is not None
-        assert described.replace(spelled, "N") == declared.replace(alias, "N")
+        assert described.replace(spelled, "N", 1) == declared.replace(alias, "N", 1)
 
     @pytest.mark.parametrize("spelling", ("s::D", "DD"))
     def test_info_describes_a_scoped_alias_as_its_declaration(self, spelling: str) -> None:
@@ -828,6 +828,18 @@ class TestInfo:
         assert scoped.eval_entry("use s::{D as DD}").ok
 
         assert scoped.info_of(spelling) == f"{spelling} is a type alias.\nType:\n  type s::D = P"
+
+    def test_info_describes_a_renamed_scoped_exception_by_its_declared_path(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("scope s\n  exception Oops\n    code: int\nend s").ok
+        assert session.eval_entry("use s::{Oops as O}").ok
+
+        renamed = session.info_of("O")
+        declared = session.info_of("s::Oops")
+
+        assert renamed is not None
+        assert declared is not None
+        assert renamed.replace("O", "N", 1) == declared.replace("s::Oops", "N", 1)
 
     def test_info_of_a_type_name_several_imports_contribute_describes_its_value(
         self, tmp_path: Path
@@ -980,7 +992,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "Ready is a constructor.\nSignature:\n  Ready() -> State::Ready"
+            "Ready is a constructor.\nSignature:\n  State::Ready() -> State::Ready"
         )
 
     def test_info_reports_a_type_definition(self) -> None:

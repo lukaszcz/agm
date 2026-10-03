@@ -41,6 +41,8 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     Item,
+    QualifierAnchor,
+    QualifierChain,
     RecordDef,
     TypeAlias,
     VariantDef,
@@ -173,6 +175,26 @@ class AliasReach(NamedTuple):
     paths: tuple[QName, ...]
     sites: tuple[ModuleId, ...]
     hidden: bool
+
+
+class AliasChain(NamedTuple):
+    """What a type path's alias chain (:meth:`TypeOwnerIndex.chain`) reads.
+
+    ``identity`` is the declaration it names (:meth:`TypeOwnerIndex.identity`);
+    ``renamed`` that one when it is an alias of its own other than the path,
+    which hosts the declarations written beneath it at its own path (``def
+    P::m`` with ``type P[T] = Plain``), where a name for it (``type Q[T] =
+    P[T]``) reaches them; ``final`` the type the chain ends at
+    (:meth:`TypeOwnerIndex.final_target`); ``sites`` the modules declaring
+    the aliases on it, the first first; ``cyclic`` whether it leads back to
+    the path.
+    """
+
+    identity: QName
+    renamed: QName | None
+    final: QName | None
+    sites: tuple[ModuleId, ...]
+    cyclic: bool
 
 
 class TypeOwnerIndex:
@@ -458,10 +480,7 @@ class TypeOwnerIndex:
 
     def cyclic(self, qname: QName) -> bool:
         """Whether alias *qname*'s chain (:meth:`_alias_chain`) leads back to *qname*."""
-        last = None
-        for _current, last in self._alias_chain(qname):
-            pass
-        return last is not None and last.target is not None and last.target.qname == qname
+        return self.chain(qname).cyclic
 
     def final_target(self, qname: QName) -> QName | None:
         """Return the type path *qname*'s alias chain ends at: *qname* itself when no alias.
@@ -469,10 +488,30 @@ class TypeOwnerIndex:
         ``None`` when the chain (:meth:`_alias_chain`) ends at no type or an
         alias, a cycle included.
         """
-        final = None
-        for current, owner in self._alias_chain(qname):
-            final = current if owner.alias is None else None
-        return final
+        return self.chain(qname).final
+
+    def chain(self, qname: QName) -> AliasChain:
+        """Return what type path *qname*'s alias chain (:meth:`_alias_chain`) reads, in one walk."""
+        named, named_alias, named_found = qname, False, False
+        final = last = None
+        sites: dict[ModuleId, None] = {}
+        for current, last in self._alias_chain(qname):
+            if last.alias is None:
+                final = current
+                if not named_found:
+                    named, named_alias = current, False
+            else:
+                final = None
+                sites[current[0]] = None
+                if not named_found:
+                    named, named_alias, named_found = current, True, not last.renames
+        return AliasChain(
+            named,
+            named if named_alias and named != qname else None,
+            final,
+            tuple(sites),
+            last is not None and last.target is not None and last.target.qname == qname,
+        )
 
     def alias_reach(self, alias: QName, table: TypeOwner, path: ScopePath) -> AliasReach:
         """Return what *path* beneath alias *alias*, which selects *table*, stands for.
@@ -481,7 +520,9 @@ class TypeOwnerIndex:
         :attr:`~TypeOwner.scopes`, its own module's first. Any other alias
         stands for its target's path (:meth:`_target_beneath`), where the
         modules declaring the aliases on the way write declarations too;
-        nothing when an alias names no nominal target.
+        nothing when an alias names no nominal target. An alias renaming
+        another that is a type of its own (:attr:`AliasChain.renamed`) stands for
+        that one's own path first.
         """
         if table.builtin_name is not None:
             own = sorted((scope for scope in table.scopes if scope[0] == alias[0]), key=str)
@@ -494,12 +535,15 @@ class TypeOwnerIndex:
         beneath = self._target_beneath(alias, table, path)
         if beneath is None:
             return AliasReach((), (), False)
-        qname, hidden, sites = beneath
-        return AliasReach((qname,), sites, hidden)
+        qname, hidden, sites, renamed = beneath
+        if renamed is None:
+            return AliasReach((qname,), sites, hidden)
+        module_id, atom = renamed
+        return AliasReach(((module_id, _atom((*_path(atom), *path))), qname), sites, hidden)
 
     def _target_beneath(
         self, alias: QName, table: TypeOwner, path: ScopePath
-    ) -> tuple[QName, bool, tuple[ModuleId, ...]] | None:
+    ) -> tuple[QName, bool, tuple[ModuleId, ...], QName | None] | None:
         """Return the full path *path* beneath alias *alias* stands for, if it is hidden, its sites.
 
         *table* is what *alias* selects. *path* is read beneath the type the
@@ -507,28 +551,41 @@ class TypeOwnerIndex:
         stands for that alias's target in turn. It is hidden when a ``hiding``
         at one of those aliases' sites removed it or a prefix of it. The sites
         are the modules declaring those aliases, the first passed first.
-        ``None`` when an alias names no nominal target.
+        Last, *alias*'s :attr:`AliasChain.renamed`. ``None`` when an alias names
+        no nominal target.
         """
         hidden = False
         sites: dict[ModuleId, None] = {}
+        chain = self.chain(alias)
+        renamed = chain.renamed
         while True:
             hidden = hidden or table.hides(path)
-            final = self.final_target(alias)
-            if final is None:
+            if chain.final is None:
                 return None
-            for current, owner in self._alias_chain(alias):
-                if owner.alias is not None:
-                    sites[current[0]] = None
-            module_id, atom = final
+            for site in chain.sites:
+                sites[site] = None
+            module_id, atom = chain.final
             base = _path(atom)
             for end in range(1, len(path)):
                 inner = (module_id, _atom((*base, *path[:end])))
                 inner_table = self.owner(inner)
                 if inner_table is not None and inner_table.alias is not None:
-                    alias, table, path = inner, inner_table, path[end:]
+                    table, path, chain = inner_table, path[end:], self.chain(inner)
                     break
             else:
-                return (module_id, _atom((*base, *path))), hidden, tuple(sites)
+                return (module_id, _atom((*base, *path))), hidden, tuple(sites), renamed
+
+    def names_qualifier(self, qname: QName, sites: Iterable[ModuleId]) -> bool:
+        """Whether full path *qname* is a type, or lies above a declaration.
+
+        One its own module declares, or one of *sites* writes there
+        (:meth:`written_beneath`).
+        """
+        return (
+            self.is_declared(qname)
+            or bool(self._declared_beneath(qname))
+            or any(any(self.written_beneath(site, qname)) for site in sites)
+        )
 
     def written_beneath(self, module_id: ModuleId, qname: QName) -> Iterator[ScopePath]:
         """Yield where *module_id* writes a declaration otherwise, relative to full path *qname*.
@@ -575,11 +632,7 @@ class TypeOwnerIndex:
         (:attr:`TypeOwner.renames`) is another name for it, along the chain
         (:meth:`_alias_chain`); any other alias is a type of its own.
         """
-        named = qname
-        for named, owner in self._alias_chain(qname):
-            if owner.alias is not None and not owner.renames:
-                break
-        return named
+        return self.chain(qname).identity
 
     def denotation(self, qname: QName) -> Denoted | None:
         """The type the alias *qname* names (:meth:`identity`) denotes, unless renaming its target.
@@ -850,7 +903,7 @@ class TypeOwnerIndex:
         for with its arguments.
         """
         if not is_nominal_type_expr(spelling, alias.type_params):
-            return AliasSelection(None, spelling, None)
+            return AliasSelection(None, self._normalized(qname, alias, spelling), None)
         selection = self._decided_targets(qname, alias, spelling)
         target = None if selection is None else self.declared_path(selection)
         if target is None:
@@ -859,10 +912,37 @@ class TypeOwnerIndex:
             parameter = self.projected_parameter(target)
             if parameter is not None and parameter[0] < len(spelling.args):
                 return self._spelled_selection(qname, alias, spelling.args[parameter[0]])
-            applied = self._applied_alias(target, alias, spelling)
+            normalized = replace(
+                spelling, args=tuple(self._normalized(qname, alias, arg) for arg in spelling.args)
+            )
+            applied = self._applied_alias(target, alias, normalized)
             if applied is not None:
                 return AliasSelection(*applied, (target, spelling))
+            return AliasSelection(target, normalized, (target, spelling))
         return AliasSelection(target, spelling, (target, spelling))
+
+    def _normalized(self, qname: QName, alias: TypeAlias, spelling: TypeExpr) -> TypeExpr:
+        """*spelling*, written in alias *alias* at *qname*, with each type name what it stands for.
+
+        ``Box[Id[T]]`` with ``type Id[T] = T`` is ``Box[T]`` (:meth:`_spelled_selection`).
+        """
+        if is_nominal_type_expr(spelling, alias.type_params):
+            return self._spelled_selection(qname, alias, spelling).stands_for
+        if isinstance(spelling, ArrayT):
+            return replace(spelling, elem=self._normalized(qname, alias, spelling.elem))
+        if isinstance(spelling, DictT):
+            return replace(
+                spelling,
+                key=self._normalized(qname, alias, spelling.key),
+                value=self._normalized(qname, alias, spelling.value),
+            )
+        if isinstance(spelling, FuncT):
+            return replace(
+                spelling,
+                params=tuple(self._normalized(qname, alias, param) for param in spelling.params),
+                result=self._normalized(qname, alias, spelling.result),
+            )
+        return spelling
 
     def _applied_alias(
         self, qname: QName, alias: TypeAlias, spelling: AppliedT
@@ -870,11 +950,11 @@ class TypeOwnerIndex:
         """What *spelling*, applying generic alias *qname* in alias *alias*, denotes and stands for.
 
         What the applied alias does, with *spelling*'s arguments for its
-        parameters: ``P[int]`` with ``type P[T] = Plain`` is ``Plain``.
-        ``None`` unless *qname* is a generic alias that is a type of its own;
-        also when *alias* passes it its own parameters, and so renames it, or
-        when what it stands for names a type spelled like a parameter of
-        *alias*, which would read as that parameter.
+        parameters: ``P[int]`` with ``type P[T] = Plain`` is ``Plain``. A
+        name it stands for spelled like a parameter of *alias* is spelled
+        anchored (``::X``), so it reads as no parameter. ``None`` unless
+        *qname* is a generic alias that is a type of its own; also when
+        *alias* passes it its own parameters, and so renames it.
         """
         applied = self.owner(self.identity(qname))
         generic = None if applied is None else applied.alias
@@ -886,12 +966,21 @@ class TypeOwnerIndex:
             or not generic.type_params
             or applied.renames
             or passes_parameters(alias.type_params, spelling)
-            or set(member_type_params((stands_for,), alias.type_params)).difference(
-                generic.type_params
-            )
         ):
             return None
-        bound = dict(zip(generic.type_params, spelling.args, strict=False))
+        span, node_id = spelling.span, spelling.node_id
+        bound: dict[str, TypeExpr] = {
+            name: NameT(
+                name,
+                span,
+                node_id,
+                QualifierChain(QualifierAnchor.CURRENT_MODULE, (), name, span, node_id),
+            )
+            for name in set(member_type_params((stands_for,), alias.type_params)).difference(
+                generic.type_params
+            )
+        }
+        bound |= zip(generic.type_params, spelling.args, strict=False)
         target = applied.target
         return None if target is None else target.qname, substitute_type_names(stands_for, bound)
 

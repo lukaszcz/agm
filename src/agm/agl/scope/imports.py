@@ -39,6 +39,7 @@ __all__ = [
     "alias_prefix",
     "build_import_env",
     "validate_import_items",
+    "target_modules",
     "contribution_routes",
     "matching_atoms",
     "qualifier_candidates",
@@ -370,7 +371,7 @@ def validate_import_items(
     alias's target, which scope reads.
     """
     for decl in decls:
-        for module in _targets(targets[decl.node_id]):
+        for module in target_modules(targets[decl.node_id]):
             module_exports = exports[module]
             for item in (*decl.hidden, *(decl.tail or ())):
                 prefix = _item_path(item)
@@ -466,7 +467,8 @@ def _tail_exposures(
     return tuple(result)
 
 
-def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
+def target_modules(target: ImportTarget) -> tuple[ModuleId, ...]:
+    """The modules an import of *target* names."""
     return (
         (target.module,)
         if isinstance(target, SingleTarget)
@@ -512,7 +514,7 @@ def build_import_env(
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     for decl in decls:
         target = targets[decl.node_id]
-        modules = _targets(target)
+        modules = target_modules(target)
         for module in modules:
             module_exports = exports[module]
             module_scopes = scope_exports[module]

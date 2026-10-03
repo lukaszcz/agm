@@ -210,6 +210,18 @@ def _format_repl_location(span: "SourceSpan") -> str:
     return f"{label}:{span.start_line}:{span.start_col}"
 
 
+def _info_spelling(
+    name: str, module_id: "ModuleId", scope_path: tuple[str, ...], decl_name: str
+) -> str:
+    """How ``:info name`` names the declaration *name* selects, at *scope_path*/*decl_name*.
+
+    A session declaration by the path it is declared at, as its type
+    displays (``def Base::h`` for ``def G::h`` with ``type G = Base``); any
+    other as *name* spells it.
+    """
+    return "::".join((*scope_path, decl_name)) if module_id.is_entry else name
+
+
 def _format_repl_signature(signature: "FunctionSignature") -> str:
     """Render the AgL source surface of a function signature for ``:info``."""
     params = [f"{param.name}: {param.type!r}" for param in signature.params]
@@ -445,6 +457,9 @@ class ReplSession:
         # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
+        # Each retained region, by node id, at the scope path it opened when
+        # written: it opens that path still, wherever its spelling now leads.
+        self._retained_region_scopes: dict[int, tuple[str, ...]] = {}
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). The module-graph
         # assembler merges it with each entry's import-visible fixities.
@@ -1653,6 +1668,7 @@ class ReplSession:
             else None
         )
         if ref is not None and ref.kind.value != "constructor_binding":
+            declared = _info_spelling(name, ref.module_id, ref.scope_path, ref.name)
             type_env = self._info_type_env(ref.module_id)
             signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
@@ -1660,7 +1676,9 @@ class ReplSession:
                     (
                         f"{name} is a function.",
                         _format_info_section(
-                            "Signature", f"def {name}{_format_repl_signature(signature)}", location
+                            "Signature",
+                            f"def {declared}{_format_repl_signature(signature)}",
+                            location,
                         ),
                     )
                 )
@@ -1677,7 +1695,7 @@ class ReplSession:
             return "\n".join(
                 (
                     f"{name} is a {'mutable ' if ref.mutable else ''}binding.",
-                    _format_info_section("Binding", f"{keyword} {name}"),
+                    _format_info_section("Binding", f"{keyword} {declared}"),
                     _format_info_section("Type", repr(binding_type)),
                     _format_info_section("Value", rendered, location),
                 )
@@ -1793,12 +1811,13 @@ class ReplSession:
         key = reference.type_key
         if key is None:
             return None
+        module_id, scope_path, decl_name = key
+        declared = _info_spelling(name, module_id, scope_path, decl_name)
         alias = self._alias_declaration(key)
         if alias is not None:
             params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
-            definition = f"type {name}{params} = {render_type_expr(alias.type_expr)}"
+            definition = f"type {declared}{params} = {render_type_expr(alias.type_expr)}"
             return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
-        module_id, scope_path, decl_name = key
         # A type this session declares is located at its declaration.
         location = (
             _format_repl_location(
@@ -1818,7 +1837,7 @@ class ReplSession:
         generic = type_env.get_generic_type(local_name)
         if generic is None:
             return None
-        definition = format_generic_type_def_for_repl(name, generic, self._type_env.type_table)
+        definition = format_generic_type_def_for_repl(declared, generic, self._type_env.type_table)
         return "\n".join(
             (
                 f"{name} is a generic {generic.kind} type.",
@@ -1946,6 +1965,7 @@ class ReplSession:
         # it has to recompile the entry program.
         self._accumulated_imports = []
         self._accumulated_scoped_imports = []
+        self._retained_region_scopes = {}
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

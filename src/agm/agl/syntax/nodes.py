@@ -484,7 +484,8 @@ class GenericDeclaration:
     @property
     def type_params(self) -> tuple[str, ...]:
         """The slots that introduce readable type variables."""
-        return tuple(slot for slot in self.type_param_slots if slot != TYPE_PARAMETER_WILDCARD)
+        slots = self.type_param_slots
+        return slots and tuple(slot for slot in slots if slot != TYPE_PARAMETER_WILDCARD)
 
 
 @dataclass(frozen=True, slots=True)

@@ -253,20 +253,30 @@ def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
 
 
 def test_a_reference_reading_an_enclosing_slot_that_names_two_constructors_is_rejected() -> None:
-    """An inner pattern name read outside its pattern is the enclosing slot, here two members."""
+    """An inner pattern name read outside its pattern is the enclosing slot's ambiguous reading."""
     entry = (
         "enum Color\n  | Red\n  | Blue\nenum Signal\n  | Red\n  | Green\n"
         "record Pair\n  c: Color\n  s: Signal\nrecord W\n  c: Color\n"
         "def f(p: Pair, w: W) -> Color =\n  case p of\n  | Pair(c = Red, s = Red) =>\n"
         "    case w of\n    | W(c = Red) => Red\n    | _ => p.c\n  | _ => p.c\n"
     )
-    with pytest.raises(AglTypeError) as raised:
+    with pytest.raises(AmbiguousConstructorError) as raised:
         resolve_and_check_inline_entry(entry, HostCapabilities())
     error = raised.value
-    assert type(error) is AglTypeError
     assert error.span is not None
     assert error.span.start_offset == entry.index("=> Red") + len("=> ")
     assert entry[error.span.start_offset : error.span.end_offset] == "Red"
+
+
+def test_a_reference_reading_an_enclosing_slot_a_pattern_binds_is_accepted() -> None:
+    """An inner pattern name read outside its pattern is the enclosing slot's binder."""
+    resolve_and_check_inline_entry(
+        "enum Color\n  | Red\n  | Blue\nenum Signal\n  | Red\n  | Green\n"
+        "record Pair\n  c: Color\nrecord W\n  c: Color\n"
+        "def f(p: Pair, w: W) -> Color =\n  case p of\n  | Pair(c = _ as Red) =>\n"
+        "    case w of\n    | W(c = Red) => Red\n    | _ => Color::Blue\n",
+        HostCapabilities(),
+    )
 
 
 # ---------------------------------------------------------------------------

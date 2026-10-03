@@ -58,6 +58,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId, Reader, is_std_config_root, 
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
+    Ambiguity,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -6598,18 +6599,12 @@ class _Checker:
             self._record_pattern_binding_ref(binders[0].pattern_node_id, binding)
         else:
             binding, constructor = self._select_pattern_slot_fallback(slot)
-            if slot.outside_ambiguity is not None and self._slot_has_references(slot):
-                raise slot.outside_ambiguity.error(
+            ambiguity = self._slot_ambiguity(slot)
+            if ambiguity is not None and self._slot_has_references(slot):
+                raise ambiguity.error(
                     slot.name,
                     self._slot_reference_span(match_site, slot),
                     reader=Reader(self._module_id, self._resolved.declared_segments),
-                )
-            if (
-                binding.kind is BinderKind.constructor_binding and constructor is None
-            ) and self._slot_has_references(slot):
-                raise AglTypeError(
-                    f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
-                    span=self._slot_reference_span(match_site, slot),
                 )
         self._record_side_table_addition("slot_resolution", self._slot_resolution, slot.slot_id)
         self._slot_resolution[slot.slot_id] = binding
@@ -6626,7 +6621,8 @@ class _Checker:
 
         Scope decided the reading outside; with none, the pattern's own
         constructors are read. A ``constructor_binding`` paired with ``None``
-        means they disagree.
+        means they disagree, the outside reading then being ambiguous
+        (:meth:`_slot_ambiguity`).
         """
         alternative = slot.alternative
         if alternative is None:
@@ -6656,6 +6652,21 @@ class _Checker:
                 self._slot_constructor_refs.get(slot_id),
             )
         return alternative, slot.alternative_constructor
+
+    def _slot_ambiguity(self, slot: PatternSlot) -> Ambiguity | None:
+        """The ambiguous reading a reference to unbound *slot* reports, if any.
+
+        Its own name's outside it, or, where that is an enclosing slot no
+        pattern binds either, that slot's.
+        """
+        alternative = slot.alternative
+        if alternative is None or alternative.kind is not BinderKind.pattern_slot:
+            return slot.outside_ambiguity
+        # A pattern-slot binding always carries its slot id.
+        enclosing = cast(int, alternative.slot_id)
+        if self._slot_resolution[enclosing].kind is not BinderKind.constructor_binding:
+            return None
+        return self._slot_ambiguity(self._resolved.pattern_slots[enclosing])
 
     def _slot_has_references(self, slot: PatternSlot) -> bool:
         """Whether a branch-body reference directly resolves to *slot*."""

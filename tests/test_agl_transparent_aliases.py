@@ -1021,6 +1021,19 @@ _SCENARIOS["applied-enum-aliases-inject-their-members-at-their-own-arguments"] =
             '"s"',
             phase="typecheck",
         ),
+        **{
+            f"compatible-with-neither-{name}": rejected(
+                f"import ia::{{IntOpt}}\nimport it::{{TextOpt}}\nimport op\n"
+                f"fn(p: op::Opt[bool]) => {text}",
+                AglTypeError,
+                spelling,
+                phase="typecheck",
+            )
+            for name, text, spelling in (
+                ("pattern", "case p of\n  | Som(v) => v\n  | Non => false", "Som(v)"),
+                ("is", "p is Som", "p is Som"),
+            )
+        },
         "renaming-beside-its-generic-enum": accepted(
             f"import op::*\nimport ren::{{Ren}}\n{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
         ),
@@ -1174,7 +1187,51 @@ _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
             "fn(p: Pair) => p", AmbiguousQualificationError, "Pair"
         ),
         "applied-and-generic-clash": rejected("fn(p: Bx) => p", AmbiguousQualificationError, "Bx"),
+        "applied-and-generic-one-pattern": accepted(
+            "fn(p: Box[int]) => case p of\n  | Bx(v) => v", "gen::Box[int] -> int"
+        ),
         "alias-and-declaration-clash": rejected("fn(p: R) => p", AmbiguousQualificationError, "R"),
+    },
+)
+
+_NORMALIZING = (
+    "record Box[T]\n  v: T\ndef Box::g() -> int = 1\nenum Opt[T]\n  | Som(v: T)\n  | Non\n"
+    "type Id[T] = T\n"
+)
+"""Generic types, and an alias standing for its parameter the aliases below apply in arguments."""
+_SOM = "record nm::Opt::Som[int]\n  v: int"
+
+_SCENARIOS["applied-arguments-are-normalized"] = Scenario(
+    modules={
+        "nm": _NORMALIZING,
+        "a": "import nm::*\ntype B = Box[int]\ntype O = Opt[int]\n",
+        "f": "import nm::*\ntype B = Box[Id[int]]\ntype O = Opt[Id[int]]\n",
+    },
+    header=("import nm", "import a::{B, O}\nimport f::{B, O}\nimport a\nimport f"),
+    probes={
+        "one-record": accepted("B(v = 1)", "record nm::Box[int]\n  v: int"),
+        "one-type": accepted("(fn(b: a::B) => b.v)(f::B(v = 1))", "int"),
+        "one-member": accepted("Som(v = 1)", _SOM),
+        "one-member-test": accepted("fn(o: a::O) => o is f::O::Som", "nm::Opt[int] -> bool"),
+        "one-member-pattern": accepted(
+            "fn(o: nm::Opt[int]) => case o of\n  | Som(v) => v\n  | Non => 0",
+            "nm::Opt[int] -> int",
+        ),
+    },
+)
+
+_SCENARIOS["a-generic-alias-normalizing-its-arguments-renames-its-target"] = Scenario(
+    modules={
+        "nm": _NORMALIZING,
+        "g3": "import nm::*\ntype B3[T] = Box[Id[T]]\ntype O3[T] = Opt[Id[T]]\n",
+    },
+    header=("import nm::*", "import g3::*"),
+    probes={
+        "reads-the-target": accepted("B3::g()", "int"),
+        "declares-at-the-target": accepted("def B3::k() -> int = 1\nBox::k()", "int"),
+        "one-type": accepted("(fn(b: B3[int]) => b.v)(Box(v = 1))", "int"),
+        "enum-member": accepted("O3::Som(v = 1)", _SOM),
+        "bare-enum-member": accepted("Som(v = 1)", _SOM),
     },
 )
 
@@ -1341,7 +1398,10 @@ _SCENARIOS["an-item-through-an-alias-names-what-its-site-reaches-beneath-the-tar
     },
 )
 
-_PLAIN = "record Base\n  x: int\n\ndef Base::f() -> int = 1\n"
+_PLAIN = (
+    "record Base\n  x: int\n\ndef Base::f() -> int = 1\n\n"
+    "scope Base::Sub\n  def t() -> int = 2\nend Base::Sub\n"
+)
 _ALIASING = "import base\ntype Geo = base::Base\ntype U2 = text\n"
 _BENEATH = (
     "import base::*\n\ndef Base::k() -> int = 1\n\nrecord Base::In2\n  a: int\n\n"
@@ -1376,6 +1436,10 @@ _OWN_NAMED_ALIKE = (
     "  def q() -> int = {}::w()\nend Q\n\nQ::q()"
 )
 """Reads ``w`` of a scope of the reader's own named like ``base``'s ``Base``."""
+
+
+_OWN_ROOT_NAMED_ALIKE = "scope Base\n  def w() -> int = 5\nend Base\n\n{}"
+"""Reads beside a root scope of the reader's own named like ``base``'s ``Base``."""
 
 
 def _in_scope(imported: str, value: str) -> str:
@@ -1452,9 +1516,7 @@ _SCENARIOS["an-alias-reaches-what-its-reader-imports-beneath-the-target-path"] =
             "Q::q()",
             "int",
         ),
-        "own-scope-named-alike": rejected(
-            _OWN_NAMED_ALIKE.format("Geo"), UnknownMemberError, "Geo::w"
-        ),
+        "own-scope-named-alike": accepted(_OWN_NAMED_ALIKE.format("Geo"), "int"),
         "own-scope-named-alike-by-the-target-path": accepted(
             _OWN_NAMED_ALIKE.format("Base"), "int"
         ),
@@ -1482,15 +1544,56 @@ _SCENARIOS["an-alias-reaches-its-target-path-where-its-reader-names-no-type-so"]
         "scope-beneath": accepted("import nb::*\nGeo::S::s()", "int"),
         "use-of-a-scope-beneath": accepted("import nb::*\nuse Geo::S::*\ns()", "int"),
         "imported-in-a-scope": accepted(_in_scope("nb::*", "Geo::k()"), "int"),
-        "own-scope-named-alike": rejected(
-            "scope Base\n  def w() -> int = 5\nend Base\n\nGeo::w()", UnknownMemberError, "Geo::w"
-        ),
+        "own-scope-named-alike": accepted(_OWN_ROOT_NAMED_ALIKE.format("Geo::w()"), "int"),
         "own-scope-named-alike-by-the-target-path": accepted(
-            "scope Base\n  def w() -> int = 5\nend Base\n\nBase::w()", "int"
+            _OWN_ROOT_NAMED_ALIKE.format("Base::w()"), "int"
+        ),
+        "own-scope-named-alike-through-an-alias-of-the-alias": accepted(
+            "import a2::*\n" + _OWN_ROOT_NAMED_ALIKE.format("G2::w()"), "int"
+        ),
+        "own-scope-named-alike-read-in-a-scope": accepted(
+            _OWN_ROOT_NAMED_ALIKE.format("scope Q\n  def q() -> int = Geo::w()\nend Q\n\nQ::q()"),
+            "int",
+        ),
+        "own-scope-beneath-the-target-path": accepted(
+            "scope Base::S2\n  def u() -> int = 7\nend Base::S2\n\nGeo::S2::u()", "int"
+        ),
+        "use-of-an-own-scope-beneath-the-target-path": accepted(
+            "use Geo::S2::*\n\nscope Base::S2\n  def u() -> int = 7\nend Base::S2\n\nu()", "int"
+        ),
+        "own-scope-named-alike-beside-the-target": accepted(
+            _OWN_ROOT_NAMED_ALIKE.format("Geo::f()"), "int"
+        ),
+        "scope-the-target-declares": accepted("Geo::Sub::t()", "int"),
+        "use-of-a-scope-the-target-declares": accepted("use Geo::Sub::*\nt()", "int"),
+        "use-of-a-scope-the-target-declares-renamed": accepted("use Geo::Sub as R\nR::t()", "int"),
+        "use-of-an-item-of-a-scope-the-target-declares": accepted("use Geo::Sub::{t}\nt()", "int"),
+        "use-through-an-alias-of-the-alias": accepted("import a2::*\nuse G2::Sub::*\nt()", "int"),
+        "use-in-a-scope-of-a-scope-the-target-declares": accepted(
+            "scope Q\n  use Geo::Sub::*\n  def q() -> int = t()\nend Q\n\nQ::q()", "int"
+        ),
+        "nothing-beneath-a-scope-the-target-declares": rejected(
+            "Geo::Sub::nope()", UnknownMemberError, "Geo::Sub::nope"
         ),
         "hidden": rejected("import nb::* hiding Base::k\nGeo::k()", HiddenMemberError, "Geo::k"),
         "declared-by-the-target": accepted("import nb::*\nGeo::f()", "int"),
         "nothing": rejected("import nb::*\nGeo::nope()", UnknownMemberError, "Geo::nope"),
+    },
+)
+
+_SCENARIOS["an-alias-reaches-no-qualifier-a-hiding-at-its-site-removed"] = Scenario(
+    modules={**_MODULES, "ah": "import base::* hiding Base::Inner\ntype Gh = Base\n"},
+    header=("import ah::*",),
+    probes={
+        "use": rejected("use Gh::Inner::*\n1", UnknownQualifierError, "use Gh::Inner::*"),
+        "use-renamed": rejected(
+            "use Gh::Inner as R\n1", UnknownQualifierError, "use Gh::Inner as R"
+        ),
+        "constructed": rejected("Gh::Inner(y = 1)", HiddenMemberError, "Gh::Inner"),
+        "sibling": accepted("Gh::f()", "int"),
+        "not-an-alias": rejected(
+            "use Base::Inner::*\n1", UnknownQualifierError, "use Base::Inner::*"
+        ),
     },
 )
 

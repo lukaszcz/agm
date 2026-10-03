@@ -92,7 +92,7 @@ from agm.agl.scope.type_names import (
     is_nominal_type_expr,
     owner_member_selection,
 )
-from agm.agl.scope.type_owners import TypeOwnerIndex
+from agm.agl.scope.type_owners import AliasReach, TypeOwnerIndex
 from agm.agl.scope.uses import UseReader
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -927,18 +927,27 @@ class ModuleSources(SourcesHost):
         reads. What an own alias reaches is own (*layer*), as its target's
         spelling there would be.
         """
-        declared = self._declared_type(owner)
-        if not routed and declared[0] != self._module_id:
-            module_id, atom = declared
-            placed = (module_id, _bare_atom((*_bare_path(atom), *rest)))
+        if not routed:
             self._declare_scope_paths()
+            declared_types = tuple(
+                declared
+                for declared in self._declared_types(owner)
+                if declared[0] != self._module_id
+            )
             own = sum(
                 (
                     *(
                         self.own_at((*spelling, *rest), kind)
+                        for declared in declared_types
                         for spelling in self._declaring_spellings(declared, rest[0])
                     ),
-                    *(self._own_spelled_at(path, kind) for path in self._placed.get(placed, ())),
+                    *(
+                        self._own_spelled_at(path, kind)
+                        for module_id, atom in declared_types
+                        for path in self._placed.get(
+                            (module_id, _bare_atom((*_bare_path(atom), *rest))), ()
+                        )
+                    ),
                 ),
                 Reading(),
             )
@@ -946,12 +955,26 @@ class ModuleSources(SourcesHost):
                 return own
         return self._selected_by_table(owner, layer, rest, chain, kind, routed=routed)
 
-    def _declared_type(self, key: DeclarationKey) -> QName:
-        """The type *key* names, or the one its alias chain ends at."""
-        identity = _key_qname(self.identity(key))
-        return self._type_owners.final_target(identity) or identity
+    def _declared_types(self, key: DeclarationKey) -> tuple[QName, ...]:
+        """The types whose paths type *key* stands for: its final declared type's, renamed first.
 
-    def stands_for(self, key: DeclarationKey) -> AliasTarget | None:
+        An alias that is another name for an alias of its own stands for
+        that one's own path too (:attr:`~agm.agl.scope.type_owners.AliasChain.renamed`).
+        """
+        _named, renamed, declared = self._declared_type(key)
+        return (declared,) if renamed is None or renamed == declared else (renamed, declared)
+
+    def _declared_type(self, key: DeclarationKey) -> tuple[QName, QName | None, QName]:
+        """Return the type *key* names (:meth:`identity`), the alias it renames, and its final type.
+
+        The renamed alias is the alias of its own the named one is
+        (:attr:`~agm.agl.scope.type_owners.AliasChain.renamed`); the final
+        type is the one its alias chain ends at, else the named type itself.
+        """
+        chain = self._type_owners.chain(self._identity_path(key))
+        return chain.identity, chain.renamed, chain.final or chain.identity
+
+    def stands_for(self, key: DeclarationKey) -> tuple[AliasTarget, ...]:
         """See :meth:`~agm.agl.scope.lookup.PathSources.stands_for`.
 
         Nothing while what an alias reaches is read (:meth:`_reaching`): that
@@ -959,22 +982,26 @@ class ModuleSources(SourcesHost):
         """
         owner = None if self._reads_reach else self._type_owners.owner(_key_qname(key))
         if owner is None or owner.alias is None:
-            return None
+            return ()
         builtin = owner.builtin_name
         if builtin is not None:
-            return AliasTarget(None, (builtin,))
-        declared = self._declared_type(key)
-        if declared == _key_qname(key):
-            return None
-        return AliasTarget(declared, _bare_path(declared[1]))
+            return (AliasTarget(None, (builtin,)),)
+        return tuple(
+            AliasTarget(declared, _bare_path(declared[1]))
+            for declared in self._declared_types(key)
+            if declared != _key_qname(key)
+        )
 
     def names_only(self, target: AliasTarget, named: Reading) -> bool:
         """See :meth:`~agm.agl.scope.lookup.PathSources.names_only`."""
-        return target.declared is None or {
-            self._declared_type(key)
-            for key in (candidate.target.key for candidate in named.candidates)
-            if key is not None
-        } <= {target.declared}
+        return target.declared is None or all(
+            target.declared in (identity, declared)
+            for identity, _renamed, declared in (
+                self._declared_type(candidate.target.key)
+                for candidate in named.candidates
+                if candidate.target.key is not None
+            )
+        )
 
     def _selected_by_table(
         self,
@@ -1046,16 +1073,47 @@ class ModuleSources(SourcesHost):
         own path its name spells, however this module spells the declarations
         beneath.
         """
-        reach = self._type_owners.alias_reach(alias, table, path)
+        reach = self._alias_reach(alias, table, path, routed=routed)
         if reach.hidden:
             return self._hidden_beneath(chain, path)
-        paths = reach.paths
-        name = table.builtin_name
-        if name is not None and not routed:
-            own = (self._module_id, _bare_atom((name, *path)))
-            paths = (*(qname for qname in paths if qname != own), own)
-        readings = [self._declared_at(qname, layer, kind, sites=reach.sites) for qname in paths]
+        readings = [
+            self._declared_at(qname, layer, kind, sites=reach.sites) for qname in reach.paths
+        ]
         return sum(readings[1:], readings[0]) if readings else Reading()
+
+    def _alias_reach(
+        self, alias: QName, table: TypeOwner, path: ScopePath, *, routed: bool
+    ) -> AliasReach:
+        """What *path* beneath *alias* (whose owner is *table*) stands for (:meth:`_beneath_alias`).
+
+        Beneath an alias of a built-in type, this module's own path its name
+        spells too, unless only a module route reached it (*routed*).
+        """
+        reach = self._type_owners.alias_reach(alias, table, path)
+        name = table.builtin_name
+        if name is None or routed:
+            return reach
+        own = (self._module_id, _bare_atom((name, *path)))
+        return reach._replace(paths=(*(qname for qname in reach.paths if qname != own), own))
+
+    def projected_origins(self, alias: DeclarationKey, rest: ScopePath) -> frozenset[QName]:
+        """See :meth:`~agm.agl.scope.lookup.PathSources.projected_origins`."""
+        qname = _key_qname(alias)
+        table = self._type_owners.owner(qname)
+        if table is None or table.alias is None:
+            return frozenset()
+        reach = self._alias_reach(qname, table, rest, routed=False)
+        if reach.hidden:
+            return frozenset()
+        return frozenset(
+            path
+            for path in reach.paths
+            if (
+                self.own_origins(_bare_path(path[1]))
+                if path[0] == self._module_id
+                else self._type_owners.names_qualifier(path, reach.sites)
+            )
+        )
 
     @staticmethod
     def _hidden_beneath(chain: QualifierChain, path: ScopePath) -> Reading:
@@ -1325,13 +1383,16 @@ class ModuleSources(SourcesHost):
         A path beneath an alias is its target's path there, unless this
         module declares it so.
         """
-        owners = self._type_owners
+        return _qname_decl_key(self._type_owners.identity(self._identity_path(key)))
+
+    def _identity_path(self, key: DeclarationKey) -> QName:
+        """The full path whose identity *key*'s is (:meth:`identity`)."""
         module_id, path, name = key
         qname = _key_qname(key)
         node = self._scope_nodes.get(path) if module_id == self._module_id else None
         if node is None or name not in node.members:
-            return _qname_decl_key(owners.declaration(qname))
-        return _qname_decl_key(owners.identity(qname))
+            return self._type_owners.path_target(qname)
+        return qname
 
     def denotes(self, key: DeclarationKey) -> object:
         """What *key* names in an ambiguity: its identity, or what an alias denotes there."""

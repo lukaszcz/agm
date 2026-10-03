@@ -355,12 +355,12 @@ class PathSources(DeclarationNames, Protocol):
         """
         ...
 
-    def stands_for(self, key: DeclarationKey) -> AliasTarget | None:
-        """What alias *key* stands for; ``None`` for another type or an alias of no named type."""
+    def stands_for(self, key: DeclarationKey) -> tuple[AliasTarget, ...]:
+        """What alias *key* stands for; nothing for another type or an alias of no named type."""
         ...
 
     def names_only(self, target: AliasTarget, named: Reading) -> bool:
-        """Whether a path reaching the types *named* names only *target*'s type.
+        """Whether a path reaching the types *named* names only *target*'s type, or names for it.
 
         A built-in type's name always names it.
         """
@@ -388,6 +388,14 @@ class PathSources(DeclarationNames, Protocol):
 
     def routed_origins(self, chain: QualifierChain, path: ScopePath) -> frozenset[QName]:
         """The scopes and types *chain*'s leading module route reaches as *path* beneath it."""
+        ...
+
+    def projected_origins(self, alias: DeclarationKey, rest: ScopePath) -> frozenset[QName]:
+        """The scopes and types type *alias*'s own member table reaches as *rest* beneath it.
+
+        Those *rest* stands for beneath its target (:meth:`projected`), unless
+        hidden there; none when *alias* is no alias.
+        """
         ...
 
     def reader(self) -> Reader:
@@ -828,9 +836,8 @@ class _Walk:
                 for step in self._steps
                 if count > step.start
                 for owner in self._owners(step, count)
-                if (key := owner.target.key) is not None
-                and not owner.routed
-                and (target := sources.stands_for(key)) is not None
+                if (key := owner.target.key) is not None and not owner.routed
+                for target in sources.stands_for(key)
             )
         return stands
 
@@ -858,11 +865,15 @@ class _Walk:
                 applied.target, owner.layer, rest, chain, kind, routed=owner.routed
             )
         reading = sources.projected(key, owner.layer, rest, chain, kind, routed=owner.routed)
-        target = None if reading.candidates or owner.routed else sources.stands_for(key)
-        if target is None:
+        if reading.candidates or owner.routed:
             return reading
-        standing = _Standing(step, owner, key, target)
-        return reading + self._beside(step, standing, count, chain, kind)
+        return sum(
+            (
+                self._beside(step, _Standing(step, owner, key, target), count, chain, kind)
+                for target in sources.stands_for(key)
+            ),
+            reading,
+        )
 
     def _beside(
         self,
@@ -876,11 +887,13 @@ class _Walk:
 
         Where that path names only the alias's target at *step*, what
         contributions reach beneath it there is reached as the alias is (the
-        alias's own member table reads this module's declarations), and a
-        path a ``hiding`` removed there is refused. An alias applying its
-        target selects what its own member table does of what is reached. An
-        alias named as its target's path adds nothing: the walk reads that
-        path.
+        alias's own member table reads this module's declarations beneath
+        the target), and a path a ``hiding`` removed there is refused. Where
+        it names no type at *step*, this module's own declarations there are
+        a scope of its own named so, which the table never reads: they merge
+        with it. An alias applying its target selects what its own member
+        table does of what is reached. An alias named as its target's path
+        adds nothing: the walk reads that path.
         """
         sources, names = self._sources, self._names
         _, owner, key, target = standing
@@ -888,17 +901,21 @@ class _Walk:
             return Reading()
         spelled = (*step.path, *target.path)
         beside = (*spelled, *names[count:])
+        named = step.owners(spelled)
         reached = tuple(
-            replace(
+            candidate
+            if candidate.layer is ContributionLayer.DECLARED
+            else replace(
                 candidate,
                 layer=owner.layer,
                 origin=contribution_origin(candidate.origin.declaration, owner.layer),
             )
             for candidate in step.read(beside, kind).candidates
-            if candidate.layer is not ContributionLayer.DECLARED and not candidate.routed
+            if not candidate.routed
+            and (candidate.layer is not ContributionLayer.DECLARED or not named.candidates)
         )
         hidden = not reached and step.hidden(beside)
-        if not (reached or hidden) or not sources.names_only(target, step.owners(spelled)):
+        if not (reached or hidden) or not sources.names_only(target, named):
             return Reading()
         if hidden:
             return Reading(refusals=(self._hidden(chain),))
@@ -911,14 +928,17 @@ class _Walk:
     def named(self, origins: Callable[[_Step, ScopePath], frozenset[QName]]) -> frozenset[QName]:
         """The scopes and types the walk's full path names at every step, by *origins*.
 
-        An alias a written prefix reaches adds what the path it stands for
-        names in its place, as :meth:`_reading` reads it.
+        An alias a written prefix reaches adds what its own member table
+        reaches for the rest of the path, and what the path it stands for
+        names in its place, as :meth:`_reading` reads both.
         """
         names, sources = self._names, self._sources
         found: set[QName] = set()
         for step in self._steps:
             found |= origins(step, (*step.path, *names))
             for count in range(step.start + 1, len(names)):
+                for key in filter(None, (owner.target.key for owner in self._owners(step, count))):
+                    found |= sources.projected_origins(key, names[count:])
                 stands = self._standing(count)
                 if self._owners(step, count):
                     stands = tuple(standing for standing in stands if standing.step is step)

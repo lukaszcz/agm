@@ -60,6 +60,7 @@ from agm.agl.scope.imports import (
     build_import_env,
     declares_bare_constructor,
     matching_atoms,
+    target_modules,
     validate_import_items,
 )
 from agm.agl.scope.resolver import _Resolver
@@ -1009,6 +1010,55 @@ def _declared_keys(
     return scopes, placements
 
 
+def _anchored_regions(
+    program: Program, retained: Mapping[int, ScopePath], scopes: Mapping[int, ScopePath]
+) -> dict[int, ScopePath]:
+    """*scopes*, but each region of *program* in *retained* opening the scope path it maps to.
+
+    *retained* holds the regions a REPL session retained from earlier
+    entries, each at the scope path it opened then, however its spelling
+    reads now.
+    """
+    anchored = dict(scopes)
+    for region, written in _regions(program.body.items):
+        opened = retained.get(region.node_id)
+        if opened == written:
+            anchored.pop(region.node_id, None)
+        elif opened is not None:
+            anchored[region.node_id] = opened
+    return anchored
+
+
+def _superseded_imports(
+    program: Program,
+    scopes: Mapping[int, ScopePath],
+    retained: Collection[int],
+    targets: Mapping[int, ImportTarget],
+) -> frozenset[int]:
+    """The imports of *program*'s *retained* regions an import of its other regions replaces.
+
+    One naming the same module at the scope path its region opens (*scopes*,
+    else as written) replaces them, as a later REPL entry's import does.
+    """
+    written: set[tuple[ScopePath, ModuleId]] = set()
+    kept: list[tuple[int, ScopePath, tuple[ModuleId, ...]]] = []
+    for region, path in _regions(program.body.items):
+        opened = scopes.get(region.node_id, path)
+        for item in region.items:
+            if not isinstance(item, ImportDecl):
+                continue
+            modules = target_modules(targets[item.node_id])
+            if region.node_id in retained:
+                kept.append((item.node_id, opened, modules))
+            else:
+                written.update((opened, module) for module in modules)
+    return frozenset(
+        node_id
+        for node_id, opened, modules in kept
+        if any((opened, module) in written for module in modules)
+    )
+
+
 def _key_declarations(program: Program, scopes: Mapping[int, ScopePath]) -> Program:
     """Return *program* with each declaration in *scopes* written at the scope path it maps to.
 
@@ -1188,6 +1238,7 @@ def resolve_program(
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
     entry_repl_session_placements: Mapping[ScopePath, QName] | None = None,
+    entry_repl_session_regions: Mapping[int, ScopePath] | None = None,
     cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
@@ -1212,6 +1263,11 @@ def resolve_program(
         Each retained declaration keyed beneath another module's path, by
         its full path, mapped to the full path it is placed at there, as
         decided when it was declared.
+    entry_repl_session_regions:
+        Each region retained from a prior REPL entry to hold its imports, by
+        node id, mapped to the scope path it opened then: it opens that path
+        still, and its imports yield to an import this entry writes of the
+        same module at it.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -1462,6 +1518,17 @@ def resolve_program(
         }
 
     placements[graph.entry_id] = retained_placements(programs[graph.entry_id])
+    retained_regions = entry_repl_session_regions or {}
+
+    def current_imports(mid: ModuleId) -> tuple[ImportDecl, ...]:
+        """*mid*'s imports, but those of retained REPL regions an entry import replaces."""
+        imports = graph.modules[mid].imports
+        if mid != graph.entry_id:
+            return imports
+        superseded = _superseded_imports(
+            programs[mid], declared_scopes.get(mid, {}), retained_regions, all_targets
+        )
+        return tuple(decl for decl in imports if decl.node_id not in superseded)
 
     def prepare(mid: ModuleId) -> None:
         """Build *mid*'s import environment and resolver over the current exports."""
@@ -1475,11 +1542,12 @@ def resolve_program(
             import_envs[mid] = cached.import_env
             resolved_modules[mid] = cached
             return
+        imports = current_imports(mid)
         module_targets: dict[int, ImportTarget] = {
-            decl.node_id: all_targets[decl.node_id] for decl in loaded.imports
+            decl.node_id: all_targets[decl.node_id] for decl in imports
         }
         import_envs[mid] = build_import_env(
-            loaded.imports,
+            imports,
             module_targets,
             export_maps,
             scope_export_maps,
@@ -1518,7 +1586,7 @@ def resolve_program(
     def validate_imports(mid: ModuleId) -> None:
         """Reject an import item of *mid* naming nothing, over the exports as they now stand."""
         validate_import_items(
-            graph.modules[mid].imports, all_targets, export_maps, scope_export_maps, alias_origins
+            current_imports(mid), all_targets, export_maps, scope_export_maps, alias_origins
         )
 
     def declared_paths(mid: ModuleId) -> Mapping[NameAtom, QName]:
@@ -1647,6 +1715,10 @@ def resolve_program(
             declared_scopes[mid], placed = _declared_keys(
                 mid, programs[mid], declared_paths(mid), declared_regions(mid)
             )
+            if mid == graph.entry_id:
+                declared_scopes[mid] = _anchored_regions(
+                    programs[mid], retained_regions, declared_scopes[mid]
+                )
             if declared_scopes[mid]:
                 programs[mid] = _key_declarations(programs[mid], declared_scopes[mid])
             placements[mid] = (

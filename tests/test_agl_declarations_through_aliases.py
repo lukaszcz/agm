@@ -449,6 +449,11 @@ _NORMALIZED = {
         "type T5 = KT[int]\ntype Arr5[E] = KA[int, E]\ntype IA5 = KI[text]",
         "type B5[T] = KB[int, T]\ntype IB5 = KB[text, int]\ntype F5 = KF[int]",
     ),
+    "normalizing-its-arguments": (
+        "type Id[T] = T\n",
+        "type T5 = Id[text]\ntype Arr5[E] = array[Id[E]]\ntype IA5 = array[Id[int]]",
+        "type B5[T] = Box[Id[T]]\ntype IB5 = Box[Id[int]]\ntype F5 = Id[int] -> bool",
+    ),
 }
 """Aliases applying a generic alias of another module, by what each then denotes."""
 
@@ -476,6 +481,85 @@ _SCENARIOS |= {
         },
     )
     for name, (funcs, builtin, nominal) in _NORMALIZED.items()
+}
+
+_TYPES_OF_THEIR_OWN = (
+    "record Plain\n  x: int\ndef Plain::pm() -> int = 1\ntype P[T] = Plain\ntype Q[T] = P[T]"
+)
+"""``P``, a generic alias that is a type of its own, and ``Q``, another name for it."""
+
+
+def _renamed_type_of_its_own_probes(*, elsewhere: bool) -> dict[str, Probe]:
+    """Declarations beneath ``P`` and ``Q``, read through both; one ``elsewhere`` declares."""
+    probes: dict[str, Probe] = {}
+    for declared in ("P", "Q"):
+        second = f"def {'Q' if declared == 'P' else 'P'}::d() -> int = 2"
+        probes[f"{declared}-twice"] = rejected(
+            f"def {declared}::d() -> int = 1\n{second}", DuplicateDeclarationError, second
+        )
+        for read in ("P", "Q"):
+            probes |= {
+                f"{declared}-static-read-through-{read}": accepted(
+                    f"def {declared}::m() -> int = 1\n{read}::m()", "int"
+                ),
+                f"{declared}-record-read-through-{read}": accepted(
+                    f"record {declared}::R\n  b: int\n{read}::R(b = 1).b", "int"
+                ),
+                f"{declared}-region-read-through-{read}": accepted(
+                    f"scope {declared}\n  def z() -> int = 1\nend {declared}\n{read}::z()", "int"
+                ),
+            }
+    for read in ("P", "Q"):
+        probes |= {
+            f"{read}-target-path": accepted(f"{read}::pm()", "int"),
+            f"{read}-type": accepted(f"(fn(q: {read}[int]) => q.x)(Plain(x = 1))", "int"),
+            f"{read}-undeclared": rejected(f"{read}::zz()", UnknownMemberError, f"{read}::zz"),
+            f"{read}-no-target-path": rejected(
+                f"def {read}::m() -> int = 1\nPlain::m()", UnknownMemberError, "Plain::m"
+            ),
+        }
+        if elsewhere:
+            probes[f"{read}-declared-elsewhere"] = accepted(f"{read}::pz()", "int")
+    return probes
+
+
+_SCENARIOS |= {
+    "a-generic-alias-renaming-an-own-type-of-its-own-is-that-type": Scenario(
+        header=(_TYPES_OF_THEIR_OWN,),
+        probes=_renamed_type_of_its_own_probes(elsewhere=False),
+    ),
+    "a-generic-alias-renaming-an-imported-type-of-its-own-is-that-type": Scenario(
+        modules={
+            "pl": f"{_TYPES_OF_THEIR_OWN}\n",
+            "pz": "import pl::*\ndef P::pz() -> int = 4\n",
+        },
+        header=("import pl::*\nimport pz::*",),
+        probes=_renamed_type_of_its_own_probes(elsewhere=True),
+    ),
+}
+
+_CAPTURING = "record X\n  a: int\ntype A[T] = X\ntype C[X] = A[int]\ntype D = C[text]"
+"""``C`` applies ``A``, which stands for ``X``, with a parameter spelled ``X`` of its own."""
+
+_SCENARIOS |= {
+    f"applying-an-alias-never-captures-its-names-{name}": Scenario(
+        modules={"cap": f"{_CAPTURING}\n"},
+        header=(header,),
+        probes={
+            "renaming-static": accepted("def D::m() -> int = 1\nX::m()", "int"),
+            "renaming-reads-the-target": accepted("def X::n() -> int = 2\nD::n()", "int"),
+            "renaming-value": accepted("D(a = 1).a", "int"),
+            "renaming-type": accepted("(fn(d: D) => d.a)(X(a = 1))", "int"),
+            "own-type-static": accepted("def C::m() -> int = 1\nC::m()", "int"),
+            "own-type-record": accepted("record C::R\n  b: int\nC::R(b = 1).b", "int"),
+            "own-type-reads-the-target": accepted("def X::n() -> int = 2\nC::n()", "int"),
+            "own-type-no-target-path": rejected(
+                "def C::m() -> int = 1\nX::m()", UnknownMemberError, "X::m"
+            ),
+            "own-type-type": accepted("(fn(c: C[bool]) => c.a)(X(a = 1))", "int"),
+        },
+    )
+    for name, header in (("own", _CAPTURING), ("imported", "import cap::*"))
 }
 
 
@@ -1271,20 +1355,54 @@ class TestDeclarationsThroughAliases:
         assert_scenario(tmp_path, scenario)
 
 
+@pytest.mark.parametrize(
+    ("header", "record"),
+    [(_OWN_ALIAS, "base::Base"), (_IMPORTED_ALIAS, "base::Base"), (_LOCAL_TARGET, "Base")],
+)
 @pytest.mark.parametrize("spelling", ["Base", "Geo"])
-def test_info_describes_a_declaration_through_either_spelling(
-    tmp_path: Path, spelling: str
+def test_info_describes_a_declaration_through_either_spelling_by_its_declared_path(
+    tmp_path: Path, header: tuple[str, ...], record: str, spelling: str
 ) -> None:
     assert_repl_verdicts(
         tmp_path,
         _MODULES,
-        (*_OWN_ALIAS, "def Geo::g() -> int = 2"),
+        (
+            *header,
+            "def Geo::g() -> int = 2\ndef Geo::m(self) -> int = 3",
+            "scope Geo\n  def h() -> int = 4\nend Geo",
+            "let Geo::v = 5",
+            "record Geo::Gen[T]\n  v: T\ntype Geo::A[T] = array[T]",
+        ),
         {
-            "info": info(
+            "function": info(
                 f"{spelling}::g",
-                f"{spelling}::g is a function.\nSignature:\n  def {spelling}::g() -> int\n"
+                f"{spelling}::g is a function.\nSignature:\n  def Base::g() -> int\n"
                 "Location: <repl>:1:1",
-            )
+            ),
+            "method": info(
+                f"{spelling}::m",
+                f"{spelling}::m is a function.\nSignature:\n  def Base::m(self: {record}) -> int\n"
+                "Location: <repl>:2:1",
+            ),
+            "region-function": info(
+                f"{spelling}::h",
+                f"{spelling}::h is a function.\nSignature:\n  def Base::h() -> int\n"
+                "Location: <repl>:2:3",
+            ),
+            "binding": info(
+                f"{spelling}::v",
+                f"{spelling}::v is a binding.\nBinding:\n  let Base::v\nType:\n  int\nValue:\n  5\n"
+                "Location: <repl>:1:1",
+            ),
+            "generic-type": info(
+                f"{spelling}::Gen",
+                f"{spelling}::Gen is a generic record type.\nType:\n  record Base::Gen[T]\n"
+                "    v: T\nLocation: <repl>:1:1",
+            ),
+            "alias": info(
+                f"{spelling}::A",
+                f"{spelling}::A is a type alias.\nType:\n  type Base::A[T] = array[T]",
+            ),
         },
     )
 
@@ -1380,6 +1498,93 @@ def test_rebinding_the_alias_leaves_a_binding_declared_through_it_at_its_old_tar
         {
             "static": accepted("Base::v", "int"),
             "through-the-new-target": rejected("Geo::v", UnknownMemberError, "Geo::v"),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "header",
+    [_IMPORTED_ALIAS, (*_IMPORTED_ALIAS, "type Geo = Base")],
+    ids=["through-the-imported-alias", "through-an-own-alias-of-its-target"],
+)
+def test_an_own_alias_reaching_nothing_leaves_the_imported_alias_of_its_name_reaching(
+    tmp_path: Path, header: tuple[str, ...]
+) -> None:
+    """An own ``Geo`` re-pointed at ``Other`` reaches no ``v``; an imported one, ``Base::v``."""
+    assert_repl_verdicts(
+        tmp_path,
+        _MODULES,
+        (*header, "let Geo::v = 2", "record Other\n  w: int", "type Geo = Other"),
+        {
+            "through-the-alias": accepted("Geo::v", "int"),
+            "through-the-target": accepted("Base::v", "int"),
+            "the-own-alias": accepted("Geo(w = 1)", "record Other\n  w: int"),
+        },
+    )
+
+
+_LIB_MODULES = {**_MODULES, "lib": "def free() -> int = 6\ndef g() -> int = 7\n"}
+
+
+@pytest.mark.parametrize(
+    "imported",
+    ["import lib::{free}", "import lib::*", "import lib\n  use lib::{free}"],
+    ids=["an-import-tail", "an-import-wildcard", "a-use"],
+)
+@pytest.mark.parametrize(
+    "header",
+    [_OWN_ALIAS, _LOCAL_TARGET],
+    ids=["an-own-alias", "an-alias-of-an-own-type"],
+)
+def test_rebinding_the_alias_leaves_a_region_import_written_through_it_at_its_old_target(
+    tmp_path: Path, header: tuple[str, ...], imported: str
+) -> None:
+    """A later import of the same module through the rebound alias is at another path."""
+    assert_repl_verdicts(
+        tmp_path,
+        _LIB_MODULES,
+        (
+            *header,
+            f"scope Geo\n  {imported}\nend Geo",
+            "record Other\n  w: int",
+            "type Geo = Other",
+            "scope Geo\n  import lib::{g}\nend Geo",
+        ),
+        {
+            "the-old-target": accepted("def Base::k() -> int = free()\nBase::k()", "int"),
+            "the-new-target": accepted("def Other::k() -> int = g()\nOther::k()", "int"),
+            "not-at-the-new-target": rejected(
+                "def Other::k() -> int = free()\nOther::k()", AglScopeError, "free"
+            ),
+            "not-through-the-alias": rejected(
+                "def Geo::k() -> int = free()\nGeo::k()", AglScopeError, "free"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize("second", ["Geo", "Base"])
+@pytest.mark.parametrize("first", ["Geo", "Base"])
+@pytest.mark.parametrize(
+    "header",
+    [_OWN_ALIAS, _IMPORTED_ALIAS, _LOCAL_TARGET],
+    ids=["an-own-alias", "an-imported-alias", "an-alias-of-an-own-type"],
+)
+def test_a_later_region_import_through_either_spelling_replaces_an_earlier_one(
+    tmp_path: Path, header: tuple[str, ...], first: str, second: str
+) -> None:
+    """Both regions open the target's path: the later import of the module there replaces."""
+    assert_repl_verdicts(
+        tmp_path,
+        _LIB_MODULES,
+        (
+            *header,
+            f"scope {first}\n  import lib::{{free}}\nend {first}",
+            f"scope {second}\n  import lib::{{g}}\nend {second}",
+        ),
+        {
+            "replaced": rejected("def Base::k() -> int = free()\nBase::k()", AglScopeError, "free"),
+            "replacing": accepted("def Base::k() -> int = g()\nBase::k()", "int"),
         },
     )
 

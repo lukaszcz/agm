@@ -822,19 +822,12 @@ class TestInfo:
 
     @pytest.mark.parametrize("spelling", ("s::D", "DD"))
     def test_info_describes_a_scoped_alias_as_its_declaration(self, spelling: str) -> None:
-        """A scoped alias, qualified or renamed by ``use``, reads like a root declaration."""
+        """A scoped alias, qualified or renamed by ``use``, is described at its declared path."""
         scoped = _open_session()
         assert scoped.eval_entry("scope s\n  record P\n    x: int\n\n  type D = P\nend s").ok
         assert scoped.eval_entry("use s::{D as DD}").ok
-        root = _open_session()
-        assert root.eval_entry("record P\n  x: int\n\ntype D = P").ok
 
-        described = scoped.info_of(spelling)
-        declared = root.info_of("D")
-
-        assert described is not None
-        assert declared is not None
-        assert described.replace(spelling, "N") == declared.replace("D", "N")
+        assert scoped.info_of(spelling) == f"{spelling} is a type alias.\nType:\n  type s::D = P"
 
     def test_info_of_a_type_name_several_imports_contribute_describes_its_value(
         self, tmp_path: Path

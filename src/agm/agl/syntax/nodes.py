@@ -256,6 +256,11 @@ class QualifierChain:
         """Whether the chain uses an absolute module anchor."""
         return self.anchor is QualifierAnchor.MODULE
 
+    @property
+    def routed(self) -> bool:
+        """Whether the chain leads with a module route alone: anchored, or a slash route."""
+        return self.anchored or (bool(self.segments) and "/" in self.segments[0].name)
+
 
 @dataclass(frozen=True, slots=True)
 class VarRef:

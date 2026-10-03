@@ -583,9 +583,10 @@ _DECLARING_BENEATH = (
 def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
     """What ``hiding Geo, T2`` removes of the paths they reach, under every spelling.
 
-    *route* is the module route the paths are also spelled through. ``Geo``
-    spells ``base::Base`` by its route, so it reaches nothing its module
-    declares at ``Base``; ``T2::lt`` reaches what it declares at ``text``.
+    *route* is the module route the paths are also spelled through. Every
+    path beneath a removed alias is hidden. ``Geo`` spells ``base::Base`` by
+    its route, so what its module declares at ``Base`` stays; ``T2`` reaches
+    what it declares at ``text``, which goes with it.
     """
     spellings = (("", ""), ("-routed", f"{route}::"))
     return {
@@ -593,15 +594,16 @@ def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
             f"direct{routed}": accepted(f"{qualifier}Base::h()", "int")
             for routed, qualifier in spellings
         },
-        "by-the-alias": rejected("Geo::h()", UnknownQualifierError, "Geo::h"),
-        "by-the-alias-routed": rejected(
-            f"{route}::Geo::h()", UnknownMemberError, f"{route}::Geo::h"
-        ),
         **{
-            f"beneath-a-builtin-by-the-alias{routed}": rejected(
-                f"{qualifier}T2::lt()", HiddenMemberError, f"{qualifier}T2::lt"
+            f"{name}{routed}": rejected(
+                f"{qualifier}{path}()", HiddenMemberError, f"{qualifier}{path}"
             )
             for routed, qualifier in spellings
+            for name, path in (
+                ("by-the-alias", "Geo::h"),
+                ("beneath-a-builtin-by-the-alias", "T2::lt"),
+                ("beneath-a-builtin", "text::lt"),
+            )
         },
         "target": rejected("fn(x: Base) => x", AglTypeError, "Base"),
         "builtin-alias": rejected("fn(x: U) => x", AglTypeError, "U"),
@@ -619,14 +621,11 @@ _SCENARIOS |= {
         modules={"base": _BASE, "ad": _DECLARING_BENEATH},
         header=("import ad::* hiding Base\nimport ad hiding Base",),
         probes={
-            **{
-                f"direct{routed}": rejected(
-                    f"{qualifier}Base::h()", HiddenMemberError, f"{qualifier}Base::h"
-                )
-                for routed, qualifier in (("", ""), ("-routed", "ad::"))
-            },
-            "by-the-alias": rejected("Geo::h()", UnknownMemberError, "Geo::h"),
-            "by-the-alias-routed": rejected("ad::Geo::h()", UnknownMemberError, "ad::Geo::h"),
+            f"{name}{routed}": rejected(
+                f"{qualifier}{path}()", HiddenMemberError, f"{qualifier}{path}"
+            )
+            for routed, qualifier in (("", ""), ("-routed", "ad::"))
+            for name, path in (("direct", "Base::h"), ("by-the-alias", "Geo::h"))
         },
     ),
     "an-export-hiding-an-alias-removes-the-paths-it-reaches": Scenario(
@@ -638,6 +637,53 @@ _SCENARIOS |= {
         header=(_ROUTES,),
         probes=_beneath_hidden_alias_probes("ex"),
     ),
+}
+
+_REACHING = (
+    "import base::*\ntype HGeo = Base\ndef Base::j() -> int = 5\n"
+    "type T2 = text\ndef text::lt() -> int = 1\ndef other() -> int = 2\n"
+)
+"""Aliases of an imported type and of ``text``, beside declarations at their targets' paths."""
+
+
+def _hidden_reach_probes(route: str, hidden: Collection[str]) -> dict[str, Probe]:
+    """What hiding the aliases *hidden* of :data:`_REACHING` removes, bare and after *route*.
+
+    Each removes what its target's path reaches where it is declared, under
+    every spelling; the paths of an alias kept stay.
+    """
+    paths = {"HGeo": ("Base::j", "HGeo::j"), "T2": ("text::lt", "T2::lt")}
+    return {
+        f"{path}{routed}": (
+            rejected(f"{qualifier}{path}()", HiddenMemberError, f"{qualifier}{path}")
+            if alias in hidden
+            else accepted(f"{qualifier}{path}()", "int")
+        )
+        for routed, qualifier in (("", ""), ("-routed", f"{route}::"))
+        for alias, spelled in paths.items()
+        for path in spelled
+    } | {
+        "kept": accepted("other()", "int"),
+        "kept-routed": accepted(f"{route}::other()", "int"),
+        "builtin-kept": accepted('text::size("ab")', "int"),
+    }
+
+
+_SCENARIOS |= {
+    f"{name}-{'-'.join(hidden).lower()}-removes-what-its-site-reaches-beneath-the-target": Scenario(
+        modules={
+            "base": _BASE,
+            "hid": _REACHING,
+            "ex": f"import hid\nexport hid hiding {', '.join(hidden)}\n",
+        },
+        header=(header.format(items=", ".join(hidden)),),
+        probes=_hidden_reach_probes(route, hidden),
+    )
+    for hidden in (("HGeo", "T2"), ("HGeo",), ("T2",))
+    for name, route, header in (
+        ("an-import-hiding", "hid", "import hid::* hiding {items}\nimport hid hiding {items}"),
+        ("an-export-hiding", "ex", _ROUTES),
+    )
 }
 
 
@@ -1206,14 +1252,14 @@ _SCENARIOS |= {
             f"type PB = Id[{argument}]\n",
         },
         header=(
-            "import base::*\nimport pj",
+            "import base::*\nimport pj\nimport pj::{PB}",
             f"type Id[T] = {stands}\ntype Id2[T] = Id[T]",
             f"type IB = Id[{argument}]\ntype J = Id2[Id[{argument}]]",
         ),
         probes={
             **{
                 f"{spelling}-{position}": probe
-                for spelling in ("IB", "J", "pj::PB")
+                for spelling in ("IB", "J", "pj::PB", "PB")
                 for position, probe in {
                     "static": accepted(f"{spelling}::f()", "int"),
                     "nested-value": accepted(f"{spelling}::Inner(y = 1)", _INNER),
@@ -1507,28 +1553,54 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
     },
 )
 
-_SCENARIOS["an-item-through-an-alias-names-what-its-site-reaches-beneath-the-target"] = Scenario(
+_STRUCTURAL = "type Fn = (int) -> int\n"
+"""An alias of a structural type, which declares nothing beneath it."""
+
+_FORWARDING_TEXT = (
+    "import tx::* hiding text::zz, text::sub::zz\nexport tx::{text::yy}\ntype V3 = text\n"
+)
+"""An alias of ``text`` beside a re-export of ``tx``'s ``text::yy``."""
+
+_SCENARIOS["an-item-through-an-alias-names-what-its-module-exports-beneath-the-target"] = Scenario(
     modules={
         "tx": _TEXT_SCOPE,
         "bj": _HIDING_SITE,
-        "ex": "import bj\nexport bj::{V2::yy}\n",
-        "eh": "import bj\nexport bj hiding V2::yy\n",
+        "bk": _FORWARDING_TEXT,
+        "ex": "import bk\nexport bk::{V3::yy}\n",
+        "eh": "import bk\nexport bk hiding V3::yy\n",
+        "fx": _STRUCTURAL,
     },
     header=(),
     probes={
-        "tail": accepted("import bj::{V2::yy, V2::sub::yy}\nV2::yy() + V2::sub::yy()", "int"),
-        "tail-hidden-at-the-alias-site": rejected(
-            "import bj::{V2::zz}\n1", UnknownMemberError, "import bj::{V2::zz}"
+        "tail": accepted("import bk::{V3::yy}\nV3::yy()", "int"),
+        **{
+            f"{item}-{name}": rejected(
+                f"import {module}::{written}\n1",
+                UnknownMemberError,
+                f"import {module}::{written}",
+            )
+            for item, form in (("tail", "{{{path}}}"), ("hiding", "* hiding {path}"))
+            for name, module, path in (
+                ("reached-only-where-declared", "bj", "V2::yy"),
+                ("hidden-where-declared", "bj", "V2::zz"),
+                ("not-exported", "bk", "V3::sub::yy"),
+                ("beneath-a-structural-target", "fx", "Fn::x"),
+            )
+            for written in (form.format(path=path),)
+        },
+        "hiding": rejected("import bk::* hiding V3::yy\nV3::yy()", HiddenMemberError, "V3::yy"),
+        "hiding-the-target-path": rejected(
+            "import bk::* hiding V3::yy\ntext::yy()", HiddenMemberError, "text::yy"
         ),
-        "hiding": rejected("import bj::* hiding V2::yy\nV2::yy()", HiddenMemberError, "V2::yy"),
-        "hiding-keeps-another": accepted("import bj::* hiding V2::yy\nV2::sub::yy()", "int"),
-        "hiding-hidden-at-the-alias-site": rejected(
-            "import bj::* hiding V2::zz\n1", UnknownMemberError, "import bj::* hiding V2::zz"
+        "routed-hiding": rejected(
+            "import bk hiding V3::yy\nbk::text::yy()", HiddenMemberError, "bk::text::yy"
         ),
-        "export-item": accepted("import ex::*\nV2::yy()", "int"),
-        "export-item-routed": accepted("import ex\nex::V2::yy()", "int"),
-        "export-hiding": rejected("import eh::*\nV2::yy()", HiddenMemberError, "V2::yy"),
-        "export-hiding-keeps-another": accepted("import eh::*\nV2::sub::yy()", "int"),
+        "export-item": accepted("import ex::*\nV3::yy()", "int"),
+        "export-item-routed": accepted("import ex\nex::V3::yy()", "int"),
+        "export-hiding": rejected("import eh::*\nV3::yy()", HiddenMemberError, "V3::yy"),
+        "export-hiding-the-target-path": rejected(
+            "import eh::*\ntext::yy()", HiddenMemberError, "text::yy"
+        ),
     },
 )
 
@@ -1543,8 +1615,8 @@ _BENEATH = (
 )
 """Declares paths beneath ``base``'s ``Base`` and beneath ``text``."""
 _BENEATH_TOO = "import base::*\n\ndef Base::k() -> int = 2\n"
-_FORWARDING = "import base::*\n\nscope Base\n  export lib::{free}\nend Base\n"
-"""Forwards ``lib``'s ``free`` beneath ``base``'s ``Base``."""
+_FORWARDING = "import base::*\n\nscope Base\n  export lib::{free}\nend Base\n\ntype FG = Base\n"
+"""Forwards ``lib``'s ``free`` beneath ``base``'s ``Base``, beside an alias of ``Base``."""
 _FORWARDING_THROUGH = "import base::*\nimport al::*\n\nscope Geo\n  export lib::{free}\nend Geo\n"
 _NAMED_ALIKE = "scope Base\n  def o() -> int = 3\nend Base\n"
 """Declares a scope of its own named like ``base``'s ``Base``."""
@@ -1588,6 +1660,19 @@ _SCENARIOS["an-alias-reaches-nothing-its-reader-imports-beneath-the-target-path"
         "forwarded": _unknown_call("Geo::free", "import fw::*\nGeo::free()"),
         "forwarded-through-an-alias": accepted("import fg::*\nGeo::free()", "int"),
         "forwarded-by-a-route": accepted("import fg\nfg::Geo::free()", "int"),
+        **{
+            f"forwarded-beneath-the-target-by-a-route{name}": accepted(
+                f"import fw\n{route}fw::FG::free()", "int"
+            )
+            for name, route in (("", ""), ("-anchored", "/"))
+        },
+        **{
+            f"by-a-route-only-what-it-exports{name}": _unknown_call(
+                f"{route}fw::FG::f", f"import fw\n{route}fw::FG::f()"
+            )
+            for name, route in (("", ""), ("-anchored", "/"))
+        },
+        "the-alias-reads-where-declared": accepted("import fw::*\nFG::f()", "int"),
         "declared": _unknown_call("Geo::k", "import nb::*\nGeo::k()"),
         "own-alias": accepted("import nb::*\ntype OG = Base\nOG::k()", "int"),
         "annotation": rejected(
@@ -1800,12 +1885,17 @@ def test_an_unresolved_alias_target_is_an_error_where_the_alias_is_declared(
         pytest.param("import al\nexport al hiding Geo::Nope\n", id="hiding"),
         pytest.param("import bj\nexport bj::{V2::zz}\n", id="item-hidden-at-the-alias-site"),
         pytest.param("import bj\nexport bj hiding V2::zz\n", id="hiding-hidden-at-the-alias-site"),
+        pytest.param("import bj\nexport bj::{V2::yy}\n", id="item-reached-only-at-the-alias-site"),
+        pytest.param(
+            "import bj\nexport bj hiding V2::yy\n", id="hiding-reached-only-at-the-alias-site"
+        ),
+        pytest.param("import fx\nexport fx::{Fn::x}\n", id="item-beneath-a-structural-target"),
     ],
 )
 def test_an_export_item_through_an_alias_naming_nothing_is_an_error_where_written(
     tmp_path: Path, export: str
 ) -> None:
-    modules = {**_MODULES, "tx": _TEXT_SCOPE, "bj": _HIDING_SITE}
+    modules = {**_MODULES, "tx": _TEXT_SCOPE, "bj": _HIDING_SITE, "fx": _STRUCTURAL}
     phase, error, span, _identity = inline_verdict(
         tmp_path, {"entry": "import ex\n1", "ex": export, **modules}
     )

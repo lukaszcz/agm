@@ -621,7 +621,7 @@ _SCENARIOS |= {
                 "record-type": accepted(f"(fn(p: {reached}::R) => p.z)(Base::R(z = 1))", "int"),
                 # A module route reaches only what the module declares or exports.
                 "target": rejected(f"{reached}::f()", UnknownMemberError, f"{reached}::f")
-                if reached == "thr::Base"
+                if "thr::" in reached
                 else accepted(f"{reached}::f()", "int"),
             }.items()
         },
@@ -687,7 +687,8 @@ def _region_export_probes(
     """What a ``scope Base`` region's export *forwarded*, and its own ``h``, read after *route*.
 
     ``Geo`` reads ``Base`` where it is declared, which reads none of the
-    module's own exports.
+    module's own exports; a module route reads through it what the module
+    exports beneath ``Base``.
     """
     return {
         f"{spelling}-{name}": accepted(f"{route}{spelling}::{name}()", verdict)
@@ -695,7 +696,7 @@ def _region_export_probes(
         else rejected(f"{route}{spelling}::{name}()", verdict, f"{route}{spelling}::{name}")
         for spelling, verdicts in (
             ("Base", forwarded),
-            ("Geo", dict.fromkeys(forwarded, UnknownMemberError)),
+            ("Geo", forwarded if route else dict.fromkeys(forwarded, UnknownMemberError)),
         )
         for name, verdict in {**verdicts, "h": "int"}.items()
     }
@@ -835,44 +836,134 @@ _LITERAL = {
     "base": "record Base\n  x: int\ndef Base::f() -> int = 1\n",
     "t3": "import base::*\ndef Base::k() -> int = 3\n",
     "s3": "import base::*\nimport t3::*\ntype Geo3 = Base\n",
+    "s4": (
+        "import base::*\nimport t3::*\nexport base::{Base}\nexport t3::{Base::k}\n"
+        "type Geo4 = Base\n"
+    ),
     "sr": "import base\ndef Base::g() -> int = 2\ntype GeoR = base::Base\n",
     "tz": "def array::z() -> int = 1\ndef array::y() -> int = 2\n",
     "sz": "import tz::* hiding array::z\ntype IA = array[int]\n",
     "sg": "import base::*\n\nscope r\n  type G = Base\nend r\n\ndef r::Base::k() -> int = 4\n",
+    "sa": (
+        "record Base\n  y: int\n\nscope r\n  type G = ::Base\nend r\n\n"
+        "def r::Base::k() -> int = 4\ndef Base::m() -> int = 5\n"
+    ),
 }
 """Aliases whose target spelling reads, where they are declared, an import the module keeps
-(``s3``), a module route (``sr``), an import's ``hiding`` (``sz``) and a region's own path
-(``sg``)."""
+(``s3``) or exports (``s4``), a module route (``sr``), an import's ``hiding`` (``sz``) and a
+region's own path (``sg``), or the root alone (``sa``)."""
 
 
-def _literal_probes(route: str, region: str) -> dict[str, Probe]:
-    """What each alias of :data:`_LITERAL` reaches, read after *route* (*region* for ``sg``)."""
+def _literal_probes(route: str, region: str, *, exported_only: bool) -> dict[str, Probe]:
+    """What each alias of :data:`_LITERAL` reaches, read after *route* (*region* for ``sg``);
+    *exported_only* when the read reaches only what the alias's module exports beneath the
+    target."""
+
+    def reached(path: str, *, kept: bool = True) -> Probe:
+        if kept and not exported_only:
+            return accepted(f"{path}()", "int")
+        return rejected(f"{path}()", UnknownMemberError, path)
+
     return {
-        "a-site-import": accepted(f"{route.format('s3')}Geo3::k()", "int"),
-        "a-site-import-beside-the-target": accepted(f"{route.format('s3')}Geo3::f()", "int"),
-        "a-route-spelling": rejected(
-            f"{route.format('sr')}GeoR::g()", UnknownMemberError, f"{route.format('sr')}GeoR::g"
-        ),
+        "a-site-import": reached(f"{route.format('s3')}Geo3::k"),
+        "a-site-import-beside-the-target": reached(f"{route.format('s3')}Geo3::f"),
+        "a-site-export": accepted(f"{route.format('s4')}Geo4::k()", "int"),
+        "a-site-export-beside-the-target": accepted(f"{route.format('s4')}Geo4::f()", "int"),
+        "a-route-spelling": reached(f"{route.format('sr')}GeoR::g", kept=False),
         "a-route-spelling-reaches-the-route": accepted(f"{route.format('sr')}GeoR::f()", "int"),
-        "a-site-hiding": rejected(
-            f"{route.format('sz')}IA::z()", HiddenMemberError, f"{route.format('sz')}IA::z"
+        "a-site-hiding": (
+            reached(f"{route.format('sz')}IA::z", kept=False)
+            if exported_only
+            else rejected(
+                f"{route.format('sz')}IA::z()", HiddenMemberError, f"{route.format('sz')}IA::z"
+            )
         ),
-        "beside-a-site-hiding": accepted(f"{route.format('sz')}IA::y()", "int"),
+        "beside-a-site-hiding": reached(f"{route.format('sz')}IA::y"),
         "a-region-step": accepted(f"{region}r::G::k()", "int"),
-        "a-region-step-reaches-the-root": accepted(f"{region}r::G::f()", "int"),
+        "a-region-step-reaches-the-root": reached(f"{region}r::G::f"),
     }
 
 
 _SCENARIOS |= {
     "an-alias-reads-its-target-as-written-where-declared-importer": Scenario(
         modules=_LITERAL,
-        header=("import s3::{Geo3}\nimport sr::{GeoR}", "import sz::{IA}\nimport sg::*"),
-        probes=_literal_probes("", ""),
+        header=(
+            "import s3::{Geo3}\nimport s4::{Geo4}\nimport sr::{GeoR}",
+            "import sz::{IA}\nimport sg::*",
+        ),
+        probes=_literal_probes("", "", exported_only=False),
     ),
-    "an-alias-reads-its-target-as-written-where-declared-route": Scenario(
+    **{
+        f"an-alias-reads-what-its-module-exports-beneath-the-target-{name}": Scenario(
+            modules=_LITERAL,
+            header=("import s3\nimport s4\nimport sr", "import sz\nimport sg"),
+            probes=_literal_probes(f"{anchor}{{}}::", f"{anchor}sg::", exported_only=True),
+        )
+        for name, anchor in (("route", ""), ("anchored-route", "/"))
+    },
+    **{
+        f"an-anchored-target-reads-the-root-alone-{name}": Scenario(
+            modules=_LITERAL,
+            header=(header,),
+            probes={
+                "own-at-the-root": accepted(f"{route}r::G::m()", "int"),
+                "own-in-the-region": rejected(
+                    f"{route}r::G::k()", UnknownMemberError, f"{route}r::G::k"
+                ),
+            },
+        )
+        for name, header, route in (
+            ("importer", "import sa::*", ""),
+            ("route", "import sa", "sa::"),
+        )
+    },
+    "an-item-through-an-alias-names-what-its-module-exports-beneath-the-target": Scenario(
         modules=_LITERAL,
-        header=("import s3\nimport sr", "import sz\nimport sg"),
-        probes=_literal_probes("{}::", "sg::"),
+        header=("import base::*",),
+        probes={
+            "unexported": rejected(
+                "import s3::{Geo3::k}\nGeo3::k()", UnknownMemberError, "import s3::{Geo3::k}"
+            ),
+            "exported": accepted("import s4::{Geo4::k}\nGeo4::k()", "int"),
+            "a-region-step": accepted("import sg::{r::G::k}\nr::G::k()", "int"),
+            "a-region-step-unexported": rejected(
+                "import sg::{r::G::f}\nr::G::f()", UnknownMemberError, "import sg::{r::G::f}"
+            ),
+            "beside-a-site-hiding": rejected(
+                "import sz::{IA::y}\nIA::y()", UnknownMemberError, "import sz::{IA::y}"
+            ),
+            "hiding-unexported": rejected(
+                "import s3::* hiding Geo3::k\nGeo3::f()",
+                UnknownMemberError,
+                "import s3::* hiding Geo3::k",
+            ),
+            "hiding-exported": rejected(
+                "import s4::* hiding Geo4::k\nGeo4::k()", HiddenMemberError, "Geo4::k"
+            ),
+        },
+    ),
+    "an-anchor-narrows-what-an-own-alias-reaches": Scenario(
+        modules=_LITERAL,
+        header=("import base::*\nimport t3::*", "type OG = Base", "def Base::w() -> int = 7"),
+        probes={
+            "imported-beneath-the-target": rejected("::OG::k()", UnknownMemberError, "::OG::k"),
+            "imported-target-member": rejected("::OG::f()", UnknownMemberError, "::OG::f"),
+            "own-beneath-the-target": accepted("::OG::w()", "int"),
+            "unanchored": accepted("OG::k()", "int"),
+        },
+    ),
+    "an-anchor-narrows-what-an-own-alias-in-a-region-reaches": Scenario(
+        modules=_LITERAL,
+        header=(
+            "import base::*",
+            "scope r\n  type G = Base\nend r",
+            "def r::Base::k() -> int = 4",
+        ),
+        probes={
+            "own-at-a-region-step": accepted("::r::G::k()", "int"),
+            "imported-at-the-root": rejected("::r::G::f()", UnknownMemberError, "::r::G::f"),
+            "unanchored": accepted("r::G::f()", "int"),
+        },
     ),
     "an-own-alias-reads-its-target-as-written-a-site-import": Scenario(
         modules=_LITERAL,

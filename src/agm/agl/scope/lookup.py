@@ -246,14 +246,18 @@ class PathSources(DeclarationNames, Protocol):
         kind: LookupKind,
         *,
         owners_within: int,
+        written: ScopePath,
     ) -> Reading:
         """What type *owner*, made visible by *layer*, selects for *rest* in a position of *kind*.
 
-        *rest* is the tail of *chain*'s names after the owner's. The owner's
-        own member table decides; beneath an alias, *rest* is read as its
-        target as written, where the alias is declared, read
-        (:func:`lookup_through`). Only a type *chain*'s first *owners_within*
-        names reach, or an alias, projects its member table there.
+        *rest* is the tail of *chain*'s names after the owner's, and
+        *written* the owner's full path as read. The owner's own member table
+        decides; beneath an alias, *rest* is read as its target as written,
+        where the alias is declared, read (:func:`lookup_through`) -- or,
+        when *chain* reached the owner through ``::`` or a module route, as
+        that anchor or route reads the target's paths there. Only a type
+        *chain*'s first *owners_within* names reach, or an alias, projects
+        its member table there.
         """
         ...
 
@@ -563,9 +567,7 @@ def lookup_qualified(
 
 def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
     """Return where *chain*, written in *scope_path*, is read."""
-    if chain is not None and (
-        chain.anchor is QualifierAnchor.MODULE or (chain.segments and "/" in chain.segments[0].name)
-    ):
+    if chain is not None and chain.routed:
         routed = chain
         return _Anchor(
             (
@@ -674,8 +676,22 @@ class _Walk:
         )
 
     def hides(self) -> bool:
-        """Whether a ``hiding`` removed the walk's full path at any of its steps."""
-        return any(step.hidden((*step.path, *self._names)) for step in self._steps)
+        """Whether a ``hiding`` removed the walk's full path at any of its steps.
+
+        Removing a written prefix -- its path, or every type it reaches --
+        removes every path beneath it.
+        """
+        names, sources = self._names, self._sources
+        return any(
+            step.hidden((*step.path, *names[:count]))
+            or (
+                count < len(names)
+                and bool(owners := self._owners(step, count))
+                and all(is_removed(owner, sources) for owner in owners)
+            )
+            for step in self._steps
+            for count in range(step.start + 1, len(names) + 1)
+        )
 
     def reached(self, kind: LookupKind, owners_within: int) -> tuple[Candidate, ...]:
         """Return what the first step reaching a declaration of *kind* reaches; own ones alone.
@@ -756,7 +772,7 @@ class _Walk:
                 key = owner.target.key
                 if key is not None and (count <= owners_within or self._sources.aliases(key)):
                     reading += _reached_as(
-                        self._beneath(owner, key, count, chain, kind, owners_within),
+                        self._beneath(step, owner, key, count, chain, kind, owners_within),
                         owner,
                         self._sources,
                     )
@@ -773,6 +789,7 @@ class _Walk:
 
     def _beneath(
         self,
+        step: _Step,
         owner: Candidate,
         key: DeclarationKey,
         count: int,
@@ -780,7 +797,7 @@ class _Walk:
         kind: LookupKind,
         owners_within: int,
     ) -> Reading:
-        """What type *key*, which *owner* reached as the first *count* names, selects beneath.
+        """What type *key*, which *owner* reached at *step* as the first *count* names, selects.
 
         Its own member table selects for the rest of the names
         (:meth:`PathSources.projected`); an applied segment's, the type it
@@ -794,7 +811,15 @@ class _Walk:
             return sources.beneath_applied(
                 applied, rest, chain, kind, site=self._site, owners_within=within
             )
-        return sources.projected(key, owner.layer, rest, chain, kind, owners_within=within)
+        return sources.projected(
+            key,
+            owner.layer,
+            rest,
+            chain,
+            kind,
+            owners_within=within,
+            written=(*step.path, *self._names[:count]),
+        )
 
     def named(
         self, chain: QualifierChain, origins: Callable[[_Step, ScopePath], frozenset[QName]]

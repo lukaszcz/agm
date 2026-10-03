@@ -53,27 +53,23 @@ def selection_node_id(spelling: NameT | AppliedT | VariantRef) -> int:
 
 
 def member_chain(owner: NameT | AppliedT, path: ScopePath) -> QualifierChain:
-    """Return the chain spelling ``owner::path``, *owner* as written.
+    """Return the chain spelling ``owner::path``, *owner* as written; *owner* alone for no *path*.
 
     The inverse of :func:`owner_type_expr` for a one-name *path*.
     """
     qualifier = owner.qualifier
-    segments = (
-        QualifierSegment(
-            owner.name,
-            owner.args if isinstance(owner, AppliedT) else None,
-            span=owner.span,
-            node_id=owner.node_id,
-        ),
-        *(
-            QualifierSegment(name, None, span=owner.span, node_id=owner.node_id)
-            for name in path[:-1]
-        ),
+    written = (
+        (owner.name, owner.args if isinstance(owner, AppliedT) else None),
+        *((name, None) for name in path),
+    )
+    segments = tuple(
+        QualifierSegment(name, args, span=owner.span, node_id=owner.node_id)
+        for name, args in written[:-1]
     )
     return QualifierChain(
         anchor=None if qualifier is None else qualifier.anchor,
         segments=(*(() if qualifier is None else qualifier.segments), *segments),
-        member=path[-1],
+        member=written[-1][0],
         span=owner.span,
         node_id=owner.node_id,
     )

@@ -530,18 +530,27 @@ def _raise_reexport_scope_conflict(exposed: NameAtom, decl: ExportDecl) -> None:
 Through = Callable[[ModuleId, PathAtom], Mapping[PathAtom, QName]]
 """The declarations a path beneath an alias module *ModuleId* exports reaches.
 
-What its target as written, then the rest of the path, reaches where the
-alias is declared, and every declaration beneath that, keyed by their paths
-relative to it; none when the path lies beneath no exported alias or the
-alias's module is not resolved yet.
+What the module exports at its target's path, then the rest of the path, and
+beneath that -- for a target leading with a module route, what it as written
+reaches there where the alias is declared -- keyed by their paths relative to
+it; none when the path lies beneath no exported alias or the alias's module is
+not resolved yet.
 """
 
 
 class Denotations(Protocol):
-    """What declaration a full path names (:class:`TypeOwnerIndex`)."""
+    """What declaration a full path names, and what a ``hiding`` naming it removes."""
 
     def identity(self, qname: QName) -> QName:
         """The declaration full path *qname* names."""
+        ...
+
+    def removed_by(self, qname: QName) -> frozenset[QName]:
+        """What a ``hiding`` naming *qname* removes, by :meth:`identity`.
+
+        The declaration it names, and the scopes and types a path beneath an
+        alias is read in.
+        """
         ...
 
 
@@ -563,6 +572,26 @@ class _Unresolved:
 
     def identity(self, qname: QName) -> QName:
         return qname
+
+    def removed_by(self, qname: QName) -> frozenset[QName]:
+        return frozenset({qname})
+
+
+@dataclass(frozen=True, slots=True)
+class _Reaching:
+    """:class:`Denotations` once aliases resolve: *owners* name, *reached* reads beneath aliases.
+
+    *reached* tells the scopes and types a path beneath an alias is read in.
+    """
+
+    owners: TypeOwnerIndex
+    reached: Callable[[QName], frozenset[QName]]
+
+    def identity(self, qname: QName) -> QName:
+        return self.owners.identity(qname)
+
+    def removed_by(self, qname: QName) -> frozenset[QName]:
+        return frozenset(map(self.identity, (qname, *self.reached(qname))))
 
 
 def _is_beneath_any(qname: QName, removed: Collection[QName]) -> bool:
@@ -728,9 +757,9 @@ def _compute_reexport_additions(
     An item matching nothing the target exports names what *through* reaches
     beneath an alias the target exports, less what the target withholds
     beneath it, and forwards it. A ``hiding`` item removes the declarations
-    it names, every one beneath them and beneath the scopes an alias of a
-    built-in type among them stands for, whatever atom spells them (by
-    *denotations*), and each forwarded atom withholds them beneath it too; an
+    it names and every one beneath them or beneath what a path beneath an
+    alias among them is read in, whatever atom spells them (by
+    :meth:`Denotations.removed_by`), and each forwarded atom withholds them beneath it too; an
     atom a whole-module export's ``hiding`` removes, or the target's did, is
     recorded removed. With *allow_missing*, a selected item matching nothing
     forwards nothing, and a ``hiding`` item matching nothing withholds the
@@ -786,9 +815,10 @@ def _compute_reexport_additions(
         # final one, which a later pass reaches.
         return _Additions(result, withheld_result, scope_result)
     removed = frozenset(
-        denotations.identity(origin)
+        removed
         for declarations, _scopes, reached in hidden_items
         for origin in (*(target_exports[source] for source in declarations), *reached.values())
+        for removed in denotations.removed_by(origin)
     )
     hidden_scopes = {source for _declarations, scopes, _named in hidden_items for source in scopes}
 
@@ -1239,7 +1269,14 @@ def resolve_program(
         if found is None:
             return {}
         alias, rest = found
-        return sources_of(alias[0]).exported_through(alias, rest, declared_in_program)
+        return sources_of(alias[0]).exported_through(
+            alias, rest, export_maps[module_id], declared_in_program
+        )
+
+    def reached_beneath(qname: QName) -> frozenset[QName]:
+        if qname not in alias_origins:
+            return frozenset()
+        return sources_of(qname[0]).reached_beneath(qname)
 
     import_envs: dict[ModuleId, ImportEnv] = {}
 
@@ -1317,7 +1354,7 @@ def resolve_program(
             graph,
             members,
             through,
-            type_owners,
+            _Reaching(type_owners, reached_beneath),
             validate=validate,
         )
 

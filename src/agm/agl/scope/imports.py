@@ -43,7 +43,6 @@ __all__ = [
     "contribution_routes",
     "matching_atoms",
     "qualifier_candidates",
-    "qualifier_decls",
     "qualifier_hides",
     "qualifier_exposures",
     "qualifier_member_decls",
@@ -116,7 +115,7 @@ class ModuleContribution:
     """One imported module's route-keyed declaration and named-scope contribution.
 
     ``path_decls`` and ``alias_decls`` are the import declarations forming
-    each route.
+    each route; ``exports`` is everything the module exports, hidden or not.
     """
 
     module: ModuleId
@@ -135,6 +134,7 @@ class ModuleContribution:
     )
     path_decls: frozenset[int] = frozenset()
     alias_decls: Mapping[str, frozenset[int]] = field(default_factory=dict)
+    exports: Mapping[NameAtom, QName] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         members: Mapping[NameAtom, QName] = MappingProxyType(
@@ -644,6 +644,7 @@ def build_import_env(
             {alias: _frozen_decls(decls) for alias, decls in acc.alias_member_decls.items()},
             frozenset(acc.path_decls),
             _frozen_decls(acc.alias_decls),
+            exports[module],
         )
     return ImportEnv(
         contributions=contributions,
@@ -834,24 +835,6 @@ def qualifier_hides(
         for module in qualifier_candidates(env, qualifier, anchored=anchored)
         for route in _matching_contribution_routes(
             env.contributions[module], qualifier, anchored=anchored
-        )
-    )
-
-
-def qualifier_decls(
-    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
-) -> frozenset[int]:
-    """Return the import declarations forming every route *qualifier* names."""
-    return frozenset(
-        node_id
-        for module in qualifier_candidates(env, qualifier, anchored=anchored)
-        for route in _matching_contribution_routes(
-            env.contributions[module], qualifier, anchored=anchored
-        )
-        for node_id in (
-            env.contributions[module].path_decls
-            if route is None
-            else env.contributions[module].alias_decls[route]
         )
     )
 

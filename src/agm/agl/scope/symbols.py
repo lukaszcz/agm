@@ -43,10 +43,13 @@ from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     AttributeKeyedArg,
+    EnumDef,
+    ExceptionDef,
     ExportItem,
     FuncDef,
     ImportItem,
     Program,
+    RecordDef,
     TypeAlias,
     UseDecl,
 )
@@ -519,11 +522,10 @@ class TypeOwner:
     none of them, but spelling one is a focused error rather than an unknown
     name. ``alias`` is an alias path's declaration. ``injected`` holds, for an
     enum declaration only, its referenced members' record constructors, whose
-    names a root enum injects bare. ``hidden`` holds, relative to an alias's
-    target, the paths of the declarations beneath it that the alias's target
-    spelling cannot reach where the alias is declared, since a ``hiding``
-    removed them: an inline member's is its name alone, and hidden members
-    are left out of ``members``. ``target`` holds, for an alias
+    names a root enum injects bare. ``hidden`` holds, for an alias, the
+    paths of its target's inline members that the alias's target spelling
+    cannot reach where the alias is declared, since a ``hiding`` removed
+    them: each a member's name alone, left out of ``members``. ``target`` holds, for an alias
     with a nominal target, the target's identity (:class:`TypeTarget`): what a
     REPL entry retains and never re-selects, however later entries redeclare
     or import around it. ``own_path_referenced`` holds, for
@@ -533,10 +535,7 @@ class TypeOwner:
     alias too (``B::Item`` with ``type B = Box``). ``arity`` is the number of
     type parameters the declaration itself takes. ``builtin`` is, for an
     alias of a built-in type (directly or through aliases), that type in
-    terms of the alias's own type parameters; ``scopes`` are then the scope
-    paths the built-in's name names as a qualifier where the alias of it is
-    declared -- that module's own path spelled so among them -- and
-    ``hidden`` is relative to them. ``stands_for`` is, for an alias, the type
+    terms of the alias's own type parameters. ``stands_for`` is, for an alias, the type
     expression it stands for where it is declared: its target expression, or
     the argument there of an alias standing for one of its type parameters
     (``Id[Base]`` with ``type Id[T] = T`` stands for ``Base``), or what any
@@ -557,14 +556,7 @@ class TypeOwner:
     own_path_referenced: frozenset[str] = frozenset()
     arity: int = 0
     builtin: TypeExpr | None = None
-    scopes: frozenset[QName] = frozenset()
     stands_for: TypeExpr | None = None
-
-    @property
-    def builtin_name(self) -> str | None:
-        """The name of the built-in type :attr:`builtin` is, if any."""
-        named = None if self.builtin is None else named_builtin_type(self.builtin)
-        return None if named is None else named.name
 
     @property
     def renames(self) -> bool:
@@ -597,10 +589,6 @@ class TypeOwner:
             return False
         named = target if isinstance(target, (NameT, AppliedT)) else named_builtin_type(target)
         return isinstance(named, AppliedT) and not passes_parameters(alias.type_params, named)
-
-    def hides(self, path: ScopePath) -> bool:
-        """Whether *path* beneath the alias's target, or a path above it, is :attr:`hidden`."""
-        return any(path[:end] in self.hidden for end in range(1, len(path) + 1))
 
     @property
     def constructs(self) -> bool:
@@ -1136,10 +1124,14 @@ class ModuleResolution:
         The segments of every path the module declares -- a REPL session's
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
         data a diagnostic spelling another module's declaration anchors by.
-    ``spelled_types``
-        Each own scope path spelling another module's type, to that type's
-        declaration: a later resolution reusing the module reads beneath it
-        what the module declares beneath that type.
+    ``scope_entity_kinds``, ``import_decl_scope_paths``, ``type_declarations``,
+    ``scoped_constructor_candidates``, ``injected_constructors``
+        What each own full path declares (a scope, a type or an ordinary
+        declaration), each import declaration's region, each type declaration
+        with the scope path it is declared in, the constructors each scoped
+        spelling names, and the enum members injected bare at each step: with
+        the tables above, what a later resolution reusing the module reads
+        its paths through, as at an alias's declaration.
     """
 
     program: Program
@@ -1170,7 +1162,17 @@ class ModuleResolution:
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
     replaced_uses: dict[int, frozenset[int]] = field(default_factory=dict)
     declared_segments: frozenset[str] = frozenset()
-    spelled_types: dict[ScopePath, QName] = field(default_factory=dict)
+    scope_entity_kinds: dict[DeclarationKey, str] = field(default_factory=dict)
+    import_decl_scope_paths: dict[int, ScopePath] = field(default_factory=dict)
+    type_declarations: tuple[
+        tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath], ...
+    ] = ()
+    scoped_constructor_candidates: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
+        default_factory=dict
+    )
+    injected_constructors: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
+        default_factory=dict
+    )
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

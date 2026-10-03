@@ -24,7 +24,6 @@ from agm.agl.diagnostics import AglError, AglTypeError, HiddenMemberError
 from agm.agl.repl.session import ReplSession
 from agm.agl.scope.symbols import (
     AglScopeError,
-    AmbiguousQualificationError,
     DuplicateDeclarationError,
     TypeArgumentsError,
     UnknownMemberError,
@@ -313,8 +312,10 @@ _SCENARIOS |= {
             "target-nested": accepted(
                 "def Base::Inner::m(self) -> int = self.y\nBase::Inner(y = 1).m()", "int"
             ),
-            "target-read-through-the-alias": accepted(
-                "def Base::m(self) -> int = self.x\nGeo::m(Base(x = 1))", "int"
+            "target-not-read-through-the-alias": rejected(
+                "def Base::m(self) -> int = self.x\nGeo::m(Base(x = 1))",
+                UnknownMemberError,
+                "Geo::m",
             ),
         },
     ),
@@ -477,7 +478,10 @@ def _renamed_type_of_its_own_probes() -> dict[str, Probe]:
     probes: dict[str, Probe] = {}
     for read in ("P", "Q"):
         probes |= {
-            f"{read}-declared-elsewhere": accepted(f"{read}::pz()", "int"),
+            # ``P::pz`` is imported at its path; ``Q`` reads ``P`` where ``pz`` is not imported.
+            f"{read}-declared-elsewhere": accepted(f"{read}::pz()", "int")
+            if read == "P"
+            else rejected(f"{read}::pz()", UnknownMemberError, f"{read}::pz"),
             f"{read}-target-path": accepted(f"{read}::pm()", "int"),
             f"{read}-type": accepted(f"(fn(q: {read}[int]) => q.x)(Plain(x = 1))", "int"),
             f"{read}-undeclared": rejected(f"{read}::zz()", UnknownMemberError, f"{read}::zz"),
@@ -510,31 +514,40 @@ _BENEATH_INNER = (
 """Declarations beneath the imported aliases of :data:`_INNER_TYPES_OF_THEIR_OWN`."""
 
 
-def _inner_type_of_its_own_probes() -> dict[str, Probe]:
-    """Each declaration beneath an alias of its own beneath ``Base``, through both spellings."""
+def _inner_type_of_its_own_probes(imported: bool) -> dict[str, Probe]:
+    """Each declaration beneath an alias of its own beneath ``Base``, through both spellings.
+
+    ``Geo`` is *imported* from a module importing only ``inn``, else an own alias.
+    """
+
+    def declared(spelling: str, text: str, identity: str) -> Probe:
+        """*text* reads what ``innd`` declares at its path, unless ``Geo`` is imported."""
+        return unknown(text) if imported and spelling == "Geo" else accepted(text, identity)
+
+    def unknown(text: str) -> Probe:
+        return rejected(text, UnknownMemberError, text.split("(")[0])
+
     return {
         f"{spelling}-{position}": probe
         for spelling in ("Base", "Geo")
         for position, probe in {
-            "own-path": accepted(f"{spelling}::P::m()", "int"),
-            "declared-through-a-renaming-name": accepted(f"{spelling}::Q::q()", "int"),
-            "of-a-builtin-type": accepted(f"{spelling}::K::k()", "int"),
-            "nested": accepted(f"{spelling}::P::S::d()", "int"),
-            "region": accepted(f"{spelling}::P::z()", "int"),
-            "record": accepted(f"{spelling}::P::R(b = 1).b", "int"),
+            "own-path": declared(spelling, f"{spelling}::P::m()", "int"),
+            "declared-through-a-renaming-name": declared(spelling, f"{spelling}::Q::q()", "int"),
+            "of-a-builtin-type": declared(spelling, f"{spelling}::K::k()", "int"),
+            "nested": declared(spelling, f"{spelling}::P::S::d()", "int"),
+            "region": declared(spelling, f"{spelling}::P::z()", "int"),
+            "record": declared(spelling, f"{spelling}::P::R(b = 1).b", "int"),
             "target-path": accepted(f"{spelling}::P::pm()", "int"),
-            "undeclared": rejected(
-                f"{spelling}::P::zz()", UnknownMemberError, f"{spelling}::P::zz"
+            "undeclared": unknown(f"{spelling}::P::zz()"),
+            "renamed-not-at-the-own-path": unknown(f"{spelling}::Q::m()"),
+            "renamed-nested-not-at-the-own-path": unknown(f"{spelling}::Q::S::d()"),
+            "through-a-renaming-alias-not-at-its-path": unknown(f"{spelling}::M::P::n()"),
+            "own-beneath-the-renamed-path": rejected(
+                f"def Base::P::w() -> int = 7\n{spelling}::Q::w()",
+                UnknownMemberError,
+                f"{spelling}::Q::w",
             ),
-            "renamed-own-path": accepted(f"{spelling}::Q::m()", "int"),
-            "renamed-nested": accepted(f"{spelling}::Q::S::d()", "int"),
-            "through-a-renaming-alias": accepted(f"{spelling}::M::P::n()", "int"),
-            "own-beneath-the-renamed-path": accepted(
-                f"def Base::P::w() -> int = 7\n{spelling}::Q::w()", "int"
-            ),
-            "through-a-renaming-alias-undeclared": rejected(
-                f"{spelling}::M::P::zz()", UnknownMemberError, f"{spelling}::M::P::zz"
-            ),
+            "through-a-renaming-alias-undeclared": unknown(f"{spelling}::M::P::zz()"),
         }.items()
     }
 
@@ -543,7 +556,7 @@ _SCENARIOS |= {
     f"an-outer-alias-reaches-an-inner-alias-of-its-own-path-{name}": Scenario(
         modules={"inn": f"{_INNER_TYPES_OF_THEIR_OWN}\n", "innd": _BENEATH_INNER, **modules},
         header=header,
-        probes=_inner_type_of_its_own_probes(),
+        probes=_inner_type_of_its_own_probes(imported=bool(modules)),
     )
     for name, modules, header in (
         ("own-alias", {}, ("import inn::*\nimport innd::*", "type Geo = Base")),
@@ -580,9 +593,13 @@ _SCENARIOS |= {
                 "def D::m() -> int = 1\nX::m()", UnknownMemberError, "X::m"
             ),
             "own-type-declares-at-its-path": accepted("def C::m() -> int = 1\nC::m()", "int"),
-            "renaming-reads-the-target": accepted("def X::n() -> int = 2\nD::n()", "int"),
+            "renaming-reads-the-target-where-declared": rejected(
+                "def X::n() -> int = 2\nD::n()", UnknownMemberError, "D::n"
+            ),
             "renaming-value": accepted("D(a = 1).a", "int"),
-            "own-type-reads-the-target": accepted("def X::n() -> int = 2\nC::n()", "int"),
+            "own-type-reads-the-target-where-declared": rejected(
+                "def X::n() -> int = 2\nC::n()", UnknownMemberError, "C::n"
+            ),
             "own-type-type": accepted("(fn(c: C[bool]) => c.a)(X(a = 1))", "int"),
         },
     ),
@@ -667,13 +684,20 @@ _REGION_EXPORTS = {
 def _region_export_probes(
     route: str, forwarded: dict[str, str | type[AglError]]
 ) -> dict[str, Probe]:
-    """What a ``scope Base`` region's export *forwarded*, and its own ``h``, read after *route*."""
+    """What a ``scope Base`` region's export *forwarded*, and its own ``h``, read after *route*.
+
+    ``Geo`` reads ``Base`` where it is declared, which reads none of the
+    module's own exports.
+    """
     return {
         f"{spelling}-{name}": accepted(f"{route}{spelling}::{name}()", verdict)
         if isinstance(verdict, str)
         else rejected(f"{route}{spelling}::{name}()", verdict, f"{route}{spelling}::{name}")
-        for spelling in ("Base", "Geo")
-        for name, verdict in {**forwarded, "h": "int"}.items()
+        for spelling, verdicts in (
+            ("Base", forwarded),
+            ("Geo", dict.fromkeys(forwarded, UnknownMemberError)),
+        )
+        for name, verdict in {**verdicts, "h": "int"}.items()
     }
 
 
@@ -763,44 +787,25 @@ _SCENARIOS["what-a-cycle-member-declares-beneath-an-imported-type-is-re-exported
     },
 )
 
-_RENAMED_SITE = (
-    "import base",
-    "use base::{Base as B2}",
-    "type RGeo = B2",
-    "def B2::g() -> int = 2",
-)
-"""A site spelling ``Base`` as a ``use`` renames it, declaring beneath that spelling."""
-
 _NESTED_SITE = ("import mid::*", "type NGeo = Mid", "def Mid::k() -> int = 3")
 """A site spelling ``Base`` through an imported alias, declaring beneath that spelling."""
 
 _SITES = {
     "base": "record Base\n  x: int\ndef Base::f() -> int = 1\n",
-    "renamed": "\n".join(_RENAMED_SITE) + "\n",
     "mid": "import base::*\ntype Mid = Base\n",
     "nested": "\n".join(_NESTED_SITE) + "\n",
-    "regional": (
-        "import base\n\nscope r\n  use base::{Base as B2}\n  type SGeo = B2\nend r\n\n"
-        "def r::B2::g() -> int = 2\n"
-    ),
     "routed": (
         "import base\n\nscope Base\n  def g() -> int = 2\nend Base\n\ntype BGeo = base::Base\n"
-    ),
-    "hid": (
-        "import base::*\nuse base::{Base as B2}\ntype HGeo = Base\ndef B2::k() -> int = 1\n"
-        "def Base::j() -> int = 2\n"
     ),
 }
 """Modules declaring an alias of ``Base`` beside declarations beneath their spellings of names."""
 
 _SCENARIOS["an-alias-reaches-what-its-site-declares-beneath-its-spelling-of-the-target"] = Scenario(
     modules=_SITES,
-    header=("import renamed::{RGeo}\nimport routed::{BGeo}", "import nested::{NGeo}"),
+    header=("import routed::{BGeo}", "import nested::{NGeo}"),
     probes={
-        "a-use-renaming-the-target": accepted("RGeo::g()", "int"),
         "an-imported-alias-of-the-target": accepted("NGeo::k()", "int"),
-        "a-use-in-a-region": accepted("import regional::*\nr::SGeo::g()", "int"),
-        "the-target-itself": accepted("RGeo::f() + NGeo::f() + BGeo::f()", "int"),
+        "the-target-itself": accepted("NGeo::f() + BGeo::f()", "int"),
         "a-scope-named-like-the-target-naming-nothing": rejected(
             "BGeo::g()", UnknownMemberError, "BGeo::g"
         ),
@@ -809,18 +814,8 @@ _SCENARIOS["an-alias-reaches-what-its-site-declares-beneath-its-spelling-of-the-
 
 _SCENARIOS["a-module-route-reads-what-an-alias-site-declares-beneath-the-target"] = Scenario(
     modules=_SITES,
-    header=("import renamed\nimport nested", "import regional"),
-    probes={
-        "a-use-renaming-the-target": accepted("renamed::RGeo::g()", "int"),
-        "an-imported-alias-of-the-target": accepted("nested::NGeo::k()", "int"),
-        "a-use-in-a-region": accepted("regional::r::SGeo::g()", "int"),
-    },
-)
-
-_SCENARIOS["an-own-alias-reaches-the-declarations-beneath-a-use-renaming-its-target"] = Scenario(
-    modules=_SITES,
-    header=_RENAMED_SITE,
-    probes={"declared": accepted("RGeo::g()", "int"), "target": accepted("RGeo::f()", "int")},
+    header=("import nested",),
+    probes={"an-imported-alias-of-the-target": accepted("nested::NGeo::k()", "int")},
 )
 
 _SCENARIOS["an-own-alias-reaches-the-declarations-beneath-an-imported-alias-it-names"] = Scenario(
@@ -829,14 +824,177 @@ _SCENARIOS["an-own-alias-reaches-the-declarations-beneath-an-imported-alias-it-n
     probes={"declared": accepted("NGeo::k()", "int"), "target": accepted("NGeo::f()", "int")},
 )
 
-_SCENARIOS["hiding-an-alias-removes-what-its-module-declares-beneath-any-spelling"] = Scenario(
+_SCENARIOS["hiding-an-alias-leaves-a-scope-named-like-its-target"] = Scenario(
     modules=_SITES,
-    header=("import hid::* hiding HGeo\nimport routed::* hiding BGeo",),
-    probes={
-        "a-use-renaming-the-target": rejected("B2::k()", HiddenMemberError, "B2::k"),
-        "the-target-spelling": rejected("Base::j()", HiddenMemberError, "Base::j"),
-        "a-scope-named-like-the-target-naming-nothing": accepted("Base::g()", "int"),
-    },
+    header=("import routed::* hiding BGeo",),
+    probes={"a-scope-named-like-the-target-naming-nothing": accepted("Base::g()", "int")},
+)
+
+
+_LITERAL = {
+    "base": "record Base\n  x: int\ndef Base::f() -> int = 1\n",
+    "t3": "import base::*\ndef Base::k() -> int = 3\n",
+    "s3": "import base::*\nimport t3::*\ntype Geo3 = Base\n",
+    "sr": "import base\ndef Base::g() -> int = 2\ntype GeoR = base::Base\n",
+    "tz": "def array::z() -> int = 1\ndef array::y() -> int = 2\n",
+    "sz": "import tz::* hiding array::z\ntype IA = array[int]\n",
+    "sg": "import base::*\n\nscope r\n  type G = Base\nend r\n\ndef r::Base::k() -> int = 4\n",
+}
+"""Aliases whose target spelling reads, where they are declared, an import the module keeps
+(``s3``), a module route (``sr``), an import's ``hiding`` (``sz``) and a region's own path
+(``sg``)."""
+
+
+def _literal_probes(route: str, region: str) -> dict[str, Probe]:
+    """What each alias of :data:`_LITERAL` reaches, read after *route* (*region* for ``sg``)."""
+    return {
+        "a-site-import": accepted(f"{route.format('s3')}Geo3::k()", "int"),
+        "a-site-import-beside-the-target": accepted(f"{route.format('s3')}Geo3::f()", "int"),
+        "a-route-spelling": rejected(
+            f"{route.format('sr')}GeoR::g()", UnknownMemberError, f"{route.format('sr')}GeoR::g"
+        ),
+        "a-route-spelling-reaches-the-route": accepted(f"{route.format('sr')}GeoR::f()", "int"),
+        "a-site-hiding": rejected(
+            f"{route.format('sz')}IA::z()", HiddenMemberError, f"{route.format('sz')}IA::z"
+        ),
+        "beside-a-site-hiding": accepted(f"{route.format('sz')}IA::y()", "int"),
+        "a-region-step": accepted(f"{region}r::G::k()", "int"),
+        "a-region-step-reaches-the-root": accepted(f"{region}r::G::f()", "int"),
+    }
+
+
+_SCENARIOS |= {
+    "an-alias-reads-its-target-as-written-where-declared-importer": Scenario(
+        modules=_LITERAL,
+        header=("import s3::{Geo3}\nimport sr::{GeoR}", "import sz::{IA}\nimport sg::*"),
+        probes=_literal_probes("", ""),
+    ),
+    "an-alias-reads-its-target-as-written-where-declared-route": Scenario(
+        modules=_LITERAL,
+        header=("import s3\nimport sr", "import sz\nimport sg"),
+        probes=_literal_probes("{}::", "sg::"),
+    ),
+    "an-own-alias-reads-its-target-as-written-a-site-import": Scenario(
+        modules=_LITERAL,
+        header=("import base::*\nimport t3::*", "type Geo3 = Base"),
+        probes={
+            "a-site-import": accepted("Geo3::k()", "int"),
+            "beside-the-target": accepted("Geo3::f()", "int"),
+        },
+    ),
+    "an-own-alias-reads-its-target-as-written-a-route-spelling": Scenario(
+        modules=_LITERAL,
+        header=("import base", "def Base::g() -> int = 2", "type GeoR = base::Base"),
+        probes={
+            "own-beneath-another-spelling": rejected("GeoR::g()", UnknownMemberError, "GeoR::g"),
+            "the-route": accepted("GeoR::f()", "int"),
+            "own-at-its-path": accepted("Base::g()", "int"),
+        },
+    ),
+    "an-own-alias-reads-its-target-as-written-a-site-hiding": Scenario(
+        modules=_LITERAL,
+        header=("import tz::* hiding array::z", "type IA = array[int]"),
+        probes={
+            "hidden": rejected("IA::z()", HiddenMemberError, "IA::z"),
+            "beside": accepted("IA::y()", "int"),
+        },
+    ),
+    "an-own-alias-reads-its-target-as-written-a-region-step": Scenario(
+        modules=_LITERAL,
+        header=(
+            "import base::*",
+            "scope r\n  type G = Base\nend r",
+            "def r::Base::k() -> int = 4",
+        ),
+        probes={
+            "the-region": accepted("r::G::k()", "int"),
+            "the-root": accepted("r::G::f()", "int"),
+            "the-target-at-the-root": rejected("Base::k()", UnknownMemberError, "Base::k"),
+        },
+    ),
+}
+
+_TYPE_RENAMES = {
+    "a-braced-item": "use base::{Base as B2}",
+    "an-item": "use base::Base as B2",
+    "a-nested-type": "use base::{Base::Inner as B2}",
+}
+"""Each way a ``use`` renames a type ``B2``."""
+
+_SCENARIOS |= (
+    {
+        f"declaring-beneath-a-use-renaming-a-type-{kind}": Scenario(
+            modules=_MODULES,
+            header=("import base", use),
+            probes={
+                **{
+                    position: rejected(text.replace("Geo", "B2"), AglScopeError, "B2")
+                    for position, text in _BENEATH.items()
+                },
+                "beside-it": accepted("def Bx::k() -> int = 1\nBx::k()", "int"),
+            },
+        )
+        for kind, use in _TYPE_RENAMES.items()
+    }
+    | {
+        f"a-use-renaming-a-type-after-a-declaration-beneath-its-name-{kind}": Scenario(
+            modules=_MODULES,
+            header=("import base",),
+            probes={
+                position: rejected(
+                    f"{text.replace('Geo', 'r::B2')}\n\nscope r\n  {use}\nend r", AglScopeError, use
+                )
+                for position, text in _BENEATH.items()
+            },
+        )
+        for kind, use in _TYPE_RENAMES.items()
+    }
+    | {
+        "a-use-renaming-a-type-after-an-entry-declaring-beneath-its-name": Scenario(
+            modules=_MODULES,
+            header=("import base", "def r::B2::k() -> int = 1"),
+            probes={
+                kind: rejected(f"scope r\n  {use}\nend r", AglScopeError, use)
+                for kind, use in _TYPE_RENAMES.items()
+            },
+        ),
+        "a-use-renaming-a-type-in-a-region": Scenario(
+            modules=_MODULES,
+            header=("import base", "scope r\n  use base::{Base as B2}\nend r"),
+            probes={
+                "beneath-it": rejected("def r::B2::g() -> int = 2", AglScopeError, "B2"),
+                "in-its-region": rejected(
+                    "scope r\n  def B2::g() -> int = 2\nend r", AglScopeError, "B2"
+                ),
+                "its-name-at-the-root": accepted("def B2::g() -> int = 2\nB2::g()", "int"),
+                "read-through-it": accepted(
+                    "scope r\n  def t() -> int = B2::f()\nend r\n\nr::t()", "int"
+                ),
+            },
+        ),
+        "a-use-renaming-a-module-or-scope-declares-nothing": Scenario(
+            modules=_MODULES,
+            header=("import base\nimport lib", "use lib::S as M\nuse base as bm"),
+            probes={
+                "a-scope": accepted("def M::k() -> int = 1\nM::k() + M::top()", "int"),
+                "a-region-of-a-scope": accepted(
+                    "scope M\n  def h() -> int = 2\nend M\n\nM::h()", "int"
+                ),
+                "a-module": accepted("def bm::k() -> int = 1\nbm::k()", "int"),
+                "a-function": accepted(
+                    "use lib::{free as fr}\ndef fr::k() -> int = 1\nfr::k()", "int"
+                ),
+            },
+        ),
+        "a-method-receiver-through-a-use-renaming-a-type": Scenario(
+            modules=_MODULES,
+            header=("import base\nimport al", "use base::{Base as B2}\nuse al::{Geo as G2}"),
+            probes={
+                "renamed-type": rejected("def B2::m(self) -> int = 1", AglScopeError, "B2"),
+                "renamed-alias": rejected("def G2::m(self) -> int = 1", AglScopeError, "G2"),
+            },
+        ),
+    }
 )
 
 
@@ -846,6 +1004,15 @@ class TestDeclarationsThroughAliases:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
+
+
+def test_a_use_renaming_a_type_after_an_entry_declaring_beneath_its_name(tmp_path: Path) -> None:
+    assert_repl_verdicts(
+        tmp_path,
+        _MODULES,
+        ("import base", "def B2::k() -> int = 1"),
+        {kind: rejected(use, AglScopeError, use) for kind, use in _TYPE_RENAMES.items()},
+    )
 
 
 def test_info_describes_a_declaration_beneath_an_imported_alias_at_its_written_path(
@@ -1104,10 +1271,8 @@ def test_a_duplicate_beneath_an_imported_alias_is_one_path_declared_twice(tmp_pa
             "beside-the-target": accepted(
                 'def Geo::d() -> int = 1\ndef Base::d() -> text = "b"\nBase::d()', "text"
             ),
-            "both-own-through-the-alias": rejected(
-                'def Geo::d() -> int = 1\ndef Base::d() -> text = "b"\nGeo::d()',
-                AmbiguousQualificationError,
-                "Geo::d",
+            "own-through-the-alias-reads-its-path": accepted(
+                'def Geo::d() -> int = 1\ndef Base::d() -> text = "b"\nGeo::d()', "int"
             ),
         },
     )

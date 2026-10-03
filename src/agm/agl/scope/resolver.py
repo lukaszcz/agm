@@ -43,7 +43,7 @@ because its argument must be a source literal.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
@@ -74,8 +74,6 @@ from agm.agl.scope.imports import (
     NameAtom,
     PathAtom,
     QName,
-    contribution_routes,
-    qualifier_members,
 )
 from agm.agl.scope.lookup import (
     LookupKind,
@@ -84,7 +82,6 @@ from agm.agl.scope.lookup import (
     is_removed,
     lookup_bare,
     lookup_declared,
-    lookup_origins,
     lookup_qualified,
     lookup_steps,
 )
@@ -92,7 +89,6 @@ from agm.agl.scope.sources import (
     ModuleSources,
     constructor_binding,
     constructor_candidate_sort_key,
-    is_root_inline_member,
     scope_path_sort_key,
 )
 from agm.agl.scope.symbols import (
@@ -436,32 +432,67 @@ def reject_declaring_beneath_retained(
 ) -> None:
     """Reject an alias REPL entry *program* declares where an earlier entry declared beneath it.
 
-    Any retained scope path (*scope_nodes*) at or beneath its path completes
-    the pair, but for those of an earlier type at its path (*type_paths*):
-    that type's own scope, holding only its inline members, and their empty
-    scopes.
+    See :func:`_retained_beneath`.
     """
     for item, path in _declaring_items(_root_items_as_written(program.body.items)[0]):
-        if not isinstance(item, TypeAlias):
+        if isinstance(item, TypeAlias) and _retained_beneath(
+            (*path, item.name), scope_nodes, type_paths
+        ):
+            raise _beneath_alias_error((*path, item.name), item.span)
+
+
+def _retained_beneath(
+    alias_path: ScopePath,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    type_paths: Mapping[ScopePath, TypeOwner],
+) -> bool:
+    """Whether earlier REPL entries declared beneath *alias_path*, an alias an entry declares.
+
+    Any retained scope path (*scope_nodes*) at or beneath it does, but for
+    those of an earlier type at its path (*type_paths*): that type's own
+    scope, holding only its inline members, and their empty scopes.
+    """
+    owner = type_paths.get(alias_path)
+    inline = frozenset(() if owner is None else owner.members)
+    for scope_path, node in scope_nodes.items():
+        beneath = scope_path[len(alias_path) :]
+        if scope_path[: len(alias_path)] != alias_path:
             continue
-        alias_path = (*path, item.name)
-        owner = type_paths.get(alias_path)
-        inline = frozenset(() if owner is None else owner.members)
-        for scope_path, node in scope_nodes.items():
-            beneath = scope_path[len(alias_path) :]
-            if scope_path[: len(alias_path)] != alias_path:
+        own = owner is not None and (not beneath or (len(beneath) == 1 and beneath[0] in inline))
+        allowed = frozenset() if beneath else inline
+        if not own or not allowed.issuperset(node.members) or node.bare_contributions or node.uses:
+            return True
+    return False
+
+
+def _first_declared_beneath(
+    items: tuple[Item, ...], aliases: Mapping[ScopePath, SourceSpan], retained: Iterable[ScopePath]
+) -> tuple[ScopePath, SourceSpan] | None:
+    """The first pair of an alias and a region or declaration beneath it that *items* complete.
+
+    *aliases* are the aliases written here, where each is declared; *retained*
+    those an earlier REPL entry declared. A region opening an alias's path,
+    or a declaration beneath it, pairs with it. Returns the alias's path and
+    where the pair completes: at the alias when it is the later, else at the
+    segment completing its path.
+    """
+    completed: tuple[int, ScopePath, SourceSpan] | None = None
+    for item, path in _declaring_items(_root_items_as_written(items)[0]):
+        for alias_path in (*aliases, *retained):
+            count = len(alias_path)
+            if path[:count] != alias_path or (isinstance(item, ScopeRegion) and len(path) != count):
                 continue
-            own = owner is not None and (
-                not beneath or (len(beneath) == 1 and beneath[0] in inline)
-            )
-            allowed = frozenset() if beneath else inline
-            if (
-                not own
-                or not allowed.issuperset(node.members)
-                or node.bare_contributions
-                or node.uses
-            ):
-                raise _beneath_alias_error(alias_path, item.span)
+            alias = aliases.get(alias_path)
+            if alias is not None and alias.start_offset > item.span.start_offset:
+                pair = (alias.start_offset, alias_path, alias)
+            else:
+                segment = (
+                    item.segment if isinstance(item, ScopeRegion) else item.scope_path[count - 1]
+                )
+                pair = (item.span.start_offset, alias_path, segment.span)
+            if completed is None or pair[0] < completed[0]:
+                completed = pair
+    return None if completed is None else (completed[1], completed[2])
 
 
 def _head_arguments(head: TypeExpr | None) -> tuple[TypeExpr, ...]:
@@ -518,6 +549,7 @@ class _Resolver(ModuleSources):
         decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo],
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef],
         cross_module_type_owners: Mapping[QName, ReceiverOwner],
+        site_sources: Callable[[ModuleId], ModuleSources],
         *,
         ambient_type_names: frozenset[str] = frozenset(),
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
@@ -542,6 +574,8 @@ class _Resolver(ModuleSources):
         # ImportEnv/dict for a module with no imports or no public types).
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv = import_env
+        # What reads beneath an alias read where the alias is declared.
+        self._site_sources = site_sources
         # Declaration metadata used to build cross-module references.
         self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = decl_info
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
@@ -776,61 +810,70 @@ class _Resolver(ModuleSources):
     def _reject_declaring_beneath_aliases(self, items: tuple[Item, ...]) -> None:
         """Reject declaring beneath a name this module declares as an alias, in either order.
 
-        A region opening an alias's path, or a declaration beneath it, meets
-        an alias written here or one an earlier REPL entry retained. Of the
-        pairs, the one completed first is reported: at the alias when it is
-        the later, else at the segment completing its path.
+        An alias written here or one an earlier REPL entry retained
+        (:func:`_first_declared_beneath`).
         """
-        declaring = list(_declaring_items(_root_items_as_written(items)[0]))
         aliases = {
-            (*path, item.name): item for item, path in declaring if isinstance(item, TypeAlias)
+            (*path, item.name): item.span
+            for item, path in _declaring_items(_root_items_as_written(items)[0])
+            if isinstance(item, TypeAlias)
         }
         retained = [
             path
             for path, owner in self._repl_session_type_paths.items()
             if owner.alias is not None and path not in aliases
         ]
-        completed: tuple[int, ScopePath, SourceSpan] | None = None
-        for item, path in declaring:
-            for alias_path in (*aliases, *retained):
-                count = len(alias_path)
-                if path[:count] != alias_path or (
-                    isinstance(item, ScopeRegion) and len(path) != count
-                ):
-                    continue
-                alias = aliases.get(alias_path)
-                if alias is not None and alias.span.start_offset > item.span.start_offset:
-                    pair = (alias.span.start_offset, alias_path, alias.span)
-                else:
-                    segment = (
-                        item.segment
-                        if isinstance(item, ScopeRegion)
-                        else item.scope_path[count - 1]
-                    )
-                    pair = (item.span.start_offset, alias_path, segment.span)
-                if completed is None or pair[0] < completed[0]:
-                    completed = pair
+        completed = _first_declared_beneath(items, aliases, retained)
         if completed is not None:
-            raise _beneath_alias_error(completed[1], completed[2])
+            raise _beneath_alias_error(*completed)
 
-    def resolve(
+    def _reject_declaring_beneath_type_renames(self) -> None:
+        """Reject declaring beneath a name a ``use`` of this module renames a type as.
+
+        Such a name is an alias of the module's own, in either order
+        (:func:`_first_declared_beneath`): a use written here, or one an
+        earlier REPL entry retained, and what earlier entries declared
+        beneath a use written here (:func:`_retained_beneath`).
+        """
+        uses = self._uses
+        renames: dict[ScopePath, SourceSpan] = {}
+        retained: list[ScopePath] = []
+        with uses.view(every_use=True):
+            # The root's enclosing layers hold what earlier REPL entries wrote there.
+            for layer in (*self._scope_nodes.values(), *self._layer_chain(self._root_scope)[1:]):
+                site = layer.scope_path
+                for decl in uses.visible(layer):
+                    for name in uses.type_renames(site, decl):
+                        if not uses.writes(decl):
+                            retained.append((*site, name))
+                        elif _retained_beneath(
+                            (*site, name),
+                            self._repl_session_scope_nodes,
+                            self._repl_session_type_paths,
+                        ):
+                            raise _beneath_alias_error((*site, name), decl.span)
+                        else:
+                            renames.setdefault((*site, name), decl.span)
+        completed = _first_declared_beneath(self._program.body.items, renames, retained)
+        if completed is not None:
+            raise _beneath_alias_error(*completed)
+
+    def collect(
         self,
         *,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ) -> ModuleResolution:
-        """Resolve the prepared program's constructors and bodies; the second phase.
+    ) -> None:
+        """Collect the prepared program's constructors and root bindings; the second phase.
 
         Runs once every module of the program is constructed, since the
-        type-owner index answers from all of their headers. It collects this
-        module's constructors, then walks the bodies.
+        type-owner index answers from all of their headers, and for every
+        module before any walks its bodies (:meth:`resolve`): a path read
+        through another module's alias reads that module's tables.
 
         *ambient_constructor_candidates* carries the other modules'
         constructors that import tails make bare here.
         """
-        program = self._program
-        root = self._root_scope
         type_owners = self._declared_type_owners()
-        self._reject_alias_cycles()
         # A retained path's owner is re-derived through the index rather than
         # read off its stored, declaration-time value: an alias's
         # reachable members/hidden set can go stale as later entries change
@@ -841,15 +884,6 @@ class _Resolver(ModuleSources):
             for path in {**self._repl_session_type_paths, **type_owners}
             if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
         }
-        # A tail or ``hiding`` item written through an alias must name a
-        # declaration whether or not anything reads it.
-        for node_id in self._import_env.decl_hiding:
-            self._import_hidden(node_id)
-        for exposures in self._import_env.decl_tail_beneath.values():
-            for named in sorted(
-                {named for items in exposures.values() for named in items}, key=_item_order
-            ):
-                self._named_by(named)
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
@@ -873,6 +907,22 @@ class _Resolver(ModuleSources):
         # A static root binds every declaration up front: its walk changes no path read.
         if self._is_static_root_module:
             self._keep_readings()
+
+    def resolve(self) -> ModuleResolution:
+        """Resolve the collected program's bodies; the third phase."""
+        program = self._program
+        root = self._root_scope
+        self._reject_alias_cycles()
+        self._reject_declaring_beneath_type_renames()
+        # A tail or ``hiding`` item written through an alias must name a
+        # declaration whether or not anything reads it.
+        for node_id in self._import_env.decl_hiding:
+            self._import_hidden(node_id)
+        for exposures in self._import_env.decl_tail_beneath.values():
+            for named in sorted(
+                {named for items in exposures.values() for named in items}, key=_item_order
+            ):
+                self._named_by(named)
         self._resolve_root_items(program.body.items)
         self._validate_function_names()
         self._validate_non_method_type_params()
@@ -904,11 +954,19 @@ class _Resolver(ModuleSources):
             method_declarations=dict(self._method_declarations),
             reachable_declarations=self._reachable_declarations(),
             attributes=attribute_facts,
-            type_owners=type_owners,
+            type_owners=self._declared_type_owners(),
             owner_declarations=dict(self._owner_declarations),
             replaced_uses=self._replaced_uses(),
             declared_segments=self.reader().declared,
-            spelled_types=self.spelled_types(),
+            scope_entity_kinds=dict(self._scope_entity_kinds),
+            import_decl_scope_paths=dict(self._import_decl_scope_paths),
+            type_declarations=tuple(self._type_declarations),
+            scoped_constructor_candidates={
+                key: tuple(refs) for key, refs in self._scoped_constructor_candidates.items()
+            },
+            injected_constructors={
+                key: tuple(refs) for key, refs in self._injected_constructors.items()
+            },
         )
 
     # ------------------------------------------------------------------
@@ -2673,48 +2731,10 @@ class _Resolver(ModuleSources):
             ),
             None,
         )
-        if owner is not None and self._spelling_selects((owner,), name, candidate, span):
+        site = self._named_scope_path()
+        if owner is not None and self._spelling_selects((owner,), name, candidate, span, site):
             return f"{owner}::{name}"
-        return self._routed_spelling(candidate, origin, span)
-
-    def _spelling_selects(
-        self,
-        qualifier: tuple[str, ...],
-        member: str,
-        candidate: ConstructorRef,
-        span: SourceSpan,
-        *,
-        anchored: bool = False,
-    ) -> bool:
-        """Whether ``qualifier::member``, written at *span*, selects *candidate*."""
-        found = self._qualified_lookup(
-            self._probe_chain(qualifier, member, span, anchored=anchored),
-            member,
-            LookupKind.VALUE,
-            span,
-        )
-        return isinstance(found, QualifiedTarget) and found.constructor == candidate
-
-    def _routed_spelling(self, candidate: ConstructorRef, origin: QName, span: SourceSpan) -> str:
-        """Spell *candidate*, imported as *origin*, by its shortest route selecting it at *span*.
-
-        Each import route exposing *origin* is tried, anchored ones included;
-        without one, *candidate* is spelled by its declaration path.
-        """
-        spellings = (
-            render_route_member(route, written, anchored=anchored)
-            for contribution in self._import_env.contributions.values()
-            for atom, qname in contribution.members.items()
-            if qname == origin
-            for written in (_bare_path(atom),)
-            for route, anchored in contribution_routes(contribution)
-            if self._spelling_selects(
-                ("/".join(route), *written[:-1]), written[-1], candidate, span, anchored=anchored
-            )
-        )
-        return min(spellings, key=len, default=None) or spell_declaration(
-            origin[0], _bare_path(origin[1]), reader=self.reader()
-        )
+        return self._routed_spelling(candidate, origin, span, site)
 
     def _validate_qualifier_chains(self, root: SyntaxNode, type_params: Iterable[str] = ()) -> None:
         """Validate qualifier syntax in the current lexical scope layer.
@@ -2934,25 +2954,6 @@ class _Resolver(ModuleSources):
         owner = self._type_owners.owner(qname)
         return owner if owner is not None and owner.constructs else None
 
-    def retained_paths_beneath(self, path: ScopePath) -> frozenset[ScopePath]:
-        """Return, relative to own *path*, the paths of the declarations earlier REPL entries
-        retain beneath it: types, their inline members and ordinary members."""
-        retained = {
-            *self._repl_session_type_paths,
-            *(
-                (*owner_path, member)
-                for owner_path, owner in self._repl_session_type_paths.items()
-                if owner.alias is None
-                for member in owner.members
-            ),
-            *self._repl_session_ordinary_member_paths,
-        }
-        return frozenset(
-            declared[len(path) :]
-            for declared in retained
-            if len(declared) > len(path) and declared[: len(path)] == path
-        )
-
     def paths_reached_at(
         self,
         scope_path: ScopePath,
@@ -2968,7 +2969,7 @@ class _Resolver(ModuleSources):
         reaches it. Another declaration at that path hides nothing. Every use
         is read when *every_use*; otherwise those the read in progress sees.
         """
-        with self._uses.view(every_use), self._named_scope(scope_path), self._reaching():
+        with self._uses.view(every_use), self._named_scope(scope_path):
             return frozenset(
                 path
                 for path in paths
@@ -2977,17 +2978,6 @@ class _Resolver(ModuleSources):
                     HiddenMemberError,
                 )
             )
-
-    def scopes_named_at(
-        self, scope_path: ScopePath, name: str, *, every_use: bool
-    ) -> frozenset[QName]:
-        """Return the scope paths *name*, a qualifier at *scope_path*, names.
-
-        Every use is read when *every_use*; otherwise those the read in progress sees.
-        """
-        chain = QualifierChain(None, (), name, self._program.span, self._program.node_id)
-        with self._uses.view(every_use):
-            return lookup_origins(self, chain, scope_path)
 
     def type_name_selection_at(
         self,
@@ -3280,35 +3270,6 @@ class _Resolver(ModuleSources):
         raise AglScopeError(
             f"'{render_qualified_name(chain, name)}' names no constructor.", span=chain.span
         )
-
-    def _route_injected_members(
-        self, chain: QualifierChain, name: str
-    ) -> dict[ConstructorRef, str]:
-        """Map each root enum inline member one-segment route *chain* injects as *name*.
-
-        A re-exported enum's members are injected too. Each maps to its
-        owner-qualified spelling where *chain* is written: through *chain*
-        when it matches one module, else through a route selecting only its
-        exposing module.
-        """
-        surfaces = qualifier_members(self._import_env, chain.leading_route, anchored=chain.anchored)
-        injected: dict[ConstructorRef, str] = {}
-        for _module, members in surfaces:
-            for atom, origin in members.items():
-                path = _bare_path(atom)
-                constructor = self._cross_module_constructor_refs.get(origin)
-                if (
-                    path[1:] == (name,)
-                    and constructor is not None
-                    and is_root_inline_member(constructor)
-                ):
-                    injected.setdefault(
-                        constructor,
-                        render_qualified_name(chain, "::".join(path))
-                        if len(surfaces) == 1
-                        else self._routed_spelling(constructor, origin, chain.span),
-                    )
-        return injected
 
     def _pattern_constructors(self, name: str) -> tuple[ConstructorRef, ...]:
         """Return the constructor candidates a bare pattern or ``is`` spelling *name* reaches.

@@ -3678,6 +3678,14 @@ class TestExportDecl:
 
         assert _rejection(tmp_path, modules, "entry") == (AmbiguousQualificationError, "A")
 
+    @pytest.mark.parametrize("export", ["export m::{Id::x}", "export m hiding Id::x"])
+    def test_an_export_item_beneath_an_alias_standing_for_its_parameter_names_nothing(
+        self, tmp_path: Path, export: str
+    ) -> None:
+        modules = {"entry": "import ex::*\n()", "m": "type Id[T] = T", "ex": f"import m\n{export}"}
+
+        assert _rejection(tmp_path, modules, "ex") == (UnknownMemberError, export)
+
     def test_reexport_cycle_keeps_a_hiding_of_a_module_outside_it(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

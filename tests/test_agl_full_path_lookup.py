@@ -486,6 +486,23 @@ _SCENARIOS = {
             )
         },
     ),
+    "an-imported-alias-of-an-enum-reaches-what-its-site-declares-beside-its-member-paths": (
+        Scenario(
+            modules={
+                "one": _ALIASED_ENUM,
+                "two": (
+                    "import one::{E}\ntype D = E\n"
+                    'def E::Blue() -> text = "own"\nrecord E::Red\n  q: bool\n'
+                ),
+            },
+            header=("import two::*",),
+            probes={
+                "function": accepted("D::Blue()", "text"),
+                "record": accepted("D::Red(q = true)", "record two::E::Red\n  q: bool"),
+                "routed-function": accepted("import two\ntwo::D::Blue()", "text"),
+            },
+        )
+    ),
     "an-own-alias-of-an-imported-enum-declared-after-its-member-path": Scenario(
         modules={"one": _ALIASED_ENUM},
         header=("import one::{E}",),

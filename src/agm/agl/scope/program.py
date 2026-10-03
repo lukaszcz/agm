@@ -63,6 +63,7 @@ from agm.agl.scope.imports import (
     validate_import_items,
 )
 from agm.agl.scope.resolver import _Resolver, reject_declaring_beneath_retained
+from agm.agl.scope.sources import ModuleSources, ResolvedSources
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
@@ -529,21 +530,18 @@ def _raise_reexport_scope_conflict(exposed: NameAtom, decl: ExportDecl) -> None:
 Through = Callable[[ModuleId, PathAtom], Mapping[PathAtom, QName]]
 """The declarations a path beneath an alias module *ModuleId* exports reaches.
 
-Its target's declaration at that path and every one beneath it, keyed by
-their paths relative to it; none when the path lies beneath no exported
-alias or the alias's module is not resolved yet.
+What its target as written, then the rest of the path, reaches where the
+alias is declared, and every declaration beneath that, keyed by their paths
+relative to it; none when the path lies beneath no exported alias or the
+alias's module is not resolved yet.
 """
 
 
 class Denotations(Protocol):
     """What declaration a full path names (:class:`TypeOwnerIndex`)."""
 
-    def declaration(self, qname: QName) -> QName:
+    def identity(self, qname: QName) -> QName:
         """The declaration full path *qname* names."""
-        ...
-
-    def scopes_of(self, qname: QName) -> frozenset[QName]:
-        """The scopes alias *qname* stands for beside its path, where its sites declare."""
         ...
 
 
@@ -563,11 +561,8 @@ def _reaches_nothing(_module: ModuleId, _path: PathAtom) -> Mapping[PathAtom, QN
 class _Unresolved:
     """:class:`Denotations` before any alias is resolvable: each path names itself."""
 
-    def declaration(self, qname: QName) -> QName:
+    def identity(self, qname: QName) -> QName:
         return qname
-
-    def scopes_of(self, qname: QName) -> frozenset[QName]:
-        return frozenset()
 
 
 def _is_beneath_any(qname: QName, removed: Collection[QName]) -> bool:
@@ -748,7 +743,7 @@ def _compute_reexport_additions(
 
     def beneath_any(origin: QName, removed: Collection[QName]) -> bool:
         """Whether *origin*'s declaration is or lies beneath one of *removed*."""
-        return _is_beneath_any(denotations.declaration(origin), removed)
+        return _is_beneath_any(denotations.identity(origin), removed)
 
     def withheld_through(prefix: PathAtom) -> frozenset[QName]:
         """What the target withholds beneath the exported alias a prefix of *prefix* spells."""
@@ -791,10 +786,9 @@ def _compute_reexport_additions(
         # final one, which a later pass reaches.
         return _Additions(result, withheld_result, scope_result)
     removed = frozenset(
-        path
+        denotations.identity(origin)
         for declarations, _scopes, reached in hidden_items
         for origin in (*(target_exports[source] for source in declarations), *reached.values())
-        for path in (denotations.declaration(origin), *denotations.scopes_of(origin))
     )
     hidden_scopes = {source for _declarations, scopes, _named in hidden_items for source in scopes}
 
@@ -1139,12 +1133,27 @@ def resolve_program(
     settling: set[ModuleId] = set()
 
     declared_in_program = _declarations_beneath(decl_info)
+    # What each cached module reads where its aliases are declared.
+    cached_sources: dict[ModuleId, ResolvedSources] = {}
 
-    def declared_beneath(qname: QName) -> Collection[ScopePath]:
-        resolver = resolvers.get(qname[0])
-        if resolver is None:
-            return declared_in_program(qname)
-        return resolver.retained_paths_beneath(_path(qname[1])).union(declared_in_program(qname))
+    def sources_of(module_id: ModuleId) -> ModuleSources:
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver
+        found = cached_sources.get(module_id)
+        if found is None:
+            cached = resolved_modules[module_id]
+            found = cached_sources[module_id] = ResolvedSources(
+                module_id,
+                cached.resolved,
+                cached.import_env,
+                all_public_types=all_public_types,
+                type_owners=type_owners,
+                decl_info=decl_info,
+                cross_module_constructor_refs=cross_module_constructor_refs,
+                site_sources=sources_of,
+            )
+        return found
 
     def reached_paths(
         qname: QName,
@@ -1160,20 +1169,6 @@ def resolve_program(
             return resolver.paths_reached_at(path[:-1], spelling, paths, every_use=every_use)
         hidden = resolved_modules[module_id].resolved.type_owners[path].hidden
         return frozenset(paths).difference(hidden)
-
-    def builtin_scopes(qname: QName, name: str, *, every_use: bool) -> frozenset[QName]:
-        module_id, atom = qname
-        path = _path(atom)
-        resolver = resolvers.get(module_id)
-        if resolver is not None:
-            return resolver.scopes_named_at(path[:-1], name, every_use=every_use)
-        return resolved_modules[module_id].resolved.type_owners[path].scopes
-
-    def spelled_types(module_id: ModuleId) -> Mapping[ScopePath, QName]:
-        resolver = resolvers.get(module_id)
-        if resolver is not None:
-            return resolver.spelled_types()
-        return resolved_modules[module_id].resolved.spelled_types
 
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
@@ -1205,10 +1200,7 @@ def resolve_program(
         all_public_types=all_public_types,
         constructor_refs=cross_module_constructor_refs,
         alias_targets=alias_target,
-        declared_beneath=declared_beneath,
         reached_paths=reached_paths,
-        builtin_scopes=builtin_scopes,
-        spelled_types=spelled_types,
         current_selection=current_selection,
         read_view=lambda module_id: resolvers[module_id].read_view(),
     )
@@ -1247,26 +1239,7 @@ def resolve_program(
         if found is None:
             return {}
         alias, rest = found
-        reach = type_owners.alias_reach(
-            alias, type_owners.declared_owner(alias, all_public_types[alias]), rest
-        )
-        reached: dict[PathAtom, QName] = {}
-        if reach.hidden:
-            return reached
-        for named in reach.paths:
-            module, atom = named
-            # Where the alias is declared, a site's own declaration wins its path.
-            for site in reach.sites:
-                for spelled in type_owners.site_spellings(site, named):
-                    if spelled in decl_info:
-                        reached.setdefault((), spelled)
-                    for relative in declared_in_program(spelled):
-                        reached.setdefault(relative, (site, _atom((*_path(spelled[1]), *relative))))
-            if named in decl_info:
-                reached.setdefault((), named)
-            for relative in declared_in_program(named):
-                reached.setdefault(relative, (module, _atom((*_path(atom), *relative))))
-        return reached
+        return sources_of(alias[0]).exported_through(alias, rest, declared_in_program)
 
     import_envs: dict[ModuleId, ImportEnv] = {}
 
@@ -1305,6 +1278,7 @@ def resolve_program(
             cross_module_constructor_refs=cross_module_constructor_refs,
             builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             cross_module_type_owners=cross_module_type_owners,
+            site_sources=sources_of,
             all_public_types=all_public_types,
             type_owners=(
                 type_owners.with_retained(mid, retained_type_owners)
@@ -1403,13 +1377,11 @@ def resolve_program(
         reexport(members, validate=True)
 
     # ------------------------------------------------------------------
-    # Step 6: Resolve each prepared module's bodies against the type owners
-    # the prepared headers make selectable.
+    # Step 6: Collect every prepared module's constructors and root bindings,
+    # then resolve each one's bodies against the type owners the prepared
+    # headers make selectable: a body reads through other modules' aliases.
     # ------------------------------------------------------------------
-    for mid in graph.modules:
-        resolver = resolvers.get(mid)
-        if resolver is None:
-            continue
+    for mid, resolver in resolvers.items():
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates = _build_cross_module_constructor_candidates(
             import_envs[mid],
@@ -1418,7 +1390,12 @@ def resolve_program(
             type_owners,
             resolver.tail_removes,
         )
-        resolved = resolver.resolve(ambient_constructor_candidates=cross_module_candidates or None)
+        resolver.collect(ambient_constructor_candidates=cross_module_candidates or None)
+    for mid in graph.modules:
+        prepared = resolvers.get(mid)
+        if prepared is None:
+            continue
+        resolved = prepared.resolve()
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,

@@ -176,6 +176,10 @@ class UseReader:
         layer.uses.append(decl)
         self._entry_ids.add(decl.node_id)
 
+    def writes(self, decl: UseDecl) -> bool:
+        """Whether this entry writes *decl*, rather than a REPL session retaining it."""
+        return decl.node_id in self._entry_ids
+
     @contextmanager
     def _reading_use(self, decl: UseDecl) -> Iterator[_UseReads]:
         """Read what *decl* reaches: only the uses written before it are visible meanwhile.
@@ -287,6 +291,31 @@ class UseReader:
                 )
             self._renamed[decl.node_id] = found
         return found
+
+    def type_renames(self, site: ScopePath, decl: UseDecl) -> tuple[str, ...]:
+        """The names *decl*, written in region *site*, renames a type as.
+
+        A single-item rename of a type, and each tail item naming one under a
+        name of its own; a rename of a module, a scope or another declaration
+        renames no type.
+        """
+        target = _use_target(decl)
+        with self._reading_use(decl):
+            whole = (
+                (decl.alias,)
+                if decl.alias is not None
+                and self._use_renames(site, decl)
+                and self._use_path_reached(site, decl, target, LookupKind.TYPE)
+                else ()
+            )
+            return whole + tuple(
+                item.rename
+                for item in decl.tail or ()
+                if item.rename is not None
+                and self._use_path_reached(
+                    site, decl, (*target, *_item_path(item)), LookupKind.TYPE, len(target)
+                )
+            )
 
     def _pending_at(self, site: ScopePath, decl: UseDecl, names: ScopePath) -> bool:
         """Whether *names*, as *decl* in region *site* spells them, is an own member not yet bound.

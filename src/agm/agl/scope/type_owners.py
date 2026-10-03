@@ -116,6 +116,13 @@ class ReachedPaths(Protocol):
 DeclaredBeneath = Callable[[QName], Collection[ScopePath]]
 """The paths, relative to type or scope *qname*, of the declarations its module makes beneath it."""
 
+SpelledTypes = Callable[[ModuleId], Mapping[ScopePath, QName]]
+"""Each own scope path of module *module_id* spelling another module's type, to that type.
+
+The type its last name selects in the region above it, as one declaration
+(:meth:`TypeOwnerIndex.identity`).
+"""
+
 ReadView = Callable[[ModuleId], object]
 """What reads made now in module *module_id* see of its uses.
 
@@ -159,7 +166,8 @@ class AliasReach(NamedTuple):
 
     ``paths`` are the full paths it stands for; ``sites`` the modules
     declaring the aliases on the way, the nearest first, each of which may
-    declare there (:meth:`TypeOwnerIndex.site_spelling`);
+    declare beneath its own spellings of the types there
+    (:meth:`TypeOwnerIndex.site_spellings`);
     ``hidden`` whether a ``hiding`` at one of those aliases' sites removed it;
     ``target`` the type whose member table the target's spelling reads the
     path beneath (the alias of its own it renames, else the type its chain
@@ -203,6 +211,7 @@ class TypeOwnerIndex:
     *declared_beneath* which declarations lie beneath a type's path and
     *reached_paths* which of them an alias of it reaches; *builtin_scopes*
     the scopes an alias of a built-in type reads paths beneath;
+    *spelled_types* the scopes a module declares beneath, spelling a type;
     *current_selection* what a retained alias's spelling or an enum's member
     reference selects now; *read_view* what tells a read of a module from a later one seeing
     otherwise. *retained* supplies the owners of *retained_module*'s paths
@@ -219,6 +228,7 @@ class TypeOwnerIndex:
         declared_beneath: DeclaredBeneath,
         reached_paths: ReachedPaths,
         builtin_scopes: BuiltinScopes,
+        spelled_types: SpelledTypes,
         current_selection: CurrentTypeSelection,
         read_view: ReadView,
         retained_module: ModuleId | None = None,
@@ -230,6 +240,7 @@ class TypeOwnerIndex:
         self._declared_beneath = declared_beneath
         self._reached_paths = reached_paths
         self._builtin_scopes = builtin_scopes
+        self._spelled_types = spelled_types
         self._current_selection = current_selection
         self._read_view = read_view
         self._retained_module = retained_module
@@ -257,6 +268,7 @@ class TypeOwnerIndex:
             declared_beneath=self._declared_beneath,
             reached_paths=self._reached_paths,
             builtin_scopes=self._builtin_scopes,
+            spelled_types=self._spelled_types,
             current_selection=self._current_selection,
             read_view=self._read_view,
             retained_module=module_id,
@@ -564,39 +576,45 @@ class TypeOwnerIndex:
         """Whether full path *qname* is a type, or lies above a declaration.
 
         One its own module declares, or one of *sites* declares at its
-        spelling there (:meth:`site_spelling`).
+        spellings of it (:meth:`site_spellings`).
         """
         return (
             self.is_declared(qname)
             or bool(self._declared_beneath(qname))
             or any(
-                spelled is not None and bool(self._declared_beneath(spelled))
-                for spelled in (self.site_spelling(site, qname) for site in sites)
+                self._declared_beneath(spelled)
+                for site in sites
+                for spelled in self.site_spellings(site, qname)
             )
         )
 
-    def site_spelling(self, site: ModuleId, qname: QName) -> QName | None:
-        """Return the full path *site*'s own declarations at full path *qname*'s spelling have.
+    def site_spellings(self, site: ModuleId, qname: QName) -> tuple[QName, ...]:
+        """Return the full paths *site*'s own declarations at full path *qname* have.
 
-        *qname* lies beneath an alias's target, whose path the alias's site
-        spells as written; its own declarations there are beneath it. ``None``
-        when *site* declares a type above that spelling, which is the site's
-        own type, not the target's.
+        *qname* itself in its own module. In another, the path beneath each
+        own scope of *site* spelling a type above *qname*
+        (*spelled_types*) that *qname* lies at beneath that type.
         """
         module_id, atom = qname
         if module_id == site:
-            return qname
+            return (qname,)
         path = _path(atom)
-        if any(self.is_declared((site, _atom(path[:end]))) for end in range(1, len(path))):
-            return None
-        return site, atom
+        named = {
+            self.identity(above): end
+            for end in range(1, len(path))
+            if self.is_declared(above := (module_id, _atom(path[:end])))
+        }
+        return tuple(
+            (site, _atom((*scope, *path[named[declaration] :])))
+            for scope, declaration in self._spelled_types(site).items()
+            if declaration in named
+        )
 
     def scopes_of(self, qname: QName) -> frozenset[QName]:
         """Return the scopes type *qname* stands for beside its path.
 
         An alias of a built-in type's :attr:`TypeOwner.scopes`; any other
-        alias's target spelled at each site on its way that declares no type
-        there (:meth:`site_spelling`).
+        alias's target spelled by each site on its way (:meth:`spelled_scopes`).
         """
         owner = self.owner(qname)
         if owner is None or owner.alias is None or owner.builtin_name is not None:
@@ -606,19 +624,22 @@ class TypeOwnerIndex:
             spelled
             for named in reach.paths
             for site in reach.sites
-            if (spelled := self.spelled_scope(site, named)) is not None
+            for spelled in self.spelled_scopes(site, named)
         )
 
-    def spelled_scope(self, site: ModuleId, qname: QName) -> QName | None:
-        """Return the scope *site*'s own declarations beneath type *qname* are in, if any.
+    def spelled_scopes(self, site: ModuleId, qname: QName) -> frozenset[QName]:
+        """Return the scopes *site*'s own declarations beneath another module's type *qname* are in.
 
-        Its spelling there (:meth:`site_spelling`); ``None`` in *qname*'s own
-        module, or where *site* declares a type at or above that spelling.
+        Its own scopes spelling that type (*spelled_types*); none in *qname*'s own module.
         """
-        spelled = self.site_spelling(site, qname)
-        if spelled is None or spelled == qname or self.is_declared(spelled):
-            return None
-        return spelled
+        if site == qname[0]:
+            return frozenset()
+        named = self.identity(qname)
+        return frozenset(
+            (site, _atom(scope))
+            for scope, declaration in self._spelled_types(site).items()
+            if declaration == named
+        )
 
     def path_target(self, qname: QName) -> QName:
         """Return the full path *qname* stands for: beneath an alias, its target's path there."""

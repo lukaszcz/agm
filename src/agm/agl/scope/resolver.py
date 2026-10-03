@@ -597,13 +597,12 @@ class _Resolver(ModuleSources):
         self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
         # A retained ordinary member may be replaced by a later member at the
         # same path, but it cannot simultaneously become a namespace prefix.
-        # Type and named-scope members already own retained scope nodes and are
-        # therefore excluded from this ordinary-member set.
+        # Types, whose members are constructor bindings, are excluded.
         self._repl_session_ordinary_member_paths = {
             (*path, name)
             for path, node in self._repl_session_scope_nodes.items()
-            for name in node.members
-            if (*path, name) not in self._repl_session_scope_nodes
+            for name, ref in node.members.items()
+            if ref.kind is not BinderKind.constructor_binding
         }
         # Each retained type-owned path maps to the owner it resolved to when
         # declared, so a retained alias keeps its target after a redeclaration.
@@ -909,6 +908,7 @@ class _Resolver(ModuleSources):
             owner_declarations=dict(self._owner_declarations),
             replaced_uses=self._replaced_uses(),
             declared_segments=self.reader().declared,
+            spelled_types=self.spelled_types(),
         )
 
     # ------------------------------------------------------------------
@@ -1046,9 +1046,11 @@ class _Resolver(ModuleSources):
 
         self._type_declarations.append((item, path))
         type_scope = path + (item.name,)
+        self._type_paths.add(type_scope)
+        if isinstance(item, TypeAlias):
+            return
         self._scope_paths.add(type_scope)
         self._scope_node_ids.setdefault(type_scope, item.node_id)
-        self._type_paths.add(type_scope)
         if isinstance(item, EnumDef):
             for member in item.members:
                 if not isinstance(member, VariantDef):
@@ -1338,7 +1340,8 @@ class _Resolver(ModuleSources):
             nested_scope_names = frozenset(
                 nested_path[-1] for nested_path in nodes if nested_path[:-1] == type_path
             )
-            nodes[type_path].clear_owned_constructor_members(nested_scope_names)
+            if type_path in nodes:
+                nodes[type_path].clear_owned_constructor_members(nested_scope_names)
         for (_module_id, path, name), declaration in self._declarations.items():
             nodes[path].register_member(name, declaration)
         return nodes

@@ -1169,6 +1169,12 @@ def resolve_program(
             return resolver.scopes_named_at(path[:-1], name, every_use=every_use)
         return resolved_modules[module_id].resolved.type_owners[path].scopes
 
+    def spelled_types(module_id: ModuleId) -> Mapping[ScopePath, QName]:
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver.spelled_types()
+        return resolved_modules[module_id].resolved.spelled_types
+
     def alias_target(
         qname: QName, alias: TypeAlias, spelling: NameT | AppliedT
     ) -> TypeSelection | None:
@@ -1202,6 +1208,7 @@ def resolve_program(
         declared_beneath=declared_beneath,
         reached_paths=reached_paths,
         builtin_scopes=builtin_scopes,
+        spelled_types=spelled_types,
         current_selection=current_selection,
         read_view=lambda module_id: resolvers[module_id].read_view(),
     )
@@ -1250,13 +1257,11 @@ def resolve_program(
             module, atom = named
             # Where the alias is declared, a site's own declaration wins its path.
             for site in reach.sites:
-                spelled = type_owners.site_spelling(site, named)
-                if spelled is None:
-                    continue
-                if spelled in decl_info:
-                    reached.setdefault((), spelled)
-                for relative in declared_in_program(spelled):
-                    reached.setdefault(relative, (site, _atom((*_path(atom), *relative))))
+                for spelled in type_owners.site_spellings(site, named):
+                    if spelled in decl_info:
+                        reached.setdefault((), spelled)
+                    for relative in declared_in_program(spelled):
+                        reached.setdefault(relative, (site, _atom((*_path(spelled[1]), *relative))))
             if named in decl_info:
                 reached.setdefault((), named)
             for relative in declared_in_program(named):

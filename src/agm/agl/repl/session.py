@@ -1305,7 +1305,8 @@ class ReplSession:
                 for nested_path in self._session_scope_nodes
                 if nested_path[:-1] == path
             )
-            self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
+            if path in self._session_scope_nodes:
+                self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
 
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)

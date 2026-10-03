@@ -1136,6 +1136,10 @@ class ModuleResolution:
         The segments of every path the module declares -- a REPL session's
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
         data a diagnostic spelling another module's declaration anchors by.
+    ``spelled_types``
+        Each own scope path spelling another module's type, to that type's
+        declaration: a later resolution reusing the module reads beneath it
+        what the module declares beneath that type.
     """
 
     program: Program
@@ -1166,6 +1170,7 @@ class ModuleResolution:
     owner_declarations: dict[int, TypeSelection] = field(default_factory=dict)
     replaced_uses: dict[int, frozenset[int]] = field(default_factory=dict)
     declared_segments: frozenset[str] = frozenset()
+    spelled_types: dict[ScopePath, QName] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

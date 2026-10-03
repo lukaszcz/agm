@@ -237,6 +237,43 @@ _SCENARIOS["declared-beneath-an-imported-alias-of-no-record"] = Scenario(
     },
 )
 
+_APPLIED_TARGETS = (
+    "import gen\ntype IB = array[int]\ntype TD[V] = dict[text, V]\ntype IBox = gen::Box[int]\n"
+    "type IO = gen::Opt[int]\ndef array::st() -> int = 9\n"
+)
+"""Aliases applying a built-in or generic type to own arguments, declared through an import."""
+
+_SCENARIOS["declared-beneath-an-imported-alias-applying-its-target"] = Scenario(
+    modules={
+        "gen": "record Box[T]\n  v: T\ndef Box::gb() -> int = 7\n"
+        "enum Opt[T] = Som(v: T) | Non\ndef Opt::ob() -> int = 8\n",
+        "bi": _APPLIED_TARGETS,
+    },
+    header=("import bi::*\nimport gen::*",),
+    probes={
+        **{
+            f"{alias}-static": accepted(f"def {alias}::k() -> int = 1\n{alias}::k()", "int")
+            for alias in ("IB", "TD", "IBox", "IO")
+        },
+        "IB-record": accepted("record IB::R\n  z: int\nIB::R(z = 1).z", "int"),
+        "IBox-region": accepted("scope IBox\n  def h() -> int = 2\nend IBox\n\nIBox::h()", "int"),
+        "IBox-reach": accepted("IBox::gb()", "int"),
+        "IO-reach": accepted("IO::ob()", "int"),
+        "IB-reach": accepted("IB::st()", "int"),
+        "IBox-own-beats-the-reach": accepted('def IBox::gb() -> text = "own"\nIBox::gb()', "text"),
+        "IB-own-beats-the-reach": accepted('def IB::st() -> text = "own"\nIB::st()', "text"),
+        "IBox-target-reads-nothing-own": rejected(
+            "def IBox::k() -> int = 1\nBox::k()", UnknownMemberError, "Box::k"
+        ),
+        "IBox-constructor": accepted("IBox::Box(v = 1).v", "int"),
+        "IO-member": accepted("IO::Som(v = 1).v", "int"),
+        "IO-member-at-its-arguments": rejected(
+            'IO::Som(v = "x")', AglTypeError, '"x"', phase="typecheck"
+        ),
+        "written-arguments": rejected("IBox[int]::gb()", TypeArgumentsError, "IBox[int]"),
+    },
+)
+
 
 def _receiver_probes(spelling: str, record: str) -> dict[str, Probe]:
     """Methods whose receiver *spelling*, an alias of ``Base``, selects; *record* renders Base."""
@@ -489,10 +526,16 @@ def _inner_type_of_its_own_probes() -> dict[str, Probe]:
             "undeclared": rejected(
                 f"{spelling}::P::zz()", UnknownMemberError, f"{spelling}::P::zz"
             ),
+            "renamed-own-path": accepted(f"{spelling}::Q::m()", "int"),
+            "renamed-nested": accepted(f"{spelling}::Q::S::d()", "int"),
+            "through-a-renaming-alias": accepted(f"{spelling}::M::P::n()", "int"),
+            "own-beneath-the-renamed-path": accepted(
+                f"def Base::P::w() -> int = 7\n{spelling}::Q::w()", "int"
+            ),
+            "through-a-renaming-alias-undeclared": rejected(
+                f"{spelling}::M::P::zz()", UnknownMemberError, f"{spelling}::M::P::zz"
+            ),
         }.items()
-    } | {
-        "Base-renamed-own-path": accepted("Base::Q::m()", "int"),
-        "Base-through-a-renaming-alias": accepted("Base::M::P::n()", "int"),
     }
 
 
@@ -717,6 +760,82 @@ _SCENARIOS["what-a-cycle-member-declares-beneath-an-imported-type-is-re-exported
         "whole-function": accepted("xw::Base::m()", "int"),
         "whole-type": accepted("xw::Base::R(y = 1).y", "int"),
         "region": accepted("use xr::Base::S\nS::s()", "int"),
+    },
+)
+
+_RENAMED_SITE = (
+    "import base",
+    "use base::{Base as B2}",
+    "type RGeo = B2",
+    "def B2::g() -> int = 2",
+)
+"""A site spelling ``Base`` as a ``use`` renames it, declaring beneath that spelling."""
+
+_NESTED_SITE = ("import mid::*", "type NGeo = Mid", "def Mid::k() -> int = 3")
+"""A site spelling ``Base`` through an imported alias, declaring beneath that spelling."""
+
+_SITES = {
+    "base": "record Base\n  x: int\ndef Base::f() -> int = 1\n",
+    "renamed": "\n".join(_RENAMED_SITE) + "\n",
+    "mid": "import base::*\ntype Mid = Base\n",
+    "nested": "\n".join(_NESTED_SITE) + "\n",
+    "regional": (
+        "import base\n\nscope r\n  use base::{Base as B2}\n  type SGeo = B2\nend r\n\n"
+        "def r::B2::g() -> int = 2\n"
+    ),
+    "routed": (
+        "import base\n\nscope Base\n  def g() -> int = 2\nend Base\n\ntype BGeo = base::Base\n"
+    ),
+    "hid": (
+        "import base::*\nuse base::{Base as B2}\ntype HGeo = Base\ndef B2::k() -> int = 1\n"
+        "def Base::j() -> int = 2\n"
+    ),
+}
+"""Modules declaring an alias of ``Base`` beside declarations beneath their spellings of names."""
+
+_SCENARIOS["an-alias-reaches-what-its-site-declares-beneath-its-spelling-of-the-target"] = Scenario(
+    modules=_SITES,
+    header=("import renamed::{RGeo}\nimport routed::{BGeo}", "import nested::{NGeo}"),
+    probes={
+        "a-use-renaming-the-target": accepted("RGeo::g()", "int"),
+        "an-imported-alias-of-the-target": accepted("NGeo::k()", "int"),
+        "a-use-in-a-region": accepted("import regional::*\nr::SGeo::g()", "int"),
+        "the-target-itself": accepted("RGeo::f() + NGeo::f() + BGeo::f()", "int"),
+        "a-scope-named-like-the-target-naming-nothing": rejected(
+            "BGeo::g()", UnknownMemberError, "BGeo::g"
+        ),
+    },
+)
+
+_SCENARIOS["a-module-route-reads-what-an-alias-site-declares-beneath-the-target"] = Scenario(
+    modules=_SITES,
+    header=("import renamed\nimport nested", "import regional"),
+    probes={
+        "a-use-renaming-the-target": accepted("renamed::RGeo::g()", "int"),
+        "an-imported-alias-of-the-target": accepted("nested::NGeo::k()", "int"),
+        "a-use-in-a-region": accepted("regional::r::SGeo::g()", "int"),
+    },
+)
+
+_SCENARIOS["an-own-alias-reaches-the-declarations-beneath-a-use-renaming-its-target"] = Scenario(
+    modules=_SITES,
+    header=_RENAMED_SITE,
+    probes={"declared": accepted("RGeo::g()", "int"), "target": accepted("RGeo::f()", "int")},
+)
+
+_SCENARIOS["an-own-alias-reaches-the-declarations-beneath-an-imported-alias-it-names"] = Scenario(
+    modules=_SITES,
+    header=_NESTED_SITE,
+    probes={"declared": accepted("NGeo::k()", "int"), "target": accepted("NGeo::f()", "int")},
+)
+
+_SCENARIOS["hiding-an-alias-removes-what-its-module-declares-beneath-any-spelling"] = Scenario(
+    modules=_SITES,
+    header=("import hid::* hiding HGeo\nimport routed::* hiding BGeo",),
+    probes={
+        "a-use-renaming-the-target": rejected("B2::k()", HiddenMemberError, "B2::k"),
+        "the-target-spelling": rejected("Base::j()", HiddenMemberError, "Base::j"),
+        "a-scope-named-like-the-target-naming-nothing": accepted("Base::g()", "int"),
     },
 )
 

@@ -844,7 +844,31 @@ _INT_BOX = "record gen::Box[int]\n  v: int"
 
 
 def _applied_probes(spelling: str) -> dict[str, Probe]:
-    """*spelling* of ``Box[int]`` reads a path beneath it as ``Box[int]`` does."""
+    """*spelling* of ``Box[int]`` reads its own constructor as ``Box[int]`` does.
+
+    A path beneath an alias's bare segment is its target's, which carries no
+    type arguments; a written application carries its own.
+    """
+    beneath: dict[str, Probe] = (
+        {
+            "nested-record": rejected(f"{spelling}::In(w = 1)", TypeArgumentsError, spelling),
+            "nested-record-annotation": rejected(
+                f"fn(p: {spelling}::In) => 1", TypeArgumentsError, spelling
+            ),
+            "static-function": rejected(f"{spelling}::g()", TypeArgumentsError, spelling),
+            "method": rejected(f"{spelling}::m", TypeArgumentsError, spelling),
+        }
+        if "[" in spelling
+        else {
+            "nested-record": accepted(f"{spelling}::In(w = 1).w", "int"),
+            "nested-record-annotation": accepted(
+                f"(fn(p: {spelling}::In) => p.w)(Box::In(w = 1))", "int"
+            ),
+            "static-function": accepted(f"{spelling}::g()", "int"),
+            "method": accepted(f"{spelling}::m(Box(v = 1))", "int"),
+            "method-of-another-application": accepted(f'{spelling}::m(Box(v = "s"))', "int"),
+        }
+    )
     return {
         f"{spelling}-{name}": probe
         for name, probe in {
@@ -867,18 +891,13 @@ def _applied_probes(spelling: str) -> dict[str, Probe]:
                 f"p: {spelling}::Box",
                 phase="typecheck",
             ),
-            "nested-record": rejected(f"{spelling}::In(w = 1)", TypeArgumentsError, spelling),
-            "nested-record-annotation": rejected(
-                f"fn(p: {spelling}::In) => 1", TypeArgumentsError, spelling
-            ),
             "missing-beneath-nested-record": rejected(
                 f"{spelling}::In::x()", UnknownMemberError, f"{spelling}::In::x"
             ),
             "missing-beneath-nested-record-annotation": rejected(
                 f"fn(p: {spelling}::In::x) => 1", UnknownMemberError, f"{spelling}::In::x"
             ),
-            "static-function": rejected(f"{spelling}::g()", TypeArgumentsError, spelling),
-            "method": rejected(f"{spelling}::m", TypeArgumentsError, spelling),
+            **beneath,
         }.items()
     }
 
@@ -1409,7 +1428,9 @@ def _builtin_alias_probes(text: str, array: str, applied: str) -> dict[str, Prob
             f"let _ = {array}::map", AglTypeError, f"{array}::map", phase="typecheck"
         ),
         f"{array}-applied": rejected(f"{array}[int]::map", TypeArgumentsError, f"{array}[int]"),
-        f"{applied}-applied": rejected(f"{applied}::map", TypeArgumentsError, applied),
+        f"{applied}-applied": rejected(f"{applied}::map", TypeArgumentsError, applied)
+        if "[" in applied
+        else accepted(f"{applied}::map([1], fn(x: int) => x + 1)", "array[int]"),
     }
 
 
@@ -1425,7 +1446,7 @@ _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
         **_builtin_alias_probes("T2", "Arr", "IA"),
         **_builtin_alias_probes("U2", "Brr", "IB"),
         "alias-of-an-alias": accepted('T3::size("ab")', "int"),
-        "applied-alias-of-an-alias": rejected("A3::map", TypeArgumentsError, "A3"),
+        "applied-alias-of-an-alias": accepted("A3::map([1], fn(x: int) => x + 1)", "array[int]"),
         "hidden-at-the-alias-site": rejected("V2::zz()", HiddenMemberError, "V2::zz"),
         "reached-at-the-alias-site": accepted("V2::yy()", "int"),
         "hidden-beneath-at-the-alias-site": rejected(
@@ -1680,20 +1701,18 @@ _APPLYING_MODULES = {
 }
 _INT_FULL = "record gen::Opt::Full[int]\n  v: int"
 
-_SCENARIOS["an-applied-alias-reads-its-target-path-as-its-application-does"] = Scenario(
+_SCENARIOS["an-applied-alias-reads-its-target-path-without-its-arguments"] = Scenario(
     modules=_APPLYING_MODULES,
     header=("import ga::*",),
     probes={
         "application": rejected(
             "import gen::*\nimport gb::*\nBox[int]::k()", TypeArgumentsError, "Box[int]"
         ),
-        "alias": rejected("import gb::*\nIntBox::k()", TypeArgumentsError, "IntBox"),
+        "alias": accepted("import gb::*\nIntBox::k()", "int"),
         "application-in-a-scope": rejected(
             _in_scope("gb::*", "Box[int]::k()"), TypeArgumentsError, "Box[int]"
         ),
-        "alias-in-a-scope": rejected(
-            _in_scope("gb::*", "IntBox::k()"), TypeArgumentsError, "IntBox"
-        ),
+        "alias-in-a-scope": accepted(_in_scope("gb::*", "IntBox::k()"), "int"),
         "member-application-in-a-scope": accepted(
             _in_scope("gen::*", "Opt[int]::Full(v = 1)"), _INT_FULL
         ),

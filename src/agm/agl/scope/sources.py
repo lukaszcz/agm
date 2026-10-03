@@ -52,6 +52,7 @@ from agm.agl.scope.lookup import (
     LookupKind,
     QualifiedTarget,
     Reading,
+    is_removed,
     removes,
 )
 from agm.agl.scope.symbols import (
@@ -230,6 +231,7 @@ class ModuleSources(SourcesHost):
         self._kept_contributions: dict[tuple[ScopePath, ScopePath, LookupKind], Reading] = {}
         self._kept_own_types: dict[ScopePath, Reading] = {}
         self._kept_stood_for: dict[_StandingFor, tuple[AliasReach, Reading]] = {}
+        self._kept_spelled_types: dict[None, dict[ScopePath, QName]] = {}
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -239,6 +241,34 @@ class ModuleSources(SourcesHost):
             )
             for declaration, path in self._type_declarations
         }
+
+    def spelled_types(self) -> dict[ScopePath, QName]:
+        """Map each own scope path spelling another module's type to the declaration it names.
+
+        A path spells the type its last name, read as a type in the region
+        above it with every use, selects there -- one declaration however
+        many ways (:meth:`identity`), never removed by a ``hiding``. An own
+        type's path is its own.
+        """
+        with self._uses.view(every_use=True):
+            return self._kept(self._kept_spelled_types, None, self._read_spelled_types)
+
+    def _read_spelled_types(self) -> dict[ScopePath, QName]:
+        """Read :meth:`spelled_types` afresh."""
+        spelled: dict[ScopePath, QName] = {}
+        for path in self._scope_nodes:
+            if not path or self.own_at(path, LookupKind.TYPE).candidates:
+                continue
+            reached = self.contributed_at(path[:-1], path, LookupKind.TYPE).candidates
+            named = {
+                None if key is None else self._type_owners.identity(_key_qname(key))
+                for candidate in reached
+                if not is_removed(candidate, self)
+                for key in (candidate.target.key,)
+            }
+            if len(named) == 1 and (declaration := named.pop()) is not None:
+                spelled[path] = declaration
+        return spelled
 
     def read_view(self) -> object:
         """What reads made now see of the uses: reads with equal views see the same of them."""
@@ -863,35 +893,34 @@ class ModuleSources(SourcesHost):
     ) -> Reading:
         """The declarations at full path *qname*, as ones of *kind*, made visible by *layer*.
 
-        This module's own declaration at *qname* wins, whether *qname* names
-        its own type or an imported one. Failing that: another module's --
-        the one it declares there, and the one each of *sites* declares at
-        its spelling there (:meth:`~TypeOwnerIndex.site_spelling`).
+        Those at *qname* and at each of *sites*' own spellings of it
+        (:meth:`~TypeOwnerIndex.site_spellings`), this module's own winning.
         """
-        module_id, atom = qname
-        if module_id == self._module_id:
-            own = Reading(
-                tuple(
-                    replace(candidate, layer=layer, origin=contribution_origin(qname, layer))
-                    for candidate in self.own_at(_bare_path(atom), kind).candidates
-                )
+        spelled: dict[QName, None] = {
+            path: None
+            for path in (
+                qname,
+                *(path for site in sites for path in self._type_owners.site_spellings(site, qname)),
             )
-            if own.candidates or not sites:
-                return own
-        declared = [qname] if qname in self._decl_info else []
-        declared.extend(
-            spelled
-            for site in sites
-            if site not in (module_id, self._module_id)
-            and (spelled := self._type_owners.site_spelling(site, qname)) in self._decl_info
+        }
+        own = Reading(
+            tuple(
+                replace(candidate, layer=layer, origin=contribution_origin(path, layer))
+                for path in spelled
+                if path[0] == self._module_id
+                for candidate in self.own_at(_bare_path(path[1]), kind).candidates
+            )
         )
+        if own.candidates:
+            return own
         candidates = (
             Candidate(
                 self._contributed_target(self._cross_module_binding_ref(declaration), ()),
                 layer,
                 contribution_origin(declaration, layer),
             )
-            for declaration in declared
+            for declaration in spelled
+            if declaration[0] != self._module_id and declaration in self._decl_info
         )
         return Reading(tuple(c for c in candidates if self.fits(c.target, kind)))
 
@@ -1126,10 +1155,11 @@ class ModuleSources(SourcesHost):
         """See :meth:`~agm.agl.scope.lookup.DeclarationNames.scopes_of`."""
         return frozenset(map(_qname_decl_key, self._type_owners.scopes_of(_key_qname(key))))
 
-    def spelled_scope(self, module: ModuleId, key: DeclarationKey) -> DeclarationKey | None:
-        """See :meth:`~agm.agl.scope.lookup.DeclarationNames.spelled_scope`."""
-        spelled = self._type_owners.spelled_scope(module, _key_qname(key))
-        return None if spelled is None else _qname_decl_key(spelled)
+    def spelled_scopes(self, module: ModuleId, key: DeclarationKey) -> frozenset[DeclarationKey]:
+        """See :meth:`~agm.agl.scope.lookup.DeclarationNames.spelled_scopes`."""
+        return frozenset(
+            map(_qname_decl_key, self._type_owners.spelled_scopes(module, _key_qname(key)))
+        )
 
     def aliases(self, key: DeclarationKey) -> bool:
         """Whether *key* declares a type alias."""

@@ -149,8 +149,8 @@ class DeclarationNames(Protocol):
         """The scopes alias *key* stands for beside its path, where its sites declare."""
         ...
 
-    def spelled_scope(self, module: ModuleId, key: DeclarationKey) -> DeclarationKey | None:
-        """The scope *module*'s own declarations beneath type *key* are in, if any."""
+    def spelled_scopes(self, module: ModuleId, key: DeclarationKey) -> frozenset[DeclarationKey]:
+        """The scopes *module*'s own declarations beneath another module's type *key* are in."""
         ...
 
 
@@ -159,8 +159,8 @@ def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> boo
 
     *names* names it: an alias denoting the type a removed alias denotes is
     removed too, and so is a declaration beneath a scope a removed alias
-    stands for, or beneath its module's spelling of a removed type, however
-    spelled.
+    stands for, or beneath any of its module's own spellings of a removed
+    type.
     """
     if hiding == NOT_HIDDEN:
         return False
@@ -169,11 +169,11 @@ def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> boo
     return all(
         any(
             any(
-                above is not None and _beneath(named, above)
+                _beneath(named, above)
                 for above in (
                     hidden,
                     *names.scopes_of(hidden),
-                    names.spelled_scope(named[0], hidden),
+                    *names.spelled_scopes(named[0], hidden),
                 )
             )
             or (denoted != named and names.denotes(hidden) == denoted)
@@ -519,7 +519,7 @@ def lookup_origins(
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
     walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
-    return walk.named(anchor.origins)
+    return walk.named(chain, anchor.origins)
 
 
 def lookup_qualified(
@@ -744,25 +744,34 @@ class _Walk:
         return reading
 
     def _through_prefixes(
-        self, step: _Step, chain: QualifierChain, kind: LookupKind, owners_within: int
+        self,
+        step: _Step,
+        chain: QualifierChain,
+        kind: LookupKind,
+        owners_within: int,
+        *,
+        after: int | None = None,
     ) -> Reading:
-        """What each written prefix selects beneath it for the rest of the path.
+        """What each written prefix longer than *after* names selects beneath it for the rest.
 
-        As :meth:`_reading` reads it, *owners_within* as there.
+        As :meth:`_reading` reads it, *owners_within* as there; *after* is the
+        step's module route by default.
         """
         reading = Reading()
-        for count in range(step.start + 1, len(self._names)):
+        for count in range(step.start + 1 if after is None else after + 1, len(self._names)):
             owners = self._owners(step, count)
             for owner in owners:
                 key = owner.target.key
                 if key is not None and (count <= owners_within or self._sources.aliases(key)):
                     reading += _reached_as(
-                        self._beneath(step, owner, key, count, chain, kind), owner
+                        self._beneath(step, owner, key, count, chain, kind, owners_within),
+                        owner,
                     )
             if not owners:
                 for standing in self._standing(count):
                     reading += _reached_as(
-                        self._beside(step, standing, count, chain, kind), standing.owner
+                        self._beside(step, standing, count, chain, kind, owners_within),
+                        standing.owner,
                     )
         return reading
 
@@ -802,6 +811,7 @@ class _Walk:
         count: int,
         chain: QualifierChain,
         kind: LookupKind,
+        owners_within: int,
     ) -> Reading:
         """What type *key*, which *owner* reached as the first *count* names at *step*, selects.
 
@@ -828,7 +838,9 @@ class _Walk:
             return reading
         return sum(
             (
-                self._beside(step, _Standing(step, owner, key, target), count, chain, kind)
+                self._beside(
+                    step, _Standing(step, owner, key, target), count, chain, kind, owners_within
+                )
                 for target in sources.stands_for(key)
             ),
             reading,
@@ -865,13 +877,16 @@ class _Walk:
         count: int,
         chain: QualifierChain,
         kind: LookupKind,
+        owners_within: int,
     ) -> Reading:
         """What the path alias *standing* stands for reaches at *step* as the first *count* names.
 
         Where that path names only the alias's target at *step*, what
         contributions reach beneath it there is reached as the alias is (the
         alias's own member table reads this module's declarations beneath
-        the target), and a path a ``hiding`` removed there is refused. Where
+        the target), and so is what a type a longer prefix of it reaches
+        selects beneath that (:meth:`_spelled`, *owners_within* as there); a
+        path a ``hiding`` removed there is refused. Where
         it names no type at *step*, this module's own declarations there are
         a scope of its own named so, which the table never reads: they merge
         with it. An alias applying its target selects what its own member
@@ -893,9 +908,15 @@ class _Walk:
                 layer=owner.layer,
                 origin=contribution_origin(candidate.origin.declaration, owner.layer),
             )
-            for candidate in step.read(beside, kind).candidates
+            for candidate in (
+                *(
+                    candidate
+                    for candidate in step.read(beside, kind).candidates
+                    if candidate.layer is not ContributionLayer.DECLARED or not named.candidates
+                ),
+                *self._spelled(step, target.path, count, chain, kind, owners_within).candidates,
+            )
             if not candidate.routed
-            and (candidate.layer is not ContributionLayer.DECLARED or not named.candidates)
         )
         hidden = not reached and step.hidden(beside)
         if not (reached or hidden) or not sources.names_only(target, named):
@@ -908,30 +929,86 @@ class _Walk:
                 return selected
         return Reading(reached)
 
-    def named(self, origins: Callable[[_Step, ScopePath], frozenset[QName]]) -> frozenset[QName]:
-        """The scopes and types the walk's full path names at every step, by *origins*.
+    def _respelled(
+        self, step: _Step, spelled: ScopePath, count: int, chain: QualifierChain
+    ) -> tuple[_Walk, QualifierChain]:
+        """This walk spelling *chain* at *step* with *spelled* for its first *count* names.
+
+        *spelled* names one type already, the one an alias the first *count*
+        names reach stands for: the walk reads only longer prefixes
+        (:meth:`_spelled`, :meth:`_named_at`), so each one reads fewer written
+        names than the last.
+        """
+        segment = chain.segments[count - 1]
+        written = replace(
+            chain,
+            segments=(
+                *(QualifierSegment(name, None, segment.span, segment.node_id) for name in spelled),
+                *chain.segments[count:],
+            ),
+        )
+        names = (*spelled, *self._names[count:])
+        walk = _Walk(self._sources, self._site, (step,), self._route, written, names, self._span)
+        return walk, written
+
+    def _spelled(
+        self,
+        step: _Step,
+        spelled: ScopePath,
+        count: int,
+        chain: QualifierChain,
+        kind: LookupKind,
+        owners_within: int,
+    ) -> Reading:
+        """What types prefixes longer than *spelled*, in place of the first *count* names, select.
+
+        As :meth:`_through_prefixes` reads a written spelling (:meth:`_respelled`).
+        """
+        walk, written = self._respelled(step, spelled, count, chain)
+        return walk._through_prefixes(
+            step, written, kind, owners_within - count + len(spelled), after=len(spelled)
+        )
+
+    def named(
+        self, chain: QualifierChain, origins: Callable[[_Step, ScopePath], frozenset[QName]]
+    ) -> frozenset[QName]:
+        """The scopes and types the walk's full path, *chain*, names at every step, by *origins*.
 
         An alias a written prefix reaches adds what its own member table
         reaches for the rest of the path, and what the path it stands for
         names in its place, as :meth:`_reading` reads both.
         """
+        return frozenset(
+            origin for step in self._steps for origin in self._named_at(step, chain, origins)
+        )
+
+    def _named_at(
+        self,
+        step: _Step,
+        chain: QualifierChain,
+        origins: Callable[[_Step, ScopePath], frozenset[QName]],
+        *,
+        after: int | None = None,
+    ) -> frozenset[QName]:
+        """What :meth:`named` finds at *step*, through prefixes longer than *after* names.
+
+        *after* is the step's module route by default.
+        """
         names, sources = self._names, self._sources
-        found: set[QName] = set()
-        for step in self._steps:
-            found |= origins(step, (*step.path, *names))
-            for count in range(step.start + 1, len(names)):
-                for key in filter(None, (owner.target.key for owner in self._owners(step, count))):
-                    found |= sources.projected_origins(key, names[count:])
-                stands = self._standing(count)
-                if self._owners(step, count):
-                    stands = tuple(standing for standing in stands if standing.step is step)
-                for standing in stands:
-                    target = standing.target
-                    spelled = (*step.path, *target.path)
-                    if target.path != names[:count] and sources.names_only(
-                        target, step.owners(spelled)
-                    ):
-                        found |= origins(step, (*spelled, *names[count:]))
+        found = set(origins(step, (*step.path, *names)))
+        for count in range(step.start + 1 if after is None else after + 1, len(names)):
+            for key in filter(None, (owner.target.key for owner in self._owners(step, count))):
+                found |= sources.projected_origins(key, names[count:])
+            stands = self._standing(count)
+            if self._owners(step, count):
+                stands = tuple(standing for standing in stands if standing.step is step)
+            for standing in stands:
+                target = standing.target
+                if target.path != names[:count] and sources.names_only(
+                    target, step.owners((*step.path, *target.path))
+                ):
+                    walk, written = self._respelled(step, target.path, count, chain)
+                    found |= walk._named_at(step, written, origins, after=len(target.path))
         return frozenset(found)
 
     def _hidden(self, chain: QualifierChain) -> HiddenMemberError:
@@ -976,14 +1053,18 @@ class _Walk:
         beneath the alias); where it reaches none, an alias another step
         reaches so does. A segment carries type arguments only when the
         type its full path selects (own first, else the one contributed; two
-        are ambiguous) owns what follows, as many as it takes. A segment
-        selecting an alias that applies its target carries that alias's.
+        are ambiguous) owns what follows, as many as it takes: those written
+        on it, never an alias's own (``IBox::k`` with ``type IBox = Box[int]``
+        carries none).
         """
         segments = chain.segments
         owner: DeclarationKey | None = None
         for index in range(step.start, len(segments)):
             segment = segments[index]
             last = index == len(segments) - 1
+            arguments = segment.type_args
+            if arguments is None and not last:
+                continue
             owners = self._selecting(
                 chain,
                 step,
@@ -991,14 +1072,6 @@ class _Walk:
                 self._owners(step, index + 1)
                 or tuple(standing.owner for standing in self._standing(index + 1)),
             )
-            selected = _decided(owners, self._sources.denotes)
-            applied = segment.type_args is not None or (
-                isinstance(selected, Candidate)
-                and selected.target.key is not None
-                and self._sources.applies(selected.target.key)
-            )
-            if not applied and not last:
-                continue
             member = self._names[index + 1]
             following = (
                 target
@@ -1033,13 +1106,14 @@ class _Walk:
                 ),
                 (None, None),
             )
-            if not applied:
+            if arguments is None:
                 continue
+            selected = _decided(owners, self._sources.denotes)
             if isinstance(selected, tuple):
                 return self._ambiguous(selected, self._names[step.start : index + 1], segment.span)
             if selected is None or selected.target.key != owner:
                 arity = None
-            if arity is None or (segment.type_args is not None and arity != len(segment.type_args)):
+            if arity is None or arity != len(arguments):
                 return TypeArgumentsError(segment.name, arity, span=segment.span)
         return (
             target
@@ -1110,8 +1184,9 @@ def _unknown(
     injected enum member is never a qualifier.
     """
     for length in range(len(chain.segments), 0, -1):
-        walk = written(replace(chain, segments=chain.segments[: length - 1]))
-        if walk.named(origins) or walk.find(LookupKind.TYPE) is not None:
+        prefix = replace(chain, segments=chain.segments[: length - 1])
+        walk = written(prefix)
+        if walk.named(prefix, origins) or walk.find(LookupKind.TYPE) is not None:
             spelled = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
                 render_qualified_name(spelled, names[length]), span=chain.span

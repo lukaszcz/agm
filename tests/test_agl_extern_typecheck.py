@@ -258,34 +258,77 @@ class TestExternCallableSignatures:
 
 
 # ---------------------------------------------------------------------------
-# Non-text-keyed dicts have no wire form, so they cannot cross an extern
-# boundary (semantics.type_table.is_extern_crossable).
+# Every dict in an extern signature (parameters, results, callback parameters)
+# needs a Hashable key, assuming its type variables are
+# (semantics.type_table.is_extern_keyable).
 # ---------------------------------------------------------------------------
 
 
-class TestExternDictKeyCrossability:
+_OPTION = "enum Option[T]\n  | none\n  | some(value: T)\n"
+
+
+class TestExternDictKeyability:
     def test_text_keyed_dict_param_permitted(self) -> None:
         check_extern("extern def f(d: dict[text, int]) -> int\n0")
 
-    def test_non_text_keyed_dict_param_rejected(self) -> None:
-        source = "extern def f(d: dict[int, text]) -> int\n0"
-        err = reject_extern(source)
-        assert _span_text(source, err) == "d: dict[int, text]"
+    def test_non_text_hashable_keyed_dict_param_and_return_permitted(self) -> None:
+        check_extern("extern def f(d: dict[int, text]) -> dict[decimal, bool]\n0")
 
-    def test_non_text_keyed_dict_return_rejected(self) -> None:
-        source = "extern def f(x: int) -> dict[int, text]\n0"
+    def test_non_hashable_keyed_dict_param_rejected(self) -> None:
+        source = "extern def f(d: dict[array[int], text]) -> int\n0"
         err = reject_extern(source)
-        assert _span_text(source, err) == "extern def f(x: int) -> dict[int, text]"
+        assert _span_text(source, err) == "d: dict[array[int], text]"
 
-    def test_non_text_keyed_dict_nested_in_record_field_rejected(self) -> None:
-        source = "record Box\n  d: dict[int, text]\nextern def f(b: Box) -> int\n0"
-        err = reject_extern(source)
-        assert _span_text(source, err) == "b: Box"
+    def test_hashable_keyed_dict_in_callback_param_permitted(self) -> None:
+        check_extern("extern def f(cb: (dict[int, text]) -> unit) -> int\n0")
 
-    def test_non_text_keyed_dict_nested_in_callback_param_rejected(self) -> None:
-        source = "extern def f(cb: (dict[int, text]) -> unit) -> int\n0"
+    def test_non_hashable_keyed_dict_in_callback_param_rejected(self) -> None:
+        source = "extern def f(cb: (dict[array[int], text]) -> unit) -> int\n0"
         err = reject_extern(source)
-        assert _span_text(source, err) == "cb: (dict[int, text]) -> unit"
+        assert _span_text(source, err) == "cb: (dict[array[int], text]) -> unit"
+
+    def test_bad_key_nested_in_record_field_param_rejected(self) -> None:
+        reject_extern("record Box\n  d: dict[array[int], text]\nextern def f(b: Box) -> int\n0")
+
+    def test_non_hashable_keyed_dict_return_rejected(self) -> None:
+        source = "extern def f(x: int) -> dict[array[int], int]\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "extern def f(x: int) -> dict[array[int], int]"
+
+    def test_var_field_record_key_return_rejected(self) -> None:
+        source = "record Cell\n  var n: int\nextern def f(x: int) -> dict[Cell, int]\n0"
+        reject_extern(source)
+
+    def test_record_key_return_permitted(self) -> None:
+        check_extern("record Id\n  n: int\nextern def f(x: int) -> dict[Id, int]\n0")
+
+    def test_enum_key_return_permitted(self) -> None:
+        check_extern("enum Color\n  | red\n  | blue\nextern def f(x: int) -> dict[Color, int]\n0")
+
+    def test_type_variable_key_param_and_return_permitted(self) -> None:
+        check_extern("extern def f[K, V](d: dict[K, V]) -> dict[K, V]\n0")
+
+    def test_compound_key_over_a_bounded_type_variable_permitted(self) -> None:
+        check_extern(_OPTION + "extern def f[T]{Hashable T}(x: T) -> dict[Option[T], int]\n0")
+
+    def test_compound_key_over_an_unbounded_type_variable_permitted(self) -> None:
+        check_extern(_OPTION + "extern def f[T](x: T) -> dict[Option[T], int]\n0")
+
+    def test_generic_record_over_a_compound_type_variable_key_permitted(self) -> None:
+        source = (
+            _OPTION + "record Box[K]\n  d: dict[K, int]\nextern def f[T](x: T) -> Box[Option[T]]\n0"
+        )
+        check_extern(source)
+
+    def test_compound_key_over_a_non_hashable_type_rejected(self) -> None:
+        reject_extern(_OPTION + "extern def f(x: int) -> dict[Option[array[int]], int]\n0")
+
+    def test_bad_key_nested_in_record_field_return_rejected(self) -> None:
+        source = "record Box\n  d: dict[array[int], text]\nextern def f(x: int) -> Box\n0"
+        reject_extern(source)
+
+    def test_bad_key_nested_in_array_return_rejected(self) -> None:
+        reject_extern("extern def f(x: int) -> array[dict[array[int], text]]\n0")
 
     def test_host_minted_opaque_type_param_permitted(self) -> None:
         check_extern("extern def f(s: Session) -> int\n0")
@@ -294,35 +337,27 @@ class TestExternDictKeyCrossability:
         source = "record Box\n  session: Session\nextern def f(b: Box) -> int\n0"
         check_extern(source)
 
-    def test_generic_key_param_instantiated_at_text_permitted(self) -> None:
-        source = "record Box[K]\n  d: dict[K, int]\nextern def f(b: Box[text]) -> int\n0"
+    def test_generic_key_param_instantiated_hashable_permitted(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(x: int) -> Box[int]\n0"
         check_extern(source)
 
-    def test_generic_key_param_instantiated_at_non_text_rejected(self) -> None:
-        source = "record Box[K]\n  d: dict[K, int]\nextern def f(b: Box[int]) -> int\n0"
-        err = reject_extern(source)
-        assert _span_text(source, err) == "b: Box[int]"
+    def test_generic_key_param_instantiated_non_hashable_rejected(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(x: int) -> Box[array[int]]\n0"
+        reject_extern(source)
 
     def test_generic_key_param_transitive_through_nominal_argument_rejected(self) -> None:
-        """A key parameter propagates through a nominal field's own type argument:
-        Outer[T] holds Box[T] in a field, so T is a key parameter of Outer too.
-        """
+        """Outer[T] holds Box[T] in a field, so T is a key parameter of Outer too."""
         source = (
             "record Box[K]\n"
             "  d: dict[K, int]\n"
             "record Outer[T]\n"
             "  b: Box[T]\n"
-            "extern def f(o: Outer[int]) -> int\n"
+            "extern def f(x: int) -> Outer[array[int]]\n"
             "0"
         )
-        err = reject_extern(source)
-        assert _span_text(source, err) == "o: Outer[int]"
+        reject_extern(source)
 
-    def test_compound_key_argument_rejected_regardless_of_its_own_type_parameter(self) -> None:
-        """``Box[Wrap[T]]`` never has a text key, whatever ``T`` is: ``Wrap[T]`` is a
-        compound argument, so it fails the extern key rule outright (not merely
-        deferred), even instantiated at ``text``.
-        """
+    def test_compound_key_argument_with_bad_part_rejected(self) -> None:
         source = (
             "record Wrap[T]\n"
             "  x: T\n"
@@ -330,20 +365,13 @@ class TestExternDictKeyCrossability:
             "  d: dict[K, int]\n"
             "record Outer[T]\n"
             "  b: Box[Wrap[T]]\n"
-            "extern def f(o: Outer[text]) -> int\n"
+            "extern def f(x: int) -> Outer[array[int]]\n"
             "0"
         )
-        err = reject_extern(source)
-        assert _span_text(source, err) == "o: Outer[text]"
+        reject_extern(source)
 
-    def test_wildcard_receiver_key_slot_rejected(self) -> None:
-        """A `_` receiver-prefix wildcard key still rejects for extern crossability.
-
-        See ``TestTypeVarType.test_repr_renders_method_type_slot_wildcard_as_underscore``
-        in ``test_agl_types.py`` for the diagnostic-rendering regression check:
-        the wildcard's private rigid name must never leak into this rejection.
-        """
-        reject_extern("extern def dict[_, V]::sz(self) -> int\n0")
+    def test_wildcard_receiver_key_slot_permitted(self) -> None:
+        check_extern("extern def dict[_, V]::sz(self) -> int\n0")
 
 
 # ---------------------------------------------------------------------------

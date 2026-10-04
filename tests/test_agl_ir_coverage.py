@@ -26,8 +26,8 @@ from agm.agl.semantics.values import (
     JsonValue,
     RecordValue,
     TextValue,
-    _json_eq,
-    _json_hash,
+    json_eq,
+    json_hash,
 )
 from agm.agl.typecheck.env import OutputContractSpec
 from tests._agl_helpers import type_table_for
@@ -62,9 +62,9 @@ def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
 
 
 def test_json_value_helper_edges() -> None:
-    assert not _json_eq([1], [1, 2])
-    assert _json_hash(True) != _json_hash(1)
-    assert isinstance(_json_hash([1, {"x": decimal.Decimal(2)}]), int)
+    assert not json_eq([1], [1, 2])
+    assert json_hash(True) != json_hash(1)
+    assert isinstance(json_hash([1, {"x": decimal.Decimal(2)}]), int)
     assert JsonValue(1).__eq__(object()) is NotImplemented
 
 

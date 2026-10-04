@@ -88,7 +88,7 @@ from agm.agl.semantics.type_table import (
     comparable_types,
     dict_key_is_hashable,
     is_assignable_in,
-    is_extern_crossable,
+    is_extern_keyable,
     json_cast_hint,
     qualified_decl_name,
     same_comparison_type,
@@ -1190,23 +1190,19 @@ class _Checker:
                 )
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
-        """Require finite, extern-crossable data shapes while allowing callback parameters.
+        """Require finite, extern-keyable data shapes while allowing callback parameters.
 
         Function values can cross from AgL into a companion as interpreter
         callbacks. The reverse conversion remains value-directed at runtime,
         where a bare Python callable has no AgL representation.
         """
         for param, spec in zip(node.params, sig.params):
-            self._reject_unbounded_extern_type(
-                spec.type, span=param.span, use="an extern parameter type"
-            )
-            self._reject_non_crossable_extern_type(
-                spec.type, span=param.span, use="an extern parameter type"
-            )
-        self._reject_unbounded_extern_type(sig.result, span=node.span, use="an extern return type")
-        self._reject_non_crossable_extern_type(
-            sig.result, span=node.span, use="an extern return type"
-        )
+            use = "an extern parameter type"
+            self._reject_unbounded_extern_type(spec.type, span=param.span, use=use)
+            self._reject_non_keyable_extern_type(spec.type, span=param.span, use=use)
+        use = "an extern return type"
+        self._reject_unbounded_extern_type(sig.result, span=node.span, use=use)
+        self._reject_non_keyable_extern_type(sig.result, span=node.span, use=use)
 
     def _reject_unbounded_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
         """Reject an extern type whose recursive declaration shape cannot close."""
@@ -1214,17 +1210,17 @@ class _Checker:
         if message is not None:
             raise AglTypeError(message, span=span)
 
-    def _reject_non_crossable_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
-        """Reject an extern type containing a non-``text``-keyed dict.
+    def _reject_non_keyable_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
+        """Reject an extern type containing a dict keyed by a non-``Hashable`` type.
 
-        No wire form exists for such a dict crossing the extern boundary
-        (:func:`~agm.agl.semantics.type_table.is_extern_crossable`), including
-        one nested in a record field or inside a callback parameter's type.
+        A companion inserts keys into such a dict
+        (:func:`~agm.agl.semantics.type_table.is_extern_keyable`), including
+        one nested in a record field or a callback parameter's type.
         """
-        if not is_extern_crossable(typ, self._env.type_table):
+        if not is_extern_keyable(typ, self._env.type_table):
             raise AglTypeError(
                 f"'{typ!r}' cannot be used as {use}: it contains a dict keyed by "
-                "something other than 'text', which cannot cross an extern boundary.",
+                "a type that is not 'Hashable'.",
                 span=span,
             )
 

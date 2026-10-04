@@ -45,11 +45,12 @@ form — stringified onto an object key or, failing that, an entries array;
 parameters, directly or through another declaration's own key parameter, is
 deferred rather than flagged (see ``DeclarationFlags.key_params``), since its
 wire form depends on the argument a later concrete reference supplies.
-``EXTERN_CROSSABLE`` is the same key-position deferral, but its own key rule
-is ``text``-only (the only key type with an FFI wire form), and a function
-leaf is itself data-crossable (an extern parameter may be a callback), so it
-recurses into function types instead of flagging them
-(:func:`~agm.agl.semantics.type_table.is_extern_crossable`).
+``EXTERN_KEYABLE`` is the same key-position deferral, but its own key rule
+is ``Hashable`` assuming the key's type variables are (a companion inserts
+keys into dicts), and a function leaf is not bad (a callback's parameters are
+built by the companion), so it recurses into function types instead of
+flagging them
+(:func:`~agm.agl.semantics.type_table.is_extern_keyable`).
 
 Finiteness (instantiation-closure) capability
 ----------------------------------------------
@@ -414,8 +415,8 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
     ``policy.non_data_bad``) host-minted origin
     (:meth:`~agm.agl.semantics.type_table.TypeTable.host_minted_declaration_ids`)
     — a host-minted declaration is an opaque non-data leaf, so it is bad
-    exactly where a function/``unit`` leaf is bad, and crossable otherwise
-    (e.g. ``EXTERN_CROSSABLE``, which recurses into a function's own
+    exactly where a function/``unit`` leaf is bad, and fine otherwise
+    (e.g. ``EXTERN_KEYABLE``, which recurses into a function's own
     parameter/result types instead of flagging it outright).
     A bare type variable is never itself bad — deferred to the concrete
     instantiation — which is what lets a self-referential declaration (a

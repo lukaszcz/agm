@@ -1459,9 +1459,9 @@ agent output, and a host invocation error for a program parameter; never
 
 A type-variable key cannot decode, bounded or not, and neither can an
 exception key. A type that reaches a dict with a non-`Hashable` key, such as
-`array[int]`, cannot be decoded or cast to `json`, and only a `text` key may
-appear in an `extern def` signature or as an extern target type argument; each
-is a static error. The same holds for a key reached through type arguments: if
+`array[int]`, cannot be decoded or cast to `json`, and neither may an `extern def`
+signature (a type variable in a key counts as `Hashable` there); each is a
+static error. The same holds for a key reached through type arguments: if
 `Outer[T]` has a field of type `Box[Wrap[T]]` and `Box[K]` a field of type
 `dict[K, int]`, then `Outer[array[int]]` reaches `dict[Wrap[array[int]], int]`,
 whose key is not `Hashable` when `Wrap[T]` holds a `T`. `as text` renders

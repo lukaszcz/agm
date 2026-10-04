@@ -134,14 +134,21 @@ class TestValueDirectedBoundary:
         assert exc.type_name == "Missing"
         assert exc.fields["key"] == rendered
 
-    def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
-        exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> dict[text, int]\nlet _ = f()\n()\n",
-            "from agl import dict as agl_dict\ndef f(): return agl_dict({1: 1})\n",
-            tmp_path,
+    def test_agl_dict_rejects_keys_without_an_agl_form(self, tmp_path: Path) -> None:
+        companion = (
+            "from agl import dict as agl_dict\n"
+            "def f():\n"
+            "    try:\n"
+            "        agl_dict({(1, 2): 1})\n"
+            "    except TypeError:\n"
+            "        return 'rejected'\n"
+            "    return 'accepted'\n"
+        )
+        result, _ = evaluate_ir_with_externs(
+            "extern def f() -> text\nlet r = f()\nr\n", companion, tmp_path
         )
 
-        assert exc.fields["python-type"] == "TypeError"
+        assert result["r"] == TextValue("rejected")
 
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
@@ -566,17 +573,30 @@ def test_dict_view_contains_checks_key_membership() -> None:
     assert "two" in view
 
 
-def test_dict_view_contains_a_non_string_key_returns_false() -> None:
+def test_dict_view_contains_a_key_of_another_type_returns_false() -> None:
     view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert 2 not in view
 
 
-def test_dict_view_setitem_with_a_non_string_key_raises_type_error() -> None:
+@pytest.mark.parametrize("key", [[1], {"a": 1}, None, object(), AglDictView])
+def test_dict_view_setitem_with_a_key_that_has_no_agl_form_raises_type_error(key: object) -> None:
     view = AglDictView(DictValue(), _NO_DESCRIPTORS)
 
     with pytest.raises(TypeError):
-        view[1] = 1
+        view[key] = 1
+
+
+@pytest.mark.parametrize("key", [[1], None, AglArrayView(ArrayValue([]), _NO_DESCRIPTORS)])
+def test_dict_view_lookup_with_a_key_that_has_no_agl_form_raises_type_error(key: object) -> None:
+    view = AglDictView(DictValue({"one": IntValue(1)}), _NO_DESCRIPTORS)
+
+    with pytest.raises(TypeError):
+        key in view
+    with pytest.raises(TypeError):
+        view[key]
+    with pytest.raises(TypeError):
+        del view[key]
 
 
 def test_dict_view_setitem_with_an_undecodable_value_raises() -> None:

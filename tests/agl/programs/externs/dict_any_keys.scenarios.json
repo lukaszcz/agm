@@ -1,0 +1,166 @@
+{
+  "scenarios": [
+    {
+      "name": "generic_view_over_int_keys_reads_len_iteration_lookup_and_contains",
+      "params": {
+        "mode": "generic_probe_int"
+      },
+      "expect": {
+        "stdout": "2 2 True a\n"
+      }
+    },
+    {
+      "name": "generic_view_over_record_keys_reads_len_iteration_lookup_and_contains",
+      "params": {
+        "mode": "generic_probe_record"
+      },
+      "expect": {
+        "stdout": "1 1 True p\n"
+      }
+    },
+    {
+      "name": "generic_view_over_json_keys_reads_len_iteration_lookup_and_contains",
+      "params": {
+        "mode": "generic_probe_json"
+      },
+      "expect": {
+        "stdout": "1 1 True 1\n"
+      }
+    },
+    {
+      "name": "generic_identity_returns_record_keyed_dict_intact",
+      "params": {
+        "mode": "generic_identity"
+      },
+      "expect": {
+        "stdout": "7\n"
+      }
+    },
+    {
+      "name": "generic_view_writes_and_deletes_int_keys",
+      "params": {
+        "mode": "generic_mutation_int"
+      },
+      "expect": {
+        "stdout": "{2: \"b\", 10: \"z\"}\n"
+      }
+    },
+    {
+      "name": "generic_view_writes_and_deletes_record_keys",
+      "params": {
+        "mode": "generic_mutation_record"
+      },
+      "expect": {
+        "stdout": "{Point(x = 9, y = 9): 9}\n"
+      }
+    },
+    {
+      "name": "typed_view_writes_and_deletes_int_keys",
+      "params": {
+        "mode": "typed_int_mutation"
+      },
+      "expect": {
+        "stdout": "{2: \"b\", 3: \"c\"}\n"
+      }
+    },
+    {
+      "name": "typed_view_writes_and_deletes_record_keys",
+      "params": {
+        "mode": "typed_record_mutation"
+      },
+      "expect": {
+        "stdout": "{Point(x = 3, y = 4): 20, Point(x = 5, y = 6): 30}\n"
+      }
+    },
+    {
+      "name": "typed_view_writes_enum_keys",
+      "params": {
+        "mode": "typed_enum_mutation"
+      },
+      "expect": {
+        "stdout": "{Color::Red: 1, Color::Blue: 2}\n"
+      }
+    },
+    {
+      "name": "true_and_one_are_distinct_json_keys_in_a_view",
+      "params": {
+        "mode": "json_keys_stay_distinct"
+      },
+      "expect": {
+        "stdout": "1 2 True\n"
+      }
+    },
+    {
+      "name": "extern_returns_int_keyed_dict",
+      "params": {
+        "mode": "returned_int_keys"
+      },
+      "expect": {
+        "stdout": "{1: \"a\", 2: \"b\"}\nb\n"
+      }
+    },
+    {
+      "name": "extern_returns_record_keyed_dict",
+      "params": {
+        "mode": "returned_record_keys"
+      },
+      "expect": {
+        "stdout": "5\n"
+      }
+    },
+    {
+      "name": "extern_returns_json_keyed_dict_with_container_key",
+      "params": {
+        "mode": "returned_json_keys"
+      },
+      "expect": {
+        "stdout": "1\n2\n"
+      }
+    },
+    {
+      "name": "extern_returns_decimal_keyed_dict_found_by_equal_value",
+      "params": {
+        "mode": "returned_decimal_keys"
+      },
+      "expect": {
+        "stdout": "x\n"
+      }
+    },
+    {
+      "name": "companion_writes_json_key_into_empty_dict",
+      "params": {
+        "mode": "json_write_into_empty"
+      },
+      "expect": {
+        "stdout": "1\n"
+      }
+    },
+    {
+      "name": "generic_view_over_exception_keys_reads_len_iteration_lookup_and_contains",
+      "params": {
+        "mode": "generic_probe_exception"
+      },
+      "expect": {
+        "stdout": "1 1 True 5\n"
+      }
+    },
+    {
+      "name": "typed_view_probes_iterates_and_writes_exception_keys",
+      "params": {
+        "mode": "typed_exception_mutation"
+      },
+      "expect": {
+        "stdout": "2\n10\n"
+      }
+    },
+    {
+      "name": "extern_returns_exception_keyed_dict",
+      "params": {
+        "mode": "returned_exception_keys"
+      },
+      "expect": {
+        "stdout": "3\n"
+      }
+    }
+  ]
+}

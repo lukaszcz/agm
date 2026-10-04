@@ -160,6 +160,24 @@ def test_json_value_dict_eq() -> None:
     assert JsonValue({"a": 1}) != JsonValue({"b": 1})
 
 
+def test_dict_value_first_non_text_key_migrates_existing_text_entries() -> None:
+    """Inserting a non-text key into text storage keeps every entry, in order."""
+    from agm.agl.semantics.values import DictValue, IntValue, TextValue
+
+    d = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
+    assert d.insert(IntValue(3), IntValue(3)) is True
+
+    assert [(k, v) for k, v in d.items()] == [
+        (TextValue("a"), IntValue(1)),
+        (TextValue("b"), IntValue(2)),
+        (IntValue(3), IntValue(3)),
+    ]
+    assert d.lookup(TextValue("b")) == IntValue(2)
+    assert d.insert(TextValue("a"), IntValue(9)) is False
+    assert d.lookup(TextValue("a")) == IntValue(9)
+    assert len(d) == 3
+
+
 # ---------------------------------------------------------------------------
 # DictValue order-insensitive hash (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
@@ -521,12 +539,12 @@ def test_broad_value_includes_ir_callable_forms() -> None:
 
 
 def test_helpers_accessible_from_semantics_values() -> None:
-    """_json_eq and _json_hash are accessible from agm.agl.semantics.values."""
-    from agm.agl.semantics.values import _json_eq, _json_hash
+    """json_eq and json_hash are accessible from agm.agl.semantics.values."""
+    from agm.agl.semantics.values import json_eq, json_hash
 
-    assert _json_eq(1, decimal.Decimal("1")) is True
-    assert _json_eq(True, 1) is False
-    assert isinstance(_json_hash(1), int)
+    assert json_eq(1, decimal.Decimal("1")) is True
+    assert json_eq(True, 1) is False
+    assert isinstance(json_hash(1), int)
 
 
 def test_ir_closure_value_identity_equality() -> None:

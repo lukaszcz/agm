@@ -46,6 +46,7 @@ from agm.agl.runtime.boundary import (
     current_descriptors,
     decode_boundary_value,
     encode_boundary_value,
+    store_dict_entry,
     synthesize_nominal_classes,
 )
 from agm.agl.runtime.type_contracts import TypeContract, build_type_contract
@@ -960,17 +961,16 @@ def _array(values: Sequence[object]) -> AglArrayView:
     )
 
 
-def _dict(values: dict[str, object]) -> AglDictView:
+def _dict(values: dict[object, object]) -> AglDictView:
     """Construct the companion representation of a new AgL dict.
 
-    Bound as ``agl.dict``; see :func:`_array` for where its descriptors come from.
+    Bound as ``agl.dict``; keys are any key :func:`decode_dict_key` accepts
+    (see :func:`_array` for where the view's descriptors come from).
     """
-    entries: dict[str, Value] = {}
+    entries = DictValue()
     for key, value in values.items():
-        if not isinstance(key, str):
-            raise TypeError("AgL dict keys must be str")
-        entries[key] = decode_boundary_value(value)
-    return AglDictView(DictValue(entries), current_descriptors())
+        store_dict_entry(entries, key, value)
+    return AglDictView(entries, current_descriptors())
 
 
 def _option_none(option_cls: type) -> object:

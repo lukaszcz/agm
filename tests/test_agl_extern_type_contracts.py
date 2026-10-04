@@ -2,7 +2,7 @@
 
 Each target parameter reaches the companion as an immutable ``TypeContract``
 tree (kind, label, self-contained schema, doc, nominal class, fields, members,
-items, values), built once per contract and resolved into a possibly cyclic
+items, keys, values), built once per contract and resolved into a possibly cyclic
 graph for a recursive target. A companion constructs its trusted result from
 the tree's nominal classes. The underlying ``ContractValue`` is non-data.
 """
@@ -97,7 +97,7 @@ def build(contract, question):
     if kind == "array":
         return agl.array([build(contract.items, question)])
     if kind == "dict":
-        return agl.dict({{"k": build(contract.values, question)}})
+        return agl.dict({{build(contract.keys, question): build(contract.values, question)}})
     if kind == "enum":
         return build(next(iter(contract.members.values())), question)
     return contract.nominal(
@@ -196,7 +196,21 @@ class TestDeliveredContents:
 
     def test_dict_values(self, probe: ModuleType, tmp_path: Path) -> None:
         contract = _only(probe, 'let d: dict[text, int] = capture("q")\n0', tmp_path)
-        assert (contract.kind, contract.values.kind, contract.items) == ("dict", "int", None)
+        assert (contract.kind, contract.keys.kind, contract.values.kind, contract.items) == (
+            "dict",
+            "text",
+            "int",
+            None,
+        )
+
+    def test_dict_keys_of_any_hashable_type(self, probe: ModuleType, tmp_path: Path) -> None:
+        contract = _only(probe, _TEAM + 'let d: dict[Team, int] = capture("q")\n0', tmp_path)
+        assert (contract.keys.kind, contract.keys.nominal) == ("enum", probe.agl.Team)
+        assert contract.keys.members.keys() == {"billing", "Technical"}
+
+    def test_non_dict_has_no_keys_contract(self, probe: ModuleType, tmp_path: Path) -> None:
+        contract = _only(probe, 'let a: array[int] = capture("q")\n0', tmp_path)
+        assert contract.keys is None
 
     def test_root_label_is_the_target_spelling(self, probe: ModuleType, tmp_path: Path) -> None:
         contract = _only(
@@ -293,7 +307,8 @@ class TestConstruction:
             ("bool", "true"),
             ("json", '{"q": "q"}'),
             ("array[int]", "[7]"),
-            ("dict[text, int]", '{"k": 7}'),
+            ("dict[text, int]", '{"q": 7}'),
+            ("dict[int, text]", '{7: "q"}'),
             ("Option[int]", "Option::None"),
         ],
     )

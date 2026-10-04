@@ -32,8 +32,8 @@ class TypeContract:
     record, enum, or member (``None`` otherwise); a companion constructs a
     record or member by calling it with declared field names. ``fields`` maps
     JSON names to fields and ``members`` maps JSON tags to member contracts,
-    both in declaration order; ``items``/``values`` are an array's elements and
-    a dict's values. Only the host constructs one.
+    both in declaration order; ``items`` is an array's elements, ``keys``/``values``
+    a dict's keys and values. Only the host constructs one.
     """
 
     __slots__ = (
@@ -44,6 +44,7 @@ class TypeContract:
         "fields",
         "members",
         "items",
+        "keys",
         "values",
         "_fragment",
         "_defs",
@@ -55,6 +56,7 @@ class TypeContract:
     fields: Mapping[str, TypeContractField]
     members: Mapping[str, TypeContract]
     items: TypeContract | None
+    keys: TypeContract | None
     values: TypeContract | None
     _fragment: str
     _defs: str | None
@@ -121,6 +123,7 @@ def build_type_contract(
             ),
             "members": MappingProxyType({tag: resolve(member) for tag, member in node.members}),
             "items": None if node.items is None else resolve(node.items),
+            "keys": None if node.keys is None else resolve(node.keys),
             "values": None if node.values is None else resolve(node.values),
             "_fragment": node.schema,
             "_defs": defs,

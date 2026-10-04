@@ -38,6 +38,8 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
     Value,
+    json_eq,
+    json_hash,
     value_equal,
 )
 from agm.util.scoping import ScopedVar
@@ -68,11 +70,24 @@ class BoundaryTypeError(TypeError):
     """A value written through an AgL live view is unsupported."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class AglJson:
-    """The distinct Python representation of an AgL ``json`` value."""
+    """The distinct Python representation of an AgL ``json`` value.
+
+    Equality and hashing follow AgL ``json`` equality, not Python's: ``True``
+    differs from ``1``, ``1.5`` equals ``1.50``, and containers compare
+    structurally -- so a container-valued ``AglJson`` can be a Python dict key.
+    """
 
     value: object
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, AglJson):
+            return json_eq(self.value, other.value)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return json_hash(self.value)
 
 
 class AglException(Exception):
@@ -739,8 +754,45 @@ class AglArrayView(MutableSequence[object]):
         return render_value(self._value, self._descriptors)
 
 
-class AglDictView(MutableMapping[str, object]):
-    """A mutable, lazy Python view over one AgL dict value."""
+_KEY_VALUE_KINDS = (
+    TextValue,
+    IntValue,
+    DecimalValue,
+    BoolValue,
+    JsonValue,
+    RecordValue,
+    ExceptionValue,
+)
+
+
+def decode_dict_key(key: object) -> Value:
+    """Decode a Python dict key to the AgL value it stands for.
+
+    Keys cross as values of their type do (``str``, ``int``, ``Decimal``,
+    ``bool``, :class:`AglJson`, nominal snapshots). An unhashable object (a
+    live record view, a list) raises Python's own ``TypeError``, as does any
+    other object with no key form.
+    """
+    if type(key) is str:
+        return TextValue(key)
+    hash(key)
+    decoded = _decode_written_value(key)
+    if not isinstance(decoded, _KEY_VALUE_KINDS):
+        raise BoundaryTypeError(f"{type(key).__name__} cannot be an AgL dict key")
+    return decoded
+
+
+def store_dict_entry(target: DictValue, key: object, value: object) -> None:
+    """Insert a companion's *key*/*value* into *target*, deciding key identity by AgL equality."""
+    target.insert(decode_dict_key(key), _decode_written_value(value))
+
+
+class AglDictView(MutableMapping[object, object]):
+    """A mutable, lazy Python view over one AgL dict value of any key type.
+
+    Keys are decoded to AgL values (:func:`decode_dict_key`) and matched by AgL
+    equality; iteration yields the originally inserted keys in insertion order.
+    """
 
     __slots__ = ("_value", "_descriptors")
 
@@ -748,24 +800,22 @@ class AglDictView(MutableMapping[str, object]):
         self._value = value
         self._descriptors = descriptors
 
-    def __getitem__(self, key: str) -> object:
-        found = self._value.lookup(TextValue(key))
+    def __getitem__(self, key: object) -> object:
+        found = self._value.lookup(decode_dict_key(key))
         if found is None:
             raise KeyError(key)
         return encode_boundary_value(found, self._descriptors)
 
-    def __setitem__(self, key: str, value: object) -> None:
-        if not isinstance(key, str):
-            raise TypeError("AgL dict keys must be str")
-        self._value.insert(TextValue(key), _decode_written_value(value))
+    def __setitem__(self, key: object, value: object) -> None:
+        store_dict_entry(self._value, key, value)
 
-    def __delitem__(self, key: str) -> None:
-        if self._value.remove(TextValue(key)) is None:
+    def __delitem__(self, key: object) -> None:
+        if self._value.remove(decode_dict_key(key)) is None:
             raise KeyError(key)
 
-    def __iter__(self) -> Iterator[str]:
-        for key, _value in self._value.text_items():
-            yield key
+    def __iter__(self) -> Iterator[object]:
+        for key in self._value.keys():
+            yield encode_boundary_value(key, self._descriptors)
 
     def __len__(self) -> int:
         return len(self._value)
@@ -773,17 +823,18 @@ class AglDictView(MutableMapping[str, object]):
     def clear(self) -> None:
         self._value.clear()
 
-    def popitem(self) -> tuple[str, object]:
+    def popitem(self) -> tuple[object, object]:
         pair = self._value.pop_last()
         if pair is None:
             raise KeyError("popitem(): dict is empty")
         key, value = pair
-        return cast(TextValue, key).value, encode_boundary_value(value, self._descriptors)
+        return (
+            encode_boundary_value(key, self._descriptors),
+            encode_boundary_value(value, self._descriptors),
+        )
 
     def __contains__(self, key: object) -> bool:
-        if not isinstance(key, str):
-            return False
-        return self._value.lookup(TextValue(key)) is not None
+        return self._value.lookup(decode_dict_key(key)) is not None
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglDictView) and self._value is other._value

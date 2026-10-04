@@ -34,7 +34,7 @@ from agm.util.decimal import compare_numbers
 # ---------------------------------------------------------------------------
 
 
-def _json_eq(left: object, right: object) -> bool:
+def json_eq(left: object, right: object) -> bool:
     """Compare two JSON-shaped trees with bool-guarded numeric equivalence.
 
     Mirrors the semantics in the interpreter: JSON numbers compare numerically
@@ -51,19 +51,19 @@ def _json_eq(left: object, right: object) -> bool:
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
             return False
-        return all(_json_eq(left[i], right[i]) for i in range(len(left)))
+        return all(json_eq(left[i], right[i]) for i in range(len(left)))
     if isinstance(left, dict) and isinstance(right, dict):
         if left.keys() != right.keys():
             return False
-        return all(_json_eq(left[k], right[k]) for k in left)
+        return all(json_eq(left[k], right[k]) for k in left)
     return left == right
 
 
-def _json_hash(obj: object) -> int:
+def json_hash(obj: object) -> int:
     """Stable hash for a JSON-shaped tree.
 
-    Must be consistent with ``_json_eq``: objects that compare equal must hash
-    equal.  ``_json_eq`` compares an int and a Decimal numerically, and Python
+    Must be consistent with ``json_eq``: objects that compare equal must hash
+    equal.  ``json_eq`` compares an int and a Decimal numerically, and Python
     already hashes numerically equal ints and Decimals alike (``hash(1) ==
     hash(Decimal("1.0"))``), so numbers hash as themselves.  Lists and dicts
     recurse; bools are guarded so ``True`` never hashes the same as ``1``.
@@ -72,9 +72,9 @@ def _json_hash(obj: object) -> int:
         # Hash True/False distinctly from integers.
         return hash(("__bool__", obj))
     if isinstance(obj, list):
-        return hash(tuple(_json_hash(e) for e in obj))
+        return hash(tuple(json_hash(e) for e in obj))
     if isinstance(obj, dict):
-        return hash(frozenset((_json_hash(k), _json_hash(v)) for k, v in obj.items()))
+        return hash(frozenset((json_hash(k), json_hash(v)) for k, v in obj.items()))
     return hash(obj)
 
 
@@ -120,21 +120,21 @@ class JsonValue:
     operations on the payload use ``isinstance`` guards, never bare ``Any``
     access.
 
-    ``__eq__`` delegates to ``_json_eq`` so that JSON bool/number conflation is
+    ``__eq__`` delegates to ``json_eq`` so that JSON bool/number conflation is
     prevented inside containers (e.g. ``JsonValue([True]) != JsonValue([1])``),
     consistent with the top-level ``json = json`` comparison semantics.
-    ``__hash__`` is consistent with ``__eq__`` via ``_json_hash``.
+    ``__hash__`` is consistent with ``__eq__`` via ``json_hash``.
     """
 
     raw: object
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, JsonValue):
-            return _json_eq(self.raw, other.raw)
+            return json_eq(self.raw, other.raw)
         return NotImplemented
 
     def __hash__(self) -> int:
-        return _json_hash(self.raw)
+        return json_hash(self.raw)
 
 
 # ---------------------------------------------------------------------------
@@ -205,11 +205,12 @@ class DictValue:
 
     Two representations: a ``text``-keyed dict stores ``dict[str, Value]``
     directly, with no per-key wrapper or token — the hot path, and the
-    default an empty dict starts in. A non-``text`` first insert fixes the
-    dict to token-keyed storage instead: ``dict[Hashable, tuple[Value,
-    Value]]`` keyed by :func:`key_token`, holding ``(original key, value)``.
-    So an empty dict is undetermined (``text``-keyed until proven otherwise)
-    and stays that way if every entry is later removed. Updating a key equal
+    default an empty dict starts in. The first non-``text`` key inserted
+    switches the dict (migrating any ``text`` entries, order kept) to
+    token-keyed storage: ``dict[Hashable, tuple[Value, Value]]`` keyed by
+    :func:`key_token`, holding ``(original key, value)``. So an empty dict is
+    undetermined (``text``-keyed until proven otherwise) and stays token-keyed
+    once switched, even if every entry is later removed. Updating a key equal
     to one already stored (e.g. ``1.5`` over stored ``1.50``) replaces only
     the value — the originally inserted key is kept, so iteration is stable.
 
@@ -269,7 +270,7 @@ class DictValue:
         return None if pair is None else pair[1]
 
     def insert(self, key: Value, value: Value) -> bool:
-        """Store *value* under *key*; fixes the representation on the first insert.
+        """Store *value* under *key*; a first non-``text`` key migrates entries to token storage.
 
         Returns whether *key* was new (``False`` if it already existed — the
         stored key value is then left unchanged, only its value replaced).
@@ -281,6 +282,10 @@ class DictValue:
         tokens = self._tokens
         if tokens is None:
             tokens = {}
+            for text_key, text_value in self._text.items():
+                wrapped = TextValue(text_key)
+                tokens[key_token(wrapped)] = (wrapped, text_value)
+            self._text.clear()
             object.__setattr__(self, "_tokens", tokens)
         token = key_token(key)
         existing = tokens.get(token)
@@ -359,8 +364,8 @@ class DictValue:
         """Iterate ``(str, Value)`` pairs straight from ``text`` storage, unwrapped.
 
         For callers statically restricted to ``text``-keyed dicts (JSON and
-        display encoders, the environment table, ``AglDictView``'s public
-        surface): they never see a token-keyed dict, so this skips the
+        display encoders, the environment table): they never see a
+        token-keyed dict, so this skips the
         per-key ``TextValue`` wrap/unwrap :meth:`items` pays.
         """
         return iter(self._text.items())
@@ -501,7 +506,7 @@ def key_token(value: Value) -> Hashable:
 
     Values equal under AgL equality share a token, distinct values don't:
     every scalar/``json`` ``Value`` is its own token, since their frozen
-    dataclass (or, for ``json``, ``_json_eq``/``_json_hash``-backed) equality
+    dataclass (or, for ``json``, ``json_eq``/``json_hash``-backed) equality
     and hashing already follow AgL equality — distinct classes never compare
     equal (``bool`` != ``int``), ``decimal`` widens (``1.5`` == ``1.50``, same
     hash), and ``json`` bools tag apart from numbers. A record, enum member,
@@ -778,8 +783,8 @@ __all__ = [
     "TextValue",
     "UnitValue",
     "Value",
-    "_json_eq",
-    "_json_hash",
+    "json_eq",
+    "json_hash",
     "key_token",
     "value_equal",
     "values_equal",

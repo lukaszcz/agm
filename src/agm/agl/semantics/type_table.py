@@ -38,8 +38,8 @@ import this module without a circular import. Those flags are one fixpoint per
 construction), cached on :class:`TypeTable` and invalidated whenever the
 table's declarations change. ``EQ`` backs ``=``/``!=`` (``comparable_types``);
 ``JSON_CONVERTIBLE`` backs :meth:`TypeTable.nominal_is_json_convertible`;
-``HASHABLE`` backs the ``Hashable`` constraint; ``EXTERN_CROSSABLE`` backs
-:func:`is_extern_crossable`. :meth:`TypeTable.nominal_satisfies` takes the
+``HASHABLE`` backs the ``Hashable`` constraint; ``EXTERN_KEYABLE`` backs
+:func:`is_extern_keyable`. :meth:`TypeTable.nominal_satisfies` takes the
 language-level ``ConstraintKind`` (``Eq``/``Hashable``) and maps it onto its
 ``DataProperty``; the JSON/extern properties have no language-level
 constraint spelling, so their table methods use the fixpoint directly.
@@ -51,9 +51,10 @@ uses) where a type variable, the bottom type, and an unresolved inference
 variable all count as satisfied. Its nominal case consults the same
 declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
 :func:`comparable_types` instead always takes the checker's real bound
-environment. :func:`is_json_convertible`/:func:`is_extern_crossable` are
+environment. :func:`is_json_convertible`/:func:`is_extern_keyable` are
 separate structural walks with no bounds concept at all — a bare type
-variable is simply never convertible/crossable in either.
+variable is never convertible; the extern key rule instead assumes every
+type variable in a key ``Hashable``.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -200,7 +201,7 @@ class DataProperty(enum.Enum):
 
     ``EQ``/``HASHABLE`` back the language-level ``Eq``/``Hashable``
     constraints (``agm.agl.constraints.ConstraintKind``); ``JSON_CONVERTIBLE``
-    backs ``as json``/``as text`` and every wire boundary; ``EXTERN_CROSSABLE``
+    backs ``as json``/``as text`` and every wire boundary; ``EXTERN_KEYABLE``
     backs extern signatures. Each has its own :class:`LeafPolicy` in
     :data:`LEAF_POLICIES`. The shared fixpoint itself
     (:func:`~agm.agl.semantics.analyses.compute_declaration_flags`) lives in
@@ -211,7 +212,7 @@ class DataProperty(enum.Enum):
     EQ = "eq"
     HASHABLE = "hashable"
     JSON_CONVERTIBLE = "json_convertible"
-    EXTERN_CROSSABLE = "extern_crossable"
+    EXTERN_KEYABLE = "extern_keyable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,27 +255,16 @@ def dict_key_is_hashable(
     return satisfies(key, ConstraintKind.HASHABLE, table, bounds)
 
 
-def dict_key_is_text_wire_key(
+def dict_key_is_hashable_assuming_type_vars(
     key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
 ) -> bool:
-    """Return whether *key* can be a ``dict`` key crossing the extern/FFI boundary.
+    """``EXTERN_KEYABLE``'s dict-key rule: ``Hashable``, assuming every free type variable is.
 
-    Only a literal ``text`` key can (an FFI view has no stringified/entries
-    form) — every other key type, a nominal type filling the position
-    included, fails immediately no matter its own arguments. *assume_ok* (see
-    :attr:`LeafPolicy.dict_key_ok`) defers a bare type variable among them
-    instead of failing outright. Shared by :func:`is_extern_crossable` and
-    ``semantics.analyses.compute_declaration_flags``'s ``EXTERN_CROSSABLE``
-    leaf policy. JSON encoding accepts any ``Hashable`` key
-    (:func:`is_json_convertible`, encode-only); JSON decoding accepts a
-    ``Hashable`` key that is itself decodable, excluding type variables and
-    exceptions (the checker's ``_wire_type_is_serializable``). *table* is
-    unused: a ``text``/type-variable check needs no lookup; it is only part
-    of the signature to match :attr:`LeafPolicy.dict_key_ok`.
+    Extern code builds keys of a type variable's instantiation, so a type
+    variable (bounded or not) passes wherever it occurs in the key.
+    *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`.
     """
-    if isinstance(key, TypeVarType):
-        return key.name in assume_ok
-    return isinstance(key, TextType)
+    return dict_key_is_hashable(key, table, assume_ok | free_type_vars(key))
 
 
 #: Property -> the policy computing its declaration-level "does not satisfy"
@@ -283,10 +273,10 @@ def dict_key_is_text_wire_key(
 #: recursing into ``array``/``dict``; HASHABLE flags one that is not deeply
 #: immutable data — a function/unit/``var`` field, or an ``array``/``dict``
 #: outright (never recursed into); JSON_CONVERTIBLE additionally flags a dict
-#: keyed by a non-``Hashable`` type; EXTERN_CROSSABLE instead requires a
-#: ``text`` key (the only key type with an FFI wire form) and, unlike
-#: JSON_CONVERTIBLE, a function leaf is data-crossable (an extern parameter
-#: may be a callback), so it recurses into function types instead of
+#: keyed by a non-``Hashable`` type; EXTERN_KEYABLE instead requires a key
+#: that is ``Hashable`` assuming its type variables are and, unlike
+#: JSON_CONVERTIBLE, a function leaf is not bad (a callback's parameters are
+#: built by the companion), so it recurses into function types instead of
 #: flagging them.
 LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
     {
@@ -308,11 +298,11 @@ LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
             non_data_bad=True,
             dict_key_ok=dict_key_is_hashable,
         ),
-        DataProperty.EXTERN_CROSSABLE: LeafPolicy(
+        DataProperty.EXTERN_KEYABLE: LeafPolicy(
             recurse_containers=True,
             var_fields_bad=False,
             non_data_bad=False,
-            dict_key_ok=dict_key_is_text_wire_key,
+            dict_key_ok=dict_key_is_hashable_assuming_type_vars,
         ),
     }
 )
@@ -322,7 +312,7 @@ def _constraint_kind_to_data_property(kind: ConstraintKind) -> DataProperty:
     """Map a language-level constraint kind onto its declaration-flags property.
 
     The single place ``ConstraintKind`` (``Eq``/``Hashable``) is translated to
-    a :class:`DataProperty`; ``JSON_CONVERTIBLE`` and ``EXTERN_CROSSABLE``
+    a :class:`DataProperty`; ``JSON_CONVERTIBLE`` and ``EXTERN_KEYABLE``
     have no language-level constraint spelling.
     """
     return {
@@ -1689,16 +1679,16 @@ class TypeTable:
             lambda arg: is_json_convertible(arg, self),
         )
 
-    def nominal_is_extern_crossable(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+    def nominal_is_extern_keyable(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if *handle* may cross an extern boundary (cycle-safe).
 
-        Used by :func:`is_extern_crossable` for its nominal case; see
-        :attr:`DataProperty.EXTERN_CROSSABLE`.
+        Used by :func:`is_extern_keyable` for its nominal case; see
+        :attr:`DataProperty.EXTERN_KEYABLE`.
         """
         return self._nominal_satisfies_property(
             handle,
-            DataProperty.EXTERN_CROSSABLE,
-            lambda arg: is_extern_crossable(arg, self),
+            DataProperty.EXTERN_KEYABLE,
+            lambda arg: is_extern_keyable(arg, self),
         )
 
     def _nominal_satisfies_property(
@@ -1719,7 +1709,7 @@ class TypeTable:
         applies.
 
         For a policy with ``dict_key_ok`` set (``JSON_CONVERTIBLE``/
-        ``EXTERN_CROSSABLE``), the argument at a KEY parameter position
+        ``EXTERN_KEYABLE``), the argument at a KEY parameter position
         (``DeclarationFlags.key_params`` — e.g. ``Box[K]`` with field
         ``d: dict[K, int]``) must ADDITIONALLY satisfy that policy's own
         ``dict_key_ok`` check directly: a key parameter's own occurrence in
@@ -2477,31 +2467,27 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             assert_never(unreachable)
 
 
-def is_extern_crossable(t: Type, table: TypeTable) -> bool:
-    """Return ``True`` if a value of type ``t`` may cross an extern boundary.
+def is_extern_keyable(t: Type, table: TypeTable) -> bool:
+    """Return ``True`` if every ``dict`` in *t* has an extern-keyable key.
 
-    Structural, like :func:`is_json_convertible`, with two differences: a
-    function type is itself crossable (an AgL function value crosses as an
-    interpreter callback), so it recurses into the function's parameter and
-    result types rather than being rejected outright; and a free type
-    variable is crossable (an extern signature's own type parameters are
-    not erased the way a compiled ``as json`` cast's are, so they are
-    deferred here exactly as :func:`satisfies` defers them in open-world
-    mode). The remaining obstacle is a non-``text``-keyed ``dict`` anywhere,
-    including nested inside a function type
-    (:class:`~agm.agl.semantics.analyses.DataProperty.EXTERN_CROSSABLE`).
-
-    Structural over :func:`~agm.agl.semantics.types.type_children`: a
-    ``dict``'s key is checked directly (:func:`dict_key_is_text_wire_key`) and
-    only its value recurses; a nominal delegates to the table; every other
-    constructor (a leaf, an ``array``, or a function's params/result) is
-    crossable iff every direct child is.
+    Structural, like :func:`is_json_convertible`, except that a function type
+    recurses into its parameter and result types (a companion builds a
+    callback's arguments), and a free type variable passes (an extern
+    signature's own type parameters are not erased). The only obstacle is a
+    ``dict`` whose key is not ``Hashable`` anywhere
+    (:class:`~agm.agl.semantics.analyses.DataProperty.EXTERN_KEYABLE`): a
+    companion inserts keys into parameter dicts and returns dicts whose keys
+    are inserted. A ``dict``'s key is checked directly
+    (:func:`dict_key_is_hashable_assuming_type_vars`) and only its value
+    recurses; a nominal delegates to the table.
     """
     if isinstance(t, DictType):
-        return dict_key_is_text_wire_key(t.key, table) and is_extern_crossable(t.value, table)
+        return dict_key_is_hashable_assuming_type_vars(t.key, table) and is_extern_keyable(
+            t.value, table
+        )
     if isinstance(t, (RecordType, EnumType, ExceptionType)):
-        return table.nominal_is_extern_crossable(t)
-    return all(is_extern_crossable(child, table) for child in type_children(t))
+        return table.nominal_is_extern_keyable(t)
+    return all(is_extern_keyable(child, table) for child in type_children(t))
 
 
 def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> bool:

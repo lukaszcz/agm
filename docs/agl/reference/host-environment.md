@@ -564,8 +564,9 @@ columns are 1-based. `run_start` records the invoked `command` and selected
 `parameters` for host-seeded `@param` bindings, and `config` for other
 host-seeded values. Parameter and config keys use qualified binding names;
 enum values retain their `$case` tag, and decimal values are exact text strings.
-A trace record carries no declared key type, so a dict with a key type other
-than `text` is written as an array of `{"key": …, "value": …}` entries.
+A non-empty dict whose keys are not text is written as an array of
+`{"key": …, "value": …}` entries; text-keyed and empty dicts are objects. Trace
+records encode values by their runtime shape, uniformly across events.
 Cycles and non-data values degrade to markers. Run boundaries delimit each
 execution, including entries appended to a shared file. Positional source
 writes may enable or disable tracing, so records outside the active interval

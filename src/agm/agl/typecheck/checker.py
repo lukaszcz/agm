@@ -4750,8 +4750,8 @@ class _Checker:
             for elem in expr.elements:
                 self._check_template_literal_child(elem)
             return ArrayType(elem=JsonType())
-        # DictLit — caller guarantees non-empty. Keys are always text, always
-        # Hashable, so no constraint check gates the duplicate check here.
+        # DictLit — caller guarantees non-empty. Keys are text (always Hashable),
+        # so no constraint check gates the duplicate check here.
         self._check_dict_keys_against(expr.entries, TextType())
         self._check_dict_literal_duplicate_keys(expr.entries)
         for entry in expr.entries:

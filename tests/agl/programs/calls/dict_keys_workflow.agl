@@ -1,0 +1,125 @@
+# Dicts keyed by text, int, enum and record values in one workflow: computed
+# literal keys, indexing, `:=` and `set`, `in`, `for`, `std/dict` with each
+# `DuplicateKeys` policy, `KeyError` and `DuplicateKeyError` keys, program
+# parameters in value syntax or JSON, and a mocked agent answering with the
+# object form (plain keys for text, stringified keys for int and plain enum
+# keys) or the entry-array form (record keys).
+import std/dict
+
+enum Zone
+  | North
+  | South
+
+record Cell
+  x: int
+  y: int
+
+def tally[K]{Hashable K}(xs: array[K]) -> dict[K, int] =
+  let counts: dict[K, int] = {}
+  for x in xs do
+    if x in counts => counts[x] := counts[x] + 1 else => counts.set(x, 1)
+  done
+  counts
+
+program def main(
+  mode: text,
+  n: int = 1,
+  stock: dict[Zone, int] = {},
+  sizes: dict[int, text] = {},
+  spots: dict[Cell, text] = {}
+) -> unit =
+  let agent: Agent = AgentCommand("planner")
+  case mode of
+    | "params" =>
+        print(stock)
+        print(sizes)
+        print(spots)
+        var total = 0
+        for z in stock do
+          total := total + stock[z]
+        done
+        print(total)
+        for c in spots do
+          print("%{c.x},%{c.y} -> %{spots[c]}")
+        done
+    | "literals" =>
+        let prefix = "k"
+        let text-keyed: dict[text, int] = {"%{prefix}-a": 1, "%{prefix}-b": 2}
+        let int-keyed: dict[int, text] = {n: "n", n + 1: "next"}
+        let enum-keyed: dict[Zone, int] = {North: 1}
+        let record-keyed: dict[Cell, text] = {Cell(x = n, y = 0): "here"}
+        int-keyed.set(n + 5, "far")
+        int-keyed[n] := "updated"
+        enum-keyed.set(South, enum-keyed[North] + 10)
+        enum-keyed[North] := 2
+        record-keyed.set(Cell(x = n, y = 1), "up")
+        record-keyed[Cell(x = n, y = 0)] := "moved"
+        print(text-keyed)
+        print(int-keyed)
+        print(enum-keyed)
+        print(record-keyed)
+        print(n in int-keyed)
+        print(South in enum-keyed)
+        print(Cell(x = 9, y = 9) in record-keyed)
+        let zs: array[Zone] = [North, South, North]
+        print(tally(zs))
+        print(tally([n, n, n + 1]))
+        print(tally(["a", "b", "a"]))
+    | "missing" =>
+        let d: dict[int, text] = {1: "one"}
+        try
+          let _ = d[n]
+        catch KeyError as e =>
+          print(e.key)
+        let zones: dict[Zone, int] = {North: 1}
+        try
+          let _ = zones[South]
+        catch KeyError as e =>
+          print(e.key)
+        let cells: dict[Cell, int] = {}
+        try
+          let _ = cells[Cell(x = n, y = n)]
+        catch KeyError as e =>
+          print(e.key)
+        let words: dict[text, int] = {"a": 1}
+        try
+          let _ = words["b"]
+        catch KeyError as e =>
+          print(e.key)
+    | "computed-duplicate" =>
+        try
+          let d: dict[int, text] = {n: "a", 3: "b"}
+          print(d)
+        catch DuplicateKeyError as e =>
+          print("duplicate %{e.key}")
+    | "from-entries" =>
+        let pairs = [
+          Pair(first = Cell(x = n, y = 0), second = "a"),
+          Pair(first = Cell(x = 2, y = 0), second = "b"),
+          Pair(first = Cell(x = 3, y = 0), second = "c"),
+        ]
+        print(dict::from-entries(pairs, dict::DuplicateKeys::KeepFirst))
+        print(dict::from-entries(pairs, dict::DuplicateKeys::KeepLast))
+        try
+          print(dict::from-entries(pairs))
+        catch DuplicateKeyError as e =>
+          print("duplicate %{e.key}")
+        let north: Zone = North
+        let south: Zone = South
+        let zpairs = [Pair(first = north, second = 1), Pair(first = south, second = 2)]
+        let zones = dict::from-entries(zpairs)
+        print(zones.keys())
+        print(zones.merge({North: 5}))
+    | "agent-int" =>
+        let d: dict[int, text] = agent.ask("Sizes.", parse-error-retries = 1)
+        print(d)
+    | "agent-text" =>
+        let d: dict[text, int] = agent.ask("Counts.", parse-error-retries = 1)
+        print(d)
+    | "agent-zone" =>
+        let d: dict[Zone, int] = agent.ask("Stock.", parse-error-retries = 1)
+        print(d)
+    | "agent-cell" =>
+        let d: dict[Cell, text] = agent.ask("Spots.", parse-error-retries = 1)
+        print(d)
+    | _ => ()

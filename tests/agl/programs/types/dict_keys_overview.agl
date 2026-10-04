@@ -1,0 +1,32 @@
+enum Color
+  | Red
+  | Blue
+
+record Point
+  x: int
+  y: int
+
+def lookup[K, V]{Hashable K}(d: dict[K, V], key: K) -> V = d[key]
+def count[K]{Hashable K}(xs: array[K]) -> dict[K, int] =
+  let counts: dict[K, int] = {}
+  for x in xs do
+    counts.set(x, if x in counts => counts[x] + 1 else => 1)
+  done
+  counts
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+
+program def main() -> unit =
+  let by-color: dict[Color, int] = {Red: 1, Blue: 2}
+  let names: dict[int, text] = {1: "one", 1 + 1: "two"}
+  let grid: dict[Point, text] = {Point(x = 0, y = 0): "origin"}
+  let prefix = "k"
+  let t: dict[text, int] = {"%{prefix}-a": 1}
+  for c in by-color do
+    print(c)                                    # Color
+  done
+  print(lookup(names, 2))
+  print(grid[Point(x = 0, y = 0)])
+  print(t["k-a"])
+  let colors: array[Color] = [Red, Blue, Red]
+  print(count(colors))
+  print(same(Point(x = 1, y = 2), Point(x = 1, y = 2)))

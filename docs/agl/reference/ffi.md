@@ -196,7 +196,7 @@ than an extern signature.
 `bool` is considered before `int` on return because Python makes `bool` an
 `int` subclass while AgL does not. An `extern def` signature type or target
 type argument that reaches a non-`text`-keyed dict, at any depth, is a static
-error; see [Convertibility to `json`](types.md#convertibility-to-json). A bare
+error; see [Dict wire forms](types.md#dict-wire-forms). A bare
 Python `list` or `dict` is never an AgL boundary value and is rejected.
 Construct a new AgL container with `agl.array([...])` or `agl.dict({...})`
 instead. Wrap every JSON value, including `None` and scalars, with

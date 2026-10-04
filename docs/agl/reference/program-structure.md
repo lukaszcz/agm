@@ -97,7 +97,8 @@ host invocation error, reported before anything executes. Parameter types
 must be JSON-wire-serializable: `text` crosses verbatim, every other type
 reads its external text as strict JSON or an [AgL value syntax
 literal](host-environment.md#value-syntax); `unit`, function types, and
-types reaching a dict whose key is not `Hashable` are rejected. A name-addressable
+types reaching a dict whose key is not `Hashable` or not decodable (an
+exception key) are rejected. A name-addressable
 parameter cannot spell an [engine setting](#engine-settings) name, since both
 share one flag and config namespace. Full resolution and help rules:
 [Host environment](host-environment.md#program-arguments).

@@ -158,8 +158,8 @@ and decodes under, and the JSON tag naming a record wherever it inhabits an
 enum, wherever a value crosses JSON: agent structured output, `as`/`as?`
 casts, program parameters, and [uncaught-exception
 reports](host-environment.md#results-and-termination). A dict key of an enum whose members have no
-fields encodes as its member's tag ([Convertibility to
-`json`](types.md#convertibility-to-json)). Rendering (`print`, string
+fields encodes as its member's tag ([Dict wire
+forms](types.md#dict-wire-forms)). Rendering (`print`, string
 interpolation, …) always uses the declared name.
 
 Two sibling fields or enum members whose effective JSON names collide, or

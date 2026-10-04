@@ -525,6 +525,7 @@ rules:
    plain object with no `"$case"` tag.
 7. Unknown fields are rejected.
 8. Missing fields without a declared default are rejected.
+9. A dict takes its key type's [wire form](types.md#dict-wire-forms).
 
 Example — for
 
@@ -576,7 +577,9 @@ mechanically from the target type:
 | `bool` | `{"type": "boolean"}` |
 | `json` | `{}` (any JSON value) |
 | `array[T]` | `{"type": "array", "items": <T>}` |
-| `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
+| `dict[K, V]`, `K` `text` or a text alias | `{"type": "object", "additionalProperties": <V>}` |
+| `dict[K, V]`, `K` an `int`, `decimal`, `bool`, or plain enum | as above plus `"propertyNames"`: a number-text `pattern`, `{"enum": ["true", "false"]}`, or `{"enum": [<tags>]}` |
+| `dict[K, V]`, any other `Hashable` `K` | `{"type": "array", "items": <a closed object with required "key" and "value">}` |
 | record | object schema: `additionalProperties: false`, `required` lists every field without a declared default, per-field `properties` keyed by effective JSON name |
 | plain enum | `{"enum": [<tag>, …]}` listing the members' effective JSON tags; when any constructor carries `@doc`, instead `oneOf` of per-member `{"const": <tag>}` schemas, each with its constructor's `@doc` as `description` when present |
 | any other enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
@@ -584,7 +587,7 @@ mechanically from the target type:
 A target that reaches a dict must have a key that is `Hashable` and itself
 decodable (never a type variable or an exception); any other is a static
 error. The key's wire form is described under
-[convertibility to JSON](types.md#convertibility-to-json).
+[dict wire forms](types.md#dict-wire-forms).
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a

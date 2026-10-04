@@ -508,8 +508,11 @@ crosses as the matching JSON object or array. A string nested inside one is read
 top-level string of that position's type is, so `levels = ["Debug", "Info"]`,
 `points = ["Point(1, 2)", { x = 3, y = 4 }]`, and `workers = ["claude/opus:high", "codex"]` all
 decode; a string in a nested `json` position stays a JSON string. A native table given for a `dict`
-whose JSON form is an array of `{"key": …, "value": …}` entries reads each table key as text of the
-key type, so `by-point = { "Point(x = 1, y = 2)" = "a" }` and `by-point = {}` both decode.
+reads each table key as a string of the key type would be read at that position, whatever the
+dict's JSON form: `{ "2.0" = "a" }` for an `int` key, `{ Blue = 1 }` or `{ bleu = 1 }` for an enum
+key (declared name or JSON tag), `{ "Point(x = 1, y = 2)" = "a" }` for a record key, and `{}` for
+any. A dict whose JSON form is an array of `{"key": …, "value": …}` entries also accepts an array of
+`{ key = …, value = … }` tables.
 
 A CLI token, `@opt-env` value, or config string for an enum whose members are all fieldless names
 a member by its declared name, its `@name`, or its JSON name — `--level Debug` and `--level debug`

@@ -217,8 +217,8 @@ non-empty dict literal `{k: v, …}`, indexing (`d[k]`), indexed assignment
 the type itself, empty `{}`, `for`, rendering, `copy`/`shallow-copy`, and
 `==` — do not, so `K` may be non-hashable, such as `array[int]`; `==` still
 needs `Eq` on the whole dict type. A dict with a `Hashable` key encodes to
-JSON and decodes from it in the same form; see [Convertibility to
-`json`](#convertibility-to-json).
+JSON in its key's form, and decodes back from that form when the key is also
+decodable (an exception key is not); see [Dict wire forms](#dict-wire-forms).
 
 A record or enum-member record may mark an individual field with `var`.
 That field is a mutable reference slot: `receiver.field := value` updates the
@@ -1355,7 +1355,7 @@ may raise `CastError`.
 | `dict[K,V]` | identical `dict[K,V]` | total (no-op), for any key type `K` |
 | `dict[K,V]` for a `Hashable`, decodable `K` | `text` | fallible — strict JSON or AgL value syntax parse, key decoding per its wire form, then value validation |
 | `dict[K,V]` for a `Hashable`, decodable `K` | `json` | fallible — key decoding per its wire form, then value validation |
-| `json` | `dict[K,V]` for any `Hashable` `K` | total for conformance — encodes in the key type's [wire form](#convertibility-to-json); decodes back from it (rows above) |
+| `json` | `dict[K,V]` for any `Hashable` `K` | total for conformance — encodes in the key type's [wire form](#dict-wire-forms); decodes back from it (rows above) |
 | record `R` | same record `R` | total (no-op) |
 | record `R` | `text` | fallible — strict JSON or AgL value syntax parse, then field validation |
 | record `R` | `json` | fallible — field validation |
@@ -1405,19 +1405,22 @@ and `Box[T] as json` are static errors inside a generic `def`: type
 arguments are erased, so at the point the cast is checked there is no way to
 know whether the eventual instantiation of `T` will carry a non-data value.
 
-A dict's JSON form depends on its static key type `K`, so a generic field
+### Dict wire forms
+
+A dict's JSON form is chosen by its static key type `K`, so a generic field
 `dict[K, V]` takes the form of each instantiation's key type:
 
-- `text`, or a text alias such as `path`: a JSON object keyed by the text;
-- `int`, `decimal`, `bool`, or an enum whose members all have no fields: a
-  JSON object keyed by the stringified key — the number text `as json`
-  produces (`"-2"`, `"1.50"`), `"true"`/`"false"`, or the member's effective
-  `$case` tag (see [`@json-name`](attributes.md#name-and-json-name));
-- any other `Hashable` key — a record, an exception, `json`, or an enum with
-  a member that has fields, such as `Option[int]`: a JSON array of
-  `{"key": <key>, "value": <value>}` objects, each key in its own JSON form.
+| Key type | JSON form |
+| -------- | --------- |
+| `text`, or a text alias such as `path` | object keyed by the text |
+| `int`, `decimal` | object keyed by the number's exact JSON text (`"-2"`, `"1.50"`) |
+| `bool` | object keyed by `"true"` or `"false"` |
+| an enum whose members all have no fields | object keyed by the member's effective `$case` tag (see [`@json-name`](attributes.md#name-and-json-name)) |
+| any other `Hashable` key: a record, an exception, `json`, `Option[...]`, an enum with a member that has fields | array of `{"key": <key>, "value": <value>}` objects, each key in its own JSON form |
 
-Every form keeps the dict's insertion order.
+The derived [JSON Schema](agent-calls.md#derived-json-schema) follows the
+same forms. Every form keeps the dict's insertion order. An empty dict still takes its
+key type's form.
 
 ```agl
 enum Color
@@ -1437,22 +1440,32 @@ program def main() -> unit =
   print(by-point as json)  # [{"key": {"x": 1, "y": 2}, "value": "p"}]
 ```
 
-Decoding reads the same forms: a cast from `text` or `json`, `parse`, and
-agent or `exec` output accept any `Hashable` key type. A stringified number
-key follows the number rules (`"2.0"` fills an `int` key, `"2.5"` does not;
-non-number text fails), a `bool` key is `"true"` or `"false"`, and an enum key
-is a member's effective tag. Two wire keys that decode to equal keys
-(`"1.0"` and `"1.00"`, or a repeated entry key) fail the conversion like any
-malformed input: `CastError` for `as`, `None` for `as?`, `ValueParseError`
-for `parse`, a retry or `AgentParseError` for agent output. A type-variable
-key cannot decode, bounded or not, and neither can an exception key. A type
-that reaches a dict with a non-`Hashable` key, such as `array[int]`, cannot
-be decoded or cast to `json`, and only a `text` key may appear in an
-`extern def` signature or as an extern target type argument; each is a
-static error. The same holds for a key reached through type arguments: if
-`Outer[T]` has a field of type `Box[Wrap[T]]` and `Box[K]` a field of type `dict[K, int]`, then
-`Outer[array[int]]` reaches `dict[Wrap[array[int]], int]`, whose key is not
-`Hashable` when `Wrap[T]` holds a `T`. `as text` renders both.
+Decoding reads the same forms: a cast from `text` or `json`, `parse`, agent
+and `exec` output, and program parameters accept any `Hashable`, decodable key
+type; the key's form fixes the wire shape expected. Host text for a parameter
+or a text cast may also spell a dict in
+[value syntax](host-environment.md#value-syntax), whose keys are read against
+the key type. A stringified key is read as its type: a number key follows the number rules (`"2.0"` fills an `int`
+key, `"2.5"` does not, non-number text fails), a `bool` key is exactly
+`"true"` or `"false"`, and an enum key is a member's effective tag. An entries
+element must be an object with exactly the members `key` and `value`.
+
+Two wire keys that decode to equal keys (`"1"` and `"1.0"` for an `int` key,
+or a repeated entry key) fail the conversion. The failure is the
+conversion's own: `CastError` for `as`, `None` for `as?`, `ValueParseError`
+for `parse`, `ExecError` for `exec` output, a retry or `AgentParseError` for
+agent output, and a host invocation error for a program parameter; never
+`DuplicateKeyError`.
+
+A type-variable key cannot decode, bounded or not, and neither can an
+exception key. A type that reaches a dict with a non-`Hashable` key, such as
+`array[int]`, cannot be decoded or cast to `json`, and only a `text` key may
+appear in an `extern def` signature or as an extern target type argument; each
+is a static error. The same holds for a key reached through type arguments: if
+`Outer[T]` has a field of type `Box[Wrap[T]]` and `Box[K]` a field of type
+`dict[K, int]`, then `Outer[array[int]]` reaches `dict[Wrap[array[int]], int]`,
+whose key is not `Hashable` when `Wrap[T]` holds a `T`. `as text` renders
+both.
 
 ### Total vs fallible casts
 
@@ -1527,7 +1540,7 @@ conversion:
 - **exception** → a JSON object with every field of the value's runtime
   exception type, in declaration order, each keyed by its effective JSON name.
 - **`array[E]`/`dict[K, V]`** → the JSON array, or the dict's key-directed
-  [JSON form](#convertibility-to-json), obtained by converting each
+  [JSON form](#dict-wire-forms), obtained by converting each
   element/key/value the same way — so `array[R] as json` is a JSON array of
   record objects, and a nested `array[array[R]]` or `dict[text, array[R]]`
   converts to the matching nested JSON shape.

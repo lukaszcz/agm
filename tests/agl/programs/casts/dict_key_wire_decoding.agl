@@ -3,7 +3,8 @@
 # scalar or an all-nullary enum's effective tag, or an entries array for every
 # other hashable key. Stringified number keys follow the wire-number rules
 # (`"2.0"` fills an int key, `"2.5"` does not). Two wire keys decoding to equal
-# AgL keys fail the conversion with its own error, never `DuplicateKeyError`.
+# AgL keys fail the conversion with its own error, never `DuplicateKeyError`;
+# so do two object members of the JSON text with one name, in value syntax too.
 
 import std/json
 
@@ -94,9 +95,20 @@ program def main(mode: int, raw: text) -> unit =
       | 19 =>
           let d = raw as dict[Tree, int]
           print(d as json)
+      | 20 =>
+          let d = raw as dict[text, int]
+          print(d as json)
+      | 21 =>
+          let j = parse::[json](raw)
+          print(j)
+      | 22 =>
+          let j = json::parse(raw)
+          print(j)
       | _ =>
           print(()) # unreachable in scenarios
   catch CastError =>
     print("cast-error")
   catch ValueParseError =>
     print("parse-error")
+  catch JsonParseError =>
+    print("json-parse-error")

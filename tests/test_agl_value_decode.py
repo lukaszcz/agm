@@ -19,6 +19,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.runtime.convert import decode_value
 from agm.agl.runtime.value_decode import (
     ValueDecodeError,
+    host_data_to_json,
     host_text_to_json,
     option_some_field_schema,
     option_some_json_name,
@@ -26,7 +27,7 @@ from agm.agl.runtime.value_decode import (
 )
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import BoolType, DecimalType, IntType, JsonType, TextType, Type
-from agm.agl.semantics.values import IntValue, RecordValue
+from agm.agl.semantics.values import DictValue, IntValue, RecordValue
 from agm.agl.type_schema import build_param_decoder, derive_schema_and_decode
 from agm.agl.typecheck import CheckedModule
 from agm.agl.value_syntax.reader import read_value
@@ -555,3 +556,151 @@ class TestHostTextToJson:
         schema, defs = _scalar_plan(IntType())
         with pytest.raises(ValueDecodeError):
             host_text_to_json("not valid", schema, defs, agent_command_fallback=False)
+
+
+# ---------------------------------------------------------------------------
+# Dict keys: object / stringified / entries wire forms
+# ---------------------------------------------------------------------------
+
+_KEY_PRELUDE = (
+    "enum Color\n  | Red\n  | Green\n\nenum Shade\n  | Dark\n  | Level(n: int)\n\n"
+    "record Point\n  x: int\n  y: int\n\n"
+)
+
+
+def _dict_plan(key_type: str) -> tuple[DecodeSchema, dict[str, DecodeSchema]]:
+    return _last_expr_plan(f"{_KEY_PRELUDE}let d: dict[{key_type}, int] = {{}}\nd")
+
+
+class TestDictKeyForms:
+    def test_text_key_is_the_object_key(self) -> None:
+        schema, defs = _dict_plan("text")
+        assert value_node_to_json(read_value('{"a": 1}'), schema, defs) == {"a": 1}
+
+    def test_bare_text_key_is_rejected(self) -> None:
+        schema, defs = _dict_plan("text")
+        with pytest.raises(ValueDecodeError):
+            value_node_to_json(read_value("{a: 1}"), schema, defs)
+
+    def test_int_key_stringifies(self) -> None:
+        schema, defs = _dict_plan("int")
+        assert value_node_to_json(read_value("{1: 1, -2: 2}"), schema, defs) == {"1": 1, "-2": 2}
+
+    def test_decimal_and_bool_keys_stringify_like_json(self) -> None:
+        schema, defs = _dict_plan("decimal")
+        assert value_node_to_json(read_value("{1.50: 1, 2: 2}"), schema, defs) == {
+            "1.50": 1,
+            "2": 2,
+        }
+        schema, defs = _dict_plan("bool")
+        assert value_node_to_json(read_value("{true: 1, false: 0}"), schema, defs) == {
+            "true": 1,
+            "false": 0,
+        }
+
+    def test_plain_enum_key_stringifies_to_its_tag(self) -> None:
+        schema, defs = _last_expr_plan("enum Plain\n  | A\n  | B\nlet d: dict[Plain, int] = {}\nd")
+        assert value_node_to_json(read_value("{A: 1, Plain::B: 2}"), schema, defs) == {
+            "A": 1,
+            "B": 2,
+        }
+
+    def test_entries_form_converts_key_and_value(self) -> None:
+        schema, defs = _dict_plan("Point")
+        result = value_node_to_json(read_value("{Point(x = 1, y = 2): 3}"), schema, defs)
+        assert result == [{"key": {"x": 1, "y": 2}, "value": 3}]
+        schema, defs = _dict_plan("Shade")
+        result = value_node_to_json(read_value("{Dark: 1, Level(n = 2): 2}"), schema, defs)
+        assert result == [
+            {"key": {"$case": "Dark"}, "value": 1},
+            {"key": {"$case": "Level", "n": 2}, "value": 2},
+        ]
+
+    def test_key_of_the_wrong_type_is_rejected(self) -> None:
+        schema, defs = _dict_plan("int")
+        for source in ('{"a": 1}', "{Red: 1}", "{1.5: 1}"):
+            with pytest.raises(ValueDecodeError):
+                value_node_to_json(read_value(source), schema, defs)
+
+    def test_duplicate_wire_keys_are_rejected(self) -> None:
+        schema, defs = _dict_plan("int")
+        with pytest.raises(ValueDecodeError):
+            value_node_to_json(read_value("{1: 1, 1: 2}"), schema, defs)
+
+    def test_json_slot_accepts_text_keys_only(self) -> None:
+        schema, defs = _scalar_plan(JsonType())
+        assert value_node_to_json(read_value('{"a": {"b": 1}}'), schema, defs) == {"a": {"b": 1}}
+        for source in ("{1: 1}", "{a: 1}", "{null: 1}"):
+            with pytest.raises(ValueDecodeError):
+                value_node_to_json(read_value(source), schema, defs)
+
+    def test_equal_keys_distinct_on_the_wire_fail_the_decode(self) -> None:
+        schema, defs = _dict_plan("decimal")
+        wire = value_node_to_json(read_value("{1.0: 1, 1.00: 2}"), schema, defs)
+        with pytest.raises(ValueError):
+            decode_value(schema, wire, defs)
+
+    def test_decoded_value_round_trips(self) -> None:
+        schema, defs = _dict_plan("Point")
+        wire = value_node_to_json(read_value("{Point(x = 1, y = 2): 3}"), schema, defs)
+        decoded = decode_value(schema, wire, defs)
+        assert isinstance(decoded, DictValue)
+        [(key, value)] = decoded.items()
+        assert isinstance(key, RecordValue)
+        assert key.fields == {"x": IntValue(1), "y": IntValue(2)}
+        assert value == IntValue(3)
+
+
+class TestHostDictKeys:
+    def test_native_table_keeps_its_text_keys(self) -> None:
+        schema, defs = _dict_plan("int")
+        assert host_data_to_json({"1": 5}, schema, defs) == {"1": 5}
+
+    def test_native_entries_array_reads_key_and_value_slots(self) -> None:
+        schema, defs = _dict_plan("Point")
+        data = [{"key": {"x": 1, "y": 2}, "value": 3}]
+        assert host_data_to_json(data, schema, defs) == data
+        reads = host_data_to_json([{"key": "Point(x = 1, y = 2)", "value": "3"}], schema, defs)
+        assert reads == [{"key": {"x": 1, "y": 2}, "value": 3}]
+
+    def test_native_table_in_an_entries_dict_becomes_entries(self) -> None:
+        schema, defs = _dict_plan("Point")
+        assert host_data_to_json({}, schema, defs) == []
+        table = {"Point(x = 1, y = 2)": "3"}
+        assert host_data_to_json(table, schema, defs) == [{"key": {"x": 1, "y": 2}, "value": 3}]
+
+    def test_malformed_native_entry_passes_through_for_validation(self) -> None:
+        schema, defs = _dict_plan("Point")
+        assert host_data_to_json([1, {"key": 1}], schema, defs) == [1, {"key": 1}]
+
+    def test_host_text_reads_json_then_value_syntax(self) -> None:
+        schema, defs = _dict_plan("int")
+        assert host_text_to_json('{"1": 5}', schema, defs, agent_command_fallback=False) == {"1": 5}
+        assert host_text_to_json("{1: 5}", schema, defs, agent_command_fallback=False) == {"1": 5}
+
+    def test_json_that_is_no_wire_value_of_the_slot_reads_as_value_syntax(self) -> None:
+        schema, defs = _dict_plan("Point")
+        assert host_text_to_json("{}", schema, defs, agent_command_fallback=False) == []
+        schema, defs = _dict_plan("json")
+        wire = host_text_to_json('{"s": 1}', schema, defs, agent_command_fallback=False)
+        assert wire == [{"key": "s", "value": 1}]
+
+    def test_json_scalar_that_decodes_into_the_slot_wins(self) -> None:
+        schema, defs = _scalar_plan(IntType())
+        assert host_text_to_json("42", schema, defs, agent_command_fallback=False) == 42
+
+    def test_json_omitting_a_defaulted_field_still_takes_the_json_path(self) -> None:
+        schema, defs = _retry_plan()
+        assert host_text_to_json("{}", schema, defs, agent_command_fallback=False) == {}
+
+    def test_text_that_is_neither_json_nor_a_value_is_a_value_decode_error(self) -> None:
+        schema, defs = _dict_plan("int")
+        with pytest.raises(ValueDecodeError):
+            host_text_to_json("{1: ", schema, defs, agent_command_fallback=False)
+
+    def test_json_fitting_nowhere_is_left_for_the_callers_decode_to_reject(self) -> None:
+        schema, defs = _dict_plan("int")
+        wire = host_text_to_json('{"a": 1}', schema, defs, agent_command_fallback=False)
+        assert wire == {"a": 1}
+        with pytest.raises(ValueError):
+            decode_value(schema, wire, defs)

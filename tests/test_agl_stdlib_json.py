@@ -90,6 +90,16 @@ def test_json_companion_parse_rejects_a_lone_surrogate_escape() -> None:
     assert exc_info.value.value.fields["raw"] == TextValue(raw)
 
 
+def test_json_companion_parse_rejects_a_duplicate_member_name() -> None:
+    companion = _json_companion()
+    raw = '{"a": 1, "a": 2}'
+
+    with pytest.raises(AglException) as exc_info:
+        companion.parse(raw)
+    assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue(raw)
+
+
 def test_json_companion_parse_combines_a_surrogate_escape_pair() -> None:
     # Built from parts so no tool between here and the file can fold the
     # adjacent escapes into the astral character they denote.

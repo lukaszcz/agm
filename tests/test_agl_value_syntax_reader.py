@@ -90,17 +90,47 @@ def test_empty_array() -> None:
     assert read_value("[]") == ArrayNode((), 0, 2)
 
 
-def test_dict_with_name_key_text_key_and_trailing_comma() -> None:
-    node = read_value('{a: 1, "b": 2,}')
+def test_dict_with_quoted_text_keys_and_trailing_comma() -> None:
+    node = read_value("{\"a\": 1, 'b': 2,}")
     assert isinstance(node, DictNode)
-    assert [entry.key for entry in node.entries] == ["a", "b"]
-    assert [entry.value for entry in node.entries] == [IntNode(1, 4, 5), IntNode(2, 12, 13)]
+    assert [entry.key for entry in node.entries] == [TextNode("a", 1, 4), TextNode("b", 9, 12)]
+    assert [entry.value for entry in node.entries] == [IntNode(1, 6, 7), IntNode(2, 14, 15)]
 
 
-def test_dict_with_dollar_suffixed_name_key() -> None:
-    node = read_value("{exec$: 1}")
+def test_dict_with_scalar_keys() -> None:
+    node = read_value("{1: 0, -2: 0, 1.5: 0, true: 0}")
     assert isinstance(node, DictNode)
-    assert [entry.key for entry in node.entries] == ["exec$"]
+    k1, k2, k3, k4 = (entry.key for entry in node.entries)
+    assert isinstance(k1, IntNode) and k1.value == 1
+    assert isinstance(k2, IntNode) and k2.value == -2
+    assert isinstance(k3, DecimalNode) and k3.value == Decimal("1.5")
+    assert isinstance(k4, BoolNode) and k4.value is True
+
+
+def test_dict_bare_name_key_is_a_constructor() -> None:
+    node = read_value("{Red: 1}")
+    assert isinstance(node, DictNode)
+    assert node.entries[0].key == CtorNode(None, "Red", None, 1, 4)
+
+
+def test_dict_qualified_and_record_constructor_keys() -> None:
+    node = read_value("{Color::Red: 1, Point(x = 1, y = 2): 2}")
+    assert isinstance(node, DictNode)
+    first, second = (entry.key for entry in node.entries)
+    assert isinstance(first, CtorNode)
+    assert (first.qualifier, first.name, first.args) == ("Color", "Red", None)
+    assert isinstance(second, CtorNode)
+    assert second.name == "Point"
+    assert second.args is not None
+    assert len(second.args) == 2
+
+
+def test_dict_nested_dict_values() -> None:
+    node = read_value('{1: {"a": {2: 3}}}')
+    assert isinstance(node, DictNode)
+    inner = node.entries[0].value
+    assert isinstance(inner, DictNode)
+    assert isinstance(inner.entries[0].value, DictNode)
 
 
 def test_empty_dict() -> None:
@@ -158,7 +188,7 @@ def test_nested_ctor_arguments() -> None:
 
 def test_dict_without_trailing_comma() -> None:
     node = read_value('{"a": 1}')
-    assert node == DictNode((DictEntry("a", IntNode(1, 6, 7), 1, 7),), 0, 8)
+    assert node == DictNode((DictEntry(TextNode("a", 1, 4), IntNode(1, 6, 7), 1, 7),), 0, 8)
 
 
 def test_dollar_brace_not_followed_by_a_name_is_literal_text() -> None:
@@ -265,14 +295,13 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         '"\\uD800%{1}"',
         '"\\uD800"',
         "@",
-        "{1: 2}",
         '{"a" 1}',
         "Shape::if",
         "Circle(1 2)",
         "Circle(if = 1)",
         '"${',
         "{if: 1}",
-        "{true: 1}",
+        "{1 2}",
     ),
     ids=(
         "unterminated-text",
@@ -300,14 +329,13 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "high-surrogate-before-hole",
         "high-surrogate-at-end-of-literal",
         "unexpected-character",
-        "dict-key-not-a-name",
         "dict-missing-colon",
         "qualified-ctor-invalid-member",
         "args-missing-comma",
         "invalid-argument-name",
         "dollar-brace-at-eof-in-text",
         "dict-key-is-keyword",
-        "dict-key-is-true",
+        "dict-key-without-colon",
     ),
 )
 def test_read_value_rejects_malformed_input(source: str) -> None:

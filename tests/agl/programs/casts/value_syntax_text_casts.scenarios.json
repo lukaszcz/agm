@@ -61,8 +61,8 @@
       "expect": {"stdout": "[1, 2, 3]\nas?: false\n"}
     },
     {
-      "name": "dict_value_syntax_bare_keys",
-      "params": {"target": "dict", "value": "{a: 1, b: 2}"},
+      "name": "dict_value_syntax_quoted_keys",
+      "params": {"target": "dict", "value": "{\"a\": 1, \"b\": 2,}"},
       "expect": {"stdout": "{\"a\": 1, \"b\": 2}\nas?: false\n"}
     },
     {

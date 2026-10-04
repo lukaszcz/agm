@@ -1,0 +1,33 @@
+# Dict program parameters read from CLI tokens by key type: JSON when it
+# decodes into the dict's wire form (an object for text, int, plain-enum and
+# decimal keys; an entries array otherwise), else a value-syntax dict literal
+# whose keys read against the declared key type. Colliding keys fail the run.
+
+enum Color
+  | Red
+  | Tint(level: int)
+
+enum Plain
+  | A
+  | B
+
+record Point
+  x: int
+  y: int
+
+program def main(
+  limits: dict[text, int] = {},
+  by-int: dict[int, text] = {},
+  by-plain: dict[Plain, int] = {},
+  by-color: dict[Color, int] = {},
+  by-point: dict[Point, text] = {},
+  by-dec: dict[decimal, int] = {},
+  by-json: dict[json, int] = {}
+) -> unit =
+  print limits
+  print by-int
+  print by-plain
+  print by-color
+  print by-point
+  print by-dec
+  print by-json

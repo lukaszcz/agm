@@ -89,8 +89,8 @@
       }
     },
     {
-      "name": "parse_json_value_syntax_bare_keys_and_trailing_comma",
-      "params": {"mode": "parse_json", "input": "{a: 1, b: [true, null],}"},
+      "name": "parse_json_value_syntax_quoted_keys_and_trailing_comma",
+      "params": {"mode": "parse_json", "input": "{\"a\": 1, \"b\": [true, null],}"},
       "expect": {"stdout": "{\"a\": 1, \"b\": [true, null]}\n"}
     },
     {

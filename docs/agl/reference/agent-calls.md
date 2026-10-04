@@ -640,6 +640,11 @@ response, then validates it strictly:
 If the response contains two or more top-level JSON values, recovery fails
 as ambiguous. Schema validation is always strict regardless of lenient mode.
 
+Recovery repairs format damage but never resolves ambiguous content: an
+object that repeats a member name is rejected in both lenient and strict
+modes, including a repaired one such as `Here: {"a": 1, "a": 2,}`. The
+response then counts as unparseable, so it is retried like any other.
+
 When the target is a plain enum and the value recovered above is not one of
 its members, the whole response is searched for its member tags. A response
 naming exactly one member — any number of times, as a whole word, in the

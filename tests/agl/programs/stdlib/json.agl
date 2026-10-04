@@ -51,6 +51,7 @@ program def main(mode: int) -> unit =
     | 7 => print(json::try-parse("{\"answer\": 42}"))
     | 8 => print(json::try-parse-lenient("result: [1, 2]"))
     | 9 => print(json::parse("{\"name\": \"agm\"}").get?("name"))
+    | 99 => print(json::try-parse-lenient("Here: {\"a\": 1, \"a\": 2,}") is Err)
     | _ =>
         let null-value = json::parse("null")
         let bool-value = json::parse("false")

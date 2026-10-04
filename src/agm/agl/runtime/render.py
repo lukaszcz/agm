@@ -7,10 +7,13 @@ and REPL display.  Callers choose two display options:
 - ``pretty``: render containers, nominal values, and JSON over multiple indented
   lines when ``True``; keep the output on one line when ``False``.
 - ``quote_strings``: quote a top-level ``text`` value as an AgL string literal
-  when ``True``; leave top-level text verbatim when ``False``.
+  when ``True``; leave top-level text verbatim when ``False``. A top-level
+  ``json`` value is value syntax (``%`` and ``${`` escaped inside its strings)
+  when ``True`` and pure JSON when ``False``.
 
 Nested ``text`` values (including ``text`` dict keys) are always quoted so
-structured output remains parseable as AgL surface syntax; every dict key
+structured output remains parseable as AgL surface syntax, and nested ``json``
+strings escape ``%`` and ``${`` the same way; every dict key
 renders in one-line value syntax.  A record or exception renders its nominal's
 ``positional_fields`` bare, then the rest as ``name = value``.
 """
@@ -39,7 +42,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
-from agm.agl.value_syntax.lexical import quote_text, scalar_text
+from agm.agl.value_syntax.lexical import escape_interpolation_triggers, quote_text, scalar_text
 
 
 def _indent(level: int) -> str:
@@ -157,6 +160,10 @@ def _render(
 
     if isinstance(value, JsonValue):
         rendered = dumps_exact(cast(JsonShaped, value.raw), indent=2 if pretty else None)
+        if not top_level or quote_strings:
+            # Value syntax: escape the interpolation trigger as a text literal
+            # does. JSON syntax holds it only inside strings.
+            rendered = escape_interpolation_triggers(rendered)
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ArrayValue):
@@ -230,8 +237,9 @@ def render_value(
 
     ``pretty=False`` keeps output single-line where possible. ``pretty=True``
     expands structured values and JSON over multiple lines with two-space
-    indentation. ``quote_strings`` only controls top-level ``text`` values;
-    nested text is always quoted. ``unit`` always renders ``()``.
+    indentation. ``quote_strings`` only controls top-level ``text`` and ``json``
+    values; nested text is always quoted and nested ``json`` is always value
+    syntax. ``unit`` always renders ``()``.
     """
     return _render(
         cast(ObservableValue, value),

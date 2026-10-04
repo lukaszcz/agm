@@ -1,0 +1,4 @@
+exception Boom extends Exception
+
+program def main(counts: dict[Boom, int]) -> unit =
+  print counts

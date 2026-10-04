@@ -252,7 +252,7 @@ def convert_host_value(
     string) crosses the canonical JSON boundary, its nested strings read as a
     raw string is. A raw string is read through the shared host-text dispatch
     (:func:`~agm.agl.runtime.value_decode.host_param_text_to_json`): strict
-    JSON first, then one AgL value-syntax literal — no repair of user typos
+    JSON when it decodes into the slot, else one AgL value-syntax literal — no repair of user typos
     either way. *raw* may instead be an
     :class:`~agm.agl.runtime.arguments.OptionSome` box, for an ``Option[T]``
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and

@@ -20,7 +20,8 @@ def try-parse(value: text) -> Result[json, JsonParseError] =
 @doc("""
   Parse a JSON value recovered from surrounding text or a Markdown code fence.
 
-  Raises `JsonParseError` when a single valid JSON value cannot be recovered.
+  Raises `JsonParseError` when a single valid JSON value cannot be recovered,
+  or when an object repeats a member name.
 """)
 extern def parse-lenient(value: text) -> json
 

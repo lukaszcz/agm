@@ -68,7 +68,7 @@ class ArrayNode:
 class DictEntry:
     """One ``key: value`` entry of a dict literal, in source order."""
 
-    key: str
+    key: "ValueNode"
     value: "ValueNode"
     start: int
     end: int

@@ -190,6 +190,40 @@
           }
         }
       }
+    },
+    {
+      "name": "repeated_member_name_in_output_is_retried",
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [\"a\"], \"issues\": [\"b\"]}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\nthird ok\n",
+        "calls": {
+          "reviewer": 4
+        }
+      }
+    },
+    {
+      "name": "repeated_member_name_in_prose_wrapped_output_is_retried",
+      "agents": {
+        "reviewer": [
+          "Here you go: {\"$case\": \"Fail\", \"issues\": [\"a\"], \"issues\": [\"b\"],}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\nthird ok\n",
+        "calls": {
+          "reviewer": 4
+        }
+      }
     }
   ]
 }

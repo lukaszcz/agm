@@ -80,6 +80,141 @@
       "expect": {
         "stdout": "true\ntrue\ntrue\n"
       }
+    },
+    {
+      "name": "round_trip_int",
+      "params": {
+        "mode": "round_trip_int"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_decimal",
+      "params": {
+        "mode": "round_trip_decimal"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_bool",
+      "params": {
+        "mode": "round_trip_bool"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_enum",
+      "params": {
+        "mode": "round_trip_enum"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_record",
+      "params": {
+        "mode": "round_trip_record"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_json",
+      "params": {
+        "mode": "round_trip_json"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_key_error",
+      "params": {
+        "mode": "round_trip_key_error"
+      },
+      "expect": {
+        "stdout": "true\n"
+      }
+    },
+    {
+      "name": "json_text_keys_parse_back_as_value_syntax",
+      "params": {
+        "mode": "round_trip_json_text_keys"
+      },
+      "expect": {
+        "stdout": "{\n  \"s\": 1,\n  \"t\": 2\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "empty_entries_dict_parses_back",
+      "params": {
+        "mode": "round_trip_empty_entries"
+      },
+      "expect": {
+        "stdout": "{}\ntrue\n"
+      }
+    },
+    {
+      "name": "array_of_entries_dicts_parses_back",
+      "params": {
+        "mode": "round_trip_array_of_entries"
+      },
+      "expect": {
+        "stdout": "[\n  {}\n]\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_interpolation_trigger",
+      "params": {
+        "mode": "round_trip_json_key_interpolation_trigger"
+      },
+      "expect": {
+        "stdout": "{\n  \"a\\%{b}\": 1\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "json_field_escapes_interpolation_trigger",
+      "params": {
+        "mode": "round_trip_json_field_interpolation_trigger"
+      },
+      "expect": {
+        "stdout": "Holder(\n  j = \"a\\%{b}\"\n)\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_key_dollar_hole"
+      },
+      "expect": {
+        "stdout": "{\n  \"\\${HOME}\": 1\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "json_field_escapes_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_field_dollar_hole"
+      },
+      "expect": {
+        "stdout": "Holder(\n  j = \"\\${HOME}\"\n)\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_percent_before_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_key_percent_dollar_hole"
+      },
+      "expect": {
+        "stdout": "{\n  \"\\%\\${HOME}\": 1\n}\ntrue\n"
+      }
     }
   ]
 }

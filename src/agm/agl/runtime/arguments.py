@@ -200,7 +200,7 @@ def decode_param_value(
     (``runtime.value_decode.host_param_text_to_json``): ``text`` params
     verbatim, the standard ``Agent`` enum through its own text conventions, a
     plain enum member's bare JSON name as itself, everything else as strict
-    JSON falling back to AgL value syntax. An :class:`OptionSome` payload
+    JSON when it decodes into the slot, else AgL value syntax. An :class:`OptionSome` payload
     decodes its own ``value`` the same way (when textual) before being wrapped
     back into the optional enum's JSON shape. A native value's nested strings
     are read the same way for their own slots. Every value then crosses the

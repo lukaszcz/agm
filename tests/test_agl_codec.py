@@ -1807,6 +1807,41 @@ class TestPublicJsonRecoveryAdapter:
         assert extract_json_text("maybe true or maybe false") is None
 
 
+class TestRecoveryRejectsDuplicateMembers:
+    """Repair fixes format damage but never picks a duplicate member's winner."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            'Here: {"a": 1, "a": 2}',
+            '{"a": 1, "a": 2,}',
+            'Result: {"outer": {"a": 1, "b": 2, "a": 3}}',
+            '```json\n{"a": 1, "a": 2,}\n```',
+            "{a: 1, a: 2}",
+            "{'a': 1, \"a\": 2}",
+            '[{"k": 1, "k": 2,}]',
+        ],
+    )
+    def test_duplicate_member_is_unrecoverable(self, raw: str) -> None:
+        assert extract_json_text(raw) is None
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ('[{"a": 1,}, {"a": 2}]', '[{"a": 1}, {"a": 2}]'),
+            ('{"a": "a",}', '{"a": "a"}'),
+            ('He said "no: way", it\'s {"a": 1, "b": 2,}', '{"a": 1, "b": 2}'),
+            ('{"a": [{"a": 1,}], "b": {"a": 2}}', '{"a": [{"a": 1}], "b": {"a": 2}}'),
+        ],
+    )
+    def test_distinct_members_still_recover(self, raw: str, expected: str) -> None:
+        assert json.loads(extract_json_text(raw) or "") == json.loads(expected)
+
+    def test_unterminated_string_and_stray_closers_do_not_hang(self) -> None:
+        assert extract_json_text('] } {"a": 1, "b": "x') is not None
+        assert extract_json_text('{"a\\q": 1, "a\\q": 2,}') is None
+
+
 # ---------------------------------------------------------------------------
 # 4. Strict mode
 # ---------------------------------------------------------------------------

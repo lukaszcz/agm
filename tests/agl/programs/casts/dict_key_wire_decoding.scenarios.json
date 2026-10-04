@@ -471,6 +471,96 @@
       "expect": {
         "stdout": "cast-error\n"
       }
+    },
+    {
+      "name": "json_repeated_member_name_fails_int_keyed_cast",
+      "params": {
+        "mode": 1,
+        "raw": "{\"1\": \"a\", \"1\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_text_keyed_cast",
+      "params": {
+        "mode": 20,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_json_parse",
+      "params": {
+        "mode": 21,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_std_json_parse",
+      "params": {
+        "mode": 22,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "json-parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_repeated_int_key_fails_parse",
+      "params": {
+        "mode": 11,
+        "raw": "{1: \"a\", 1: \"b\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_int_keys_fail_parse",
+      "params": {
+        "mode": 11,
+        "raw": "{1: \"a\", 1.0: \"b\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_record_keys_fail_parse",
+      "params": {
+        "mode": 12,
+        "raw": "{Point(x = 1, y = 2): \"p\", Point(1, 2): \"q\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_repeated_int_key_errs_try_parse",
+      "params": {
+        "mode": 16,
+        "raw": "{1: \"a\", 1: \"b\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_int_keys_err_try_parse",
+      "params": {
+        "mode": 16,
+        "raw": "{1: \"a\", 1.0: \"b\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
     }
   ]
 }

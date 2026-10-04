@@ -625,8 +625,10 @@ render(value: T, pretty: bool = true, quote-strings: bool = true) -> text
 
 `pretty` selects single-line versus multi-line indented rendering for
 structured values and JSON; a dict key always renders on one line.
-`quote-strings` controls only a top-level `text` argument; when it is
-`false`, rendering text is identity.
+`quote-strings` controls only a top-level `text` or `json` argument. When it
+is `false`, rendering text is identity and a top-level `json` renders as pure
+JSON; when it is `true`, a `json` string escapes `%` and `${` as a text literal
+does, so the output is value syntax.
 
 ```agl
 program def main() -> unit =
@@ -642,8 +644,9 @@ type argument fixes its input, for example `let f: json -> text = render`. An
 explicit type argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote-strings = false)` renders the quoted json form
-`"hi"`: `quote-strings` controls only a top-level `text` argument, and the
-coerced argument has type `json`.
+`"hi"`: the coerced argument has type `json`, so it is not rendered as text.
+`render::[json]("50%")` renders `"50\%"`, and with `quote-strings = false`
+`"50%"`.
 
 ## JSON parsing
 

@@ -43,22 +43,27 @@ ESCAPE_ENCODE: Final[Mapping[str, str]] = {
 _HEX_DIGITS: Final[str] = "0123456789abcdefABCDEF"
 
 
+def escape_interpolation_triggers(quoted: str) -> str:
+    """Escape ``%`` and ``${`` in already-quoted string text for value syntax.
+
+    A double-quoted JSON string and an AgL text literal share every other
+    escape, so this is the only step turning one into the other.
+    """
+    return quoted.replace(INTERP_TRIGGER, ESCAPE_ENCODE[INTERP_TRIGGER]).replace("${", "\\${")
+
+
 def quote_text(value: str) -> str:
     """Return *value* as a double-quoted AgL text-literal surface form."""
-    out: list[str] = ['"']
-    for index, character in enumerate(value):
-        if character == "$" and value.startswith("${", index):
-            out.append("\\$")
-            continue
+    out: list[str] = []
+    for character in value:
         escaped = ESCAPE_ENCODE.get(character)
-        if escaped is not None:
+        if escaped is not None and character != INTERP_TRIGGER:
             out.append(escaped)
         elif character < " ":
             out.append(f"\\u{ord(character):04x}")
         else:
             out.append(character)
-    out.append('"')
-    return "".join(out)
+    return f'"{escape_interpolation_triggers("".join(out))}"'
 
 
 def scalar_text(value: int | decimal.Decimal | bool) -> str:

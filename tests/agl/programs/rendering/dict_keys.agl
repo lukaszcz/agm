@@ -3,8 +3,8 @@
 # escaped like nested text, every other key in its own spelling (numbers,
 # `true`/`false`, qualified enum members, constructor forms, JSON). A key
 # always renders on one line, even inside multi-line output. Each mode renders
-# one key kind through every surface; the round-trip mode parses a rendered
-# text-keyed dict back to an equal value.
+# one key kind through every surface; the round-trip modes parse a rendered
+# dict back to an equal value.
 
 enum Color
   | Red
@@ -13,6 +13,9 @@ enum Color
 record Point
   x: int
   y: int
+
+record Holder
+  j: json
 
 def show[T](value: T, rendered: text) -> unit =
   print(value)
@@ -51,5 +54,73 @@ program def main(mode: text) -> unit =
         print(parse::[dict[text, Point]](render(d)) == d)
         print(parse::[dict[text, Point]](d as text) == d)
         print(parse::[dict[text, Point]]("%{d}") == d)
+    | "round_trip_int" =>
+        let d: dict[int, text] = {1: "one", -2: "minus two"}
+        print(parse::[dict[int, text]](render(d)) == d)
+        print(parse::[dict[int, text]](d as text) == d)
+        print(parse::[dict[int, text]]("%{d}") == d)
+    | "round_trip_decimal" =>
+        let d: dict[decimal, bool] = {1.50: true, 2: false}
+        print(parse::[dict[decimal, bool]](render(d)) == d)
+        print(parse::[dict[decimal, bool]](d as text) == d)
+        print(parse::[dict[decimal, bool]]("%{d}") == d)
+    | "round_trip_bool" =>
+        let d: dict[bool, int] = {true: 1, false: 0}
+        print(parse::[dict[bool, int]](render(d)) == d)
+        print(parse::[dict[bool, int]](d as text) == d)
+        print(parse::[dict[bool, int]]("%{d}") == d)
+    | "round_trip_enum" =>
+        let d: dict[Color, text] = {Red: "red", Tint(level = 2): "tint"}
+        print(parse::[dict[Color, text]](render(d)) == d)
+        print(parse::[dict[Color, text]](d as text) == d)
+        print(parse::[dict[Color, text]]("%{d}") == d)
+    | "round_trip_record" =>
+        let d: dict[Point, text] = {Point(x = 1, y = 2): "a", Point(x = -1, y = 0): "b"}
+        print(parse::[dict[Point, text]](render(d)) == d)
+        print(parse::[dict[Point, text]](d as text) == d)
+        print(parse::[dict[Point, text]]("%{d}") == d)
+    | "round_trip_json" =>
+        let d: dict[json, int] = {null: 0, ("s" as json): 1, ({"k": [1, 2]} as json): 2}
+        print(parse::[dict[json, int]](render(d)) == d)
+        print(parse::[dict[json, int]](d as text) == d)
+        print(parse::[dict[json, int]]("%{d}") == d)
+    | "round_trip_json_text_keys" =>
+        let d: dict[json, int] = {("s" as json): 1, ("t" as json): 2}
+        print(render(d))
+        print(parse::[dict[json, int]](render(d)) == d)
+    | "round_trip_empty_entries" =>
+        let d: dict[Point, int] = {}
+        print(render(d))
+        print(parse::[dict[Point, int]](render(d)) == d)
+    | "round_trip_array_of_entries" =>
+        let a: array[dict[Point, int]] = [{}]
+        print(render(a))
+        print(parse::[array[dict[Point, int]]](render(a)) == a)
+    | "round_trip_json_key_interpolation_trigger" =>
+        let d: dict[json, int] = {("a\%{b}" as json): 1}
+        print(render(d))
+        print(parse::[dict[json, int]](render(d)) == d)
+    | "round_trip_json_field_interpolation_trigger" =>
+        let h = Holder(j = "a\%{b}" as json)
+        print(render(h))
+        print(parse::[Holder](render(h)) == h)
+    | "round_trip_json_key_dollar_hole" =>
+        let d: dict[json, int] = {("\${HOME}" as json): 1}
+        print(render(d))
+        print(parse::[dict[json, int]](render(d)) == d)
+    | "round_trip_json_field_dollar_hole" =>
+        let h = Holder(j = "\${HOME}" as json)
+        print(render(h))
+        print(parse::[Holder](render(h)) == h)
+    | "round_trip_json_key_percent_dollar_hole" =>
+        let d: dict[json, int] = {("%\${HOME}" as json): 1}
+        print(render(d))
+        print(parse::[dict[json, int]](render(d)) == d)
+    | "round_trip_key_error" =>
+        let d: dict[Point, int] = {Point(x = 1, y = 2): 1}
+        try
+          print(d[Point(x = 9, y = 9)])
+        catch KeyError as e =>
+          print(parse::[Point](e.key) == Point(x = 9, y = 9))
     | _ =>
         print "unknown mode"

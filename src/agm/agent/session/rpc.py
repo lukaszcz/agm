@@ -41,7 +41,7 @@ from agm.sandbox.prepare import SandboxContext, sandbox_run_for
 from agm.sandbox.profile import profile_name
 from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
 from agm.util.decimal import decimal_in_range, parse_json_decimal, reject_json_constant
-from agm.util.unicode import loads_json
+from agm.util.unicode import json_object_unique, loads_json
 
 _RpcOperation = Literal[
     "prompt",
@@ -499,7 +499,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 line,
                 parse_constant=reject_json_constant,
                 parse_float=parse_json_decimal,
-                object_pairs_hook=_json_object,
+                object_pairs_hook=json_object_unique,
             )
         except ValueError as exc:
             raise _RpcProtocolError("Pi RPC returned malformed JSONL") from exc
@@ -776,15 +776,6 @@ def _terminate(child: _RpcChild) -> None:
         # The reader callbacks close over ``child``; dropping them breaks that
         # cycle so the process, queued stdout, and stderr tail are freed at once.
         child.readers.clear()
-
-
-def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
 
 
 def _validate_response(event: dict[str, object]) -> None:

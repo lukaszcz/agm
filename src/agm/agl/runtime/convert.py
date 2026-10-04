@@ -69,7 +69,7 @@ from agm.util.decimal import (
     parse_json_decimal,
     reject_json_constant,
 )
-from agm.util.unicode import loads_json
+from agm.util.unicode import json_object_unique, loads_json
 
 if TYPE_CHECKING:
     from jsonschema import TypeChecker
@@ -86,6 +86,7 @@ class StrictJsonParseError(Exception):
 
     Covers:
     - Malformed JSON (syntax errors).
+    - A duplicate object member name.
     - Non-standard constants: ``NaN``, ``Infinity``, ``-Infinity`` (including
       when nested inside containers such as ``[NaN]`` or ``{"x": Infinity}``).
     - A number no decimal can hold.
@@ -174,6 +175,7 @@ def parse_json_strict(text: str) -> object:
     - Floating-point numbers are parsed as :class:`decimal.Decimal` (never
       ``float``), preserving exact precision; one no decimal can hold
       (``1e99999999999999999999``) is rejected.
+    - A duplicate object member name is rejected.
     - A ``\\uD8xx``/``\\uDCxx`` escape that does not combine with an adjacent
       partner into one scalar character is rejected.
 
@@ -193,7 +195,10 @@ def parse_json_strict(text: str) -> object:
         # parse_constant rejects NaN/Infinity/-Infinity even when nested
         # inside containers like [NaN].
         obj: object = loads_json(
-            stripped, parse_float=parse_json_decimal, parse_constant=reject_json_constant
+            stripped,
+            parse_float=parse_json_decimal,
+            parse_constant=reject_json_constant,
+            object_pairs_hook=json_object_unique,
         )
     except ValueError as exc:
         raise StrictJsonParseError(f"JSON parse error: {exc}") from exc

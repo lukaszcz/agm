@@ -114,8 +114,12 @@ usage, not catchable in-language, before any statement executes.
 other type reads its external text as one **strict JSON value or AgL value
 syntax literal** (externally supplied values are not chatty agent output, so
 no lenient recovery applies), validated against the declared type: a token
-that parses as strict JSON is read as JSON; any other token is read as one
-[value syntax](#value-syntax) literal instead. An `Agent`-typed value
+that parses as strict JSON and decodes into the declared type is read as JSON;
+any other token is read as one [value syntax](#value-syntax) literal instead
+(so `{}` for a dict whose JSON form is an array of `{"key": …, "value": …}`
+entries, see [Convertibility to JSON](types.md#convertibility-to-json), is an
+empty dict literal). A duplicate member name in a JSON object is an
+error. An `Agent`-typed value
 ([Agents](#agents) above) instead reads a JSON object, then an `Agent`
 member constructor call, then compact shorthand (`claude/opus:high`), and
 otherwise falls back to a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
@@ -128,6 +132,10 @@ table in the value's [JSON shape](agent-calls.md#the-json-wire-format). A
 string nested inside it is read exactly as a top-level config string of that
 position's type is, so a string means the same at every depth; a string in a
 `json` position stays a JSON string.
+
+A native table given for a dict whose JSON form is an array of entries reads
+each table key as text of the key type and each value as above, so
+`{ "Point(x = 1, y = 2)" = "a" }` and `{}` both decode.
 
 A CLI token, an `@opt-env` variable's value, and a qualified config-table
 string ([Config-file schema](#config-file-schema) below) must all be valid
@@ -151,9 +159,10 @@ host `Agent` parameter does.
 
 A value-syntax literal is a data-only subset of AgL's own expression syntax:
 an integer, decimal, `true`/`false`, a quoted text literal, an `[item, ...]`
-array, a `{key: value, ...}` dict of quoted-or-bare keys, or a constructor
-reference/call — `Name`, `Name()`, or `Name(arg, ..., field = value, ...)`. A
-constructor's arguments bind against its declared fields by the same
+array, a `{key: value, ...}` dict whose keys are value-syntax literals read
+against the declared key type, or a constructor reference/call — `Name`,
+`Name()`, or `Name(arg, ..., field = value, ...)`. A constructor's arguments
+bind against its declared fields by the same
 [zone rules](functions.md#parameters) an ordinary call uses, except that a
 named-only field always takes an explicit `field = value`: value syntax has
 no variables, so the bare-name shorthand an ordinary call allows for a
@@ -164,7 +173,9 @@ the single name immediately enclosing the record's declaration: its innermost
 scope (`Geo::Point(...)`) or, for an inline enum member, its enum
 (`Shape::Square(...)`). A top-level record takes no qualifier. Where an enum
 type is expected, the enum's own name also qualifies any of its members. A
-duplicate dict key is an error. Nesting is
+bare name is always a constructor, so a text key is quoted (`{"cpu": 2}`); a
+dict inside a `json` value takes text keys only. A duplicate dict key is an
+error. Nesting is
 unrestricted — a constructor argument, array item, or dict value may itself
 be any value-syntax literal, including another constructor call. `null` and
 a heterogeneous (mixed-type) array or dict are legal only in a `json`-typed

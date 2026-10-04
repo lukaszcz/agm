@@ -128,23 +128,24 @@ There is **no binary floating-point type**.
 
 Arithmetic is performed under a fixed decimal context: 28 significant digits,
 banker's rounding (round-half-even), with the adjusted exponent of the most
-significant digit bounded by ±999999 and subnormal values reaching down to
-the smallest representable exponent below it. This context is part of the
-language semantics and does not vary by host. A `decimal` value, however
-created, is always finite and within this exponent range — range is checked,
-not precision, so a value with more than 28 significant digits is created and
-kept exactly. A decimal literal outside this range is a compile-time error.
+significant digit bounded by ±999999 and subnormal values reaching down to the
+smallest representable exponent below it. This context is part of the language
+semantics and does not vary by host. A `decimal` value, however created, is
+always finite and within this exponent range — range is checked, not
+precision, so a value with more than 28 significant digits is created and kept
+exactly. A decimal literal outside this range is a compile-time error.
 Decoding a number into a `decimal` — from JSON, an agent or `std/http`
 response, a host-supplied program argument, or an extern return value —
-rejects one outside this range, or non-finite, with that boundary's own
-error, so a `decimal` value can never arise out of range. A `json`-typed
-value is exempt from the range and may hold a number of any magnitude, but
-always a finite one: JSON or TOML parsing, an agent or `std/http` response,
-and a host-supplied program argument reject `NaN` or an infinity with that
-boundary's own error, and an extern never passes one
-([FFI](ffi.md)). Each of those boundaries also rejects a number no `decimal`
-can hold at all (such as `1e99999999999999999999`). An integer of any length,
-written or decoded, is an exact `int`.
+rejects one outside this range, or non-finite, with that boundary's own error,
+so a `decimal` value can never arise out of range. A `json`-typed value is
+exempt from the range and may hold a number of any magnitude, but always a
+finite one: JSON or TOML parsing, an agent or `std/http` response, and a
+host-supplied program argument reject `NaN` or an infinity with that
+boundary's own error, and an extern never passes one ([FFI](ffi.md)). JSON
+parsing also rejects a duplicate object member name. Each of those boundaries
+also rejects a number no `decimal` can hold at all (such as
+`1e99999999999999999999`). An integer of any length, written or decoded, is an
+exact `int`.
 
 A `decimal` operator (`+ - *` or `/`) rounds its result to 28 significant
 digits; unary `-` is exact, including in a constant expression. A result that
@@ -378,7 +379,7 @@ same way that cast would, but raise `ValueParseError` instead of `CastError`
 on failure ([Exceptions](exceptions.md#valueparseerror)). `try-parse` never
 raises: it returns `Result::Err` with the `ValueParseError` instead.
 
-A `T` requiring structure parses strict JSON or
+A `T` requiring structure parses strict JSON (when it decodes into `T`) or
 [value-syntax](host-environment.md#value-syntax), the same as a cast to that
 `T` would. A `json` target also parses strict JSON or value syntax, as plain
 data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
@@ -1479,19 +1480,21 @@ let parsed: Option[int] = some-json as? int
 
 When the target is a type that requires structure (`bool`, `int`, `decimal`,
 array, dict, record, or enum), a `json` source is only **validated** against
-the target's shape — it is already a value, not text to parse. A `text`
-source is first **parsed** as either strict JSON or an AgL
+the target's shape — it is already a value, not text to parse. A `text` source
+is first **parsed** as either strict JSON or an AgL
 [value-syntax](host-environment.md#value-syntax) literal — the input must be
 exactly one well-formed JSON value, or exactly one value-syntax literal, with
-no surrounding prose, no Markdown fences, and no recovery either way — and
-the result is then validated the same way. This contrasts with agent-output
-parsing, which uses lenient recovery by default. A cast to `Agent` from
-`text` accepts the same JSON object, member constructor call, or shorthand a
-host `Agent` parameter reads, but never falls back to a verbatim command; a
-cast to `Agent` from `json` validates a tagged member object the same way any
-other enum with a fielded member does. `parse`/`try-parse` apply the same
-rule under a different exception — see [Parsing values](#parsing-values)
-above.
+no surrounding prose, no Markdown fences, and no recovery either way — and the
+result is then validated the same way. Strict JSON is read as JSON only when
+it decodes into the target; otherwise the text is read as value syntax. A JSON
+object with a duplicate member name is rejected. This contrasts with
+agent-output parsing, which uses lenient recovery by default (though it too
+rejects a duplicate member name). A cast to `Agent` from `text` accepts the
+same JSON object, member constructor call, or shorthand a host `Agent`
+parameter reads, but never falls back to a verbatim command; a cast to `Agent`
+from `json` validates a tagged member object the same way any other enum with
+a fielded member does. `parse`/`try-parse` apply the same rule under a
+different exception — see [Parsing values](#parsing-values) above.
 
 ### `decimal as int` integrality
 

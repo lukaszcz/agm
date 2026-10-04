@@ -599,10 +599,11 @@ and parses.
 ### `JsonParseError`
 
 A `std/json` parsing function received text that is not a well-formed JSON
-document, including a document holding a lone `\uD800`-`\uDFFF` escape. An
-adjacent high and low escape pair is not lone: it denotes one character and
-parses. A number a `json` value cannot hold (`NaN`, an infinity, or one no
-`decimal` can hold) is rejected the same way ([Numbers](types.md#numbers-int-and-decimal)).
+document, including a document with a duplicate object member name or one
+holding a lone `\uD800`-`\uDFFF` escape. An adjacent high and low escape pair
+is not lone: it denotes one character and parses. A number a `json` value
+cannot hold (`NaN`, an infinity, or one no `decimal` can hold) is rejected the
+same way ([Numbers](types.md#numbers-int-and-decimal)).
 
 ```text
 raw: text   # the input text that failed to parse

@@ -20,6 +20,7 @@ from typing import cast
 __all__ = [
     "LoneSurrogateError",
     "holds_surrogate",
+    "json_object_unique",
     "loads_json",
     "require_scalar_text",
     "surrogate_index",
@@ -92,6 +93,16 @@ def visible_text(text: str) -> str:
     data, which must stay byte-exact or be rejected.
     """
     return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def json_object_unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """``object_pairs_hook`` building a dict that rejects a duplicate member name."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def loads_json(

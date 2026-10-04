@@ -64,6 +64,14 @@
       }
     },
     {
+      "name": "lenient_parse_rejects_a_repeated_member_name",
+      "params": {"mode": 99},
+      "expect": {
+        "stdout": "true\n",
+        "calls": {}
+      }
+    },
+    {
       "name": "optional_object_lookup_returns_some_for_a_present_key",
       "params": {"mode": 9},
       "expect": {

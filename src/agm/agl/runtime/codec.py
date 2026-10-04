@@ -302,6 +302,66 @@ def _candidate_is_ambiguous_multi_value(candidate: str) -> bool:
     return _count_top_level_values(candidate.strip()) >= 2
 
 
+# One JSON-like token as json-repair reads it: a double- or single-quoted
+# string, a structural character, or a bare word (an unquoted key or scalar).
+_REPAIR_TOKEN_RE = re.compile(
+    r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[{}\[\]:,]|[^\s{}\[\]:,\"']+"
+)
+_CONTAINER_OPEN_RE = re.compile(r"[{\[]")
+
+
+def _member_name(token: str) -> str:
+    """Return the member name a key *token* spells (quotes and escapes removed)."""
+    if token[0] == '"':
+        try:
+            return cast(str, _SYNTAX_DECODER.decode(token))
+        except json.JSONDecodeError:
+            return token[1:-1]
+    return token[1:-1] if token[0] == "'" else token
+
+
+def _has_duplicate_member(candidate: str) -> bool:
+    """Return True if any JSON-like object in *candidate* repeats a member name.
+
+    Lenient recovery repairs format damage but never resolves ambiguous
+    content, and ``json-repair`` silently keeps the last duplicate. This scans
+    the text handed to it: a quoted or bare token followed by ``:`` inside the
+    innermost ``{`` is a key, tracked per open object. Text outside every
+    container is prose and is ignored.
+    """
+    # One entry per open container: its key set for ``{``, ``None`` for ``[``.
+    stack: list[set[str] | None] = []
+    last: str | None = None
+    position = 0
+    while True:
+        if not stack:
+            opener = _CONTAINER_OPEN_RE.search(candidate, position)
+            if opener is None:
+                return False
+            position = opener.start()
+        match = _REPAIR_TOKEN_RE.search(candidate, position)
+        if match is None:
+            return False
+        token = match.group()
+        position = match.end()
+        keys = stack[-1] if stack else None
+        if token == ":" and keys is not None and last is not None:
+            if last in keys:
+                return True
+            keys.add(last)
+            last = None
+        elif token in "{[":
+            stack.append(set() if token == "{" else None)
+            last = None
+        elif token in "}]":
+            stack.pop()
+            last = None
+        elif token in ":,":
+            last = None
+        else:
+            last = _member_name(token)
+
+
 # JSON scalar keywords recoverable from prose (bool / null).
 _SCALAR_KEYWORD_RE = re.compile(r"(?<![A-Za-z0-9_])(true|false|null)(?![A-Za-z0-9_])")
 # JSON numbers recoverable from prose.
@@ -357,6 +417,10 @@ def _extract_json_text(raw: str) -> str | None | object:
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
        top-level values into an array.
 
+    A candidate that needs ``json-repair`` and repeats a member name within
+    one object is unrecoverable (``None``): repair never picks a duplicate's
+    winner.
+
     When ``json-repair`` is needed, it returns the repaired JSON *text*
     (without ``return_objects=True``), which is then re-parsed strictly.
     Note that ``json-repair`` may lose decimal precision for very
@@ -381,7 +445,9 @@ def _extract_json_text(raw: str) -> str | None | object:
         ok2, direct2 = _try_direct_parse(candidate)
         if ok2:
             return direct2
-        # Fall back to repair within the fence.
+        # Fall back to repair within the fence, unless it would pick a winner.
+        if _has_duplicate_member(candidate):
+            return None
         repaired = json_repair.repair_json(candidate)
         if isinstance(repaired, str) and repaired and repaired not in ('""', "null"):
             return repaired
@@ -391,6 +457,8 @@ def _extract_json_text(raw: str) -> str | None | object:
     # (e.g. ``{"a":1} {"b":2}`` or ``{"a":[1]} {"b":2}``).
     if _candidate_is_ambiguous_multi_value(stripped):
         return _AMBIGUOUS_MULTI_VALUE
+    if _has_duplicate_member(stripped):
+        return None
     repaired_full = json_repair.repair_json(stripped)
     if isinstance(repaired_full, str) and repaired_full and repaired_full not in ('""', "null"):
         return repaired_full

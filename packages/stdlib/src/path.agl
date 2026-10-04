@@ -6,34 +6,44 @@ builtin type path = text
 
 @doc("Join path `parts` using the host platform's separator and `\"\"` as its identity.")
 extern def join(parts: array[path]) -> path
+
 @doc("Return the directory component of `path`.")
 extern def dirname(path: path) -> path
+
 @doc("Return the final component of `path`.")
 extern def basename(path: path) -> path
+
 @doc("Return `path`'s final component without its extension.")
 extern def stem(path: path) -> text
+
 @doc("Return `path`'s extension, including its leading dot, when it has one.")
 extern def extension(path: path) -> Option[text]
+
 @extern-name("with_extension")
 @doc("Replace `path`'s extension with `extension`.")
 extern def with-extension(path: path, extension: text) -> path
+
 @extern-name("with_name")
 @doc("Replace `path`'s final component with `name`.")
 extern def with-name(path: path, name: text) -> path
+
 @doc("""
   Return an absolute lexical form of `path`.
 
   Raises `EncodingError` if the resolved path is not valid Unicode.
 """)
 extern def absolute(path: path) -> path
+
 @doc("Collapse redundant separators and dot components in `path`.")
 extern def normalize(path: path) -> path
+
 @doc("""
   Return the lexical path from `base` to `path`.
 
   Raises `EncodingError` if the resolved path is not valid Unicode.
 """)
 extern def relative(path: path, base: path) -> path
+
 @extern-name("expand_user")
 @doc("""
   Expand a leading `~` in `path` to the current user's home directory.
@@ -41,14 +51,18 @@ extern def relative(path: path, base: path) -> path
   Raises `EncodingError` if `HOME` (or the passwd entry) is not valid Unicode.
 """)
 extern def expand-user(path: path) -> path
+
 @extern-name("is_absolute")
 @doc("Check if `path` is absolute on the host platform.")
 extern def is-absolute(path: path) -> bool
+
 @extern-name("is_under")
 @doc("Check if `path` lexically resolves inside `base`, or is `base` itself.")
 extern def is-under(path: path, base: path) -> bool
+
 @doc("Return the non-empty path components of `path`.")
 extern def parts(path: path) -> array[text]
+
 @extern-name("common_prefix")
 @doc("""
   Return the longest directory prefix shared by `paths`.
@@ -56,6 +70,7 @@ extern def parts(path: path) -> array[text]
   An empty sequence, or absolute mixed with relative, has none.
 """)
 extern def common-prefix(paths: array[path]) -> Option[path]
+
 @doc("""
   Return the current user's home directory.
 

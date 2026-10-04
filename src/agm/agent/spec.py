@@ -82,6 +82,12 @@ class AgentCommand:
         del permission_mode
         return parse_command(self.command, kind="agent")
 
+    def interactive_argv(
+        self, *, permission_mode: PermissionMode = PermissionMode.NONE
+    ) -> list[str]:
+        """Use the custom command unchanged for terminal interaction."""
+        return self.argv(permission_mode=permission_mode)
+
 
 @dataclass(frozen=True, slots=True)
 class AgentClaude:
@@ -93,6 +99,17 @@ class AgentClaude:
     CLI_NAME: ClassVar[str] = "claude"
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
+
+    def interactive_argv(
+        self, *, permission_mode: PermissionMode = PermissionMode.NONE
+    ) -> list[str]:
+        """Build the interactive CLI argv, with a positional initial prompt."""
+        return [
+            "claude",
+            *_claude_options(self.model, self.thinking),
+            *_CLAUDE_PERMISSION_FLAGS[permission_mode],
+            "--",
+        ]
 
     def argv(
         self,
@@ -164,6 +181,17 @@ class AgentCodex:
     prompt_via_stdin: ClassVar[bool] = True
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
+    def interactive_argv(
+        self, *, permission_mode: PermissionMode = PermissionMode.NONE
+    ) -> list[str]:
+        """Build the interactive CLI argv, with a positional initial prompt."""
+        return [
+            "codex",
+            *_codex_options(self.model, self.thinking),
+            *_CODEX_PERMISSION_FLAGS[permission_mode],
+            "--",
+        ]
+
     def argv(
         self,
         *,
@@ -229,6 +257,13 @@ class AgentPi:
     CLI_NAME: ClassVar[str] = "pi"
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.RPC
+
+    def interactive_argv(
+        self, *, permission_mode: PermissionMode = PermissionMode.NONE
+    ) -> list[str]:
+        """Build the interactive CLI argv, with a positional initial prompt."""
+        del permission_mode
+        return ["pi", *_pi_options(self.provider, self.model, self.thinking), "--"]
 
     def argv(self, *, permission_mode: PermissionMode = PermissionMode.NONE) -> list[str]:
         """Build the argv for a one-shot Pi prompt invocation.

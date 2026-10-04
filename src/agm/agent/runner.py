@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import sys
+import time
 from collections import ChainMap
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
@@ -583,6 +584,7 @@ def _prepare_sandboxed_argv(
     env: MutableMapping[str, str],
     *,
     sandbox: SandboxRun | None,
+    pty: bool = False,
 ) -> tuple[list[str], PreparedSandboxCommand | SandboxPreparationFailure | None]:
     """Wrap *argv* under *sandbox*, when given.
 
@@ -604,7 +606,7 @@ def _prepare_sandboxed_argv(
         return argv, None
     spec = sandbox.limits.for_command(profile_name(argv[0]) if argv else None)
     try:
-        prepared = sandbox.context.prepare(argv, spec, env=env, cwd=Path.cwd())
+        prepared = sandbox.context.prepare(argv, spec, env=env, cwd=Path.cwd(), pty=pty)
     except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
         return argv, SandboxPreparationFailure(str(exc))
     return prepared.argv, prepared
@@ -619,6 +621,7 @@ def prepare_rendered_prompt_run(
     delivery: PromptDelivery = PromptDelivery.FILE,
     session_id: str | None = None,
     sandbox: SandboxRun | None = None,
+    pty: bool = False,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
@@ -638,7 +641,7 @@ def prepare_rendered_prompt_run(
 
     *delivery* selects how the prompt reaches the agent, so literal and
     promptless lifecycle commands share this same subprocess boundary without
-    making prompt files.
+    making prompt files. ``pty`` gives sandboxed interactive calls a controlling terminal.
 
     When *sandbox* is given, the prompt-bearing argv is wrapped through the
     sandbox library before becoming ``PreparedPromptRun.argv``. A library
@@ -660,7 +663,7 @@ def prepare_rendered_prompt_run(
             append_target=True,
             session_id=session_id,
         )
-        argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox)
+        argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox, pty=pty)
         return PreparedPromptRun(
             command=command,
             effective_file=effective_file,
@@ -681,7 +684,7 @@ def prepare_rendered_prompt_run(
     )
     if delivery is PromptDelivery.LITERAL:
         argv.append(rendered_prompt)
-    argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox)
+    argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox, pty=pty)
     return PreparedPromptRun(
         command=command,
         effective_file=effective_file,
@@ -701,6 +704,7 @@ def run_prepared_prompt_result(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     stdout_to_file: bool = False,
+    interactive: bool = False,
 ) -> PromptRunResult:
     """Run a prepared runner invocation and return a structured result.
 
@@ -714,6 +718,9 @@ def run_prepared_prompt_result(
     off disk.
 
     *stdout_to_file* preserves streaming without pipe backpressure.
+
+    ``interactive`` inherits stdio, ignores SIGINT/SIGQUIT while waiting, and
+    disables output capture and idle timeout.
 
     When ``prepared.sandbox`` is a ``PreparedSandboxCommand``, the subprocess
     primitive receives its ``env``, ``cwd``, and ``interrupt_cleanup_cmd``, and
@@ -753,7 +760,8 @@ def run_prepared_prompt_result(
         cwd_for_run = None
         interrupt_cleanup_cmd = None
     try:
-        capture: ProcessCaptureResult = run_capture_result(
+        run = _run_interactive_result if interactive else run_capture_result
+        capture: ProcessCaptureResult = run(
             argv,
             env=env_for_run,
             cwd=cwd_for_run,
@@ -775,4 +783,35 @@ def run_prepared_prompt_result(
         elapsed=capture.elapsed,
         timed_out=capture.timed_out,
         spawn_error=capture.spawn_error,
+    )
+
+
+def _run_interactive_result(
+    argv: list[str],
+    *,
+    env: dict[str, str] | None,
+    cwd: Path | None,
+    interrupt_cleanup_cmd: list[str] | None,
+    **_capture_options: object,
+) -> ProcessCaptureResult:
+    """Wait for a foreground agent, retaining status without capturing its terminal UI."""
+    from agm.core.process import run_foreground_ignoring_signals
+
+    started = time.monotonic()
+    spawn_error: str | None = None
+    returncode: int | None = None
+    try:
+        returncode = run_foreground_ignoring_signals(
+            argv, env=env, cwd=cwd, interrupt_cleanup_cmd=interrupt_cleanup_cmd
+        )
+    except (OSError, ValueError) as error:
+        spawn_error = str(error)
+    empty = CapturedOutput(data=b"", truncated=False)
+    return ProcessCaptureResult(
+        returncode=returncode,
+        stdout=empty,
+        stderr=empty,
+        elapsed=time.monotonic() - started,
+        timed_out=False,
+        spawn_error=spawn_error,
     )

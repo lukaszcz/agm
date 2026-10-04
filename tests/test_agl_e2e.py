@@ -89,6 +89,7 @@ builtin def Session::open(
   sandbox: AgentSandbox = std/config::default-sandbox,
   env: Environ = std/env::environ,
 ) -> Session
+
 builtin def Session::default() -> Session
 """
 
@@ -2175,6 +2176,12 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         # imports stay first, while every per-module import is dropped in
         # favor of the scoped Option/Result/Sandbox imports.
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))
+        # Externs belong to their companion modules, not this builtin-only fixture.
+        source = re.sub(
+            r"(?m)(?:^@extern-name\([^\n]*\)\n)?^extern def [\s\S]*?\) -> [^\n]*\n",
+            "",
+            source,
+        )
         source = source.replace(
             "parse-error-retries: int = std/config::parse-error-retries",
             "parse-error-retries: int = 0",

@@ -37,6 +37,7 @@ def _run_request(
     stdout_callback: Callable[[str], None] | None = None,
     stdout_finalizer: Callable[[], None] | None = None,
     decode_stdout: Callable[[str], str] | None = None,
+    interactive: bool = False,
 ) -> AgentResponse:
     """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
@@ -58,6 +59,7 @@ def _run_request(
             env=request.env,
             delivery=delivery,
             sandbox=sandbox,
+            pty=interactive,
         )
         output_callback = request.output_callback
         result = run_prepared_prompt_result(
@@ -68,6 +70,7 @@ def _run_request(
             stderr_callback=(
                 None if output_callback is None else lambda text: output_callback("stderr", text)
             ),
+            interactive=interactive,
         )
         if stdout_finalizer is not None:
             stdout_finalizer()
@@ -84,7 +87,10 @@ def _run_request(
         )
     except InterpolationError as exc:
         raise AgentCallHostError(
-            cause="spawn_failure", exit_code=None, stderr_tail=str(exc), elapsed=0.0
+            cause="interpolation_failure" if interactive else "spawn_failure",
+            exit_code=None,
+            stderr_tail=str(exc),
+            elapsed=0.0,
         ) from exc
     finally:
         cleanup_temp_files(temp_files)
@@ -115,6 +121,44 @@ def _run_request(
         content=content,
         metadata={"elapsed": result.elapsed},
         call_info=call_info,
+    )
+
+
+def run_agent_chat(
+    request: AgentRequest, *, get_sandbox_context: "Callable[[], SandboxContext] | None"
+) -> AgentResponse:
+    """Launch a fresh foreground conversation without a response contract or timeout."""
+    from agm.agent.runner import PromptDelivery
+    from agm.agent.spec import AgentCommand
+    from agm.sandbox.prepare import sandbox_run_for
+
+    try:
+        command = request.agent.interactive_argv(permission_mode=request.permission_mode)
+    except ValueError as error:
+        raise AgentCallHostError(
+            cause="invalid_agent", exit_code=None, stderr_tail=str(error), elapsed=0.0
+        ) from error
+    if request.sandbox is not None and get_sandbox_context is None:
+        raise AgentCallHostError(
+            cause="spawn_failure",
+            exit_code=None,
+            stderr_tail="The host does not provide sandbox preparation.",
+            elapsed=0.0,
+        )
+    sandbox = (
+        None
+        if get_sandbox_context is None
+        else sandbox_run_for(request.sandbox, get_sandbox_context)
+    )
+    return _run_request(
+        request,
+        command,
+        None,
+        delivery=PromptDelivery.FILE
+        if isinstance(request.agent, AgentCommand)
+        else PromptDelivery.LITERAL,
+        sandbox=sandbox,
+        interactive=True,
     )
 
 

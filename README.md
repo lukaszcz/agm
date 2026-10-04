@@ -40,10 +40,11 @@ just setup
 
 Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
 environment and copy AGM config files, prompts, and sandbox templates into the selected
-AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). After installing the CLI, it
-reinstalls every package under `packages/` with `agm pkg install --reinstall`, then runs
-`agm pkg sync` to restore the active packages' Python requirements. It also installs the
-AgL editor support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when
+AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). The config installer refreshes the
+managed standard library; the recipe reinstalls the other packages under `packages/` with
+`agm pkg install --reinstall`, then runs `agm pkg sync` to restore the active packages'
+Python requirements. It also installs the AgL editor support: the Micro syntax file into
+`$HOME/.config/micro/syntax/`, and — when
 an `emacs` binary is available — the AgL Emacs mode (skipped with a notice otherwise):
 
 ```bash
@@ -260,10 +261,11 @@ DSL for composable agent workflows: it supports typed program and module paramet
 user-defined functions (`def`/`fn`), functions implemented by a co-located Python file (`extern def`),
 structured JSON targets, do-loops with retry/abort policies, control flow (if/case/try), shell
 execution (`exec`), and typed `Agent` values. Free `ask` lazily opens a persistent default agent
-session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)` to select
+session from `std/config::default-agent`; use `chat(...)` or `agent.chat(...)` for a blocking
+interactive agent UI, and `agent.ask(...)` or `Session::open(...)` to select
 an explicit agent or conversation. The selected value determines the invoked command. Agent calls
 run inside the `agm run` sandbox by default (see `agm run` below), and `sandbox = Native` or
-`sandbox = Disabled` opts one out (an explicit `sandbox` requires an explicit agent); `exec` runs
+`sandbox = Disabled` opts one out (free `ask` requires an explicit agent to override its sandbox); `exec` runs
 unsandboxed unless given `sandbox = Some(Sandbox(...))`. Host `Agent` arguments accept compact
 forms such as bare `claude`, `claude/sonnet:medium`, `codex/o3:high`, and `pi/openai/gpt-5:low`;
 other text is a custom command. An `[agent]` config section fills an agent's omitted model, Pi

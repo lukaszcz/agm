@@ -24,7 +24,11 @@ Arguments after `COMMAND` are passed as separate values, including quoted string
 - `[run.<command>].pty`: per-command pseudo-terminal override
 - `[run.<command>].alias`: replace the invoked command name before execution
 
-`[run].memory`/`.swap` and `[run.<command>].memory`/`.swap` are shared with AgL: an agent call's `sandbox = Sandbox(...)` or `exec`'s `sandbox = Some(Sandbox(...))` (see [`sandbox`](../agl/reference/agent-calls.md#sandbox) and [Spawn parameters](../agl/reference/shell-execution.md)) resolves its limits from the same `[run.<name>]` → `[run]` → built-in-floor chain, keyed by the real command name (the agent's executable, or `exec`'s first shell word) — never a spec-name table, never `sh`. `[run.<command>].alias` and `.pty` are read only by `agm run` itself; an AgL sandboxed call never remaps its command through an alias and never allocates a pseudo-terminal.
+`[run].memory`/`.swap` and `[run.<command>].memory`/`.swap` are shared with AgL: an agent call's `sandbox = Sandbox(...)` or `exec`'s `sandbox = Some(Sandbox(...))` (see [`sandbox`](../agl/reference/agent-calls.md#sandbox) and [Spawn parameters](../agl/reference/shell-execution.md)) resolves its limits from the same `[run.<name>]` → `[run]` → built-in-floor chain, keyed by the real command name (the agent's executable, or `exec`'s first shell word) — never a spec-name table, never `sh`. `[run.<command>].alias` and `.pty` are read only by `agm run` itself; AgL calls never remap commands through aliases. Sandboxed `ask` and `exec` capture output without a pseudo-terminal; `chat` inherits the terminal.
+
+AgL `chat` inherits the terminal and allocates a controlling pseudo-terminal inside its sandbox.
+It uses the same resource-limit and settings resolution as `ask`, without command aliases or
+`[run].pty` overrides.
 
 `agm run` options:
 

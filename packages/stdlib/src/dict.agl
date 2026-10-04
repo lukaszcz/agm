@@ -4,6 +4,7 @@ import std/errors::KeyError
 
 @doc("Return the number of entries.")
 extern def dict[text, V]::size(self) -> int
+
 @doc("Check if the dictionary has no entries.")
 def dict[text, V]::is-empty(self) -> bool = self.size() == 0
 @doc("""
@@ -12,43 +13,58 @@ def dict[text, V]::is-empty(self) -> bool = self.size() == 0
   Raises `KeyError` when the key is absent.
 """)
 extern def dict[text, V]::get(self, key: text) -> V
+
 @extern-name("get_option")
 @doc("Return the value for the given key, or `None` when absent.")
 extern def dict[text, V]::get?(self, key: text) -> Option[V]
+
 @doc("""
   Remove and return the value for the given key.
 
   Raises `KeyError` when the key is absent.
 """)
 extern def dict[text, V]::remove(self, key: text) -> V
+
 @doc("Set the value for the given key, replacing any existing value.")
 extern def dict[text, V]::set(self, key: text, value: V) -> unit
+
 @extern-name("remove_option")
 @doc("Remove and return the value for the given key, or `None` when absent.")
 extern def dict[text, V]::remove?(self, key: text) -> Option[V]
+
 @doc("Check if the dictionary contains the given key.")
 extern def dict[text, V]::contains(self, key: text) -> bool
+
 @doc("Remove all entries from the dictionary.")
 extern def dict[text, V]::clear(self) -> unit
+
 @doc("Return the keys in insertion order.")
 extern def dict[text, V]::keys(self) -> array[text]
+
 @doc("Return the values in insertion order.")
 extern def dict[text, V]::values(self) -> array[V]
+
 @doc("Return key-value pairs in insertion order.")
 extern def dict[text, V]::entries(self) -> array[Pair[text, V]]
+
 @doc("Return a new dictionary combining both dictionaries, with the other's values winning.")
 extern def dict[text, V]::merge(self, other: dict[text, V]) -> dict[text, V]
+
 @extern-name("merge_in_place")
 @doc("Merge the other's entries in place, replacing values for shared keys.")
 extern def dict[text, V]::merge!(self, other: dict[text, V]) -> unit
+
 @extern-name("map_values")
 @doc("Return a new dictionary with the function applied to each value.")
 extern def dict[text, V]::map-values[U](self, function: (V) -> U) -> dict[text, U]
+
 @doc("Return a new dictionary containing entries that satisfy the predicate.")
 extern def dict[text, V]::select(self, predicate: (text, V) -> bool) -> dict[text, V]
+
 @extern-name("select_in_place")
 @doc("Keep only entries that satisfy the predicate in place.")
 extern def dict[text, V]::select!(self, predicate: (text, V) -> bool) -> unit
+
 @doc("Call the function on each key-value pair in insertion order.")
 extern def dict[text, V]::each(self, function: (text, V) -> unit) -> unit
 

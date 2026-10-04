@@ -4,6 +4,7 @@ import std/errors::IndexError
 
 @doc("Return the number of elements.")
 extern def array[E]::size(self) -> int
+
 @doc("Check if the array has no elements.")
 def array[E]::is-empty(self) -> bool = self.size() == 0
 @doc("""
@@ -12,18 +13,22 @@ def array[E]::is-empty(self) -> bool = self.size() == 0
   Raises `IndexError` when the array is empty.
 """)
 extern def array[E]::first(self) -> E
+
 @extern-name("first_option")
 @doc("Return the first element, or `None` when the array is empty.")
 extern def array[E]::first?(self) -> Option[E]
+
 @doc("""
   Return the last element.
 
   Raises `IndexError` when the array is empty.
 """)
 extern def array[E]::last(self) -> E
+
 @extern-name("last_option")
 @doc("Return the last element, or `None` when the array is empty.")
 extern def array[E]::last?(self) -> Option[E]
+
 @doc("""
   Insert a value before the given index.
 
@@ -31,17 +36,21 @@ extern def array[E]::last?(self) -> Option[E]
   index is outside the insertion bounds.
 """)
 extern def array[E]::insert(self, index: int, value: E) -> unit
+
 @doc("Append a value to the array.")
 extern def array[E]::push(self, value: E) -> unit
+
 @doc("""
   Remove and return the last element.
 
   Raises `IndexError` when the array is empty.
 """)
 extern def array[E]::pop(self) -> E
+
 @extern-name("pop_option")
 @doc("Remove and return the last element, or `None` when the array is empty.")
 extern def array[E]::pop?(self) -> Option[E]
+
 @extern-name("remove_at")
 @doc("""
   Remove and return the element at the given index.
@@ -49,10 +58,13 @@ extern def array[E]::pop?(self) -> Option[E]
   Negative indices count from the end. Raises `IndexError` when the index is out of bounds.
 """)
 extern def array[E]::remove-at(self, index: int) -> E
+
 @doc("Remove all elements from the array.")
 extern def array[E]::clear(self) -> unit
+
 @doc("Check if the array contains the given value.")
 extern def array[E]::contains(self, value: E) -> bool
+
 @extern-name("index_of")
 @doc("""
   Return the first index of the given value.
@@ -60,48 +72,65 @@ extern def array[E]::contains(self, value: E) -> bool
   Raises `IndexError` when the value is absent.
 """)
 extern def array[E]::index-of(self, value: E) -> int
+
 @extern-name("index_of_option")
 @doc("Return the first index of the given value, or `None` when absent.")
 extern def array[E]::index-of?(self, value: E) -> Option[int]
+
 @doc("Count the elements that satisfy the predicate.")
 extern def array[E]::count(self, predicate: (E) -> bool) -> int
+
 @doc("Return a new array with the function applied to each element.")
 extern def array[E]::map[U](self, function: (E) -> U) -> array[U]
+
 @extern-name("map_in_place")
 @doc("Replace each element with the function's result in place.")
 extern def array[E]::map!(self, function: (E) -> E) -> unit
+
 @doc("Return a new array containing the elements that satisfy the predicate.")
 extern def array[E]::select(self, predicate: (E) -> bool) -> array[E]
+
 @extern-name("select_in_place")
 @doc("Keep only the elements that satisfy the predicate in place.")
 extern def array[E]::select!(self, predicate: (E) -> bool) -> unit
+
 @doc("Call the function on each element in order.")
 extern def array[E]::each(self, function: (E) -> unit) -> unit
+
 @doc("Accumulate elements from left to right, starting with the initial value.")
 extern def array[E]::fold[B](self, initial: B, function: (B, E) -> B) -> B
+
 @extern-name("fold_right")
 @doc("Accumulate elements from right to left, starting with the initial value.")
 extern def array[E]::foldr[B](self, initial: B, function: (B, E) -> B) -> B
+
 @doc("Check if any element satisfies the predicate.")
 extern def array[E]::any(self, predicate: (E) -> bool) -> bool
+
 @doc("Check if every element satisfies the predicate.")
 extern def array[E]::all(self, predicate: (E) -> bool) -> bool
+
 @doc("Return the first element satisfying the predicate, or `None` when absent.")
 extern def array[E]::find(self, predicate: (E) -> bool) -> Option[E]
+
 @extern-name("find_index")
 @doc("Return the first index satisfying the predicate, or `None` when absent.")
 extern def array[E]::find-index(self, predicate: (E) -> bool) -> Option[int]
+
 @doc("Return a new array with the elements in reverse order.")
 extern def array[E]::reverse(self) -> array[E]
+
 @extern-name("reverse_in_place")
 @doc("Reverse the elements in place.")
 extern def array[E]::reverse!(self) -> unit
+
 @doc("""
   Return a new array sorted using the comparator.
 
   The comparator returns a negative, zero, or positive integer for less, equal, or greater.
 """)
 extern def array[E]::sort(self, comparator: (E, E) -> int) -> array[E]
+
 @extern-name("sort_in_place")
 @doc("""
   Sort the elements in place using the comparator.
@@ -109,35 +138,46 @@ extern def array[E]::sort(self, comparator: (E, E) -> int) -> array[E]
   The comparator returns a negative, zero, or positive integer for less, equal, or greater.
 """)
 extern def array[E]::sort!(self, comparator: (E, E) -> int) -> unit
+
 @doc("""
   Return elements from `start` inclusive to `end` exclusive.
 
   Negative indices count from the end; bounds are clipped to the array.
 """)
 extern def array[E]::slice(self, start: int, end: int) -> array[E]
+
 @doc("Return the first `count` elements, treating a negative count as zero.")
 extern def array[E]::take(self, count: int) -> array[E]
+
 @doc("Return the elements after the first `count`, treating a negative count as zero.")
 extern def array[E]::drop(self, count: int) -> array[E]
+
 @doc("Return a new array containing this array followed by the other array.")
 extern def array[E]::concat(self, other: array[E]) -> array[E]
+
 @extern-name("concat_in_place")
 @doc("Append the other array's elements in place.")
 extern def array[E]::concat!(self, other: array[E]) -> unit
+
 @doc("Pair corresponding elements, stopping at the shorter array.")
 extern def array[E]::zip[F](self, other: array[F]) -> array[Pair[E, F]]
+
 @extern-name("zip_with")
 @doc("Apply the function to corresponding elements, stopping at the shorter array.")
 extern def array[E]::zip-with[F, A](self, other: array[F], function: (E, F) -> A) -> array[A]
+
 @doc("Pair each element with its zero-based index.")
 extern def array[E]::enumerate(self) -> array[Pair[int, E]]
 
 @doc("Concatenate the nested arrays into one array.")
 extern def flatten[T](values: array[array[T]]) -> array[T]
+
 @doc("Split an array of pairs into a pair of arrays.")
 extern def unzip[A, B](values: array[Pair[A, B]]) -> Pair[array[A], array[B]]
+
 @doc("Return an array repeating the value, treating a negative count as zero.")
 extern def repeat[T](value: T, count: int) -> array[T]
+
 @doc("""
   Return consecutive integers from `start` to `end`, both inclusive.
 

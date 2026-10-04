@@ -668,6 +668,8 @@ def run_foreground_ignoring_signals(
     cmd: list[str],
     *,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    interrupt_cleanup_cmd: list[str] | None = None,
 ) -> int:
     """Run a command inheriting stdio; this process ignores SIGINT/SIGQUIT while waiting.
 
@@ -678,14 +680,14 @@ def run_foreground_ignoring_signals(
     with (
         _running_process(
             cmd,
-            cwd=None,
+            cwd=cwd,
             env=env,
             capture_output=False,
             stdout_callback=None,
             stderr_callback=None,
             isolate_process_group=False,
             stdin_text=None,
-            interrupt_cleanup_cmd=None,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         ) as (process, _readers, _queue),
         _signals_handled_by(_IGNORED_WHILE_WAITING, signal.SIG_IGN),
     ):

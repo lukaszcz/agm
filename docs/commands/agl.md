@@ -96,7 +96,7 @@ a direct `agm repl` entry is a static error.
   schema. `ask`'s `strict-json:` argument overrides either per call.
 - `--max-call-depth N`: Maximum recursion depth (overrides `[exec] max-call-depth`; default 256).
   Exceeding it raises `RecursionError`.
-- `--default-agent AGENT`: Seed `std/config::default-agent`, the agent of `ask` calls without
+- `--default-agent AGENT`: Seed `std/config::default-agent`, the agent of `ask` and `chat` calls without
   `agent`, in [host Agent syntax](#host-agent-syntax). Decoded before execution, overriding
   qualified program-table/`[exec]` config; effective whether or not the program loads
   `std/config` or `--no-stdlib` is given. An `AgentCommand(...)` command is shell-split and
@@ -323,6 +323,24 @@ let review: Review = ask("Review %{artifact}", agent = reviewer)
 let answer: text = ask("Summarize")
 ```
 
+Use `chat` to hand the terminal to an agent's interactive UI:
+
+```agl
+program def main() -> unit =
+  chat("Help me debug this", agent = AgentClaude())
+  AgentCodex().chat("Review these changes")
+  print "Finished"
+```
+
+`chat` and `Agent::chat` are ordinary externs in `std/agent`, returning `unit`. The prompt
+defaults to `""`; free `chat` uses the current `std/config::default-agent`. Each call starts a
+fresh conversation and waits until the agent exits, inheriting stdin, stdout, and stderr.
+They accept `sandbox` and `env` with the same defaults as an explicit-agent `ask`, apply
+configured agent defaults, and allocate a controlling terminal inside an AGM sandbox. AGM
+ignores SIGINT and SIGQUIT while waiting, as for `std/os::edit`. There is no idle timeout,
+response capture, parsing, or retry. Launch failures and nonzero exits raise `AgentCallError`.
+`AgentCommand` keeps its command and prompt-file interpolation; supply an interactive command.
+
 `AgentCommand(command)`, `AgentClaude(model = "", thinking = "")`,
 `AgentCodex(model = "", thinking = "")`, and `AgentPi(provider = "", model = "", thinking = "")`
 each build their own argv; select one with an `Agent` value or `default-agent`. An empty field
@@ -334,7 +352,7 @@ Claude CLI's own defaults apply.
 
 The `[agent]` config section supplies the Pi provider, the model, and the effort (`thinking`) for
 an `AgentClaude`, `AgentCodex`, or `AgentPi` field that is `""`, when `agm exec`, `agm repl`, or a
-package-registered command uses the agent (free `ask`, `Agent::ask`, sessions). Each CLI has one
+package-registered command uses the agent (`ask`, `chat`, their Agent methods, or sessions). Each CLI has one
 table level per name field, and each level allows these keys:
 
 | Table | Keys |

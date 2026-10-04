@@ -6,12 +6,14 @@ import std/path::path
 
 @doc("End the AgL host process with portable status `code`.")
 extern def exit(code: int = 0) -> unit
+
 @doc("""
   Return an absolute path with existing symlinks resolved.
 
   Normalizes any missing suffix. Raises `EncodingError` if the resolved path is not valid Unicode.
 """)
 extern def canonicalize(path: path) -> path
+
 @doc("""
   Return the current working directory.
 
@@ -19,14 +21,17 @@ extern def canonicalize(path: path) -> path
   `EncodingError` if it is not valid Unicode.
 """)
 extern def cwd() -> path
+
 @doc("Return this process identifier.")
 extern def pid() -> int
+
 @doc("""
   Return this host's name.
 
   Raises `EncodingError` if the host name is not valid Unicode.
 """)
 extern def hostname() -> text
+
 @extern-name("temp_dir")
 @doc("""
   Return the host's temporary directory.
@@ -55,17 +60,21 @@ def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.v
 @extern-name("is_interactive")
 @doc("Check if standard input and output are both connected to a terminal.")
 extern def is-interactive() -> bool
+
 @doc("""
   Find an executable on the given environment's `PATH`, or return `None`.
 
   Uses the host default `PATH` when the environment has no `PATH`.
 """)
 extern def which(name: text, env: Environ = std/env::environ) -> Option[path]
+
 @doc("Return the host platform identifier.")
 extern def platform() -> text
+
 @extern-name("cpu_count")
 @doc("Return the usable CPU count, at least 1.")
 extern def cpu-count() -> int
+
 @doc("""
   Return the real user's passwd name, or `None` when absent.
 

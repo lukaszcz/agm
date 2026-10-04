@@ -531,7 +531,9 @@ key: text
 ### `DuplicateKeyError`
 
 Raised by a dict literal whose key expressions compute an equal key twice at
-run time (two constant keys that are equal are a static error instead). `key`
+run time (two constant keys that are equal are a static error instead), and by
+`std/dict::from-entries` meeting an equal key under its default `Raise` policy.
+`key`
 is always `text`, rendered as for [`KeyError`](#keyerror).
 
 ```text
@@ -681,7 +683,7 @@ how equality and tracing treat one.
 | ------ | --------- |
 | Out-of-range array/text index access, array indexed assignment, or an absent `array::index-of`/`text::index-of` search | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
-| A dict literal computes an equal key twice at run time | `DuplicateKeyError` |
+| A dict literal computes an equal key twice at run time, or `std/dict::from-entries` meets an equal key under `Raise` | `DuplicateKeyError` |
 | Agent transport failure, including agent output that is not valid UTF-8 | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
 | Failing shell command (parsed or unit form), or shell output that is not valid UTF-8 (any form) | `ExecError` |

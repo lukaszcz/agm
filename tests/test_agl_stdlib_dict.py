@@ -16,7 +16,11 @@ from agm.agl.runtime.boundary import AglDictView, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope import AglScopeError
 from agm.agl.semantics.values import DictValue, IntValue, RecordValue
-from tests._agl_helpers import option_nominal_descriptors
+from tests._agl_helpers import (
+    fieldless_enum_descriptors,
+    key_exception_descriptor,
+    option_nominal_descriptors,
+)
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
@@ -26,6 +30,12 @@ _OPTION = NominalId(9_200_002)
 _PAIR = NominalId(9_200_003)
 _OPTION_NONE = NominalId(9_200_004)
 _OPTION_SOME = NominalId(9_200_005)
+_DUPLICATE_KEY_ERROR = NominalId(9_200_006)
+_DUPLICATE_KEYS = NominalId(9_200_007)
+_DUPLICATE_KEYS_MEMBERS = {
+    name: NominalId(9_200_010 + index)
+    for index, name in enumerate(("Raise", "KeepFirst", "KeepLast"))
+}
 _NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
@@ -59,14 +69,12 @@ def _dict_companion() -> _DictCompanion:
     registry = ExternRegistry()
     registry.set_nominals(
         {
-            _KEY_ERROR: NominalDescriptor(
-                nominal=_KEY_ERROR,
-                module_id=ModuleId(("std", "errors")),
-                scope_path=(),
-                declared_name="KeyError",
-                kind=NominalKind.EXCEPTION,
-                fields=("message", "key"),
-                field_json_names=("message", "key"),
+            _KEY_ERROR: key_exception_descriptor(_KEY_ERROR, "KeyError"),
+            _DUPLICATE_KEY_ERROR: key_exception_descriptor(
+                _DUPLICATE_KEY_ERROR, "DuplicateKeyError"
+            ),
+            **fieldless_enum_descriptors(
+                _DUPLICATE_KEYS, _DICT_MODULE, "DuplicateKeys", _DUPLICATE_KEYS_MEMBERS
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
             _PAIR: NominalDescriptor(

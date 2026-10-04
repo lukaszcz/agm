@@ -136,10 +136,10 @@ def raise_index_error(
 
 
 def raise_key_error(exc_cls: AglExceptionClass, message: str, key: object) -> NoReturn:
-    """Raise an AgL ``KeyError``-shaped exception for the missing host *key*.
+    """Raise the key-carrying AgL exception *exc_cls* (``KeyError``, ``DuplicateKeyError``).
 
-    The exception's ``key`` field is *key* rendered in AgL value syntax (text
-    quoted), exactly as a missing-key index failure renders it.
+    The exception's ``key`` field is the host *key* rendered in AgL value syntax
+    (text quoted), exactly as a missing-key index failure renders it.
     """
     rendered = render_key_value_syntax(decode_boundary_value(key), current_descriptors())
     raise AglException(exc_cls(message=message, key=rendered))

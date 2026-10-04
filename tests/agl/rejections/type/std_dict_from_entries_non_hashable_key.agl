@@ -1,0 +1,5 @@
+import std/dict
+
+program def main() -> unit =
+  let entries: array[Pair[array[int], int]] = []
+  let _ = dict::from-entries(entries)

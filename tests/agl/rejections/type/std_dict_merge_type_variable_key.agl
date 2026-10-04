@@ -1,0 +1,4 @@
+def f[K, V](a: dict[K, V], b: dict[K, V]) -> int = a.merge(b).size()
+
+program def main() -> unit =
+  print(f({1: 1}, {2: 2}))

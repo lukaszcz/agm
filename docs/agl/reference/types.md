@@ -220,6 +220,14 @@ needs `Eq` on the whole dict type. A dict with a `Hashable` key encodes to
 JSON in its key's form, and decodes back from that form when the key is also
 decodable (an exception key is not); see [Dict wire forms](#dict-wire-forms).
 
+The `std/dict` methods follow the same split. `get`, `get?`, `set`, `remove`,
+`remove?`, `contains`, `merge`, `merge!`, and `from-entries` hash a key and
+require `Hashable K`; `size`, `is-empty`, `clear`, `keys`, `values`, `entries`,
+`map-values`, `select`, `select!`, and `each` do not. `dict::from-entries`
+takes an `on-duplicate` policy, `dict::DuplicateKeys`: `Raise` (default)
+raises `DuplicateKeyError`; `KeepFirst` keeps the first value and `KeepLast`
+the last; either way the first-seen key is kept.
+
 A record or enum-member record may mark an individual field with `var`.
 That field is a mutable reference slot: `receiver.field := value` updates the
 shared record in place, so every alias observes the new field value. Unmarked

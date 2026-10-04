@@ -14,7 +14,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, AglJson, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import JsonValue, RecordValue, TextValue
-from tests._agl_helpers import option_nominal_descriptors
+from tests._agl_helpers import key_exception_descriptor, option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _JSON_MODULE = ModuleId(("std", "json"))
@@ -47,15 +47,7 @@ def _json_companion() -> _JsonCompanion:
                 fields=("message", "raw"),
                 field_json_names=("message", "raw"),
             ),
-            _KEY_ERROR: NominalDescriptor(
-                nominal=_KEY_ERROR,
-                module_id=ModuleId(("std", "errors")),
-                scope_path=(),
-                declared_name="KeyError",
-                kind=NominalKind.EXCEPTION,
-                fields=("message", "key"),
-                field_json_names=("message", "key"),
-            ),
+            _KEY_ERROR: key_exception_descriptor(_KEY_ERROR, "KeyError"),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },
     )

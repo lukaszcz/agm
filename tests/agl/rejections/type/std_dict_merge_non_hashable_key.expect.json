@@ -1,8 +1,8 @@
 {
   "diagnostic": {
-    "line": 5,
+    "line": 3,
     "message_contains": [
-      "no field or method"
+      "Hashable"
     ]
   }
 }

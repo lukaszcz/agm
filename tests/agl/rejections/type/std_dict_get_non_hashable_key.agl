@@ -1,0 +1,4 @@
+program def main() -> unit =
+  let d: dict[array[int], int] = {}
+  let k: array[int] = [1]
+  let _ = d.get(k)

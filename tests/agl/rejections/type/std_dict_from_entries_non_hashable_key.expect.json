@@ -2,7 +2,7 @@
   "diagnostic": {
     "line": 5,
     "message_contains": [
-      "no field or method"
+      "Hashable"
     ]
   }
 }

@@ -62,6 +62,11 @@ program def main(mode: int) -> unit =
         print(alias)
         values.clear()
         print(alias.is-empty())
+    | 8 =>
+        var values = {"one": 1}
+        values.set("two", 2)
+        values.set("one", 10)
+        print(values)
     | _ =>
         let duplicated = dict::from-entries([
           Pair(first = "k", second = 1),

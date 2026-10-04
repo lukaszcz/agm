@@ -1,0 +1,164 @@
+{
+  "scenarios": [
+    {
+      "name": "int_keys_support_every_method",
+      "params": {
+        "mode": "int"
+      },
+      "expect": {
+        "stdout": "one\nOption::None\ntrue\none\nOption::None\n[2, 3]\n[\"two\", \"three\"]\n[Pair(first = 2, second = \"two\"), Pair(first = 3, second = \"three\")]\n{2: \"two!\", 3: \"three!\"}\n{3: \"three\"}\ntwo\n{2: \"deux\", 5: \"five\", 7: \"seven\"}\n2\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "enum_keys_support_every_method",
+      "params": {
+        "mode": "enum"
+      },
+      "expect": {
+        "stdout": "2\nOption::None\ntrue\n1\nOption::None\n[Color::Tint(level = 2), Color::Tint(level = 3)]\n[2, 3]\n{Color::Tint(level = 3): 3}\n[Pair(first = Color::Tint(level = 2), second = 2), Pair(first = Color::Tint(level = 3), second = 3), Pair(first = Color::Red, second = 9)]\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "record_keys_support_every_method",
+      "params": {
+        "mode": "record"
+      },
+      "expect": {
+        "stdout": "p\nfalse\nOption::Some(value = \"origin\")\n[Point(x = 1, y = 2)]\n{Point(x = 1, y = 2): \"q\"}\n{Point(x = 1, y = 2): \"p\"}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "unbounded_methods_accept_non_hashable_keys",
+      "params": {
+        "mode": "unbounded"
+      },
+      "expect": {
+        "stdout": "0\ntrue\n[]\n[]\n[]\n{}\n{}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "merge_of_empty_dicts_adopts_the_other_key_type",
+      "params": {
+        "mode": "merge_empty"
+      },
+      "expect": {
+        "stdout": "{1: 10}\n{2: 20}\n{3: 30}\n{Color::Red: 1}\n{4: 40}\n{}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "json_keys_keep_bool_and_number_apart_and_merge_equal_numbers",
+      "params": {
+        "mode": "json"
+      },
+      "expect": {
+        "stdout": "2\n3\n[true, 1, 1.5]\n{2.0: \"y\"}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "keep_first_ignores_later_duplicates",
+      "params": {
+        "mode": "dup_keep_first"
+      },
+      "expect": {
+        "stdout": "{1: \"a\", 2: \"b\"}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "keep_last_overwrites_earlier_duplicates",
+      "params": {
+        "mode": "dup_keep_last"
+      },
+      "expect": {
+        "stdout": "{1: \"c\", 2: \"b\"}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "missing_record_key_is_rendered",
+      "params": {
+        "mode": "record_missing"
+      },
+      "expect": {
+        "stdout": "Point(x = 1, y = 2)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raise_reports_the_rendered_enum_key",
+      "params": {
+        "mode": "dup_raise"
+      },
+      "expect": {
+        "stdout": "Color::Red\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raise_reports_the_rendered_text_key",
+      "params": {
+        "mode": "dup_raise_text"
+      },
+      "expect": {
+        "stdout": "\"k\"\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "enum_keys_support_size_map_each_merge_and_clear",
+      "params": {
+        "mode": "enum_rest"
+      },
+      "expect": {
+        "stdout": "3\nfalse\n{Color::Red: 10, Color::Tint(level = 2): 20, Color::Tint(level = 3): 30}\n1\n2\n3\n{Color::Red: 1, Color::Tint(level = 2): 20, Color::Tint(level = 3): 3, Color::Tint(level = 4): 4}\n{Color::Red: 1, Color::Tint(level = 3): 3}\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "record_keys_support_lookup_callbacks_merge_and_clear",
+      "params": {
+        "mode": "record_rest"
+      },
+      "expect": {
+        "stdout": "2\nfalse\nOption::Some(value = \"p\")\nOption::None\n[\"origin\", \"p\"]\n{Point(x = 0, y = 0): \"origin!\", Point(x = 1, y = 2): \"p!\"}\n{Point(x = 1, y = 2): \"p\"}\norigin\np\n{Point(x = 0, y = 0): \"origin\", Point(x = 1, y = 2): \"q\", Point(x = 3, y = 3): \"r\"}\norigin\n{Point(x = 3, y = 3): \"r\"}\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "unconstrained_type_variable_keys_support_hash_free_methods",
+      "params": {
+        "mode": "type_variable"
+      },
+      "expect": {
+        "stdout": "3\nfalse\n3\n3\n3\n3\n2\none\ntwo\nthree\n2\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "decimal_keys_keep_the_first_seen_key_on_merge_and_duplicates",
+      "params": {
+        "mode": "decimal"
+      },
+      "expect": {
+        "stdout": "{1.5: \"b\"}\n1.50\n{1.5: \"b\"}\n1.50\n{1.5: \"a\"}\n1.50\n{1.5: \"b\"}\n1.50\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "bool_keys_support_lookup_merge_and_removal",
+      "params": {
+        "mode": "bool"
+      },
+      "expect": {
+        "stdout": "0\ntrue\n{true: 10, false: 0}\n[true, false]\n1\n{false: 0}\n",
+        "calls": {}
+      }
+    }
+  ]
+}

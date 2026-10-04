@@ -312,7 +312,8 @@ extends `r::Geo`, never a root `Geo`, and a qualified-only import supplies no
 receiver name. A receiver names its type directly: a path selecting a type
 through a type alias, the module's own or an imported one, is an error (see
 [Type aliases](types.md#type-aliases)). Built-in receiver heads are the
-exception: `array[E]::name` and `dict[K, V]::name` declare methods for those
+exception: `array[E]::name`, `dict[K, V]::name`, and `dict[text, V]::name`
+(text-keyed dicts only) declare methods for those
 generic receiver types, while `text`, `json`, `int`, `decimal`, and `bool` are
 bare receiver heads; only these builtin heads take type arguments in a
 declaration path, and only on a method. `Point::norm(p)` written bare follows

@@ -654,6 +654,47 @@ def option_nominal_descriptors(
     }
 
 
+def fieldless_enum_descriptors(
+    enum: NominalId, module_id: ModuleId, name: str, members: dict[str, NominalId]
+) -> dict[NominalId, NominalDescriptor]:
+    """Build an enum of fieldless members and its member-record descriptors for test FFI images."""
+    descriptors = {
+        enum: NominalDescriptor(
+            nominal=enum,
+            module_id=module_id,
+            scope_path=(),
+            declared_name=name,
+            kind=NominalKind.ENUM,
+            variants=tuple(
+                VariantDescriptor(member, (), nominal, member, ())
+                for member, nominal in members.items()
+            ),
+        )
+    }
+    for member, nominal in members.items():
+        descriptors[nominal] = NominalDescriptor(
+            nominal=nominal,
+            module_id=module_id,
+            scope_path=(name,),
+            declared_name=member,
+            kind=NominalKind.RECORD,
+        )
+    return descriptors
+
+
+def key_exception_descriptor(nominal: NominalId, name: str) -> NominalDescriptor:
+    """Build a ``std/errors`` exception descriptor with ``message`` and ``key`` fields."""
+    return NominalDescriptor(
+        nominal=nominal,
+        module_id=ModuleId(("std", "errors")),
+        scope_path=(),
+        declared_name=name,
+        kind=NominalKind.EXCEPTION,
+        fields=("message", "key"),
+        field_json_names=("message", "key"),
+    )
+
+
 def agent_value(variant: str, **fields: str) -> RecordValue:
     """Build the runtime ``std/prelude::Agent`` enum value for *variant*.
 

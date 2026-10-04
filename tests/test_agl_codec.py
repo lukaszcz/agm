@@ -1819,6 +1819,7 @@ class TestRecoveryRejectsDuplicateMembers:
             '```json\n{"a": 1, "a": 2,}\n```',
             "{a: 1, a: 2}",
             "{'a': 1, \"a\": 2}",
+            r"{'a': 1, '\u0061': 2}",
             '[{"k": 1, "k": 2,}]',
         ],
     )

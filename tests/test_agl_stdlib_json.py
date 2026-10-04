@@ -28,6 +28,8 @@ _OPTION_SOME = NominalId(9_400_005)
 class _JsonCompanion(Protocol):
     def parse(self, raw: str) -> object: ...
 
+    def parse_lenient(self, raw: str) -> object: ...
+
     def get(self, value: object, key: str) -> object: ...
 
     def get_option(self, value: object, key: str) -> object: ...
@@ -88,6 +90,16 @@ def test_json_companion_parse_rejects_a_duplicate_member_name() -> None:
 
     with pytest.raises(AglException) as exc_info:
         companion.parse(raw)
+    assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue(raw)
+
+
+def test_json_companion_parse_lenient_rejects_escaped_duplicate_member_names() -> None:
+    companion = _json_companion()
+    raw = r"{'a': 1, '\u0061': 2}"
+
+    with pytest.raises(AglException) as exc_info:
+        companion.parse_lenient(raw)
     assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
     assert exc_info.value.value.fields["raw"] == TextValue(raw)
 

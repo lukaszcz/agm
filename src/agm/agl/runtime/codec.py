@@ -317,7 +317,10 @@ def _member_name(token: str) -> str:
             return cast(str, _SYNTAX_DECODER.decode(token))
         except json.JSONDecodeError:
             return token[1:-1]
-    return token[1:-1] if token[0] == "'" else token
+    if token[0] == "'":
+        repaired = json_repair.repair_json(f"{{{token}: null}}", return_objects=True)
+        return next(iter(cast(dict[str, object], repaired)))
+    return token
 
 
 def _has_duplicate_member(candidate: str) -> bool:
@@ -346,9 +349,10 @@ def _has_duplicate_member(candidate: str) -> bool:
         position = match.end()
         keys = stack[-1] if stack else None
         if token == ":" and keys is not None and last is not None:
-            if last in keys:
+            member_name = _member_name(last)
+            if member_name in keys:
                 return True
-            keys.add(last)
+            keys.add(member_name)
             last = None
         elif token in "{[":
             stack.append(set() if token == "{" else None)
@@ -359,7 +363,7 @@ def _has_duplicate_member(candidate: str) -> bool:
         elif token in ":,":
             last = None
         else:
-            last = _member_name(token)
+            last = token
 
 
 # JSON scalar keywords recoverable from prose (bool / null).

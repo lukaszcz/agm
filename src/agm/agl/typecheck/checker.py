@@ -47,7 +47,7 @@ from types import MappingProxyType
 from typing import Literal, Protocol, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.constraints import ConstraintBounds, ConstraintKind
+from agm.agl.constraints import ConstraintBounds, ConstraintKind, constraints_by_strength
 from agm.agl.diagnostics import (
     Diagnostic,
     dollar_spacing_hint,
@@ -2222,7 +2222,7 @@ class _Checker:
         """Check one instantiation's bounds against its final, zonked type arguments."""
         for name, typ in zip(obligation.type_arg_names, obligation.type_arg_values, strict=True):
             zonked = region.engine.zonk(typ)
-            for kind in obligation.bounds[name]:
+            for kind in constraints_by_strength(obligation.bounds[name]):
                 if not satisfies(zonked, kind, self._env.type_table, obligation.caller_bounds):
                     raise AglTypeError(
                         f"'{obligation.subject}' needs '{kind.value}' for type '{zonked!r}' "

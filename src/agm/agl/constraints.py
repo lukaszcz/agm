@@ -13,7 +13,13 @@ import enum
 from collections.abc import Mapping
 from types import MappingProxyType
 
-__all__ = ["CONSTRAINT_SPELLINGS", "ConstraintBounds", "ConstraintKind", "close_constraints"]
+__all__ = [
+    "CONSTRAINT_SPELLINGS",
+    "ConstraintBounds",
+    "ConstraintKind",
+    "close_constraints",
+    "constraints_by_strength",
+]
 
 
 class ConstraintKind(enum.Enum):
@@ -41,3 +47,17 @@ def close_constraints(kinds: frozenset[ConstraintKind]) -> frozenset[ConstraintK
     if ConstraintKind.HASHABLE in kinds:
         return kinds | {ConstraintKind.EQ}
     return kinds
+
+
+#: Every kind, strongest first: each kind implies all that follow it (see
+#: :func:`close_constraints`).
+_STRENGTH_ORDER = (ConstraintKind.HASHABLE, ConstraintKind.EQ)
+
+
+def constraints_by_strength(kinds: frozenset[ConstraintKind]) -> tuple[ConstraintKind, ...]:
+    """Return *kinds* strongest first, so iteration never depends on hash order.
+
+    A diagnostic that names the first unmet kind of an implication-closed set
+    thereby names the one whose absence is the real obstacle.
+    """
+    return tuple(kind for kind in _STRENGTH_ORDER if kind in kinds)

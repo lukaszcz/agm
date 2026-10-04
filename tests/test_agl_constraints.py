@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from agm.agl.constraints import CONSTRAINT_SPELLINGS, ConstraintKind, close_constraints
+import os
+import subprocess
+import sys
+
+import pytest
+
+from agm.agl.constraints import (
+    CONSTRAINT_SPELLINGS,
+    ConstraintKind,
+    close_constraints,
+    constraints_by_strength,
+)
 
 
 def test_constraint_spellings_is_a_closed_set() -> None:
@@ -21,3 +32,39 @@ def test_close_constraints_eq_alone_stays_eq() -> None:
 
 def test_close_constraints_empty_stays_empty() -> None:
     assert close_constraints(frozenset()) == frozenset()
+
+
+_UNBOUNDED_MERGE_PROGRAM = """\
+def f[K, V](a: dict[K, V], b: dict[K, V]) -> int = a.merge(b).size()
+
+program def main() -> unit =
+  print(f({1: 1}, {2: 2}))
+"""
+
+_DIAGNOSTICS_SCRIPT = """\
+import sys
+from agm.agl import PipelineDriver
+
+result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(sys.argv[1])
+print(" | ".join(d.message for d in result.diagnostics))
+"""
+
+
+@pytest.mark.parametrize("hash_seed", ["0", "2"])
+def test_unmet_bound_reports_strongest_kind_under_any_hash_seed(hash_seed: str) -> None:
+    """Seeds 0 and 2 give the two frozenset orders; the strongest unmet kind is named in both."""
+    done = subprocess.run(
+        [sys.executable, "-c", _DIAGNOSTICS_SCRIPT, _UNBOUNDED_MERGE_PROGRAM],
+        env={**os.environ, "PYTHONHASHSEED": hash_seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Hashable" in done.stdout
+
+
+def test_constraints_by_strength_lists_hashable_before_eq() -> None:
+    both = close_constraints(frozenset({ConstraintKind.HASHABLE}))
+    assert constraints_by_strength(both) == (ConstraintKind.HASHABLE, ConstraintKind.EQ)
+    assert constraints_by_strength(frozenset({ConstraintKind.EQ})) == (ConstraintKind.EQ,)
+    assert constraints_by_strength(frozenset()) == ()

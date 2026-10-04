@@ -211,34 +211,22 @@ def _resolve_dep_repo(dep_name: str) -> Path | None:
 
 
 def _path_candidates(incomplete: str) -> list[str]:
+    """Return entries completing *incomplete*, spelled with the directory prefix as typed."""
     current = Path.cwd()
     base_dir = current
-    prefix = incomplete
-    if incomplete.endswith(os.sep):
-        base_dir = (current / incomplete).resolve(strict=False)
-        prefix = ""
-    elif incomplete:
-        incomplete_path = Path(incomplete)
-        if incomplete_path.parent != Path("."):
-            base_dir = (current / incomplete_path.parent).resolve(strict=False)
-            prefix = incomplete_path.name
+    typed_dir = incomplete[: incomplete.rfind(os.sep) + 1]
+    prefix = incomplete[len(typed_dir) :]
+    if typed_dir:
+        base_dir = (current / typed_dir).resolve(strict=False)
 
     if not base_dir.is_dir():
         return []
 
-    candidates: set[str] = set()
-    for path in base_dir.iterdir():
-        if not path.name.startswith(prefix):
-            continue
-        try:
-            relative = path.relative_to(current)
-            display = str(relative)
-        except ValueError:
-            display = str(path)
-        if path.is_dir():
-            display = f"{display}/"
-        candidates.add(display)
-    return sorted(candidates)
+    return sorted(
+        f"{typed_dir}{path.name}{'/' if path.is_dir() else ''}"
+        for path in base_dir.iterdir()
+        if path.name.startswith(prefix)
+    )
 
 
 @_completes_quietly
@@ -342,7 +330,7 @@ def _registered_program(
 @_completes_quietly
 def registered_command_value_options(
     command_path: Sequence[str], ctx: click.Context
-) -> list[click.Option]:
+) -> list[TyperOption]:
     """Return completion-only options for the registered program *command_path* runs.
 
     See :func:`program_value_completion_options`.
@@ -354,11 +342,11 @@ def registered_command_value_options(
 @_completes_quietly
 def registered_command_positional_completion(
     command_path: Sequence[str], incomplete: str, ctx: click.Context
-) -> list[CompletionItem]:
+) -> list[CompletionItem[str]]:
     """Complete the positional slot of the registered program *command_path* runs.
 
-    The tokens after the command path fill slots except where ``--dry-run``,
-    ``agm exec``'s run-time options, or their values occupy them.
+    The tokens after the command path fill slots except where ``agm exec``'s
+    run-time options or their values occupy them.
     """
     from agm.cli_dispatch import registered_run_options
     from agm.cli_support.program_options import option_value_map
@@ -369,7 +357,7 @@ def registered_command_positional_completion(
     resolution, program_command = resolved
     if program_command is None:
         return []
-    host_options = {"--dry-run": False, **option_value_map(registered_run_options(ctx))}
+    host_options = option_value_map(registered_run_options(ctx))
     return [
         CompletionItem(candidate)
         for candidate in _positional_candidates(
@@ -381,11 +369,11 @@ def registered_command_positional_completion(
 @_completes_quietly
 def registered_command_param_completion(
     command_path: Sequence[str], incomplete: str, ctx: click.Context
-) -> list[CompletionItem]:
+) -> list[CompletionItem[str]]:
     """Complete parameters for an already resolved registered command.
 
-    *ctx* is a context under the ``agm`` group. Combines ``--dry-run`` and
-    ``agm exec``'s run-time options with the
+    *ctx* is a context under the ``agm`` group. Combines ``agm exec``'s
+    run-time options with the
     referenced program's own value-parameter option flags (and their ``--no-``
     forms), the same mechanism ``registered_command_help`` renders.
     """
@@ -398,7 +386,6 @@ def registered_command_param_completion(
     if resolution.registration.program is None:
         return [CompletionItem("--help")] if "--help".startswith(incomplete) else []
     flags = (
-        "--dry-run",
         *(
             flag
             for option in registered_run_options(ctx)
@@ -597,7 +584,7 @@ def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> l
 
 def _program_argument_completion_items(
     program: "ProgramDeclInfo", incomplete: str, params: "Sequence[ParamBindingInfo]" = ()
-) -> list[CompletionItem]:
+) -> list[CompletionItem[str]]:
     """Return ``CompletionItem`` objects for *program*'s own value-parameter flags.
 
     *program* is the declaration the caller's shared discovery already
@@ -620,37 +607,40 @@ def _program_argument_completion_items(
 
 def _program_value_completer(
     param: ProgramParamInfo | ParamBindingInfo,
-) -> Callable[[click.Context, click.Parameter, str], list[CompletionItem]]:
+) -> Callable[[click.Context, list[str], str], list[str]]:
     """Return the value completer for one program parameter's flag."""
 
     @_completes_quietly
-    def complete(
-        ctx: click.Context, option: click.Parameter, incomplete: str
-    ) -> list[CompletionItem]:
-        del ctx, option
-        if not param.is_path:
-            return []
-        return [CompletionItem(candidate) for candidate in _path_candidates(incomplete)]
+    def complete(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
+        del ctx, args
+        return _value_candidates(param, incomplete)
 
     return complete
 
 
-def program_value_completion_options(program_command: ProgramCommand | None) -> list[click.Option]:
+def _value_candidates(param: ProgramParamInfo | ParamBindingInfo, incomplete: str) -> list[str]:
+    """Complete *incomplete* as a value of *param*: paths, or its enum spellings."""
+    if param.is_path:
+        return _path_candidates(incomplete)
+    return [value for value in param.enum_values if value.startswith(incomplete)]
+
+
+def program_value_completion_options(program_command: ProgramCommand | None) -> list[TyperOption]:
     """Return hidden, completion-only options mirroring a program's value-taking flags.
 
     Click decides which parameter an incomplete value belongs to — after
     ``--flag``, ``-x``, or as ``--flag=`` — from the completing command's own
     parameters, so each program flag that takes a value is mirrored by one. A
-    ``path`` parameter's value completes filesystem paths; any other value
-    completes nothing rather than being read as a positional slot.
+    ``path`` parameter completes filesystem paths; an enum parameter completes
+    its value-syntax spellings; other values complete nothing.
     """
     if program_command is None:
         return []
     return [
-        click.Option(
-            [f"agm_program_value_{index}", *spellings],
+        TyperOption(
+            param_decls=[f"agm_program_value_{index}", *spellings],
             hidden=True,
-            shell_complete=_program_value_completer(param),
+            autocompletion=_program_value_completer(param),
         )
         for index, (param, spellings) in enumerate(program_command.value_options())
     ]
@@ -664,11 +654,12 @@ def _positional_candidates(
 ) -> list[str]:
     """Complete the positional slot *incomplete* fills after the program's *tokens*.
 
-    Filesystem paths for a ``path`` parameter; nothing for any other slot,
-    past the last slot, or when *incomplete* is an option's value.
+    Filesystem paths for a ``path`` parameter, the spellings of an enum
+    parameter; nothing for any other slot, past the last slot, or when
+    *incomplete* is an option's value.
     """
     slot = program_command.next_positional(tokens, incomplete, host_options=host_options)
-    return _path_candidates(incomplete) if slot is not None and slot.is_path else []
+    return _value_candidates(slot, incomplete) if slot is not None else []
 
 
 _EXEC_PROGRAM_META_KEY = "exec_completion_program"
@@ -680,13 +671,13 @@ def _exec_selection_inputs(ctx: click.Context) -> tuple[ExecProgramDiscovery, Ex
     from agm.cli_support.program_options import split_exec_tail
 
     params = cast(dict[str, object], ctx.params)
-    raw_command = params.get("command")
+    raw_code = params.get("code")
     raw_program = params.get("program")
     # One discovery for this completion: the FILE derivation below may
     # probe several candidate tokens with it, and the selection it settles
     # on is then read back without a second static pipeline pass.
     discovery = ExecProgramDiscovery(
-        command=raw_command if isinstance(raw_command, str) else None,
+        code=raw_code if isinstance(raw_code, str) else None,
         requested_program=raw_program if isinstance(raw_program, str) else None,
         module_paths=_string_list(params.get("module_paths")),
         no_stdlib=bool(params.get("no_stdlib")),
@@ -697,7 +688,7 @@ def _exec_selection_inputs(ctx: click.Context) -> tuple[ExecProgramDiscovery, Ex
     tail = split_exec_tail(
         _string_list(params.get("tail")),
         program_command_for_file=(
-            None if isinstance(raw_command, str) else discovery.command_for_file
+            None if isinstance(raw_code, str) else discovery.command_for_file
         ),
     )
     return discovery, tail
@@ -715,7 +706,7 @@ def _exec_program_command(ctx: click.Context) -> tuple[ExecTail, ProgramCommand 
 
 
 @_completes_quietly
-def _exec_value_options(ctx: click.Context) -> list[click.Option]:
+def _exec_value_options(ctx: click.Context) -> list[TyperOption]:
     """Return completion-only options for ``agm exec``'s selected program."""
     return program_value_completion_options(_exec_program_command(ctx)[1])
 
@@ -725,9 +716,7 @@ def complete_exec_tail(ctx: click.Context, args: list[str], incomplete: str) -> 
     """Complete ``agm exec``'s tail: the FILE, then the selected program's positional slots."""
     del args
     tail, program_command = _exec_program_command(ctx)
-    if tail.file is None and not isinstance(
-        cast(dict[str, object], ctx.params).get("command"), str
-    ):
+    if tail.file is None and not isinstance(cast(dict[str, object], ctx.params).get("code"), str):
         return complete_agl_file(ctx, [], incomplete)
     if program_command is None:
         return []
@@ -753,7 +742,7 @@ class ExecCommand(TyperCommand):
 
     When the incomplete token starts with ``--``, the standard completion (built-in
     exec options) is extended with ``--<param>`` / ``--no-<param>`` items discovered
-    from the FILE or ``-c``/``--command`` source already parsed into ``ctx.params``.
+    from the FILE or ``-c``/``--code`` source already parsed into ``ctx.params``.
     Its completion-only parameters complete the selected program's option values
     (see :func:`program_value_completion_options`).
     Degrades to base completion on any error (unreadable file, parse failure, etc.).
@@ -777,7 +766,7 @@ class ExecCommand(TyperCommand):
         )
 
         preview = copy(self)
-        preview.params = [param for param in self.params if param.name != "_dry_run"]
+        preview.params = list(self.params)
         preview_ctx = click.Context(
             cast(click.Command, preview),
             info_name=ctx.info_name,
@@ -797,10 +786,10 @@ class ExecCommand(TyperCommand):
             retain_end_of_options(preview_args, host_options),
         )
         preview_params = cast(dict[str, object], preview_ctx.params)
-        raw_command = preview_params.get("command")
+        raw_code = preview_params.get("code")
         raw_program = preview_params.get("program")
         discovery = ExecProgramDiscovery(
-            command=raw_command if isinstance(raw_command, str) else None,
+            code=raw_code if isinstance(raw_code, str) else None,
             requested_program=raw_program if isinstance(raw_program, str) else None,
             module_paths=_string_list(preview_params.get("module_paths")),
             no_stdlib=bool(preview_params.get("no_stdlib")),
@@ -808,7 +797,7 @@ class ExecCommand(TyperCommand):
         selected = split_exec_tail(
             _string_list(preview_params.get("tail")),
             program_command_for_file=(
-                None if isinstance(raw_command, str) else discovery.command_for_file
+                None if isinstance(raw_code, str) else discovery.command_for_file
             ),
         )
         program_command = (
@@ -837,13 +826,13 @@ class ExecCommand(TyperCommand):
             return params
         return [*params, *_exec_value_options(ctx)]
 
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem[str]]:
         base = super().shell_complete(ctx, incomplete)
         if not incomplete.startswith("-"):
             return base
         discovery, tail = _exec_selection_inputs(ctx)
 
-        def complete() -> list[CompletionItem]:
+        def complete() -> list[CompletionItem[str]]:
             selection = discovery.selection(tail.file)
             if selection.selected is None:
                 return base
@@ -852,9 +841,9 @@ class ExecCommand(TyperCommand):
                 incomplete,
                 discovery.params_for(tail.file, selection.selected),
             )
-            items_by_value: dict[str, CompletionItem] = {}
+            items_by_value: dict[str, CompletionItem[str]] = {}
             for item in (*base, *extra):
-                items_by_value[cast(str, item.value)] = item
+                items_by_value[item.value] = item
             return list(items_by_value.values())
 
         # A failure past the shared discovery (option-map projection, item

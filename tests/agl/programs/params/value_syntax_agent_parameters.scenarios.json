@@ -3,10 +3,19 @@
     {
       "name": "shorthand",
       "params": {
-        "worker": "claude/sonnet-medium"
+        "worker": "claude/sonnet:medium"
       },
       "expect": {
         "stdout": "claude sonnet medium\nno backup\n"
+      }
+    },
+    {
+      "name": "shorthand_without_effort",
+      "params": {
+        "worker": "codex/gpt-5.1-codex"
+      },
+      "expect": {
+        "stdout": "codex gpt-5.1-codex \nno backup\n"
       }
     },
     {
@@ -48,7 +57,7 @@
     {
       "name": "option_agent_nested_constructor",
       "params": {
-        "worker": "claude/sonnet-medium",
+        "worker": "claude/sonnet:medium",
         "backup": "Some(AgentCodex(model = \"o3\", thinking = \"high\"))"
       },
       "expect": {
@@ -56,9 +65,18 @@
       }
     },
     {
-      "name": "bad_argument_call_form_is_a_host_error",
+      "name": "call_form_omits_defaulted_thinking",
       "params": {
         "worker": "AgentClaude(model = \"opus\")"
+      },
+      "expect": {
+        "stdout": "claude opus \nno backup\n"
+      }
+    },
+    {
+      "name": "bad_argument_call_form_is_a_host_error",
+      "params": {
+        "worker": "AgentClaude(effort = \"high\")"
       },
       "expect": {
         "host_error": {
@@ -81,6 +99,17 @@
       "name": "misqualified_call_form_is_a_host_error_not_a_command",
       "params": {
         "worker": "Foo::AgentClaude(\"a\", \"b\")"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
+    },
+    {
+      "name": "malformed_native_shorthand_is_a_host_error_not_a_command",
+      "params": {
+        "worker": "claude/opus:hi gh"
       },
       "expect": {
         "host_error": {

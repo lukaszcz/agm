@@ -1,0 +1,26 @@
+# A plain-enum answer is the member's JSON name as a JSON string. Lenient
+# parsing also accepts a response naming exactly one member as a whole word,
+# in prose or inside other JSON; strict parsing accepts the quoted string only.
+enum Verdict
+  | Pass
+  | @json-name("Pass-with-notes") Conditional
+  | Fail
+
+enum Priority
+  | @doc("Blocks the release.") High
+  | Low
+
+record Triage
+  verdict: Verdict
+  priority: Priority
+
+program def main() -> unit =
+  let judge: Agent = AgentCommand("judge")
+  let v: Verdict = ask("Judge the change.", agent = judge)
+  print v
+  let p: Priority = ask("Rank the change.", agent = judge)
+  print p
+  let exact: Verdict = ask("Judge again.", agent = judge, strict-json = true)
+  print exact
+  let t: Triage = ask("Triage the change.", agent = judge)
+  print t

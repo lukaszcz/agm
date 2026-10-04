@@ -142,26 +142,6 @@ def test_set_echo_unit_off_suppresses_after_being_on() -> None:
     assert not any(": unit = ()" in line for line in written)
 
 
-def test_dry_run_unit_entry_echoes_type_only_when_echo_unit_on() -> None:
-    session = ReplSession()
-    written: list[str] = []
-    reader = _scripted_reader([":set echo-unit on", "()", ":quit"])
-
-    run_repl_loop(session, reader=reader, writer=written.append, check_only=True)
-
-    assert any(line == ": unit" for line in written)
-
-
-def test_dry_run_unit_entry_echoes_nothing_by_default() -> None:
-    session = ReplSession()
-    written: list[str] = []
-    reader = _scripted_reader(["()", ":quit"])
-
-    run_repl_loop(session, reader=reader, writer=written.append, check_only=True)
-
-    assert written == [format_banner()]
-
-
 def test_entry_evaluation_and_rendering() -> None:
     session = ReplSession()
     written: list[str] = []

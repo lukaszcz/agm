@@ -8,17 +8,25 @@ onto the module-level built-in handle constants and canonical seeded
 
 from __future__ import annotations
 
+import pytest
+
+from agm.agl import PipelineDriver
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
+    RESERVED_ENUM_MEMBER_IDS,
     RESERVED_NOMINAL_IDS,
     RESERVED_NOMINAL_NAMES,
+    require_reserved_enum_member_id,
     reserved_nominal_id,
 )
+from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
     OPTION_TYPE_DEF,
     OPTIONAL_TYPE_DEF,
+    RESERVED_FIELD_DEFAULT_VALUES,
+    TypeDef,
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
@@ -31,6 +39,8 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
 )
+from agm.agl.semantics.values import Value
+from tests._agl_helpers import agl_roots, run_inline_code, run_program, shapes_match
 
 
 def _decl_id(t: Type) -> int:
@@ -63,6 +73,34 @@ class TestReservedNominalCatalog:
 
     def test_reserved_nominal_id_returns_none_for_an_unreserved_name(self) -> None:
         assert reserved_nominal_id("NotARealType") is None
+
+
+class TestReservedEnumMemberIds:
+    def test_agent_sandbox_sandbox_member_aliases_the_standalone_sandbox_record(self) -> None:
+        """A referenced member (enum-record unification) reuses the referenced
+        record's own reserved id -- the one intentional alias in the table."""
+        assert (
+            require_reserved_enum_member_id("AgentSandbox", "Sandbox")
+            == RESERVED_NOMINAL_IDS["Sandbox"]
+        )
+        assert ("AgentSandbox", "Sandbox") in RESERVED_ENUM_MEMBER_IDS
+
+    def test_optional_none_and_some_members_alias_the_option_enum(self) -> None:
+        """``Optional``'s declaration is ``Option::Some[T] | Option::None |
+        Default``: its ``None``/``Some`` members are referenced members and so
+        alias ``Option``'s own reserved ids, matching how the real
+        standard-library declaration unifies their identity."""
+        optional_none = require_reserved_enum_member_id("Optional", "None")
+        optional_some = require_reserved_enum_member_id("Optional", "Some")
+        assert optional_none == require_reserved_enum_member_id("Option", "None")
+        assert optional_some == require_reserved_enum_member_id("Option", "Some")
+
+    def test_mismatched_pair_is_rejected_rather_than_aliased_by_bare_member_name(self) -> None:
+        """No name-keyed fallback: a member name that happens to match some
+        other reserved type name (here ``Session``) must not silently alias
+        that unrelated type's identity."""
+        with pytest.raises(KeyError):
+            require_reserved_enum_member_id("SessionTransport", "Session")
 
 
 class TestSessionNominalWiring:
@@ -121,3 +159,80 @@ class TestSeededTypeDefsCarryReservedIds:
     def test_agent_call_error_embedded_agent_field_carries_reserved_id(self) -> None:
         fields = dict(BUILTIN_EXCEPTION_TYPE_DEFS["AgentCallError"].fields)
         assert _decl_id(fields["agent"]) == reserved_nominal_id("Agent")
+
+
+def _reserved_typedef(decl_id: int) -> TypeDef:
+    """Return the seeded definition of the reserved record *decl_id*."""
+    typedef = create_seeded_type_table().get_by_id(decl_id)
+    assert typedef is not None
+    return typedef
+
+
+_RESERVED_DEFAULTED = pytest.mark.parametrize(
+    "decl_id",
+    [
+        pytest.param(decl_id, id=_reserved_typedef(decl_id).name)
+        for decl_id in sorted(RESERVED_FIELD_DEFAULT_VALUES)
+    ],
+)
+
+
+def _defaults_omitting_call(decl_id: int) -> tuple[str, Value]:
+    """Return a reserved record's constructor call omitting every defaulted field.
+
+    Assumes every required field is ``text`` and supplies an empty text for
+    it. Also returns the host's own value-syntax decode of that call against
+    the seeded table.
+    """
+    type_table = create_seeded_type_table()
+    typedef = _reserved_typedef(decl_id)
+    required = ", ".join(
+        f'{name} = ""'
+        for (name, _type), has_default in zip(
+            typedef.fields, typedef.field_has_default or (), strict=True
+        )
+        if not has_default
+    )
+    call = f"{typedef.name}({required})"
+    return call, convert_host_value(typedef.name, call, typedef.handle(), type_table)
+
+
+@_RESERVED_DEFAULTED
+def test_reserved_field_defaults_match_the_stdlib_source(decl_id: int) -> None:
+    """A reserved record's host-side default constants must match its own AgL source.
+
+    ``RESERVED_FIELD_DEFAULT_VALUES`` hand-encodes each host-known record's
+    constructor field defaults for the pre-execution CLI/config decode
+    boundary (``runtime.engine_config.convert_host_value``'s
+    ``default_resolver``), since no evaluator is reachable there. Nothing
+    else compares those constants against the real stdlib source's own
+    declared defaults, so this runs the real stdlib's constructor with every
+    defaulted field omitted (through the ordinary evaluator) and the host's
+    own value-syntax decode of the same constructor call side by side, and
+    checks they agree field by field. Parametrized over every reserved record
+    carrying host-side defaults, so a future one is covered automatically --
+    this is the one guard against silent divergence between the stdlib's
+    declared defaults and ``semantics/type_table.py``'s host-side constants.
+    """
+    call, host_value = _defaults_omitting_call(decl_id)
+
+    result = run_program(f"let probe = {call}\nprobe\n")
+    assert result.ok
+
+    assert shapes_match(result.bindings["probe"], host_value)
+
+
+@_RESERVED_DEFAULTED
+def test_no_stdlib_constructor_fills_reserved_field_defaults(decl_id: int) -> None:
+    """Without the stdlib, a reserved record's constructor fills its host-side defaults."""
+    call, host_value = _defaults_omitting_call(decl_id)
+
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        f"let probe = {call}\nprobe\n",
+        roots=agl_roots(include_stdlib=False),
+        default_stdlib=False,
+    )
+    assert result.ok
+
+    assert result.bindings["probe"] == host_value

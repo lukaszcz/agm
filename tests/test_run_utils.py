@@ -1,12 +1,12 @@
-"""Tests for agm.commands.run pure functions."""
+"""Tests for pure functions in agm.commands.run and the sandbox preparation library."""
 
 from __future__ import annotations
 
-from agm.commands.run import (
+from agm.commands.run import normalize_run_command
+from agm.sandbox.prepare import (
     _normalize_systemd_limit,
     _systemd_run_prefix,
     _systemd_scope_name,
-    normalize_run_command,
 )
 
 
@@ -71,8 +71,10 @@ class TestSystemdRunPrefix:
         prefix = _systemd_run_prefix(memory_limit=None, swap_limit="2G")
         assert "MemorySwapMax=2G" in prefix
 
-    def test_normalizes_unlimited_to_infinity(self) -> None:
-        prefix = _systemd_run_prefix(memory_limit="unlimited", swap_limit=None)
+    def test_passes_memory_limit_through_verbatim(self) -> None:
+        # Normalization (e.g. "unlimited" -> "infinity") happens earlier, in
+        # `_validate_limit`; `_systemd_run_prefix` receives an already-resolved value.
+        prefix = _systemd_run_prefix(memory_limit="infinity", swap_limit=None)
         assert "MemoryMax=infinity" in prefix
 
     def test_omits_memory_max_when_none(self) -> None:

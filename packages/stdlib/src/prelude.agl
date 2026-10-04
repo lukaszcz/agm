@@ -13,6 +13,7 @@ export std/result
 export std/value
 export std/io
 export std/agent
+export std/sandbox
 export std/session
 export std/exec
 export std/package

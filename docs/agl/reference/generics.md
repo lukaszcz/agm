@@ -361,10 +361,11 @@ immediately followed by `[` (`NAME[`):
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
 expressions. Both `Option` and the constructor (`Some`/`None`) must be `NAME`,
-not `OP_NAME`. The result is an ordinary function value for a field-bearing
-member or a constructed member-record value for a fieldless member. The latter can be
-passed as a value but is not callable; see
-[Fieldless constructor references](expressions.md#fieldless-constructor-references).
+not `OP_NAME`. The result is an ordinary function value for a member with a
+required field, or a constructed member-record value for a fieldless or
+all-defaulted member. The latter can be passed as a value but is not
+callable; see
+[Fieldless and all-defaulted constructor references](expressions.md#fieldless-and-all-defaulted-constructor-references).
 
 ## Strict parametricity
 
@@ -586,7 +587,7 @@ Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
 functions, rendered, and explicitly converted **to** `json`. JSON conversion
 uses the expression's static type, so enum-typed positions retain their member
-`"$case"` tags. Only the schema-needing boundaries reject it. A non-generic recursive type,
+tags. Only the schema-needing boundaries reject it. A non-generic recursive type,
 or a generic recursive type whose reachable instantiations close, crosses
 these boundaries normally. The [derived JSON
 Schema](agent-calls.md#derived-json-schema) for a recursive type uses

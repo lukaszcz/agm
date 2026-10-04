@@ -27,7 +27,7 @@ from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.repl.session import ReplSession
 from agm.agl.semantics.values import IntValue
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 # A non-tail recursive helper plus a variant guarded by a ``try``/``catch``.
 _PRELUDE = """
@@ -44,8 +44,10 @@ def _run(initializer: str, *, depth: int, max_call_depth: int):
     # ``out`` is bound then used so the block ends in an expression, keeping
     # ``out`` a public binding the caller can inspect.
     source = f"{_PRELUDE}let depth: int = {depth}\nlet out: int = {initializer}\nprint(out)\n"
-    driver = PipelineDriver(default_call_depth_limit=max_call_depth)
-    return run_inline_command(driver, source)
+    driver = PipelineDriver(
+        resolve_agent_spec=None, default_call_depth_limit=max_call_depth, get_sandbox_context=None
+    )
+    return run_inline_code(driver, source)
 
 
 class TestGuardIsAuthoritative:
@@ -137,7 +139,9 @@ def _operator_chain(terms: int) -> str:
 
 def _check_source(source: str) -> RunResult:
     """Run every static frontend pass over *source* without executing it."""
-    return run_inline_command(PipelineDriver(), source, check_only=True)
+    return run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None), source, check_only=True
+    )
 
 
 def _raise_recursion_error(*_args: object, **_kwargs: object) -> object:

@@ -13,6 +13,7 @@ import pytest
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
+    IrConstInt,
     IrMakeConstructor,
     IrMakeException,
     IrMakeRecord,
@@ -734,6 +735,7 @@ def test_validate_accepts_enum_member_ir_make_record() -> None:
                 name="Red", fields=(), member=NominalId(2), json_name="Red", field_json_names=()
             ),
         ),
+        field_json_names=(),
     )
     node = IrMakeRecord(
         location=loc,
@@ -842,7 +844,7 @@ def test_validate_accepts_valid_ir_make_record() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=nominal_id,
-        fields=(),
+        fields=(("x", IrConstInt(location=loc, value=1)),),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
 
@@ -871,6 +873,7 @@ def test_nominal_descriptor_record_defaults() -> None:
         declared_name="Foo",
         kind=NominalKind.RECORD,
         fields=("x", "y"),
+        field_json_names=("x", "y"),
     )
     assert desc.variants == ()
     assert desc.fields == ("x", "y")
@@ -903,6 +906,7 @@ def test_nominal_descriptor_enum_with_variants() -> None:
         kind=NominalKind.ENUM,
         fields=(),
         variants=variants,
+        field_json_names=(),
     )
     assert len(desc.variants) == 2
     assert desc.variants[0].name == "Circle"

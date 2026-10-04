@@ -51,7 +51,7 @@ from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import prepare_inline_code, run_inline_code
 from tests.agl.ir_harness import (
     MatchCompiledModule,
     base_caps,
@@ -129,7 +129,7 @@ def _compiled(source: str) -> MatchCompiledModule:
 
 
 def _prepared_program(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedProgram:
-    return prepare_inline_command(
+    return prepare_inline_code(
         source,
         entry_path=None,
         roots=RootSet(roots=roots),
@@ -808,14 +808,14 @@ def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> 
 
 
 def test_single_and_program_discovery_surface_match_errors() -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     discovery = runtime.discover_programs(
-        prepare_inline_command("let n: int = 1\ncase true of | true => n")
+        prepare_inline_code("let n: int = 1\ncase true of | true => n")
     )
     assert discovery.compiled is None
     assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
 
-    prepared_program = prepare_inline_command(
+    prepared_program = prepare_inline_code(
         "case true of | true => ()",
         entry_path=None,
         roots=RootSet(roots=frozenset()),
@@ -844,8 +844,8 @@ def test_single_discovery_and_cached_run_compile_matches_once(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
-    prepared = prepare_inline_command(
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    prepared = prepare_inline_code(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
@@ -879,7 +879,7 @@ def test_program_discovery_and_cached_run_compile_matches_once(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepared_program(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
@@ -913,7 +913,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = _prepared_program("case true of | true => 1 | false => 0")
 
     discovery = runtime.discover_programs(prepared)
@@ -927,9 +927,9 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
     assert compile_count == 1
 
 
-def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
-    result = run_inline_command(
-        PipelineDriver(),
+def test_match_invalid_unreachable_case_fails_single_check_only() -> None:
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n()",
         check_only=True,
     )
@@ -951,7 +951,9 @@ def test_match_invalid_unreachable_import_fails_graph_check_only(tmp_path: Path)
         roots=frozenset({tmp_path}),
     )
 
-    result = PipelineDriver().run_prepared(prepared, check_only=True)
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run_prepared(
+        prepared, check_only=True
+    )
 
     assert not result.ok
     assert result.error is None

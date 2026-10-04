@@ -5,7 +5,19 @@ exception TomlParseError extends Exception
 
 exception TomlRenderError extends Exception
 
+@doc("""
+  Parse TOML text into a JSON value.
+
+  Raises `TomlParseError` when the input is invalid.
+""")
 extern def parse(value: text) -> json
+
+@doc("Parse TOML text into a JSON value, returning `TomlParseError` as `Err`.")
 def try-parse(value: text) -> Result[json, TomlParseError] =
   try Ok(parse(value)) catch TomlParseError as e => Err(e)
+@doc("""
+  Render a JSON object as TOML text.
+
+  Raises `TomlRenderError` for values TOML cannot represent, including null and a non-object root.
+""")
 extern def render(value: json) -> text

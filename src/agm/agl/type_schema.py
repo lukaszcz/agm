@@ -40,11 +40,20 @@ Derivation rules:
   "properties": {"key": <schema for K>, "value": <schema for V>}, ...}}``.
 - ``record``  → object schema with ``additionalProperties: false``, ``required``,
                 and per-field ``properties``, keyed by each field's effective
-                JSON name (``@json-name`` ?? ``@name`` ?? declared).
+                JSON name (``@json-name`` ?? ``@name`` ?? declared), with each
+                field's ``@doc`` as its property's ``description`` when present.
+                A field whose declaration carries a constant default is dropped
+                from ``required``.
 - ``enum``    → ``{"oneOf": [...]}`` — one variant schema per variant, each an
                 object with the member's ``@doc`` as ``description`` when
                 present, a ``"$case"`` const property (the member's effective
-                JSON tag), and any payload fields, JSON-keyed the same way.
+                JSON tag), and any payload fields, JSON-keyed the same way and
+                carrying their own ``@doc`` as ``description`` when present.
+                A plain enum (every member fieldless) is instead its member's
+                tag string: ``{"enum": [tags]}``, or — when any member carries
+                a ``@doc`` — ``{"oneOf": [...]}`` of ``{"const": tag}``
+                alternatives, each with its member's ``@doc`` as
+                ``description``.
 
 Recursive types: both derivations expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
@@ -138,14 +147,24 @@ from agm.util.graph import sccs
 Instantiation = RecordType | EnumType
 
 
+def _is_plain_enum(typ: EnumType, type_table: TypeTable) -> bool:
+    """Whether every member of *typ* is fieldless (mirrors ``ir.contracts.is_plain_enum``)."""
+    return not any(type_table.record_fields(member) for member in type_table.enum_members(typ))
+
+
 def _emit_field_decodes(
     handle: RecordType,
     type_table: TypeTable,
     emit_field: "Callable[[Type], DecodeSchema]",
 ) -> tuple[FieldDecode, ...]:
-    """Build one record/member's field decoders via *emit_field*, JSON-keyed, zoned, and aliased."""
+    """Build one record/member's field decoders via *emit_field*, JSON-keyed, zoned, and aliased.
+
+    ``default_index`` comes straight off ``type_table.field_has_default``: the
+    field's position when the field carries a declared default, else ``None``.
+    """
     zones = dict(type_table.field_kinds(handle))
     externals = type_table.field_external_names(handle)
+    defaults = dict(type_table.field_has_default(handle))
     return tuple(
         FieldDecode(
             name,
@@ -153,8 +172,9 @@ def _emit_field_decodes(
             emit_field(ftype),
             zone=zones[name],
             alias=externals.get(name, NO_EXTERNAL_NAME).alias(name),
+            default_index=index if defaults[name] else None,
         )
-        for name, json_name, ftype in type_table.json_fields(handle)
+        for index, (name, json_name, ftype) in enumerate(type_table.json_fields(handle))
     )
 
 
@@ -194,6 +214,13 @@ def derive_schema_and_decode(
     module docstring) are emitted once under a top-level ``"$defs"`` object and
     referenced via ``{"$ref": "#/$defs/<key>"}``, with the decode plan's
     ``defs`` keyed identically; a non-recursive *typ* gets neither.
+
+    A field whose declaration carries a constant default is dropped from its
+    record/variant schema's ``required`` list and marked via
+    ``FieldDecode.default_index`` in the decode plan; its value is resolved
+    only at decode time (see ``runtime.convert.decode_value``'s
+    ``default_resolver``).
+
     """
     plan = _plan_schema(typ, type_table)
     return _emit_schema_with_plan(typ, type_table, plan), _build_decode_plan(typ, type_table, plan)
@@ -311,16 +338,38 @@ def _dict_schema(typ: DictType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     }
 
 
+def _record_properties(
+    handle: RecordType, type_table: TypeTable, plan: _SchemaPlan
+) -> tuple[list[str], dict[str, object]]:
+    """Build one record/member's ``required``+``properties`` pair, JSON-keyed.
+
+    A field whose declaration carries a constant default is dropped from
+    ``required``; every other field stays required. Shared by
+    :func:`_record_schema` and :func:`_enum_schema`, which each own their
+    respective object's own envelope (``$case`` for an enum variant).
+    """
+    defaults = dict(type_table.field_has_default(handle))
+    docs = type_table.field_docs(handle)
+    required: list[str] = []
+    properties: dict[str, object] = {}
+    for name, json_name, field_type in type_table.json_fields(handle):
+        field_schema = _emit(field_type, type_table, plan)
+        doc = docs.get(name)
+        if doc is not None:
+            field_schema = {**field_schema, "description": doc}
+        properties[json_name] = field_schema
+        if not defaults[name]:
+            required.append(json_name)
+    return required, properties
+
+
 def _record_schema(typ: RecordType, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Derive the JSON Schema for a record type, keyed by its effective JSON field names."""
-    properties: dict[str, object] = {
-        json_name: _emit(field_type, type_table, plan)
-        for _name, json_name, field_type in type_table.json_fields(typ)
-    }
+    required, properties = _record_properties(typ, type_table, plan)
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": list(properties.keys()),
+        "required": required,
         "properties": properties,
     }
 
@@ -331,15 +380,40 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property is
     a ``const`` string that identifies the selected variant — the member's
     effective JSON tag; payload fields follow, keyed by their effective JSON
-    names. A documented member carries its ``@doc`` prose as the alternative's
-    ``description`` annotation.
+    names, each dropped from ``required`` on the same terms as a record field
+    (see :func:`_record_properties`). A documented member carries its
+    ``@doc`` prose as the alternative's ``description`` annotation.
+
+    A plain enum's value is its member's tag string, so its alternatives are
+    ``const`` tags; with no documented member they collapse to one ``enum``
+    list.
     """
-    return {
-        "oneOf": [
-            _variant_schema(member, variant_name, type_table, plan)
-            for variant_name, member in type_table.enum_member_names(typ).items()
-        ]
-    }
+    members = type_table.enum_member_names(typ)
+    if not _is_plain_enum(typ, type_table):
+        return {
+            "oneOf": [
+                _variant_schema(member, variant_name, type_table, plan)
+                for variant_name, member in members.items()
+            ]
+        }
+    alternatives = [
+        _plain_variant_schema(member, variant_name, type_table)
+        for variant_name, member in members.items()
+    ]
+    if any("description" in alternative for alternative in alternatives):
+        return {"oneOf": alternatives}
+    return {"enum": [alternative["const"] for alternative in alternatives]}
+
+
+def _plain_variant_schema(
+    member: RecordType, variant_name: str, type_table: TypeTable
+) -> dict[str, object]:
+    """Emit one plain-enum member's alternative: its ``const`` tag, documented when it has a doc."""
+    schema: dict[str, object] = {"const": type_table.member_json_tag(member, variant_name)}
+    doc = type_table.declaration_doc(member)
+    if doc is not None:
+        schema["description"] = doc
+    return schema
 
 
 def _variant_schema(
@@ -349,13 +423,12 @@ def _variant_schema(
     cached = plan.variants.get(member)
     if cached is not None:
         return cached
-    required: list[str] = ["$case"]
-    properties: dict[str, object] = {
+    required_fields, field_properties = _record_properties(member, type_table, plan)
+    required = ["$case", *required_fields]
+    properties = {
         "$case": {"const": type_table.member_json_tag(member, variant_name)},
+        **field_properties,
     }
-    for _field_name, json_name, field_type in type_table.json_fields(member):
-        properties[json_name] = _emit(field_type, type_table, plan)
-        required.append(json_name)
     variant_schema: dict[str, object] = {
         "type": "object",
         "additionalProperties": False,
@@ -776,6 +849,7 @@ def _emit_tree_body(
             fields=_emit_tree_fields(typ, type_table, plan, memo),
         )
     if isinstance(typ, EnumType):
+        plain = _is_plain_enum(typ, type_table)
         return _nominal_tree_node(
             TypeNodeKind.ENUM,
             typ,
@@ -787,7 +861,11 @@ def _emit_tree_body(
                     _nominal_tree_node(
                         TypeNodeKind.MEMBER,
                         member,
-                        json.dumps(_variant_schema(member, name, type_table, plan)),
+                        json.dumps(
+                            _plain_variant_schema(member, name, type_table)
+                            if plain
+                            else _variant_schema(member, name, type_table, plan)
+                        ),
                         type_table,
                         fields=_emit_tree_fields(member, type_table, plan, memo),
                     ),

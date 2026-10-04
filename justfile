@@ -9,10 +9,17 @@ prompts_dir := justfile_directory() + "/prompts"
 default:
     @just --list
 
-# Create the virtualenv and install the project with dev dependencies
+# Create the virtualenv with the locked project and dev dependencies
 setup:
-    uv venv .venv --python 3.14
-    uv pip install --python .venv/bin/python -e ".[dev]" --group dev
+    uv sync --locked --python 3.14 --group dev
+
+# Build the Markdown documentation into site/
+docs-build:
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs build --strict
+
+# Serve the documentation with live reload on all interfaces
+docs-serve *args:
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs serve --strict --dev-addr 0.0.0.0:8000 {{args}}
 
 check_coverage := "100"
 
@@ -143,9 +150,14 @@ check:
     cat "$static_log"; \
     exit "$other_status"
 
-# Install the agm CLI into an isolated environment
-install-agm:
-    uv tool install --reinstall "{{justfile_directory()}}"
+# Install the agm CLI with the project's locked runtime dependencies
+install-agm *args:
+    @constraints_file="$(mktemp)"; \
+    trap 'rm -f "$constraints_file"' EXIT; \
+    uv export --locked --no-dev --no-emit-project --no-hashes --format requirements.txt > "$constraints_file"; \
+    install_prefix="$(just install-prefix {{args}})"; \
+    if [[ -n "$install_prefix" ]]; then export UV_TOOL_BIN_DIR="$install_prefix/bin"; fi; \
+    uv tool install --python 3.14 --reinstall --constraints "$constraints_file" "{{justfile_directory()}}"
 
 # Print the install prefix: the first non-option argument, if any
 [private]
@@ -154,21 +166,24 @@ install-prefix *args:
         if [[ "$arg" != -* ]]; then echo "$arg"; break; fi; \
     done
 
-# Install agm, its user config, and the editor modes, then sync the active
-# packages' Python requirements into the freshly installed agm's environment
+# Install agm, its user config, editor modes, and repository packages, then sync
+# the active packages' Python requirements into the freshly installed environment
 install *args:
     test -d "{{prompts_dir}}"
-    install_prefix="$(just install-prefix {{args}})"; \
-    if [[ -n "$install_prefix" ]]; then \
-        UV_TOOL_BIN_DIR="$install_prefix/bin" uv tool install --reinstall "{{justfile_directory()}}"; \
-    else \
-        uv tool install --reinstall "{{justfile_directory()}}"; \
-    fi
+    just install-agm {{args}}
     uv run python tools/install_agm_config.py {{args}}
     just setup-emacs-optional {{args}}
     install_prefix="$(just install-prefix {{args}})"; \
     if [[ -n "$install_prefix" ]]; then \
-        AGM_HOME="$install_prefix/.agm" "$install_prefix/bin/agm" pkg sync; \
+        agm="$install_prefix/bin/agm"; \
+        export AGM_HOME="$install_prefix/.agm"; \
     else \
-        "$(uv tool dir --bin)/agm" pkg sync; \
-    fi
+        agm="$(uv tool dir --bin)/agm"; \
+    fi; \
+    packages_dir="{{justfile_directory()}}/packages"; \
+    for package in "$packages_dir"/*; do \
+        [[ "$package" == "$packages_dir/stdlib" ]] && continue; \
+        [[ -f "$package/package.toml" ]] || continue; \
+        "$agm" pkg install --reinstall "$package"; \
+    done; \
+    "$agm" pkg sync

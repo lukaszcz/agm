@@ -1,0 +1,20 @@
+# Session::default() snapshots default-sandbox alongside default-agent at
+# first use: a later write to default-sandbox never reaches an already
+# snapshotted default session's reported mode.
+import std/config
+
+def classify(mode: AgentSandbox) -> text =
+  case mode of
+    | Disabled => "disabled"
+    | Native => "native"
+    | Sandbox(memory, swap, settings, patch) =>
+        "sandbox(%{memory}, %{swap}, %{settings}, %{patch})"
+
+program def main() -> unit =
+  std/config::default-agent := AgentPi("writer", "model", "high")
+  std/config::default-sandbox := AgentSandbox::Native
+  let first = Session::default()
+  print classify(first.sandbox)
+  std/config::default-sandbox := AgentSandbox::Disabled
+  let second = Session::default()
+  print classify(second.sandbox)

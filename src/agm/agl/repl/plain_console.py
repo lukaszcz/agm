@@ -122,7 +122,6 @@ def run_plain_console(
     *,
     echo: bool = True,
     echo_unit: bool = False,
-    check_only: bool = False,
     theme: str = "auto",
     on_setting_save: "Callable[[str, str | bool], None] | None" = None,
     stdin: TextIO,
@@ -155,7 +154,6 @@ def run_plain_console(
         writer=writer,
         echo=echo,
         echo_unit=echo_unit,
-        check_only=check_only,
         theme=theme,
         on_setting_change=on_setting_change,
     )

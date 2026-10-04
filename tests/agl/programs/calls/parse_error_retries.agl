@@ -1,0 +1,16 @@
+# Parse error retries: default (std/config::parse-error-retries), explicit
+# corrective retries, zero retries, format option, trailing comma in call options.
+enum Review
+  | Pass
+  | Fail(issues: array[text])
+
+program def main() -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  let strict-default: Review = ask("First review.", agent = reviewer)
+  print "first ok"
+
+  let with-retry: Review = ask("Second review.", agent = reviewer, parse-error-retries = 2)
+  print "second ok"
+
+  let aborting: Review = ask("Third review.", agent = reviewer, format = "json", parse-error-retries = 0)
+  print "third ok"

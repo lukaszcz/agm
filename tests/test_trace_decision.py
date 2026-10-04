@@ -118,14 +118,6 @@ class TestTraceDecisionCliLayer:
         )
         assert decision.explicit_path == "/cli/path.jsonl"
 
-    def test_cleared_cli_trace_file_keeps_the_configured_destination(self) -> None:
-        """``--no-trace-file`` clears only the CLI seed, not a configured path."""
-        decision = _decision(
-            cli={"trace-file": None}, exec_table={"trace-file": "/config/path.jsonl"}
-        )
-        assert decision.enabled is True
-        assert decision.explicit_path == "/config/path.jsonl"
-
 
 class TestTraceDecisionConfigLayer:
     """Config layer: lowest priority."""
@@ -155,8 +147,28 @@ class TestTraceDecisionPrecedence:
 
 
 @pytest.mark.parametrize(
+    ("cli", "exec_table", "enabled"),
+    [
+        ({"debug": True}, {}, True),
+        ({}, {"debug": True}, True),
+        ({"debug": False}, {"debug": True}, False),
+        ({"debug": True}, {"trace": False}, False),
+        ({"debug": True, "trace": False}, {}, False),
+        ({}, {"debug": True, "trace": False}, False),
+        ({"debug": True}, {"trace-file": "/config/t.jsonl"}, True),
+    ],
+)
+def test_debug_turns_trace_on_unless_trace_is_configured_or_given(
+    cli: dict[str, object | None], exec_table: dict[str, object], enabled: bool
+) -> None:
+    assert _decision(cli=cli, exec_table=exec_table).enabled is enabled
+
+
+@pytest.mark.parametrize(
     "cli,exec_table",
     [
+        ({"debug": True}, {}),
+        ({"debug": True}, {"trace": False}),
         ({}, {}),
         ({"trace": True}, {}),
         ({"trace": False}, {"trace": True}),
@@ -414,20 +426,22 @@ class TestReplLogFlagParsing:
 
 
 def _exec_args(
-    command: str,
+    code: str,
     *,
     trace: bool = False,
     no_trace: bool = False,
     trace_file: str | None = None,
+    debug: bool | None = None,
 ) -> ExecArgs:
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=[],
         strict_json=None,
         trace=trace,
         no_trace=no_trace,
         trace_file=trace_file,
+        debug=debug,
     )
 
 
@@ -459,6 +473,16 @@ class TestIntegrationLogFlagWritesTrace:
         assert agent_files.exists()
         trace_files = list(agent_files.glob("exec-*.jsonl"))
         assert len(trace_files) == 1
+
+    @pytest.mark.parametrize(("no_trace", "written"), ((False, 1), (True, 0)))
+    def test_debug_flag_creates_trace_unless_no_trace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_trace: bool, written: int
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
+        exec_command.run(_exec_args('print "hello"', no_trace=no_trace, debug=True))
+        assert len(list(tmp_path.glob(".agent-files/exec-*.jsonl"))) == written
 
     def test_explicit_trace_file_path_used(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

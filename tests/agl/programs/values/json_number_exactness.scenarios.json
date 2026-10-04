@@ -32,6 +32,7 @@
     },
     {
       "name": "agent_response_non_integral_int_field_fails",
+      "runtime": {"parse_error_retries": 0},
       "params": {"mode": "agent_output"},
       "agents": {
         "nums_source": [
@@ -57,6 +58,7 @@
     },
     {
       "name": "agent_response_non_integral_decimal_in_array_element_fails",
+      "runtime": {"parse_error_retries": 0},
       "params": {"mode": "agent_output"},
       "agents": {
         "nums_source": [

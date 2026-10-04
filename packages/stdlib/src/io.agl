@@ -1,1 +1,2 @@
+@doc("Print the value followed by a newline.")
 builtin def print[T](value: T) -> unit

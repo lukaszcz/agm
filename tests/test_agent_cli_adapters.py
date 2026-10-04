@@ -17,14 +17,21 @@ from agm.agent.session.cli_adapters import AgentCommandSessionBackend, open_cli_
 from agm.agent.spec import AgentCommand, SessionTransport
 from agm.core.process import CapturedOutput, ProcessCaptureResult
 from agm.util.interp import InterpolationError
+from tests._agl_helpers import unavailable_sandbox_context
 
 
 def _open(command: str, *, name: str = "") -> AgentCommandSessionBackend:
-    return AgentCommandSessionBackend.open(AgentCommand(command), name=name)
+    return AgentCommandSessionBackend.open(
+        AgentCommand(command), name=name, env={}, get_sandbox_context=unavailable_sandbox_context
+    )
 
 
 def _command_service() -> SessionService:
-    return SessionService(lambda request: open_cli_session(request, idle_timeout=None))
+    return SessionService(
+        lambda request: open_cli_session(
+            request, idle_timeout=None, get_sandbox_context=unavailable_sandbox_context
+        )
+    )
 
 
 def _capture_result() -> ProcessCaptureResult:
@@ -73,10 +80,49 @@ def test_single_prompt_command_session_does_not_require_a_session_id_placeholder
         SessionTransport.CLI,
         lambda handle: service.ask(handle, SessionAskRequest(prompt="question")),
         single_prompt=True,
+        env={},
     )
 
     assert response.content == "answer"
     assert _non_prompt_args(captured[0]) == ["runner", "--quiet"]
+
+
+def test_ephemeral_command_session_without_placeholder_serves_independent_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured.append(argv)
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    service = _command_service()
+
+    def action(handle: str) -> bool:
+        service.ask(handle, SessionAskRequest(prompt="first"))
+        service.ask(handle, SessionAskRequest(prompt="second"))
+        return service.continues_conversation(handle)
+
+    continues = service.with_ephemeral(
+        AgentCommand("runner --quiet"), SessionTransport.CLI, action, single_prompt=False, env={}
+    )
+
+    assert continues is False
+    assert [_non_prompt_args(argv) for argv in captured] == [["runner", "--quiet"]] * 2
+
+
+def test_ephemeral_command_session_with_placeholder_continues_its_conversation() -> None:
+    service = _command_service()
+
+    continues = service.with_ephemeral(
+        AgentCommand("runner --session %{SESSION_ID}"),
+        SessionTransport.CLI,
+        service.continues_conversation,
+        env={},
+    )
+
+    assert continues is True
 
 
 def test_open_converts_malformed_placeholder_to_an_open_error() -> None:
@@ -144,6 +190,46 @@ def test_asks_reuse_one_underlying_id_with_a_symmetric_command_shape(
     assert len(captured) == 2
     assert _non_prompt_args(captured[0]) == _non_prompt_args(captured[1])
     assert captured[0][1] == captured[1][1]
+
+
+def test_ask_runs_the_process_under_the_environment_fixed_at_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env supplied to ``open`` reaches the underlying process, verbatim."""
+    captured_envs: list[dict[str, str] | None] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured_envs.append(kwargs.get("env"))
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = AgentCommandSessionBackend.open(
+        AgentCommand("runner --session %{SESSION_ID}"),
+        get_sandbox_context=unavailable_sandbox_context,
+        env={"ONLY": "this"},
+    )
+
+    backend.ask(SessionAskRequest(prompt="question"))
+
+    assert captured_envs == [{"ONLY": "this"}]
+
+
+def test_ask_runs_the_process_under_an_explicitly_empty_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``env = {}`` at open means an empty environment, never the AGM process's own."""
+    captured_envs: list[dict[str, str] | None] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured_envs.append(kwargs.get("env"))
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = _open("runner --session %{SESSION_ID}")
+
+    backend.ask(SessionAskRequest(prompt="question"))
+
+    assert captured_envs == [{}]
 
 
 def test_ask_interpolates_mixed_prompt_session_and_escaped_placeholders(
@@ -380,7 +466,9 @@ def test_unsupported_operations_are_rejected_by_the_session_service(
     invoke: object,
 ) -> None:
     service = _command_service()
-    handle = service.open(AgentCommand("runner --session %{SESSION_ID}"), SessionTransport.CLI)
+    handle = service.open(
+        AgentCommand("runner --session %{SESSION_ID}"), SessionTransport.CLI, env={}
+    )
 
     if not callable(invoke):
         raise AssertionError("test operation must be callable")

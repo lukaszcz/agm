@@ -15,6 +15,7 @@ def run(args: WorktreeNewArgs) -> None:
         branch=None,
         existing_ok=False,
         reuse_existing_branch=True,
+        fetch=not args.no_fetch,
     )
     project_dir = discover_current_project_dir(worktree_path)
     if project_dir is not None:

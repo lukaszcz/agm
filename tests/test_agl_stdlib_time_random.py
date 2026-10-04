@@ -74,6 +74,7 @@ def _companion(
                 declared_name="TimeParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
             _INDEX_ERROR: NominalDescriptor(
                 nominal=_INDEX_ERROR,
@@ -82,6 +83,7 @@ def _companion(
                 declared_name="IndexError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "index", "length"),
+                field_json_names=("message", "index", "length"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },

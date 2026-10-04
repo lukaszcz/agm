@@ -1,0 +1,32 @@
+# Equality accepts operands related by nominal widening: an enum against one
+# of its members (either side), an enum against a wider enum, and an exception
+# against an ancestor. Comparison is by value, never by static type.
+record Red
+record Green
+
+enum Small = ::Red | ::Green
+enum Wide = ::Red | ::Green | Blue
+
+exception Base extends Exception
+  code: int
+
+exception Derived extends Base
+
+program def main(pick: text, status: int) -> unit =
+  let chosen: Option[text] = if pick == "" => None else => Some(pick)
+  print(chosen == None)
+  print(None != chosen)
+  print(chosen == Some("a"))
+  print(Some("a") == chosen)
+  print(chosen != Some("b"))
+
+  let small: Small = if pick == "a" => Red else => Green
+  let wide: Wide = Red
+  print(small == wide)
+  print(wide == small)
+  print(small == Red)
+
+  let derived = Derived(message = "boom", code = status)
+  let base: Base = derived
+  print(base == derived)
+  print(Derived(message = "boom", code = 1) == base)

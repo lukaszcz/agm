@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -30,11 +32,18 @@ from agm.agent.spec import (
     AgentCommand,
     AgentPi,
     AgentSpec,
+    PermissionMode,
     SessionTransport,
     payload_fields,
 )
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.core.process import CapturedOutput, ProcessCaptureResult
+from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
+from tests._agl_helpers import (
+    session_sandbox_context,
+    unavailable_sandbox_context,
+    write_sandbox_home,
+)
 
 
 @dataclass(frozen=True)
@@ -54,12 +63,21 @@ class CaptureTransport:
     def __init__(self, outcomes: list[CaptureOutcome]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[list[str], str | None]] = []
+        self.envs: list[dict[str, str] | None] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def run(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
             stdin_text = kwargs.get("stdin_text")
             self.calls.append((argv, stdin_text if isinstance(stdin_text, str) else None))
+            env = kwargs.get("env")
+            self.envs.append(env if isinstance(env, dict) else None)
             outcome = self.outcomes.pop(0)
+            stdout_callback = kwargs.get("stdout_callback")
+            if callable(stdout_callback) and outcome.stdout:
+                stdout_callback(outcome.stdout)
+            stderr_callback = kwargs.get("stderr_callback")
+            if callable(stderr_callback) and outcome.stderr:
+                stderr_callback(outcome.stderr)
             return ProcessCaptureResult(
                 returncode=outcome.returncode,
                 stdout=CapturedOutput(data=outcome.stdout.encode(), truncated=outcome.timed_out),
@@ -72,13 +90,76 @@ class CaptureTransport:
         monkeypatch.setattr("agm.agent.runner.run_capture_result", run)
 
 
-def _open(agent: AgentSpec, *, name: str = "", single_prompt: bool = False) -> Any:
+def _open(
+    agent: AgentSpec,
+    *,
+    name: str = "",
+    single_prompt: bool = False,
+    permission_mode: PermissionMode = PermissionMode.NONE,
+    sandbox: SandboxLimits | None = None,
+    env: dict[str, str] | None = None,
+    get_sandbox_context=unavailable_sandbox_context,
+) -> Any:
     return open_cli_session(
         SessionOpenRequest(
-            agent=agent, transport=SessionTransport.CLI, name=name, single_prompt=single_prompt
+            agent=agent,
+            transport=SessionTransport.CLI,
+            name=name,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env or {},
         ),
         idle_timeout=None,
+        get_sandbox_context=get_sandbox_context,
     )
+
+
+@pytest.mark.parametrize("single_prompt", [False, True])
+@pytest.mark.parametrize("echo", [False, True])
+def test_codex_captures_large_events_from_nonblocking_stdout(
+    tmp_path: Path, single_prompt: bool, echo: bool
+) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        "os.set_blocking(1, False)\n"
+        "answer = 'x' * 2_000_000\n"
+        "if '--json' in sys.argv:\n"
+        "    output = json.dumps({'type': 'thread.started', 'thread_id': 'thread'}) + '\\n'\n"
+        "    output += json.dumps({'type': 'item.completed', 'item': "
+        "{'type': 'agent_message', 'text': answer}}) + '\\n'\n"
+        "else:\n"
+        "    output = answer\n"
+        "data = output.encode()\n"
+        "if os.write(1, data) != len(data):\n"
+        "    sys.stderr.write('stdout backpressure\\n')\n"
+        "    sys.exit(101)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    backend = _open(
+        AgentCodex("", ""),
+        get_sandbox_context=unavailable_sandbox_context,
+        single_prompt=single_prompt,
+        env={"PATH": str(tmp_path)},
+    )
+
+    events: list[tuple[str, str]] = []
+    request = SessionAskRequest(
+        "question",
+        output_callback=(lambda phase, text, **_metadata: events.append((phase, text)))
+        if echo
+        else None,
+    )
+
+    assert backend.ask(request).content == "x" * 2_000_000
+    if not single_prompt:
+        assert backend.ask(request).content == "x" * 2_000_000
+    assert not any(phase == "stderr" for phase, _ in events)
+    backend.close()
 
 
 def _file_prompt_argv(argv: list[str], command: list[str]) -> None:
@@ -277,6 +358,186 @@ def test_claude_compact_before_first_ask_is_deferred(monkeypatch: pytest.MonkeyP
     assert "--session-id" in transport.calls[0][0]
     assert "--resume" not in transport.calls[0][0]
     assert "named" in transport.calls[0][0]
+
+
+def test_claude_echo_stream_decodes_final_response_and_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"stream_event","event":{"type":"content_block_start",'
+            '"content_block":{"type":"tool_use","name":"Read"}}}',
+            '{"type":"stream_event","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"working"}}}',
+            '{"type":"assistant","message":{"stop_reason":"tool_use"}}',
+            '{"type":"stream_event","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"answer"}}}',
+            '{"type":"assistant","message":{"stop_reason":"end_turn"}}',
+            '{"type":"result","result":"decoded final"}',
+        ]
+    )
+    transport = CaptureTransport([CaptureOutcome(output, stderr="diagnostic\n")])
+    transport.install(monkeypatch)
+    backend = _open(AgentClaude("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
+        )
+    )
+
+    assert response.content == "decoded final"
+    assert output_chunks == [
+        ("progress", "[Read]\n"),
+        ("progress", "working"),
+        ("stderr", "diagnostic\n"),
+    ]
+    command = transport.calls[0][0]
+    assert command[:2] == ["claude", "-p"]
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert "--include-partial-messages" in command
+    assert "--verbose" in command
+
+
+def test_claude_echo_stream_rejects_an_undecodable_final_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("not json")])
+    transport.install(monkeypatch)
+    backend = _open(AgentClaude("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
+
+    assert raised.value.cause == "protocol_failure"
+
+
+def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"I will inspect the files."}}',
+            '{"type":"item.started","item":{"type":"command_execution","command":"ls"}}',
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"aggregated_output":"file.txt\\n"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"final"}}',
+        ]
+    )
+    resumed_output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"I will check one more thing."}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}',
+        ]
+    )
+    transport = CaptureTransport(
+        [CaptureOutcome(output, stderr="codex log\n"), CaptureOutcome(resumed_output)]
+    )
+    transport.install(monkeypatch)
+    backend = _open(AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
+        )
+    )
+
+    assert response.content == "final"
+    assert output_chunks == [
+        ("progress", "I will inspect the files."),
+        ("progress", "$ ls\n"),
+        ("progress", "file.txt\n"),
+        ("stderr", "codex log\n"),
+    ]
+    assert transport.calls[0][0][:4] == ["codex", "exec", "--json", "--model"]
+    resumed = backend.ask(
+        SessionAskRequest("again", output_callback=lambda _phase, _text, **_metadata: None)
+    )
+    assert resumed.content == "resumed"
+    assert transport.calls[1][0][:5] == ["codex", "exec", "resume", "thread-1", "--json"]
+
+
+def test_codex_single_prompt_echo_decodes_jsonl_final_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"item.started","item":{"type":"command_execution","command":"pwd"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+        ]
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
+
+    output_chunks: list[tuple[str, str]] = []
+
+    response = backend.ask(
+        SessionAskRequest(
+            "question",
+            output_callback=lambda phase, text, **_metadata: output_chunks.append((phase, text)),
+        )
+    )
+
+    assert response.content == "answer"
+    assert output_chunks == [("progress", "$ pwd\n")]
+    assert transport.calls[0][0][:4] == ["codex", "exec", "--json", "--model"]
+
+
+def test_codex_single_prompt_echo_rejects_malformed_jsonl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("not json")])
+    transport.install(monkeypatch)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
+
+    assert raised.value.cause == "protocol_failure"
+
+
+def test_codex_single_prompt_echo_reports_turn_failure_as_agent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "\n".join(
+        (
+            '{"type":"thread.started","thread_id":"thread-1"}',
+            '{"type":"turn.failed","error":{"message":"upstream rate limit"}}',
+        )
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(
+            SessionAskRequest("question", output_callback=lambda _phase, _text, **_metadata: None)
+        )
+
+    assert raised.value.cause == "nonzero_exit"
+    assert "upstream rate limit" in raised.value.stderr_tail
 
 
 def test_pi_forks_immediately_after_open_then_child_starts_independently(
@@ -535,6 +796,24 @@ def test_codex_reply_combines_a_surrogate_escape_pair(monkeypatch: pytest.Monkey
     assert backend.ask(SessionAskRequest("hello")).content == "\U0001f600"
 
 
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_codex_reply_preserves_unicode_jsonl_separators(
+    monkeypatch: pytest.MonkeyPatch, separator: str
+) -> None:
+    expected = f"left{separator}right"
+    output = (
+        '{"type":"thread.started","thread_id":"first"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"'
+        f"{expected}"
+        '"}}'
+    )
+    transport = CaptureTransport([CaptureOutcome(output)])
+    transport.install(monkeypatch)
+    backend = _open(AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
+    assert backend.ask(SessionAskRequest("hello")).content == expected
+
+
 @pytest.mark.parametrize(
     "output",
     [
@@ -688,8 +967,12 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
         [CaptureOutcome("started"), CaptureOutcome(returncode=1, stderr="failed")]
     )
     transport.install(monkeypatch)
-    service = SessionService(lambda request: open_cli_session(request, idle_timeout=None))
-    handle = service.open(AgentClaude("", ""), SessionTransport.CLI)
+    service = SessionService(
+        lambda request: open_cli_session(
+            request, idle_timeout=None, get_sandbox_context=unavailable_sandbox_context
+        )
+    )
+    handle = service.open(AgentClaude("", ""), SessionTransport.CLI, env={})
     service.ask(handle, SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
@@ -1143,3 +1426,118 @@ def test_codex_keeps_a_malformed_stream_thread_unresumable(
         ["codex", "exec", "--json", "-"],
         ["codex", "exec", "--json", "-"],
     ]
+
+
+def _sandbox_wrapped_argv_prefix(argv: list[str], home: Path) -> None:
+    """Assert *argv* is wrapped by the systemd-run/srt chain rooted at *home*."""
+    assert argv[:4] == ["systemd-run", "--user", "--scope", "-q"]
+    srt_index = argv.index("srt")
+    assert argv[srt_index + 1] == "--settings"
+    assert argv[srt_index + 2] == str(home / ".agm" / "sandbox" / "default.json")
+    assert argv[srt_index + 3] == "--"
+
+
+def test_agent_command_session_wraps_each_prompt_under_sandbox_mode_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The session's own ``Sandbox`` mode -- fixed at open -- wraps the argv for
+    every prompt it sends, and each prepared sandbox command is closed right
+    after that prompt -- never held open across prompts."""
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    transport = CaptureTransport([CaptureOutcome("first"), CaptureOutcome("second")])
+    transport.install(monkeypatch)
+
+    closed_before_close: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed_before_close.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    limits = SandboxLimits()
+    backend = _open(
+        AgentCommand("cat %{SESSION_ID}"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=limits,
+    )
+
+    first = backend.ask(SessionAskRequest("first"))
+    second = backend.ask(SessionAskRequest("second"))
+
+    assert first.content == "first"
+    assert second.content == "second"
+    assert len(transport.calls) == 2
+    for argv, _stdin in transport.calls:
+        _sandbox_wrapped_argv_prefix(argv, home)
+    # Each prepared command started unclosed and was closed exactly once,
+    # independently of the other prompt.
+    assert closed_before_close == [False, False]
+
+
+def test_agent_command_session_ask_under_disabled_reproduces_the_unwrapped_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Disabled`` (the default) never consults sandboxing and reproduces the
+    plain, unwrapped argv a command session always sent before sandboxing existed."""
+    transport = CaptureTransport([CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    backend = _open(
+        AgentCommand("cat %{SESSION_ID}"), get_sandbox_context=unavailable_sandbox_context
+    )
+
+    response = backend.ask(SessionAskRequest("hello"))
+
+    assert response.content == "answer"
+    [(argv, _stdin)] = transport.calls
+    session = backend._session
+    assert session is not None
+    _file_prompt_argv(argv, ["cat", session.session_id])
+
+
+def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Claude session's mode is fixed at open and every native lifecycle
+    prompt it sends -- compaction, forking -- reuses it, not only ``ask``."""
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    transport = CaptureTransport(
+        [
+            CaptureOutcome("first"),
+            CaptureOutcome('{"is_error": false}'),
+            CaptureOutcome('{"session_id": "child"}'),
+        ]
+    )
+    transport.install(monkeypatch)
+
+    backend = ClaudeCliSessionBackend.open(
+        AgentClaude("m", "t"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+        env={"FIXED": "at-open"},
+    )
+
+    backend.ask(SessionAskRequest("first"))
+    backend.compact("")
+    child = backend.fork()
+
+    assert len(transport.calls) == 3
+    for argv, _stdin in transport.calls:
+        _sandbox_wrapped_argv_prefix(argv, home)
+    # Every native call this session made -- the initial prompt, compaction,
+    # and the fork itself -- ran under the same environment fixed at open
+    # (the sandbox backend may add its own entries on top, but never drops
+    # or changes the fixed one).
+    assert transport.envs[0] == transport.envs[1] == transport.envs[2]
+    assert transport.envs[0] is not None and transport.envs[0]["FIXED"] == "at-open"
+    assert isinstance(child, ClaudeCliSessionBackend)
+    assert child._permission_mode == PermissionMode.UNRESTRICTED
+    assert child._sandbox == SandboxLimits()
+    assert child._env == {"FIXED": "at-open"}

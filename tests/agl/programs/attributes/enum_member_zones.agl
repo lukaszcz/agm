@@ -3,9 +3,14 @@
 # and the zones drive construction and constructor patterns alike.
 
 enum Shape
-  | @arg-pos Rect(width: int, @arg-named label: text)
-  | @arg-named Circle(radius: int, color: text)
-  | Square(side: int)
+  | @arg-pos Rect
+      width: int
+      @arg-named label: text
+  | @arg-named Circle
+      radius: int
+      color: text
+  | Square
+      side: int
   | Empty
 
 def describe(@arg-pos shape: Shape) -> text =

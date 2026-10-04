@@ -1,0 +1,146 @@
+{
+  "scenarios": [
+    {
+      "name": "quoted_member_names",
+      "agents": {
+        "judge": [
+          "\"Pass\"",
+          "\"High\"",
+          "\"Fail\"",
+          "{\"verdict\": \"Pass-with-notes\", \"priority\": \"Low\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Pass\nPriority::High\nVerdict::Fail\nTriage(verdict = Verdict::Conditional, priority = Priority::Low)\n",
+        "calls": {"judge": 4},
+        "prompts": [
+          {"agent": "judge", "call": 0,
+           "schema_paths": [
+             {"path": ["enum"], "equals": ["Pass", "Pass-with-notes", "Fail"]}
+           ]},
+          {"agent": "judge", "call": 1,
+           "schema_paths": [
+             {"path": ["oneOf"],
+              "equals": [{"const": "High", "description": "Blocks the release."},
+                         {"const": "Low"}]}
+           ]},
+          {"agent": "judge", "call": 3,
+           "schema_paths": [
+             {"path": ["properties", "verdict", "enum"],
+              "equals": ["Pass", "Pass-with-notes", "Fail"]}
+           ]}
+        ]
+      }
+    },
+    {
+      "name": "lenient_recovers_a_bare_or_prose_wrapped_member",
+      "agents": {
+        "judge": [
+          "Pass",
+          "I would rank this Low.",
+          "\"Pass\"",
+          "{\"verdict\": \"Fail\", \"priority\": \"High\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Pass\nPriority::Low\nVerdict::Pass\nTriage(verdict = Verdict::Fail, priority = Priority::High)\n",
+        "calls": {"judge": 4}
+      }
+    },
+    {
+      "name": "lenient_reads_a_tag_containing_another_tag_whole",
+      "agents": {
+        "judge": [
+          "Pass-with-notes",
+          "The answer is \"High\".",
+          "\"Pass-with-notes\"",
+          "```json\n{\"verdict\": \"Pass\", \"priority\": \"Low\"}\n```"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Conditional\nPriority::High\nVerdict::Conditional\nTriage(verdict = Verdict::Pass, priority = Priority::Low)\n",
+        "calls": {"judge": 4}
+      }
+    },
+    {
+      "name": "one_member_named_twice_among_numbers",
+      "agents": {
+        "judge": [
+          "I found 3 issues, so Fail. Definitely Fail.",
+          "```\nLow\n```",
+          "\"Fail\"",
+          "{\"verdict\": \"Fail\", \"priority\": \"Low\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Fail\nPriority::Low\nVerdict::Fail\nTriage(verdict = Verdict::Fail, priority = Priority::Low)\n",
+        "calls": {"judge": 4}
+      }
+    },
+    {
+      "name": "two_members_are_ambiguous_and_retried",
+      "agents": {
+        "judge": [
+          "Pass or maybe Fail",
+          "Fail",
+          "Neither High nor Low fits",
+          "\"Low\"",
+          "\"Pass\"",
+          "{\"verdict\": \"Pass\", \"priority\": \"High\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Fail\nPriority::Low\nVerdict::Pass\nTriage(verdict = Verdict::Pass, priority = Priority::High)\n",
+        "calls": {"judge": 6}
+      }
+    },
+    {
+      "name": "lenient_reads_the_one_member_out_of_other_json",
+      "agents": {
+        "judge": [
+          "Fail [1]",
+          "{\"priority\": \"Low\", \"confidence\": 0.9}",
+          "\"Pass\"",
+          "{\"verdict\": \"Pass\", \"priority\": \"Low\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Fail\nPriority::Low\nVerdict::Pass\nTriage(verdict = Verdict::Pass, priority = Priority::Low)\n",
+        "calls": {"judge": 4}
+      }
+    },
+    {
+      "name": "unknown_member_and_nested_tag_object_are_retried",
+      "agents": {
+        "judge": [
+          "{\"$case\": \"Pass\"}",
+          "\"Urgent\"",
+          "\"High\"",
+          "\"Pass\"",
+          "{\"verdict\": {\"$case\": \"Pass\"}, \"priority\": \"High\"}",
+          "{\"verdict\": \"Pass\", \"priority\": \"High\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Pass\nPriority::High\nVerdict::Pass\nTriage(verdict = Verdict::Pass, priority = Priority::High)\n",
+        "calls": {"judge": 6}
+      }
+    },
+    {
+      "name": "strict_rejects_a_bare_member",
+      "runtime": {"parse_error_retries": 0},
+      "agents": {
+        "judge": [
+          "Pass",
+          "\"Low\"",
+          "Fail"
+        ]
+      },
+      "expect": {
+        "stdout": "Verdict::Pass\nPriority::Low\n",
+        "calls": {"judge": 3},
+        "raises": {"type": "AgentParseError", "fields": {"attempts": 1}}
+      }
+    }
+  ]
+}

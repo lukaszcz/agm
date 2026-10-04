@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ModuleId
@@ -15,12 +15,20 @@ from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import BuiltinKind, ModuleResolution, resolve_program
-from agm.agl.syntax.nodes import Call, ImportDecl, Program, static_function_items
+from agm.agl.syntax.nodes import (
+    Call,
+    ImportDecl,
+    Program,
+    static_function_items,
+)
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
 from agm.agl.syntax.types import UnitT
 from agm.agl.syntax.visitor import walk
-from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
+from agm.command_catalog import RESERVED_CONFIG_SECTION_NAMES, invalid_command_path
+from agm.config.engine_keys import ENGINE_KEY_NAMES
+from agm.config.qualified_keys import display_table_path, param_spellings_for
 from agm.core import fs
+from agm.core.toml import TomlDict
 from agm.packages.distribution import MANIFEST_NAME, distribution_files
 from agm.packages.errors import DisciplineError as DisciplineError
 from agm.packages.layout import MODULE_TREE_DIRNAME
@@ -28,11 +36,15 @@ from agm.packages.manifest import (
     PackageManifest,
     describe_unknown_fields,
     distribution_manifest,
+    registered_command_paths,
 )
 from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
 from agm.util.text import normalize_newlines
+
+if TYPE_CHECKING:
+    from agm.agl.semantics.type_table import TypeTable
 
 T = TypeVar("T")
 _ModuleResolutions = Mapping[ModuleId, ModuleResolution]
@@ -45,14 +57,22 @@ class PackageResolution:
     Validating what a package *ships* needs the same names as validating the
     tree it ships from, so the resolution is handed on rather than recomputed:
     a distribution is that tree minus excluded files, and no module in it is
-    ever loaded or resolved twice.
+    ever loaded or resolved twice. ``all_resolutions`` covers every module the
+    graph reached — package, dependencies, and ``std`` — for checks over the
+    whole dependency closure (manifest ``[config]`` parameter spellings);
+    ``resolutions`` is its restriction to ``modules``, the package's own.
     """
 
     package: PackageInfo
     modules: Mapping[ModuleId, Path] = field(default_factory=dict)
-    resolutions: _ModuleResolutions = field(default_factory=dict)
+    all_resolutions: _ModuleResolutions = field(default_factory=dict)
     adjacency: Mapping[ModuleId, tuple[ModuleId, ...]] = field(default_factory=dict)
     digests: Mapping[ModuleId, str] = field(default_factory=dict)
+
+    @property
+    def resolutions(self) -> _ModuleResolutions:
+        """This package's own module resolutions, restricted from ``all_resolutions``."""
+        return {module_id: self.all_resolutions[module_id] for module_id in self.modules}
 
 
 def validate_package(
@@ -70,6 +90,7 @@ def validate_package(
         package, modules, dependency_packages=tuple(dependency_packages)
     )
     _validate_command_programs(package.manifest, resolution.resolutions)
+    _validate_manifest_config(package.manifest, resolution.all_resolutions)
     _validate_resources(
         modules,
         resolution.resolutions,
@@ -222,7 +243,10 @@ def _resolve_package_modules(
     return PackageResolution(
         package,
         modules=dict(modules),
-        resolutions={module_id: resolved.modules[module_id].resolved for module_id in modules},
+        all_resolutions={
+            module_id: resolved_module.resolved
+            for module_id, resolved_module in resolved.modules.items()
+        },
         adjacency=dict(graph.adjacency),
         digests={module_id: _digest(graph.modules[module_id].source_text) for module_id in modules},
     )
@@ -311,6 +335,7 @@ def _validate_archive_content(
     except (OSError, UnicodeDecodeError) as exc:
         raise DisciplineError(f"cannot load archive package {manifest.name!r}: {exc}") from exc
     _validate_command_programs(manifest, resolution.resolutions)
+    _validate_manifest_config(manifest, resolution.all_resolutions)
     _validate_resources(
         modules,
         resolution.resolutions,
@@ -374,9 +399,9 @@ def _resource_calls(resolution: ModuleResolution) -> list[tuple[Call, BuiltinKin
 
 
 def validate_unreserved_package_name(name: str) -> None:
-    """Reject a package name that AGM's own built-in command surface reserves."""
+    """Reject a package name that AGM's own commands or config sections reserve."""
 
-    if name in RESERVED_COMMAND_NAMES:
+    if name in RESERVED_CONFIG_SECTION_NAMES:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
 
@@ -414,10 +439,16 @@ def _package_module_id(name: str, relative: str) -> ModuleId:
 
 
 def _validate_command_paths(manifest: PackageManifest) -> None:
-    for command_path in manifest.commands:
-        invalid = invalid_command_path(command_path)
-        if invalid is not None:
-            raise DisciplineError(f"command path {command_path!r} {invalid}")
+    """Hold command and alias paths to every reserved name, config sections included.
+
+    Loading tolerates a path that only collides with a config section, so an
+    installed package stays runnable; a validated package may not register one.
+    """
+    for kind, paths in (("command", manifest.commands), ("alias", manifest.aliases)):
+        for path in paths:
+            invalid = invalid_command_path(path, reserved=RESERVED_CONFIG_SECTION_NAMES)
+            if invalid is not None:
+                raise DisciplineError(f"{kind} path {path!r} {invalid}")
 
 
 def _validate_command_programs(manifest: PackageManifest, resolutions: _ModuleResolutions) -> None:
@@ -465,3 +496,87 @@ def _validate_program_reference(
         raise DisciplineError(
             f"registered program {reference!r} must declare no type parameters and a unit result"
         )
+
+
+def _validate_manifest_config(manifest: PackageManifest, resolutions: _ModuleResolutions) -> None:
+    """Validate ``[config]``'s nested command tables and leaves.
+
+    A nested table's key names a registered command, group, or alias path
+    (*manifest*'s own, ``@command`` merged in); every other leaf spells an
+    engine setting or a ``@param`` binding in the package's resolved
+    dependency closure (*resolutions*: package, dependencies, and ``std``).
+    Per-program reachability, precedence and cross-route ambiguity are a run-time
+    concern: a leaf the selected program does not consume is warned about there.
+    """
+    if not manifest.config:
+        return
+    from agm.agl.runtime.engine_config import validate_manifest_leaf_value
+    from agm.agl.semantics.type_table import create_seeded_type_table
+
+    registered = registered_command_paths(manifest)
+    param_spellings = _closure_param_spellings(resolutions)
+    _validate_config_level(
+        manifest.config,
+        (),
+        registered,
+        param_spellings,
+        create_seeded_type_table(),
+        validate_manifest_leaf_value,
+    )
+
+
+def _validate_config_level(
+    table: TomlDict,
+    prefix: tuple[str, ...],
+    registered: frozenset[tuple[str, ...]],
+    param_spellings: frozenset[str],
+    type_table: "TypeTable",
+    decode: Callable[[str, object, "TypeTable"], object],
+) -> None:
+    for key, value in table.items():
+        path = (*prefix, key)
+        is_command_word = path in registered
+        is_leaf_spelling = key in ENGINE_KEY_NAMES or key in param_spellings
+        if is_command_word and is_leaf_spelling:
+            raise DisciplineError(
+                f"manifest config key {display_table_path(path)!r} is ambiguous between a "
+                "registered command and a parameter or engine-setting spelling"
+            )
+        if is_command_word:
+            if not isinstance(value, dict):
+                raise DisciplineError(
+                    f"manifest config key {display_table_path(path)!r} registers a command "
+                    "and must be a table"
+                )
+            nested: TomlDict = value
+            _validate_config_level(nested, path, registered, param_spellings, type_table, decode)
+            continue
+        if key in ENGINE_KEY_NAMES:
+            try:
+                decode(key, value, type_table)
+            except ValueError as exc:
+                raise DisciplineError(
+                    f"manifest config key {display_table_path(path)!r}: {exc}"
+                ) from exc
+            continue
+        if key not in param_spellings:
+            raise DisciplineError(
+                f"manifest config key {display_table_path(path)!r} names neither a registered "
+                "command nor a known parameter or engine setting"
+            )
+
+
+def _closure_param_spellings(resolutions: _ModuleResolutions) -> frozenset[str]:
+    """Return every bare or dotted spelling of a ``@param`` binding across *resolutions*."""
+    spellings: set[str] = set()
+    for module_id, resolution in resolutions.items():
+        for binding in resolution.param_bindings():
+            spellings.update(
+                param_spellings_for(
+                    module_id.segments,
+                    binding.scope_path,
+                    binding.cli.name,
+                    is_entry=module_id.is_entry,
+                )
+            )
+    return frozenset(spellings)

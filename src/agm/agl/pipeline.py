@@ -3,7 +3,7 @@
 Drives the full ``parse → scope → typecheck → matchcompile → lower/link → IR eval`` pipeline:
 registers agents/codecs, validates host-supplied program arguments, materializes
 output contracts, and executes the program (or stops after static checking for
-``agm exec --dry-run``).  Structured outputs use the JSON codec with
+``agm check``). Structured outputs use the JSON codec with
 lenient-by-default recovery.
 
 ``agm.agl.runtime`` is the eval-free services layer (agents, codecs, arguments,
@@ -32,14 +32,13 @@ from agm.agl.diagnostics import (
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
+    lazy_interpreter,
+    resolver_over_interpreter,
 )
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.contract import materialize_ir_contracts
-from agm.agl.runtime.types import (
-    CallSiteInfo as CallSiteInfo,
-)
 from agm.agl.runtime.types import (
     HostEnvironment,
     ParamBindingInfo,
@@ -52,6 +51,8 @@ from agm.core.cleanup import notes_of
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agent.spec_defaults import AgentSpecResolver
+    from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
@@ -78,12 +79,21 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import FuncDef, Program, TypeAlias
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
     from agm.packages.model import PackageInfo
+    from agm.sandbox.prepare import SandboxContext
 
 _ResultT = TypeVar("_ResultT")
+
+
+def _trace_binding_label(key: "StaticBindingKey") -> str:
+    """Return the stable qualified spelling of a host-seeded binding."""
+    module_id, scope_path, name = key
+    declaration_path = "::".join((*scope_path, name))
+    return f"{module_id.display()}::{declaration_path}"
 
 
 class ArtifactProvenanceError(Exception):
@@ -151,6 +161,9 @@ class ArgumentPreflight:
         The bound, decoded arguments, ready for ``run_prepared``'s own
         ``arguments`` — one entry per declared parameter, in declaration
         order.
+    ``argument_diagnostics``
+        Program argument failures, separate from static and module parameter
+        diagnostics so CLI hosts can present them as usage errors.
     ``param_seeds``
         The decoded module-parameter values, ready for ``run_prepared``.
         Already folds in any ``@config`` entry targeting a ``@param``
@@ -172,6 +185,7 @@ class ArgumentPreflight:
     arguments: "tuple[Value | UseDefault, ...]"
     param_seeds: "Mapping[StaticBindingKey, Value]"
     program_config: "Mapping[StaticBindingKey, Value]"
+    argument_diagnostics: "tuple[Diagnostic, ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +193,7 @@ class ArgumentPreflightFailure:
     """Failed result of ``PipelineDriver.preflight_arguments``; ``result`` holds the diagnostics."""
 
     result: "RunResult"
+    argument_diagnostics: "tuple[Diagnostic, ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +211,11 @@ class RunOptions:
     """
 
     check_only: bool = False
+    echo_agent_output: bool = False
     trace_file: "Path | None" = None
+    invoked_command: str | None = None
+    program_function: str | None = None
+    program_span: "SourceSpan | None" = None
     host_settings_policy: "HostSettingsPolicy | None" = None
     builtin_host_settings: "Mapping[str, Value] | None" = None
     builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None
@@ -357,13 +376,9 @@ class RunResult:
         (``A::x``). An explicitly selected synthetic inline ``main`` also
         contributes its direct bindings; an explicit file entry does not.
         Empty for failed runs.
-    ``call_sites``
-        Static call-site inventory populated when ``check_only=True``
-        (``agm exec --dry-run``).  One entry per agent-call/exec site in
-        source order.  Empty for ordinary runs.
     ``trace_path``
         Path of the JSONL trace file written during this run, or ``None``
-        when tracing was disabled (``--no-trace``) or the run was a dry-run.
+        when tracing was disabled (``--no-trace``) or execution was check-only.
         This handle identifies the prepared program.
     """
 
@@ -372,7 +387,6 @@ class RunResult:
     error: RunError | None
     warnings: list[Diagnostic] = field(default_factory=list)
     bindings: dict[str, Value] = field(default_factory=dict)
-    call_sites: tuple[CallSiteInfo, ...] = field(default_factory=tuple)
     trace_path: Path | None = field(default=None)
 
 
@@ -401,6 +415,16 @@ class PipelineDriver:
         across one program invocation pass the same registry to each so
         companion module imports and Python module globals are shared. Each
         run still creates an interpreter with its own companion runtime state.
+    get_sandbox_context : callable or None
+        Lazily builds the `SandboxContext` a sandboxed ``exec`` call needs
+        (see `agm.sandbox.prepare.lazy_sandbox_context`). Required, so a host
+        with no sandbox capability passes ``None`` deliberately rather than
+        forgetting it; ``None`` makes a sandboxed ``exec`` raise ``ExecError``.
+    resolve_agent_spec : callable or None
+        Applies host agent defaults to every decoded ``Agent`` spec before
+        dispatch (see `agm.agent.spec_defaults.configured_defaults_resolver`).
+        Required, like ``get_sandbox_context``; ``None`` dispatches specs as
+        decoded.
     """
 
     def __init__(
@@ -412,11 +436,15 @@ class PipelineDriver:
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None",
+        resolve_agent_spec: "AgentSpecResolver | None",
     ) -> None:
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
+        self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._default_call_depth_limit = (
             default_call_depth_limit
             if default_call_depth_limit is not None
@@ -470,6 +498,8 @@ class PipelineDriver:
         agent_dispatcher: AgentFn | None,
         session_host: "SessionHost | None",
         shell_exec_timeout: float | None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None",
+        resolve_agent_spec: "AgentSpecResolver | None",
     ) -> None:
         """Replace this driver's execution-time services before ``run_prepared``.
 
@@ -484,11 +514,17 @@ class PipelineDriver:
         :meth:`preflight_arguments` never read these fields, only the
         eventual :meth:`run_prepared` call does. Invalidates the cached host
         environment so the new dispatcher/session host take effect.
+        ``get_sandbox_context`` is required (``None`` is a deliberate "no
+        sandbox capability"), so a sandboxed ``exec`` raises ``ExecError``
+        instead of crashing when a host forgets to wire one. Likewise
+        ``resolve_agent_spec`` is required; ``None`` applies no agent defaults.
         """
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
+        self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._host_env_cache = None
 
     def host_environment(self) -> HostEnvironment:
@@ -505,6 +541,8 @@ class PipelineDriver:
             session_host=self._session_host,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
+            get_sandbox_context=self._get_sandbox_context,
+            resolve_agent_spec=self._resolve_agent_spec,
         )
         return self._host_env_cache
 
@@ -535,13 +573,12 @@ class PipelineDriver:
         host_env: HostEnvironment,
         warnings: list[Diagnostic],
     ) -> RunResult:
-        """Run a freshly lowered ``executable`` — the shared tail of the
-        shared pipeline tail.
+        """Run a freshly lowered ``executable`` through the shared pipeline tail.
 
-        Materializes host codec contracts, honours the ``check_only`` dry-run
-        stop (call-site inventory, no execution), then builds and runs the
-        :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
-        ``RunResult``. All return paths carry *warnings*.
+        Materializes host codec contracts, honours the ``check_only`` stop
+        (no execution), then builds and runs the :class:`IrInterpreter`,
+        mapping an uncaught ``AglRaise`` to a failing ``RunResult``. All
+        return paths carry *warnings*.
 
         ``options.arguments`` is ``options.program_symbol``'s own bound
         value-parameter argument list, in declaration order. When the caller
@@ -625,20 +662,18 @@ class PipelineDriver:
             )
 
         # ----------------------------------------------------------------
-        # [check_only] --dry-run stop: the full static pipeline, program-argument
+        # [check_only] stop: the full static pipeline, program-argument
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement — no program output, no evaluation
         # side effects, no extern companion imports, and no trace is written.
         # ----------------------------------------------------------------
         if check_only:
-            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
             return RunResult(
                 ok=True,
                 diagnostics=[],
                 error=None,
                 warnings=list(warnings),
                 bindings={},
-                call_sites=tuple(inventory),
                 trace_path=None,
             )
 
@@ -650,7 +685,7 @@ class PipelineDriver:
 
         # Create the trace store for this run.  When trace_file is None the
         # store is a no-op and no file is touched.
-        trace = TraceStore(path=options.trace_file)
+        trace = TraceStore(path=options.trace_file, sources=executable.sources)
         if options.trace_file is not None:
             from agm.core.fs import mkdir
 
@@ -658,8 +693,6 @@ class PipelineDriver:
                 mkdir(options.trace_file.parent, parents=True, exist_ok=True)
             except OSError as exc:
                 trace.disable(exc)
-        trace.run_start()
-
         if options.host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
@@ -681,12 +714,62 @@ class PipelineDriver:
             for key, value in options.builtin_var_seeds.items():
                 interpreter_builtin_settings[key] = value
 
+        if trace.path is not None:
+            from agm.agl.ir.builtin_vars import builtin_var_key
+            from agm.agl.ir.program import ValueDescriptors
+            from agm.agl.modules.ids import STD_CONFIG_ID
+            from agm.agl.runtime.serialize import value_to_trace_json_obj
+
+            descriptors = ValueDescriptors.from_program(executable)
+            signature = (
+                executable.program_signatures.get(program_symbol, ())
+                if program_symbol is not None
+                else ()
+            )
+            traced_arguments = {
+                param.name: value_to_trace_json_obj(value, descriptors, executable.builtin_nominals)
+                for param, value in zip(signature, arguments)
+                if not isinstance(value, UseDefault)
+            }
+            traced_parameters = {
+                _trace_binding_label(key): value_to_trace_json_obj(
+                    value, descriptors, executable.builtin_nominals
+                )
+                for key, value in (options.param_seeds or {}).items()
+            }
+            normalized_settings = {
+                (builtin_var_key(STD_CONFIG_ID, (), key) if isinstance(key, str) else key): value
+                for key, value in interpreter_builtin_settings.items()
+            }
+            traced_config = {
+                _trace_binding_label(key): value_to_trace_json_obj(
+                    value, descriptors, executable.builtin_nominals
+                )
+                for key, value in normalized_settings.items()
+            }
+        else:
+            traced_arguments = None
+            traced_parameters = None
+            traced_config = None
+
+        trace.run_start(
+            command=options.invoked_command,
+            function=options.program_function,
+            arguments=traced_arguments,
+            parameters=traced_parameters,
+            config=traced_config,
+            span=options.program_span,
+        )
+
         try:
             interp = IrInterpreter(
                 executable,
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
+                get_sandbox_context=host_env.get_sandbox_context,
+                resolve_agent_spec=host_env.resolve_agent_spec,
                 strict_json=self._default_strict_json,
+                echo_agent_output=options.echo_agent_output,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
                 max_call_depth=self._default_call_depth_limit,
@@ -760,7 +843,7 @@ class PipelineDriver:
         entry_source: str,
         *,
         entry_path: "Path | None" = None,
-        inline_command: bool = False,
+        inline_code: bool = False,
     ) -> ParsedEntry:
         """Parse *entry_source* once, ahead of module-graph loading.
 
@@ -769,7 +852,7 @@ class PipelineDriver:
         Collects TAB and spaced-qualifier advisories.  Non-raising: an
         ``AglSyntaxError`` is captured into :attr:`ParsedEntry.diagnostics`
         with ``program`` left ``None``.
-        *inline_command* applies the ``agm exec -c`` synthetic-entry wrap.
+        *inline_code* applies the ``agm exec -c`` synthetic-entry wrap.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.loader import EntryParseSyntaxError, parse_entry_module
@@ -779,7 +862,7 @@ class PipelineDriver:
             try:
                 with frontend_recursion_boundary():
                     parsed_module = parse_entry_module(
-                        entry_source, entry_path=entry_path, inline_command=inline_command
+                        entry_source, entry_path=entry_path, inline_code=inline_code
                     )
             except AglSyntaxError as exc:
                 spaced_qualifiers = (
@@ -895,7 +978,7 @@ class PipelineDriver:
                         roots=roots,
                         default_stdlib=default_stdlib,
                         spaced_qualifiers=parsed.spaced_qualifiers,
-                        default_label="<command>",
+                        default_label="<code>",
                         source_text=normalize_newlines(entry_source),
                     )
                     resolved = resolve_program(graph)
@@ -957,6 +1040,7 @@ class PipelineDriver:
         source: str,
         *,
         check_only: bool = False,
+        echo_agent_output: bool = False,
         trace_file: "Path | None" = None,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
@@ -980,6 +1064,7 @@ class PipelineDriver:
                 default_stdlib=default_stdlib,
             ),
             check_only=check_only,
+            echo_agent_output=echo_agent_output,
             trace_file=trace_file,
             builtin_var_seeds=builtin_var_seeds,
             process_environment=process_environment,
@@ -1133,7 +1218,11 @@ class PipelineDriver:
         prepared: PreparedProgram,
         *,
         check_only: bool = False,
+        echo_agent_output: bool = False,
         trace_file: "Path | None" = None,
+        invoked_command: str | None = None,
+        program_function: str | None = None,
+        program_span: "SourceSpan | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgram | None" = None,
         executable: "ExecutableProgram | None" = None,
@@ -1164,6 +1253,14 @@ class PipelineDriver:
             initializers have run, within the interpreter's managed execution
             boundary. ``None`` invokes no declared entry after initialization.
 
+        ``invoked_command``
+            CLI command spelling to include in ``run_start`` when supplied by
+            a host.
+
+        ``program_function`` and ``program_span``
+            Selected ``program def`` declaration name and source span for the
+            ``run_start`` record.
+
         ``arguments``
             *program_symbol*'s own bound value-parameter argument list, in
             declaration order (:meth:`preflight_arguments`) — this method
@@ -1188,7 +1285,11 @@ class PipelineDriver:
             prepared,
             RunOptions(
                 check_only=check_only,
+                echo_agent_output=echo_agent_output,
                 trace_file=trace_file,
+                invoked_command=invoked_command,
+                program_function=program_function,
+                program_span=program_span,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
                 builtin_var_seeds=builtin_var_seeds,
@@ -1275,13 +1376,15 @@ class PipelineDriver:
         without lowering it a second time.
 
         *param_values* (the supplied/program-route tier) always wins.
-        *param_values_lower* (the module-route tier) is decoded only for keys
-        neither *param_values* nor the selected program's own ``@config``
-        cover — a module-route value either of those overrides is never
-        decoded, exactly as a program-route override is today. The
-        ``@config`` values targeting a ``@param`` binding are already typed
-        ``Value``s (evaluated by :meth:`_evaluate_program_config`) and need
-        no decoding; they rank between the two raw tiers.
+        *param_values_lower* (the module-route tier — a package-owned
+        program's manifest ``[config]`` values already folded in above the
+        plain module route) is decoded only for keys neither *param_values*
+        nor the selected program's own ``@config`` cover — a value either of
+        those overrides is never decoded, exactly as a program-route override
+        is today. The ``@config`` values targeting a ``@param`` binding are
+        already typed ``Value``s (evaluated by
+        :meth:`_evaluate_program_config`) and need no decoding; they rank
+        between the two raw tiers.
         """
         from agm.agl.runtime.arguments import bind_param_values, bind_program_arguments_for
 
@@ -1289,8 +1392,12 @@ class PipelineDriver:
         if executable is None or not result.ok:
             return ArgumentPreflightFailure(result=result)
 
-        bound, argument_diagnostics = bind_program_arguments_for(executable, program, arguments)
-        program_config = self._evaluate_program_config(executable, program)
+        get_interp = lazy_interpreter(executable)
+        default_resolver = resolver_over_interpreter(get_interp)
+        bound, argument_diagnostics = bind_program_arguments_for(
+            executable, program, arguments, default_resolver=default_resolver
+        )
+        program_config = self._evaluate_program_config(executable, program, get_interp)
         config_param_values = {
             key: value for key, value in program_config.items() if key in executable.param_bindings
         }
@@ -1300,8 +1407,12 @@ class PipelineDriver:
             for key, value in (param_values_lower or {}).items()
             if key not in upper and key not in config_param_values
         }
-        decoded_lower, lower_diagnostics = bind_param_values(executable, lower)
-        decoded_upper, upper_diagnostics = bind_param_values(executable, upper)
+        decoded_lower, lower_diagnostics = bind_param_values(
+            executable, lower, default_resolver=default_resolver
+        )
+        decoded_upper, upper_diagnostics = bind_param_values(
+            executable, upper, default_resolver=default_resolver
+        )
         param_seeds = {**decoded_lower, **config_param_values, **decoded_upper}
         diagnostics = (*argument_diagnostics, *lower_diagnostics, *upper_diagnostics)
         if diagnostics:
@@ -1311,7 +1422,8 @@ class PipelineDriver:
                     diagnostics=list(diagnostics),
                     error=None,
                     warnings=result.warnings,
-                )
+                ),
+                argument_diagnostics=argument_diagnostics,
             )
         return ArgumentPreflight(
             result=result,
@@ -1323,20 +1435,25 @@ class PipelineDriver:
 
     @staticmethod
     def _evaluate_program_config(
-        executable: "ExecutableProgram", program: ProgramDeclInfo
+        executable: "ExecutableProgram",
+        program: ProgramDeclInfo,
+        get_interp: "Callable[[], IrInterpreter]",
     ) -> "Mapping[StaticBindingKey, Value]":
         """Evaluate *program*'s own ``@config`` entries, if it carries any.
 
-        A throwaway interpreter evaluates each checked constant value
-        expression; nothing is executed and no module initializer runs. Empty
-        when *program* declares no ``@config``, so an unconfigured program
-        never pays this construction cost.
+        *get_interp* lazily builds (or returns the already-built) throwaway
+        interpreter that evaluates each checked constant value expression;
+        nothing is executed and no module initializer runs. Empty when
+        *program* declares no ``@config``, so an unconfigured program never
+        pays this construction cost; *get_interp* is shared with the field-
+        default resolver built alongside it in :meth:`prepare_arguments`, so
+        at most one throwaway interpreter is ever built per preflight.
         """
         program_symbol = executable.program_symbols[program.node_id]
         entries = executable.program_configs.get(program_symbol, ())
         if not entries:
             return {}
-        interp = IrInterpreter(executable)
+        interp = get_interp()
         return {key: interp.evaluate_constant(value) for key, value in entries}
 
     def _run_program(
@@ -1475,8 +1592,9 @@ class PipelineDriver:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
             # and after every static pass (so a static error elsewhere is reported
-            # instead, with no companion import side effect). Dry-run stops before
-            # this host-side import step to preserve its no-side-effects contract.
+            # instead, with no companion import side effect). The check-only stop
+            # happens before this host-side import step to preserve its
+            # no-side-effects contract.
             from agm.agl.ir.program import ValueDescriptors
 
             run_failure = self._wire_externs_or_fail(
@@ -1562,7 +1680,7 @@ def _select_program_inventory(
     graph: "ModuleGraph",
     module_id: "ModuleId",
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its graph-reachable runtime modules and source inventory.
+    """Restrict a selected program to its runtime-reachable modules and source-reachable params.
 
     ``program_configs`` is left whole: it is already keyed by each program
     def's own linked symbol, so ``_evaluate_program_config`` selects the
@@ -1579,11 +1697,6 @@ def _select_program_inventory(
         modules={
             mid: module for mid, module in executable.modules.items() if mid in runtime_reachable
         },
-        dry_run_inventory=tuple(
-            call_site
-            for call_site in executable.dry_run_inventory
-            if call_site.module in source_reachable
-        ),
         param_bindings={
             key: symbol
             for key, symbol in executable.param_bindings.items()
@@ -1647,42 +1760,32 @@ def _module_param_infos(
     *aliases* is the caller's shared alias index when it also discovers
     programs from the same checked program; ``None`` builds one for this call.
     """
-    from agm.agl.syntax.nodes import (
-        LetDecl,
-        VarDecl,
-        static_binding_name,
-        static_binding_node_id,
-        static_items,
-    )
+    from agm.agl.syntax.nodes import VarDecl, static_binding_name
 
     alias_index = _TypeAliasIndex(checked) if aliases is None else aliases
     module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
     for module_id, checked_module in checked.modules.items():
         attributes = checked_module.resolved.attributes
+        type_table = checked_module.type_env.type_table
         params: list[ParamBindingInfo] = []
-        for item in static_items(checked_module.resolved.program.body.items):
-            if not isinstance(item, (LetDecl, VarDecl)):
-                continue
-            binding_node_id = static_binding_node_id(item)
-            cli = attributes.params.get(binding_node_id)
-            if cli is None:
-                continue
-            name = static_binding_name(item)
-            binding_type = checked_module.type_env.binding_type_of(binding_node_id)
+        for binding in checked_module.resolved.param_bindings():
+            name = static_binding_name(binding.item)
+            binding_type = checked_module.type_env.binding_type_of(binding.node_id)
             params.append(
                 ParamBindingInfo(
                     module=module_id,
-                    scope_path=tuple(segment.name for segment in item.scope_path),
+                    scope_path=binding.scope_path,
                     name=name,
-                    node_id=binding_node_id,
-                    span=item.span,
+                    node_id=binding.node_id,
+                    span=binding.item.span,
                     type=binding_type,
-                    mutable=isinstance(item, VarDecl),
-                    cli=cli,
-                    doc=attributes.docs.get(item.node_id),
+                    mutable=isinstance(binding.item, VarDecl),
+                    cli=binding.cli,
+                    doc=attributes.docs.get(binding.item.node_id),
                     is_path=_annotates_path(
-                        checked, module_id, item.type_ann, binding_type, alias_index
+                        checked, module_id, binding.item.type_ann, binding_type, alias_index
                     ),
+                    enum_values=_enum_completion_values(binding_type, type_table),
                 )
             )
         module_params[module_id] = tuple(params)
@@ -1703,6 +1806,7 @@ def _program_param_infos(
     describe the same parameter list, in the same declaration order.
     """
     checked_module = checked.modules[module_id]
+    type_table = checked_module.type_env.type_table
     signature = checked_module.type_env.function_signature_of(funcdef.node_id)
     return tuple(
         ProgramParamInfo(
@@ -1711,12 +1815,54 @@ def _program_param_infos(
             type=param_spec.type,
             has_default=param_spec.has_default,
             span=ast_param.span,
-            cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
+            cli=_typed_option_spec(
+                checked_module.resolved.attributes.program_options[ast_param.node_id],
+                param_spec.type,
+            ),
             is_path=_annotates_path(
                 checked, module_id, ast_param.type_expr, param_spec.type, aliases
             ),
+            enum_values=_enum_completion_values(param_spec.type, type_table),
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
+    )
+
+
+def _typed_option_spec(spec: "ProgramOptionSpec", type_: "Type") -> "ProgramOptionSpec":
+    """Return *spec* with its positional CLI default settled against the checked type.
+
+    Scope recognition marks every unzoned required parameter. One whose type
+    has a negative polarity stays flag-addressed: a positional slot cannot
+    spell ``--no-x``.
+    """
+    from agm.agl.semantics.types import is_negatable_host_type
+
+    if spec.cli_positional and is_negatable_host_type(type_):
+        return replace(spec, cli_positional=False)
+    return spec
+
+
+def _enum_completion_values(type_: "Type", type_table: "TypeTable") -> tuple[str, ...]:
+    """Return the value-syntax names a bare word can construct for a parameter's enum.
+
+    Members with a required field are omitted: they need an argument list.
+    """
+    from agm.agl.semantics.types import (
+        EnumType,
+        is_standard_option_enum,
+        is_standard_optional_enum,
+    )
+
+    if isinstance(type_, EnumType) and (
+        is_standard_option_enum(type_) or is_standard_optional_enum(type_)
+    ):
+        type_ = type_.type_args[0]
+    if not isinstance(type_, EnumType):
+        return ()
+    return tuple(
+        type_table.external_name(member).name or member.name
+        for member in type_table.enum_members(type_)
+        if all(has_default for _, has_default in type_table.field_has_default(member))
     )
 
 
@@ -2102,6 +2248,8 @@ def assemble_host_environment(
     session_host: "SessionHost | None",
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+    resolve_agent_spec: "AgentSpecResolver | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
@@ -2134,6 +2282,8 @@ def assemble_host_environment(
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
+        get_sandbox_context=get_sandbox_context,
+        resolve_agent_spec=resolve_agent_spec,
     )
 
 
@@ -2198,22 +2348,3 @@ def exception_value_to_run_error(
         col=col,
         notes=notes,
     )
-
-
-def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:
-    """Convert lowering-owned dry-run metadata to the public runtime shape."""
-    from agm.agl.ir.program import DryRunEntry
-
-    return [
-        CallSiteInfo(
-            callee=entry.callee,
-            target_type=entry.target_type_label,
-            codec_name=entry.codec_name,
-            has_schema=entry.has_schema,
-            parse_policy=entry.parse_policy,
-            line=entry.line,
-            col=entry.col,
-        )
-        for entry in entries
-        if isinstance(entry, DryRunEntry)
-    ]

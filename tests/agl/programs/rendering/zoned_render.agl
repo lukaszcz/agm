@@ -29,7 +29,9 @@ record Boxed[T]
 # A generic enum with an `@arg-pos` inline member: the same zone rule applies
 # regardless of the type argument.
 enum Tree[T]
-  | @arg-pos Leaf(value: T, @arg-named tag: text)
+  | @arg-pos Leaf
+      value: T
+      @arg-named tag: text
   | Empty
 
 # An inline `@arg-pos` enum member: it renders qualified by its enum.

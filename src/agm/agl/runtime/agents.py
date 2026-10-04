@@ -6,15 +6,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agent.stream import ClaudeOutputStream, decode_claude_stream_json
+from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.builtin_nominals import BuiltinNominals, standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.values import RecordValue, TextValue, Value
-from agm.core.env import clone_env
+from agm.sandbox.request import PreparedSandboxCommand
 
 if TYPE_CHECKING:
     from agm.agent.runner import PromptDelivery
     from agm.agent.spec import AgentSpec
+    from agm.sandbox.prepare import SandboxContext, SandboxRun
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
@@ -31,14 +33,21 @@ def _run_request(
     idle_timeout: float | None,
     *,
     delivery: "PromptDelivery",
+    sandbox: "SandboxRun | None" = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stdout_finalizer: Callable[[], None] | None = None,
+    decode_stdout: Callable[[str], str] | None = None,
+    interactive: bool = False,
 ) -> AgentResponse:
     """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
         cleanup_temp_files,
         prepare_rendered_prompt_run,
         prompt_run_result_error,
+        result_stderr_tail,
         run_prepared_prompt_result,
     )
+    from agm.agent.spec import AgentCodex
     from agm.util.interp import InterpolationError
 
     temp_files: list[Path] = []
@@ -47,19 +56,41 @@ def _run_request(
             request.prompt,
             runner=command,
             temp_files=temp_files,
-            env=clone_env(),
+            env=request.env,
             delivery=delivery,
+            sandbox=sandbox,
+            pty=interactive,
         )
-        result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
+        output_callback = request.output_callback
+        result = run_prepared_prompt_result(
+            prepared,
+            idle_timeout=idle_timeout,
+            stdout_callback=stdout_callback,
+            stdout_to_file=isinstance(request.agent, AgentCodex),
+            stderr_callback=(
+                None if output_callback is None else lambda text: output_callback("stderr", text)
+            ),
+            interactive=interactive,
+        )
+        if stdout_finalizer is not None:
+            stdout_finalizer()
         call_info = AgentCallInfo(
             argv=prepared.argv or [],
             prompt_via_stdin=prepared.prompt_via_stdin,
             elapsed=result.elapsed,
             exit_code=result.returncode,
+            # A prepared but never-started sandbox (preparation failed) never
+            # actually ran the call under the sandbox, so this must reflect
+            # what happened, not merely what was requested.
+            sandboxed=isinstance(prepared.sandbox, PreparedSandboxCommand),
+            permission_mode=request.permission_mode.value,
         )
     except InterpolationError as exc:
         raise AgentCallHostError(
-            cause="spawn_failure", exit_code=None, stderr_tail=str(exc), elapsed=0.0
+            cause="interpolation_failure" if interactive else "spawn_failure",
+            exit_code=None,
+            stderr_tail=str(exc),
+            elapsed=0.0,
         ) from exc
     finally:
         cleanup_temp_files(temp_files)
@@ -68,15 +99,66 @@ def _run_request(
         raise AgentCallHostError(
             cause=failure.cause,
             exit_code=result.returncode,
-            stderr_tail=stderr_tail(result.stderr.text_or_note("stderr")[0]),
+            stderr_tail=result_stderr_tail(result),
             elapsed=result.elapsed,
             call_info=call_info,
             detail=failure.detail,
         )
+    content = result.stdout.text()
+    if decode_stdout is not None:
+        try:
+            content = decode_stdout(content)
+        except ValueError as exc:
+            raise AgentCallHostError(
+                cause="protocol_failure",
+                exit_code=result.returncode,
+                stderr_tail=result_stderr_tail(result),
+                elapsed=result.elapsed,
+                call_info=call_info,
+                detail=str(exc),
+            ) from exc
     return AgentResponse(
-        content=result.stdout.text(),
+        content=content,
         metadata={"elapsed": result.elapsed},
         call_info=call_info,
+    )
+
+
+def run_agent_chat(
+    request: AgentRequest, *, get_sandbox_context: "Callable[[], SandboxContext] | None"
+) -> AgentResponse:
+    """Launch a fresh foreground conversation without a response contract or timeout."""
+    from agm.agent.runner import PromptDelivery
+    from agm.agent.spec import AgentCommand
+    from agm.sandbox.prepare import sandbox_run_for
+
+    try:
+        command = request.agent.interactive_argv(permission_mode=request.permission_mode)
+    except ValueError as error:
+        raise AgentCallHostError(
+            cause="invalid_agent", exit_code=None, stderr_tail=str(error), elapsed=0.0
+        ) from error
+    if request.sandbox is not None and get_sandbox_context is None:
+        raise AgentCallHostError(
+            cause="spawn_failure",
+            exit_code=None,
+            stderr_tail="The host does not provide sandbox preparation.",
+            elapsed=0.0,
+        )
+    sandbox = (
+        None
+        if get_sandbox_context is None
+        else sandbox_run_for(request.sandbox, get_sandbox_context)
+    )
+    return _run_request(
+        request,
+        command,
+        None,
+        delivery=PromptDelivery.FILE
+        if isinstance(request.agent, AgentCommand)
+        else PromptDelivery.LITERAL,
+        sandbox=sandbox,
+        interactive=True,
     )
 
 
@@ -130,18 +212,54 @@ def _text_field(value: RecordValue, name: str) -> str:
     return cast(TextValue, value.fields[name]).value
 
 
-def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
-    """Return a dispatcher which builds an invocation from ``request.agent``."""
+def value_driven_agent_factory(
+    *, idle_timeout: float | None, get_sandbox_context: "Callable[[], SandboxContext]"
+) -> AgentFn:
+    """Return a dispatcher which builds an invocation from ``request.agent``.
+
+    *get_sandbox_context* is a lazily-caching `SandboxContext` builder (see
+    `sandbox.prepare.lazy_sandbox_context`); the host passes in one shared
+    callable so this factory, `create_agl_session_host`, and the execution
+    services all resolve sandbox configuration from the same context, and an
+    agent-free program, or one whose every call runs unsandboxed, never pays
+    for that config I/O.
+    """
 
     def dispatch(request: AgentRequest) -> AgentResponse:
+        from agm.agent.spec import AgentClaude
+        from agm.sandbox.prepare import sandbox_run_for
+
         spec = request.agent
+        stream = (
+            ClaudeOutputStream(request.output_callback)
+            if request.output_callback is not None and isinstance(spec, AgentClaude)
+            else None
+        )
         try:
-            command = spec.argv()
+            command = (
+                spec.argv(
+                    permission_mode=request.permission_mode,
+                    verbose=True,
+                    stream_output=True,
+                )
+                if stream is not None and isinstance(spec, AgentClaude)
+                else spec.argv(permission_mode=request.permission_mode)
+            )
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
-        return _run_request(request, command, idle_timeout, delivery=_spec_delivery(spec))
+        sandbox = sandbox_run_for(request.sandbox, get_sandbox_context)
+        return _run_request(
+            request,
+            command,
+            idle_timeout,
+            delivery=_spec_delivery(spec),
+            sandbox=sandbox,
+            stdout_callback=None if stream is None else stream.feed,
+            stdout_finalizer=None if stream is None else stream.finish,
+            decode_stdout=decode_claude_stream_json if stream is not None else None,
+        )
 
     return dispatch
 

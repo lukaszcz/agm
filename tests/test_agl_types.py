@@ -9,7 +9,7 @@ Coverage:
 - is_json_shaped: False for both types.
 - is_assignable: exact-only for both types (positive + negative).
 - comparable_types: False for unit/function; unchanged for scalars.
-- TypeEnvironment: prelude types (ExecResult, ParsePolicy) and RecursionError
+- TypeEnvironment: prelude types (ExecResult, Agent) and RecursionError
   exception registered in every fresh env.
 - seed_from: does not duplicate/clobber prelude types, but carries a
   program's own ``builtin`` declaration of one forward across entries.
@@ -180,6 +180,68 @@ class TestMembershipAssignable:
             FunctionType(params=(), result=leaf),
             FunctionType(params=(), result=target),
         )
+
+
+class TestNominalWideningComparable:
+    def test_enum_compares_with_its_members_either_way(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+        node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert comparable_types(tree_int, node_int, table, bounds={})
+        assert comparable_types(leaf, tree_int, table, bounds={})
+
+    def test_non_members_and_sibling_members_stay_incomparable(self) -> None:
+        table, _node, leaf, other, _tree = _member_assignability_table()
+        node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
+        node_text = RecordType("Node", (TextType(),), scope_path=("Tree",), decl_id=1)
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert not comparable_types(other, tree_int, table, bounds={})
+        assert not comparable_types(node_text, tree_int, table, bounds={})
+        assert not comparable_types(node_int, leaf, table, bounds={})
+        assert not comparable_types(ArrayType(leaf), ArrayType(tree_int), table, bounds={})
+
+    def test_enum_compares_with_a_wider_enum_either_way(self) -> None:
+        table, node, leaf, other, _tree = _member_assignability_table()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Wide",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                members=(node, leaf, other),
+                decl_node_id=5,
+            )
+        )
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+        wide_int = EnumType("Wide", (IntType(),), decl_id=5)
+        wide_text = EnumType("Wide", (TextType(),), decl_id=5)
+
+        assert comparable_types(tree_int, wide_int, table, bounds={})
+        assert comparable_types(wide_int, tree_int, table, bounds={})
+        assert not comparable_types(tree_int, wide_text, table, bounds={})
+
+    def test_exception_compares_with_an_ancestor_either_way(self) -> None:
+        table = TypeTable()
+        base = ExceptionType("Base", decl_id=10)
+        derived = ExceptionType("Derived", decl_id=11)
+        sibling = ExceptionType("Sibling", decl_id=12)
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=10))
+        for name, decl_id in (("Derived", 11), ("Sibling", 12)):
+            table.register(
+                TypeDef(
+                    kind="exception", name=name, module_id=ENTRY_ID, base=10, decl_node_id=decl_id
+                )
+            )
+
+        assert comparable_types(derived, base, table, bounds={})
+        assert comparable_types(base, derived, table, bounds={})
+        assert not comparable_types(derived, sibling, table, bounds={})
+
+    def test_json_still_rejects_absorbable_scalars(self) -> None:
+        assert not comparable_types(TextType(), JsonType(), _EMPTY_TABLE, bounds={})
+        assert not comparable_types(JsonType(), IntType(), _EMPTY_TABLE, bounds={})
 
 
 # ---------------------------------------------------------------------------
@@ -567,21 +629,11 @@ class TestTypeEnvironmentPrelude:
         assert fields["stderr"] == TextType()
         assert fields["timed-out"] == BoolType()
 
-    def test_parse_policy_resolves(self) -> None:
+    def test_agent_resolves(self) -> None:
         env = TypeEnvironment()
-        t = env.get_type("ParsePolicy")
+        t = env.get_type("Agent")
         assert isinstance(t, EnumType)
-        assert t.name == "ParsePolicy"
-
-    def test_parse_policy_variants(self) -> None:
-        env = TypeEnvironment()
-        t = env.get_type("ParsePolicy")
-        assert isinstance(t, EnumType)
-        members = env.type_table.enum_member_names(t)
-        # Abort has no fields.
-        assert dict(env.type_table.record_fields(members["Abort"])) == {}
-        # Retry has n: int.
-        assert dict(env.type_table.record_fields(members["Retry"])) == {"n": IntType()}
+        assert t.name == "Agent"
 
     def test_recursion_error_resolves(self) -> None:
         env = TypeEnvironment()
@@ -603,11 +655,11 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, RecordType)
         assert t.name == "ExecResult"
 
-    def test_parse_policy_is_a_builtin_enum(self) -> None:
+    def test_agent_is_a_builtin_enum(self) -> None:
         env = TypeEnvironment()
-        t = env.get_type("ParsePolicy")
+        t = env.get_type("Agent")
         assert isinstance(t, EnumType)
-        assert t.name == "ParsePolicy"
+        assert t.name == "Agent"
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +675,7 @@ class TestSeedFrom:
         target.seed_from(source)
         # Prelude types are still available.
         assert isinstance(target.get_type("ExecResult"), RecordType)
-        assert isinstance(target.get_type("ParsePolicy"), EnumType)
+        assert isinstance(target.get_type("Agent"), EnumType)
 
     def test_seed_does_not_overwrite_prelude_with_a_bare_no_identity_binding(self) -> None:
         # A binding carrying NO_DECL_ID (never a real declaration's identity —
@@ -706,10 +758,10 @@ class TestUnregisterName:
         # Still present.
         assert env.get_type("ExecResult") is not None
 
-    def test_cannot_unregister_parse_policy(self) -> None:
+    def test_cannot_unregister_agent(self) -> None:
         env = TypeEnvironment()
-        env.unregister_name("ParsePolicy")
-        assert env.get_type("ParsePolicy") is not None
+        env.unregister_name("Agent")
+        assert env.get_type("Agent") is not None
 
     def test_cannot_unregister_builtin_exception(self) -> None:
         env = TypeEnvironment()

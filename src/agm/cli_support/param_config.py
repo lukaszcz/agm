@@ -18,10 +18,14 @@ from agm.config.general import GeneralConfig
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    configured_leaf_table_candidates,
     configured_leaf_tables,
     display_table_path,
+    manifest_leaf_tables,
+    resolve_manifest_values,
     resolve_qualified_values,
 )
+from agm.core.toml import TomlDict
 
 __all__ = [
     "ParamValueTiers",
@@ -38,10 +42,12 @@ _RouteKey = tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, ...], ...]]
 class ParamValueTiers:
     """Supplied/program-route values (``upper``) above module-route values (``lower``).
 
-    ``lower`` holds only keys absent from ``upper``. The full chain also
-    ranks a selected program's own ``@config`` entries between the two —
-    ``PipelineDriver.preflight_arguments`` merges all three; there is no
-    flattened two-tier view here.
+    ``lower`` holds only keys absent from ``upper``, and within it a
+    package manifest ``[config]`` value (when the selected program is
+    package-owned) already outranks the plain module-route value for the
+    same key. The full chain also ranks a selected program's own ``@config``
+    entries between the two — ``PipelineDriver.preflight_arguments`` merges
+    all three; there is no flattened two-tier view here.
     """
 
     upper: Mapping[StaticBindingKey, object]
@@ -58,7 +64,32 @@ class _RouteReport(NamedTuple):
     positional_only: frozenset[str]
 
 
-def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_RouteReport]) -> None:
+def _tables_with_registered_descendants(
+    command_paths: tuple[tuple[str, ...], ...],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> frozenset[tuple[str, ...]]:
+    """Return which of *command_paths* is a proper prefix of another registered command.
+
+    Such a table's own leaves may be inherited defaults meant for that
+    descendant command (see the group-table inheritance in
+    :func:`agm.config.qualified_keys.resolve_qualified_values`), so a warning
+    on this command must leave them alone — a sibling command may be the one
+    that actually consumes them.
+    """
+    return frozenset(
+        path
+        for path in command_paths
+        if any(
+            len(other) > len(path) and other[: len(path)] == path for other in package_command_paths
+        )
+    )
+
+
+def _report_undeclared_config_keys(
+    config: GeneralConfig,
+    routes: Iterable[_RouteReport],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> None:
     """Warn for configured route leaves that no host input consumes.
 
     Each route carries its own declaration set because one config table can
@@ -73,8 +104,14 @@ def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_Rout
             route.scope_path,
             route.command_paths,
         )
+        exempt_tables = _tables_with_registered_descendants(
+            route.command_paths, package_command_paths
+        )
         for leaf in sorted(leaf_tables):
-            table_name = display_table_path(leaf_tables[leaf])
+            table_path = leaf_tables[leaf]
+            if table_path in exempt_tables:
+                continue
+            table_name = display_table_path(table_path)
             if leaf in route.positional_only:
                 print(
                     f"warning: config key '{leaf}' in the '{table_name}' configuration table "
@@ -92,6 +129,36 @@ def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_Rout
             )
 
 
+def _report_unused_manifest_leaves(
+    package_config: TomlDict,
+    command_paths: tuple[tuple[str, ...], ...],
+    consumed: frozenset[str],
+    package_command_paths: frozenset[tuple[str, ...]],
+) -> None:
+    """Warn for manifest leaves in the selected command's own tables that nothing consumes.
+
+    Engine settings are read by the host and *consumed* holds the program-route
+    spellings of the reachable module parameters. Inherited group and root
+    tables are skipped, since a sibling command may be the one that consumes
+    them, as are tables a registered descendant command inherits from.
+    """
+    exempt_tables = _tables_with_registered_descendants(command_paths, package_command_paths)
+    own_tables = {("config", *path) for path in command_paths} - {
+        ("config", *path) for path in exempt_tables
+    }
+    leaf_tables = manifest_leaf_tables(package_config, command_paths)
+    for leaf in sorted(leaf_tables):
+        table_path = leaf_tables[leaf]
+        if table_path not in own_tables or leaf in ENGINE_KEY_NAMES or leaf in consumed:
+            continue
+        print(
+            f"warning: manifest config key '{leaf}' in the '{display_table_path(table_path)}' "
+            "table is not an engine setting or a module parameter of the program "
+            "and will be ignored",
+            file=sys.stderr,
+        )
+
+
 def resolve_param_values(
     config: GeneralConfig,
     program: ProgramDeclInfo,
@@ -100,6 +167,8 @@ def resolve_param_values(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
+    package_command_paths: frozenset[tuple[str, ...]] = frozenset(),
+    package_config: TomlDict | None = None,
 ) -> ParamValueTiers:
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
@@ -112,8 +181,17 @@ def resolve_param_values(
     program-route values form :attr:`ParamValueTiers.upper`; the module-route
     values not already covered by that tier form :attr:`ParamValueTiers.lower`.
 
+    *package_config* is the owning package's manifest ``[config]`` table
+    (``None``/empty when the program is not package-owned). Its values
+    address the same program-route spellings and are merged into ``lower``,
+    above the plain module-route value, for every key not already resolved
+    in ``upper`` — never overriding an ``upper`` entry.
+
     Configured leaves on those routes that no host input consumes are reported
-    as warnings here, where the routes are known.
+    as warnings here, where the routes are known. *package_command_paths* is
+    every command path the owning package registers (aliases expanded), used
+    to exempt a command's own table from that warning when one of its leaves
+    is really an inherited default for a registered descendant command.
     """
     supplied = frozenset(params)
     entries = surface.entries
@@ -124,15 +202,30 @@ def resolve_param_values(
     module_values = resolve_module_param_values(config, module_params)
 
     _reject_configured_ambiguous_program_leaves(
-        config, program, entry_segments, command_paths, surface
+        config, program, entry_segments, command_paths, surface, package_config
     )
     program_values = resolve_qualified_values(config, tuple(key for _entry, key in program_routes))
     upper = dict(params)
     _merge_route_values(upper, supplied, program_routes, program_values)
     lower = {key: value for key, value in module_values.items() if key not in upper}
+    if package_config:
+        manifest_values = resolve_manifest_values(
+            package_config, tuple(key for _entry, key in program_routes)
+        )
+        _merge_route_values(lower, frozenset(upper), program_routes, manifest_values)
+        _report_unused_manifest_leaves(
+            package_config,
+            command_paths,
+            frozenset(
+                spelling for _entry, key in program_routes for spelling in key.leaf_spellings()
+            ),
+            package_command_paths,
+        )
 
     _report_undeclared_config_keys(
-        config, _route_reports(program, entry_segments, command_paths, entries, program_routes)
+        config,
+        _route_reports(program, entry_segments, command_paths, entries, program_routes),
+        package_command_paths,
     )
     return ParamValueTiers(upper=upper, lower=lower)
 
@@ -142,14 +235,22 @@ def _reject_configured_cross_route_ambiguities(
     module_routes: Sequence[tuple[ParamBindingInfo, QualifiedConfigKey]],
     program_routes: Sequence[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
 ) -> None:
-    """Reject a configured table leaf that resolves to distinct route kinds."""
+    """Reject a configured table leaf that resolves to distinct route kinds.
+
+    The program side includes tables inherited from a command path's group
+    prefixes, since a leaf set there is just as ambiguous against a module
+    route as one set on the exact route.
+    """
     if not program_routes:
         return
     # Every program route addresses the same table route, so its leaves are
     # read once; module routes repeat per declaration module and scope.
     _entry, shared_key = program_routes[0]
-    program_leaves = configured_leaf_tables(
-        config, shared_key.module_segments, shared_key.scope_path, shared_key.command_paths
+    program_leaves = configured_leaf_table_candidates(
+        config,
+        shared_key.module_segments,
+        shared_key.scope_path,
+        shared_key.command_paths,
     )
     module_leaves_by_route: dict[_RouteKey, dict[str, tuple[str, ...]]] = {}
     for module_param, module_key in module_routes:
@@ -171,7 +272,7 @@ def _reject_configured_cross_route_ambiguities(
             for entry, program_key in program_routes
             if module_param.key != entry.param.key
             and module_key.leaf == program_key.leaf
-            and program_leaves.get(program_key.leaf) == module_table
+            and module_table in program_leaves.get(program_key.leaf, frozenset())
         )
         if peers:
             _reject_configured_ambiguity(module_leaves, {module_key.leaf: (module_param, *peers)})
@@ -289,7 +390,13 @@ def _merge_route_values(
     routes: Iterable[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
     configured: Mapping[QualifiedConfigKey, object],
 ) -> None:
-    """Project configured native values without replacing CLI/environment values."""
+    """Project configured native values into *values*, skipping keys already in *supplied*.
+
+    Shared by the program-route merge into ``upper`` (*supplied* = CLI/
+    environment keys) and the manifest merge into ``lower`` (*supplied* =
+    every key already resolved in ``upper``, so a manifest value never
+    overrides one): both are "does a higher tier already own this key".
+    """
     for entry, key in routes:
         if entry.param.key in supplied or key not in configured:
             continue
@@ -303,17 +410,26 @@ def _reject_configured_ambiguous_program_leaves(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
+    package_config: TomlDict | None = None,
 ) -> None:
     """Reject a configured program-table leaf claimed by peer module parameters.
 
     Every spelling a program table may use is checked, bare or qualified: a
     spelling several parameters claim resolves to none of them, so *using* it
-    names the candidates rather than silently picking one.
+    names the candidates rather than silently picking one. *package_config*
+    extends the same check over the owning package's manifest command, group,
+    and root tables. Config group tables are covered too, since an inherited
+    leaf is just as ambiguous as one set on the exact route.
     """
     if not entry_segments:
         return
     program_path = (*program.scope_path, program.name)
-    configured = configured_leaf_tables(config, entry_segments, program_path, command_paths)
+    candidates = configured_leaf_table_candidates(
+        config, entry_segments, program_path, command_paths
+    )
+    configured = {leaf: min(tables) for leaf, tables in candidates.items()}
+    if package_config:
+        configured = {**manifest_leaf_tables(package_config, command_paths), **configured}
     _reject_configured_ambiguity(configured, surface.ambiguous)
 
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -17,9 +19,9 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.zones import ParamZone
+    from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
-    "CallSiteInfo",
     "HostEnvironment",
     "ParamBindingInfo",
     "ProgramDeclInfo",
@@ -38,6 +40,16 @@ class HostEnvironment:
         The value-driven host dispatcher for ``Agent`` enum values.
     ``session_host``
         The opaque lifecycle service used by persistent ``Session`` values.
+    ``get_sandbox_context``
+        Lazily builds the `SandboxContext` a sandboxed ``exec`` call needs
+        (see `agm.sandbox.prepare.lazy_sandbox_context`). ``None`` when the
+        host wires no sandbox context, in which case a sandboxed ``exec``
+        call cannot run.
+    ``resolve_agent_spec``
+        Applies host agent defaults (see
+        `agm.agent.spec_defaults.configured_defaults_resolver`) to every
+        decoded ``Agent`` spec before it is dispatched. ``None`` dispatches
+        specs as decoded.
     ``capabilities``
         The ``HostCapabilities`` static catalog derived from codecs — consumed
         by the type checker.
@@ -55,28 +67,8 @@ class HostEnvironment:
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"
-
-
-@dataclass(frozen=True, slots=True)
-class CallSiteInfo:
-    """Static summary of one agent-call or exec site (--dry-run inventory).
-
-    ``callee``        Agent or executor name (``"ask"`` or ``"exec"``).
-    ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
-    ``codec_name``    Selected codec, or ``"none"`` for a ``unit`` target.
-    ``has_schema``    ``True`` when the contract carries a JSON Schema.
-    ``parse_policy``  ``"abort"`` / ``"retry[N]"`` / ``"default"``.
-    ``line``          1-based source line of the call site.
-    ``col``           1-based source column of the call site.
-    """
-
-    callee: str
-    target_type: str
-    codec_name: str
-    has_schema: bool
-    parse_policy: str
-    line: int
-    col: int
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None
+    resolve_agent_spec: "AgentSpecResolver | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +76,8 @@ class ProgramParamInfo:
     """Static summary of one ``program def`` value parameter, as the host sees it.
 
     ``name``         — the declared parameter name.
-    ``kind``         — the parameter's zone (positional-only, standard,
-                        named-only), governing how a host projects it.
+    ``kind``         — the parameter's AgL zone (positional-only, standard,
+                        named-only); ``cli`` may override its CLI projection.
     ``type``         — the parameter's checked type.
     ``has_default``  — ``True`` when the parameter has a default expression.
     ``span``         — the parameter's declaration span, the anchor for a
@@ -97,6 +89,8 @@ class ProgramParamInfo:
                         alias (directly, through non-generic aliases, or as
                         ``Option[path]``), which its checked ``text`` type
                         no longer shows.
+    ``enum_values``  — the preferred value-syntax spelling of each enum member,
+                        using ``@name`` when present.
     """
 
     name: str
@@ -106,6 +100,7 @@ class ProgramParamInfo:
     span: "SourceSpan"
     cli: "ProgramOptionSpec"
     is_path: bool = False
+    enum_values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +109,8 @@ class ParamBindingInfo:
 
     ``is_path`` retains whether its annotation spells the builtin ``path``
     alias, including ``Option[path]``, for host filesystem completion.
+    ``enum_values`` retains the preferred value-syntax spelling of each enum
+    member, using ``@name`` when present.
     """
 
     module: "ModuleId"
@@ -126,6 +123,7 @@ class ParamBindingInfo:
     cli: "ProgramOptionSpec"
     doc: str | None
     is_path: bool = False
+    enum_values: tuple[str, ...] = ()
 
     @property
     def key(self) -> "StaticBindingKey":

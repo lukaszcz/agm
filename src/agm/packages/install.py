@@ -43,6 +43,7 @@ from agm.packages.distribution import (
     distribution_entries,
     distribution_files,
     is_cache_or_vcs_path,
+    manifests_equivalent,
     materialize_distribution,
 )
 from agm.packages.errors import DisciplineError as DisciplineError
@@ -180,6 +181,7 @@ class _InstallState:
     installing: set[Path] = field(default_factory=set)
     resolved: set[Path] = field(default_factory=set)
     created: list[Path] = field(default_factory=list)
+    replaced: list[tuple[Path, Path, Path]] = field(default_factory=list)
     transient_packages: dict[str, PackageInfo] = field(default_factory=dict)
     resource_packages: dict[str, PackageInfo] = field(default_factory=dict)
     installed: tuple[PackageInfo, ...] | None = None
@@ -194,6 +196,7 @@ def install_directory_with_plan(
     env: Mapping[str, str] | None = None,
     editable: bool = False,
     shadow: bool = False,
+    reinstall: bool = False,
 ) -> PackageInstallPlan:
     """Install a package directory, or activate it as an editable package.
 
@@ -202,12 +205,70 @@ def install_directory_with_plan(
     is fetched, hash-verified, and installed. Returns the activation plan.
     """
 
+    if editable and reinstall:
+        raise PackageInstallError("--reinstall cannot be used with --editable")
     return _install_with_plan(
-        lambda state: _install_directory(source, state=state, editable=editable, shadow=shadow),
+        lambda state: _install_directory(
+            source, state=state, editable=editable, shadow=shadow, reinstall=reinstall
+        ),
         home=home,
         env=env,
         shadow=shadow,
     )
+
+
+def parse_package_target(target: str) -> tuple[str, semver.Version | None]:
+    """Parse a package name with an optional exact installed version."""
+
+    if "@" not in target:
+        return target, None
+    name, version_text = target.rsplit("@", 1)
+    try:
+        version = semver.Version.parse(version_text)
+    except ValueError as exc:
+        raise PackageInstallError(f"invalid package version in {target!r}") from exc
+    if not name or "@" in name:
+        raise PackageInstallError(f"invalid package target {target!r}")
+    return name, version
+
+
+def parse_versioned_package_target(target: str) -> tuple[str, semver.Version]:
+    """Require a package target with an exact semantic version."""
+
+    name, version = parse_package_target(target)
+    if version is None:
+        raise PackageInstallError("expected NAME@VERSION")
+    return name, version
+
+
+def activate_installed_package_with_plan(
+    name: str,
+    version: semver.Version,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    shadow: bool = False,
+) -> PackageInstallPlan:
+    """Activate an exact version already present in the package store."""
+
+    def activate(state: _InstallState) -> PackageInfo:
+        if is_std_package_name(name):
+            raise PackageInstallError("the AGM-managed std package cannot be installed or switched")
+        package = next(
+            (
+                package
+                for package in _transaction_installed_packages(state)
+                if canonical_package_identity(package.manifest.name, package.manifest.version)
+                == (name, str(version))
+            ),
+            None,
+        )
+        if package is None:
+            raise PackageInstallError(f"package {name!r} version {version} is not installed")
+        _activate_package(package, state, editable_root=None, shadow=shadow)
+        return package
+
+    return _install_with_plan(activate, home=home, env=env, shadow=shadow)
 
 
 def _install_with_plan(
@@ -227,6 +288,7 @@ def _install_with_plan(
         except BaseException:
             _rollback_created_trees(state)
             raise
+        _cleanup_replaced_trees(state)
         return PackageInstallPlan(package, command_shadows)
 
 
@@ -310,29 +372,31 @@ def install_archive_with_plan(
     home: Path,
     env: Mapping[str, str] | None = None,
     shadow: bool = False,
+    reinstall: bool = False,
 ) -> PackageInstallPlan:
     """Verify, atomically extract, and activate a portable package archive; return its plan."""
 
     return _install_with_plan(
-        lambda state: _install_archive(archive, state=state, shadow=shadow),
+        lambda state: _install_archive(archive, state=state, shadow=shadow, reinstall=reinstall),
         home=home,
         env=env,
         shadow=shadow,
     )
 
 
-def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
-    """Remove the active package tree by its verified ``RECORD``.
+def uninstall_package(target: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+    """Remove an exact stored version, or the active package when unqualified.
 
     Editable packages have no copied tree or record, so removal only drops
     their activation selection.
     """
 
     with _package_operation_lock(home=home, env=env):
-        _uninstall_package(name, home=home, env=env)
+        _uninstall_package(target, home=home, env=env)
 
 
-def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+def _uninstall_package(target: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+    name, version = parse_package_target(target)
     try:
         index = load_activation_index(home=home, env=env)
     except PackageActivationError as exc:
@@ -352,6 +416,9 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
     except ValueError as exc:
         raise PackageInstallError(f"package store path is invalid for {name!r}: {exc}") from exc
     active = index.packages.get(name)
+    if version is not None and (active is None or active.version != version):
+        _uninstall_inactive_version(name, version, home=home, env=env)
+        return
     if active is None:
         if tombstone.exists():
             _finish_uninstall(name, tombstone, home=home, env=env)
@@ -408,6 +475,39 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
     _finish_uninstall(name, tombstone, version=active.version, home=home, env=env)
 
 
+def _uninstall_inactive_version(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None
+) -> None:
+    """Remove an unselected stored tree without changing activation."""
+
+    try:
+        root = canonical_package_store_path(name, version, home=home, env=env)
+    except ValueError as exc:
+        raise PackageInstallError(f"package store path is invalid for {name!r}: {exc}") from exc
+    tombstone = root.parent / f".uninstalling-{version}"
+    if tombstone.exists():
+        if not dry_run.enabled():
+            _finish_uninstall(name, tombstone, home=home, env=env)
+            if not root.exists():
+                return
+    if not root.is_dir():
+        raise PackageInstallError(f"package {name!r} version {version} is not installed")
+    try:
+        manifest = load_manifest(root / "package.toml")
+        if canonical_package_identity(manifest.name, manifest.version) != (name, str(version)):
+            raise RecordError("installed package identity does not match its store location")
+        read_record(root)
+    except (ManifestError, OSError, RecordError) as exc:
+        raise PackageInstallError(f"package integrity check failed for {name!r}: {exc}") from exc
+    if dry_run.enabled():
+        return
+    try:
+        root.replace(tombstone)
+    except OSError as exc:
+        raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
+    _finish_uninstall(name, tombstone, version=version, home=home, env=env)
+
+
 def _validated_directory_package(source: Path) -> PackageInfo:
     """Load and validate one package source directory.
 
@@ -460,11 +560,11 @@ def _stage_directory_package(
         materialize_distribution(source_root, distribution, staging)
         staged = PackageInfo(staging, load_manifest(staging / MANIFEST_NAME))
         validate_staged_distribution(resolution, staged)
-        if (
-            canonical_package_identity(staged.manifest.name, staged.manifest.version)
-            != canonical_package_identity(package.manifest.name, package.manifest.version)
-            or staged.manifest != distribution
-        ):
+        if canonical_package_identity(
+            staged.manifest.name, staged.manifest.version
+        ) != canonical_package_identity(
+            package.manifest.name, package.manifest.version
+        ) or not manifests_equivalent(staged.manifest, distribution):
             raise PackageInstallError("staged package manifest changed after source validation")
         write_record(staging)
         return staging
@@ -514,7 +614,12 @@ def _rollback_managed_refresh(destination: Path, staging: Path, previous: Path |
 
 
 def _install_directory(
-    source: Path, *, state: _InstallState, editable: bool, shadow: bool
+    source: Path,
+    *,
+    state: _InstallState,
+    editable: bool,
+    shadow: bool,
+    reinstall: bool = False,
 ) -> PackageInfo:
     from agm.packages.discipline import validate_package, validate_package_distribution
 
@@ -543,17 +648,50 @@ def _install_directory(
             ) from exc
         installed = PackageInfo(destination, package.manifest)
         if destination.exists():
-            # The store holds the distribution view of a package, so identity
-            # is checked against what this source would store rather than
-            # against its unfiltered development tree.
             distribution = distribution_manifest(package.manifest)
-            try:
-                package_hash = content_hash(distribution_entries(root, distribution))
-            except (DistributionError, OSError, RecordError) as exc:
-                raise PackageInstallError(
-                    f"cannot install package {package.manifest.name!r}: {exc}"
-                ) from exc
-            _verify_existing_install(destination, distribution, package_hash)
+            if reinstall:
+                if dry_run.enabled():
+                    try:
+                        validate_record_paths(relative for relative, _ in distribution_files(root))
+                        validate_package_distribution(resolution)
+                    except (DisciplineError, DistributionError, OSError, RecordError) as exc:
+                        raise PackageInstallError(
+                            f"cannot install package {package.manifest.name!r}: {exc}"
+                        ) from exc
+                    dry_run.print_operation("reinstall-package", str(destination))
+                else:
+                    replacement_staging: Path | None = None
+                    try:
+                        replacement_staging = _stage_directory_package(
+                            root, package, destination, resolution=resolution
+                        )
+                        previous = _publish_staged_refresh(replacement_staging, destination)
+                        if previous is None:
+                            _record_created_tree(state, destination)
+                        else:
+                            _record_replaced_tree(state, replacement_staging, destination, previous)
+                    except (
+                        DisciplineError,
+                        ManifestError,
+                        OSError,
+                        PackageInstallError,
+                        RecordError,
+                        ValueError,
+                    ) as exc:
+                        raise PackageInstallError(
+                            f"cannot reinstall package {package.manifest.name!r}: {exc}"
+                        ) from exc
+                    finally:
+                        if replacement_staging is not None and replacement_staging.exists():
+                            fs.rmtree(replacement_staging)
+            else:
+                try:
+                    package_hash = content_hash(distribution_entries(root, distribution))
+                except (DistributionError, OSError, RecordError) as exc:
+                    raise PackageInstallError(
+                        f"cannot install package {package.manifest.name!r}: {exc}"
+                    ) from exc
+                _verify_existing_install(destination, distribution, package_hash)
         elif not dry_run.enabled():
             staging: Path | None = None
             try:
@@ -601,7 +739,9 @@ def _install_directory(
     return installed
 
 
-def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> PackageInfo:
+def _install_archive(
+    archive: Path, *, state: _InstallState, shadow: bool, reinstall: bool = False
+) -> PackageInfo:
     """Extract an archive from one verified open ZIP stream and activate it."""
     from agm.packages.discipline import validate_package, validate_package_structure
 
@@ -614,8 +754,10 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
-            if destination.exists():
+            if destination.exists() and not reinstall:
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
+            elif destination.exists():
+                dry_run.print_operation("reinstall-package", str(destination))
         except (ArchiveError, ValueError) as exc:
             raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
         dry_run.print_operation("install-package-archive", str(archive))
@@ -644,7 +786,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             package = PackageInfo(staging, metadata.manifest)
             validate_package_structure(package)
             destination_exists = destination.exists()
-            if destination_exists:
+            if destination_exists and not reinstall:
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
             try:
                 _resolve_dependencies(package, state)
@@ -657,6 +799,12 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
                 fs.mkdir(destination.parent, parents=True, exist_ok=True)
                 staging.replace(destination)
                 _record_created_tree(state, destination)
+            elif reinstall:
+                previous = _publish_staged_refresh(staging, destination)
+                if previous is None:
+                    _record_created_tree(state, destination)
+                else:
+                    _record_replaced_tree(state, staging, destination, previous)
             installed = PackageInfo(destination, package.manifest)
             state.resource_packages[installed.manifest.name] = installed
         except PackageInstallError:
@@ -710,6 +858,25 @@ def _record_created_tree(state: _InstallState, destination: Path) -> None:
 
     state.created.append(destination)
     state.installed = None
+
+
+def _record_replaced_tree(
+    state: _InstallState, staging: Path, destination: Path, previous: Path
+) -> None:
+    """Track a replacement until activation commits or the prior tree is restored."""
+
+    state.replaced.append((staging, destination, previous))
+    state.installed = None
+
+
+def _cleanup_replaced_trees(state: _InstallState) -> None:
+    """Discard replaced trees after activation commits."""
+
+    for _, _, previous in state.replaced:
+        try:
+            fs.rmtree(previous)
+        except OSError:
+            continue
 
 
 def _transaction_resolved_packages(state: _InstallState) -> tuple[PackageInfo, ...]:
@@ -951,23 +1118,28 @@ def _verify_existing_install(
 ) -> None:
     try:
         installed = load_manifest(root / "package.toml")
-        if (
-            canonical_package_identity(installed.name, installed.version)
-            != canonical_package_identity(manifest.name, manifest.version)
-            or installed != manifest
-        ):
-            raise PackageInstallError(
-                f"installed package at {root} disagrees with the source manifest"
-            )
+        if canonical_package_identity(
+            installed.name, installed.version
+        ) != canonical_package_identity(
+            manifest.name, manifest.version
+        ) or not manifests_equivalent(installed, manifest):
+            raise _already_installed_error(manifest)
         entries = verify_record(root)
         if package_hash is not None and content_hash(entries) != package_hash:
-            raise PackageInstallError(
-                f"installed package at {root} conflicts with the package content hash"
-            )
+            raise _already_installed_error(manifest)
     except (ManifestError, RecordError) as exc:
         raise PackageInstallError(
             f"package integrity check failed for {manifest.name!r}: {exc}"
         ) from exc
+
+
+def _already_installed_error(manifest: PackageManifest) -> PackageInstallError:
+    """Describe a store identity collision and how an explicit replacement is requested."""
+
+    return PackageInstallError(
+        f"package {manifest.name!r} version {manifest.version} is already installed; "
+        "use --reinstall to overwrite it"
+    )
 
 
 def _load_install_index(*, home: Path, env: Mapping[str, str] | None) -> ActivationIndex:
@@ -1173,10 +1345,13 @@ def _assign_missing_registration_orders(index: ActivationIndex) -> ActivationInd
 
 
 def _rollback_created_trees(state: _InstallState) -> None:
-    """Discard immutable trees created by a failed install before they became active."""
+    """Restore replaced trees and discard trees created by a failed install."""
 
     if dry_run.enabled():
         return
+    for staging, destination, previous in reversed(state.replaced):
+        _rollback_managed_refresh(destination, staging, previous)
+        fs.rmtree(staging)
     for root in reversed(state.created):
         fs.rmtree(root)
 

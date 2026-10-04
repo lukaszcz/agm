@@ -14,6 +14,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
     BoolType,
+    IntType,
     TextType,
     Type,
 )
@@ -25,9 +26,11 @@ from agm.config.engine_keys import ENGINE_KEY_NAMES as ENGINE_KEY_NAMES
 # this layer only knows how each kind maps onto an AgL type.
 _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
     EngineKeyKind.BOOL: BoolType(),
+    EngineKeyKind.INT: IntType(),
     EngineKeyKind.TEXT: TextType(),
     EngineKeyKind.OPTION_TEXT: OPTION_TEXT_TYPE,
     EngineKeyKind.AGENT: BUILTIN_PRELUDE_TYPES["Agent"],
+    EngineKeyKind.AGENT_SANDBOX: BUILTIN_PRELUDE_TYPES["AgentSandbox"],
 }
 
 # Lookup: kebab key name → resolved AgL type. Built from the same

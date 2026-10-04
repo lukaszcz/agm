@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -68,6 +69,18 @@ def test_unexpected_command_resolution_errors_are_not_treated_as_registered_fall
 
     with pytest.raises(RuntimeError, match="unexpected failure"):
         invoke(CliRunner(), ["unknown"])
+
+
+def test_group_help_keeps_the_indented_blocks_of_its_doc() -> None:
+    commands = {
+        "tools": CommandRegistration("tools", None, "Tools.\n\nExamples:\n  agm tools lint\n"),
+        "tools lint": CommandRegistration("tools", "tools/lint::main"),
+    }
+
+    text = dispatch.registered_group_help("tools", commands)
+
+    assert text is not None
+    assert "  Examples:\n    agm tools lint\n" in text
 
 
 def test_registered_command_resolution_prefers_the_longest_path() -> None:
@@ -226,11 +239,15 @@ def test_plain_registered_command_does_not_discover_during_outer_parsing(
     assert calls == [["input"]]
 
 
-def test_registered_command_treats_only_standalone_dry_run_as_global(
+def test_registered_command_passes_dry_run_spelling_to_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A ``--dry-run``-looking token is forwarded as an ordinary program argument.
+
+    Registered commands reserve no ``--dry-run`` flag of their own, so this
+    spelling is never intercepted, whether as an option value or a bare token.
+    """
     import agm.commands.exec_program as exec_program
-    from agm.core import dry_run
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -238,13 +255,11 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
-    calls: list[tuple[list[str], bool]] = []
+    calls: list[list[str]] = []
     monkeypatch.setattr(
         exec_program,
         "run_registered",
-        lambda _program, argument_tokens, **_kwargs: calls.append(
-            (argument_tokens, dry_run.enabled())
-        ),
+        lambda _program, argument_tokens, **_kwargs: calls.append(argument_tokens),
     )
 
     value_result = invoke(CliRunner(), ["tools", "lint", "--level=--dry-run"])
@@ -252,36 +267,60 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
 
     assert value_result.exit_code == 0
     assert flag_result.exit_code == 0
-    assert calls == [(["--level=--dry-run"], False), (["--level", "strict"], True)]
+    assert calls == [
+        ["--level=--dry-run"],
+        ["--level", "strict", "--dry-run"],
+    ]
 
 
 def test_registered_command_preserves_a_host_looking_program_option_value(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import agm.commands.exec_program as exec_program
-    from tests._agl_helpers import discover_program_declarations_from_source
 
-    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    home = tmp_path / "home"
+    context = ConfigContext(home=home, proj_dir=None, cwd=tmp_path)
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main(@arg-named message: text) -> unit = ()\n",
+        commands={"tools lint": "tools/lint::main"},
+        module_path="lint",
+    )
     index = ActivationIndex(
         commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
-    (program,) = discover_program_declarations_from_source(
-        "program def main(message: text) -> unit = ()"
-    )
-    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
-    calls: list[list[str]] = []
+    monkeypatch.setattr(exec_program, "current_config_context", lambda: context)
+    calls: list[tuple[list[str], object]] = []
 
-    def run_registered(_program: str, argument_tokens: list[str], **_kwargs: object) -> None:
-        calls.append(argument_tokens)
+    def run_registered(_program: str, argument_tokens: list[str], **kwargs: object) -> None:
+        calls.append((argument_tokens, kwargs["pipeline_cache"]))
 
     monkeypatch.setattr(exec_program, "run_registered", run_registered)
 
-    result = invoke(CliRunner(), ["tools", "lint", "--message", "--dry-run"])
+    result = invoke(CliRunner(), ["tools", "lint", "--message", "--no-timeout"])
 
-    assert result.exit_code == 0
-    assert calls == [["--message", "--dry-run"]]
+    assert result.exit_code == 0, result.output
+    assert calls[0][1] is not None, calls
+    assert calls[0][0] == ["--message", "--no-timeout"]
+
+    conflict_result = invoke(
+        CliRunner(),
+        [
+            "tools",
+            "lint",
+            "--message",
+            "--no-timeout",
+            "--trace",
+            "--trace-file",
+            "trace.log",
+        ],
+    )
+
+    assert conflict_result.exit_code != 0
+    assert len(calls) == 1
 
 
 def _record_registered_exec_args(
@@ -323,6 +362,7 @@ def test_registered_command_forwards_exec_run_time_options(
         [
             "tools",
             "lint",
+            "--echo",
             "--no-strict-json",
             "--level",
             "strict",
@@ -330,13 +370,21 @@ def test_registered_command_forwards_exec_run_time_options(
             "9",
             "--default-agent",
             "claude",
+            "--default-sandbox",
+            "Native",
             "--timeout",
             "30s",
             "--trace-file",
             "trace.jsonl",
+            "--debug",
+            "--parse-error-retries",
+            "2",
         ],
     )
-    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout", "--no-trace-file"])
+    negated = invoke(
+        CliRunner(),
+        ["tools", "lint", "--no-echo", "--trace", "--no-timeout", "--no-debug"],
+    )
     plain = invoke(CliRunner(), ["tools", "lint", "--no-trace", "--level=--timeout"])
 
     assert [result.exit_code for result in (full, negated, plain)] == [0, 0, 0]
@@ -344,21 +392,26 @@ def test_registered_command_forwards_exec_run_time_options(
         ExecArgs(
             file="tools/lint::main",
             argument_tokens=["--level", "strict"],
+            echo=True,
             strict_json=False,
             max_call_depth=9,
             default_agent="claude",
+            default_sandbox="Native",
             timeout="30s",
             trace_file="trace.jsonl",
             no_trace=False,
+            debug=True,
+            parse_error_retries=2,
         ),
         ExecArgs(
             file="tools/lint::main",
             strict_json=None,
+            echo=False,
             no_trace=False,
             trace_file=None,
             trace=True,
             no_timeout=True,
-            no_trace_file=True,
+            debug=False,
         ),
         ExecArgs(
             file="tools/lint::main",
@@ -375,7 +428,7 @@ def test_registered_command_forwards_exec_run_time_options(
     [
         ["--trace", "--no-trace"],
         ["--trace", "--trace-file", "trace.jsonl"],
-        ["--trace-file", "trace.jsonl", "--no-trace-file"],
+        ["--trace-file", "trace.jsonl", "--no-trace"],
         ["--timeout", "5s", "--no-timeout"],
     ],
 )
@@ -427,7 +480,7 @@ def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
     write_installed_package(
         home,
         "tools",
-        source="program def main(message: text) -> unit = ()\n",
+        source="program def main(@arg-named message: text) -> unit = ()\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -469,7 +522,7 @@ def test_registered_value_named_like_short_help_reuses_static_pipeline_artifacts
     write_installed_package(
         home,
         "tools",
-        source="program def main(tag: text) -> unit = print tag\n",
+        source="program def main(@arg-named tag: text) -> unit = print tag\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -517,7 +570,11 @@ def test_registered_command_help_does_not_dispatch_program(
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     (program,) = discover_program_declarations_from_source(
-        "program def main(level: text, verbose: bool, message: text) -> unit = ()"
+        "program def main(\n"
+        "  @arg-named level: text,\n"
+        "  @arg-named verbose: bool,\n"
+        "  @arg-named message: text\n"
+        ") -> unit = ()"
     )
     monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
     calls: list[object] = []
@@ -536,7 +593,7 @@ def test_registered_command_help_does_not_dispatch_program(
     assert value_result.exit_code == 0
     assert "agm tools lint" in result.output
     assert "Lint package inputs" in result.output
-    assert "--dry-run" in result.output
+    assert "--dry-run" not in result.output
     assert "agm tools lint" in value_option_result.output
     assert "agm tools lint" in bool_option_result.output
     assert calls == [("tools/lint::main", ["--message", "-h"])]
@@ -559,7 +616,7 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     (program,) = discover_program_declarations_from_source(
-        "program def main(tag: text) -> unit = print tag"
+        "program def main(@arg-named tag: text) -> unit = print tag"
     )
     monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
     calls: list[object] = []
@@ -607,7 +664,7 @@ def test_registered_command_help_degrades_when_program_discovery_fails() -> None
     from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
-        "program def main(level: text) -> unit = ()"
+        "program def main(@arg-named level: text) -> unit = ()"
     )
 
     text = registered_help(
@@ -625,7 +682,7 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
-        "program def main(help: text) -> unit = print help"
+        "program def main(@arg-named help: text) -> unit = print help"
     )
 
     text = registered_help(
@@ -947,7 +1004,7 @@ def test_registered_help_reuses_discovery_for_a_host_shaped_program_value(
     write_installed_package(
         home,
         "tools",
-        source="program def main(tag: text) -> unit = ()\n",
+        source="program def main(@arg-named tag: text) -> unit = ()\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -991,7 +1048,12 @@ def test_registered_command_applies_exec_run_time_options(
 
     assert strict.stdout == "true\n"
     assert lenient.stdout == "false\n"
-    assert trace.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    start = next(record for record in records if record["kind"] == "run_start")
+    assert list(start)[:5] == ["kind", "ts", "file", "line", "col"]
+    assert str(start["file"]).endswith("main.agl")
+    assert start["command"] == "tools run"
+    assert start["function"] == "main"
     assert "--trace-file" in help_result.output
     assert "--no-timeout" in help_result.output
     assert "--module-path" not in help_result.output
@@ -1011,7 +1073,9 @@ def test_registered_command_help_returns_false_when_index_is_unavailable(
         lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
     )
 
-    assert not dispatch.print_registered_command_help(["tools", "lint"])
+    assert not dispatch.print_registered_command_help(
+        ["tools", "lint"], click.Context(get_command(cli.app))
+    )
 
 
 def test_unknown_command_without_registered_entry_keeps_click_error(
@@ -1125,7 +1189,6 @@ def test_exec_installed_reference_preserves_all_file_options(
         max_call_depth=4,
         timeout="5s",
         no_timeout=True,
-        no_trace_file=True,
         default_agent='AgentCommand("fake")',
     )
 
@@ -1231,7 +1294,7 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -1258,7 +1321,7 @@ def test_installed_package_dispatches_its_own_source_declared_command(
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
         '@doc("Review changes")\n'
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1284,7 +1347,7 @@ def test_editable_package_dispatches_its_own_source_declared_command(
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
         '@doc("Review changes")\n'
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1310,7 +1373,8 @@ def test_editing_an_editable_packages_source_command_path_takes_effect_without_r
     )
     module = source / MODULE_TREE_DIRNAME / "review.agl"
     module.write_text(
-        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools review")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1322,7 +1386,8 @@ def test_editing_an_editable_packages_source_command_path_takes_effect_without_r
     assert before.exit_code == 0
 
     module.write_text(
-        '@command("tools inspect")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools inspect")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
 
@@ -1345,7 +1410,7 @@ def test_a_non_editable_install_does_not_pick_up_a_source_edit_made_after_instal
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
-        "program def main(level: text) -> unit = print level\n", encoding="utf-8"
+        "program def main(@arg-named level: text) -> unit = print level\n", encoding="utf-8"
     )
     home = tmp_path / "home"
 
@@ -1353,7 +1418,8 @@ def test_a_non_editable_install_does_not_pick_up_a_source_edit_made_after_instal
     monkeypatch.setenv("HOME", str(home))
 
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
-        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools review")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
 
@@ -1516,7 +1582,7 @@ def test_exec_help_for_an_installed_reference_includes_program_arguments(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(level: text) -> unit = ()\n",
+        "program def main(@arg-named level: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -1568,7 +1634,7 @@ def test_program_argument_parse_failure_raises_a_typed_usage_error(tmp_path: Pat
     from agm.commands.exec_program import RegisteredProgramUsageError
 
     source = tmp_path / "main.agl"
-    source.write_text("program def main(level: text) -> unit = ()\n", encoding="utf-8")
+    source.write_text("program def main(@arg-named level: text) -> unit = ()\n", encoding="utf-8")
 
     with pytest.raises(RegisteredProgramUsageError) as exc_info:
         exec_program.run(
@@ -1605,7 +1671,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
         encoding="utf-8",
     )
     module.write_text(
-        "@param let verbose: bool = false\nprogram def main(level: text) -> unit = ()\n",
+        "@param let verbose: bool = false\nprogram def main(@arg-named level: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -1973,7 +2039,7 @@ def test_registered_declaration_ignores_a_program_owned_by_another_package(tmp_p
     from agm.commands.exec_program import registered_program_declaration
 
     write_installed_package(
-        tmp_path, "tools", source="program def main(level: text) -> unit = ()\n"
+        tmp_path, "tools", source="program def main(@arg-named level: text) -> unit = ()\n"
     )
     context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
 
@@ -2057,7 +2123,10 @@ def test_registered_program_declaration_finds_its_own_value_parameters(tmp_path:
     write_installed_package(
         tmp_path,
         "tools",
-        source=("program def other() -> unit = ()\nprogram def main(level: text) -> unit = ()\n"),
+        source=(
+            "program def other() -> unit = ()\n"
+            "program def main(@arg-named level: text) -> unit = ()\n"
+        ),
     )
     context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
 
@@ -2087,7 +2156,8 @@ def test_registered_program_declaration_prefers_the_entry_module_over_an_import(
     )
     helper.write_text("program def main(other: int) -> unit = ()\n", encoding="utf-8")
     entry.write_text(
-        "import tools/helper\nprogram def main(level: text) -> unit = ()\n", encoding="utf-8"
+        "import tools/helper\nprogram def main(@arg-named level: text) -> unit = ()\n",
+        encoding="utf-8",
     )
     write_record(package_root)
     write_activation_index(
@@ -2318,3 +2388,617 @@ def test_parameter_fixture_runs_by_installed_reference_and_file(
     file_result = invoke(CliRunner(), ["exec", str(source_file)])
     assert file_result.exit_code == 0
     assert file_result.stdout == "6\nfalse\nfalse\nfile\n"
+
+
+def _write_group_table_package(root: Path) -> None:
+    """Write a ``devel review`` package (aliased ``dev``) with one of each config value.
+
+    ``strict-json`` is an engine setting, ``label`` a defaulted signature
+    argument, and ``verbose`` a module parameter — the three kinds of value a
+    group table must feed exactly as its command's own table does.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        '\n[aliases]\ndev = "devel"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\nimport tools/logging\n\n"
+        'program def main(label: text = "none") -> unit =\n'
+        "  print std/config::strict-json\n"
+        "  print label\n"
+        "  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_registered_command_reads_engine_signature_and_module_values_from_its_group_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text(
+        '[devel]\nstrict-json = true\nlabel = "grouped"\nverbose = true\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\ngrouped\ntrue\n"
+
+
+def test_a_nearer_command_table_beats_a_group_table_set_in_a_later_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact command route wins even set in an earlier, less-specific layer.
+
+    ``verbose`` is a control key the group table alone sets, proving the cwd
+    layer is actually read even though its ``label`` loses to the home
+    layer's exact table.
+    """
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[devel.review]\nlabel = "exact"\n', encoding="utf-8"
+    )
+    cwd_config = tmp_path / ".agm"
+    cwd_config.mkdir()
+    (cwd_config / "config.toml").write_text(
+        '[devel]\nlabel = "group"\nverbose = true\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\nexact\ntrue\n"
+
+
+def test_an_alias_prefix_table_feeds_the_canonical_command_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A group table under an alias's own word inherits down just like the canonical one."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text('[dev]\nlabel = "aliased"\n', encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\naliased\nfalse\n"
+
+
+def test_an_unconsumed_group_table_leaf_draws_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel]\nunrelated = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+
+
+def test_a_same_depth_conflict_via_an_alias_errors_even_in_one_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[dev]`` and ``[devel]`` are the same-depth alias/canonical prefixes of one
+    command; both setting one key in one config layer is an error, not a pick."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_group_table_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text(
+        '[dev]\nlabel = "a"\n\n[devel]\nlabel = "b"\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 1
+
+
+def _write_config_attribute_package(root: Path) -> None:
+    """Write a ``devel review`` package whose program's ``@config`` defaults its
+    own imported module parameter, for testing @config's rank against inherited tables.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "@config(logging::verbose = false)\n"
+        "program def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_an_inherited_group_table_beats_the_programs_own_config_attribute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_config_attribute_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\n"
+
+
+def _write_nested_command_package(root: Path) -> None:
+    """Write two registered commands, one a prefix of the other: ``devel sub`` and
+    ``devel sub review``. ``devel sub``'s own program never reads ``verbose``, so
+    ``[devel.sub]`` setting it is really an inherited default for ``devel sub review``.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel sub" = { program = "tools/a::main" }\n'
+        '"devel sub review" = { program = "tools/b::main" }\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "a.agl").write_text(
+        'program def main() -> unit =\n  print "a"\n', encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "b.agl").write_text(
+        "import tools/logging\n\nprogram def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_a_commands_own_table_feeds_a_registered_descendant_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[devel.sub]`` is ``devel sub``'s own exact table and ``devel sub review``'s
+    inherited group table at once; the deeper command reads it either way."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_nested_command_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel.sub]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "sub", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\n"
+
+
+def test_a_commands_own_table_draws_no_warning_for_a_descendants_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``devel sub`` never reads ``verbose`` itself, but must not warn about it
+    either: it is a registered descendant command's inherited default."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_nested_command_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[devel.sub]\nverbose = true\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "sub"])
+
+    assert result.exit_code == 0
+    assert result.output == "a\n"
+    assert "unrelated" not in result.output
+
+
+def _write_manifest_config_package(root: Path, config_toml: str) -> None:
+    """Write a ``devel review`` package plus an unregistered ``other`` program.
+
+    ``main`` prints an engine setting, a module parameter, and a ``std``
+    dependency's own parameter, so one invocation exercises all three kinds of
+    manifest ``[config]`` leaf. ``other`` is package-owned but registers no
+    command, so it reads only the manifest root. Callable more than once
+    against the same *root* to rewrite ``[config]`` between installs.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        f"\n{config_toml}",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\nimport std/http\nimport tools/logging\n\n"
+        "program def main() -> unit =\n"
+        "  print std/config::strict-json\n"
+        "  print tools/logging::verbose\n"
+        '  print std/http::timeout.unwrap-or("none")\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "other.agl").write_text(
+        "import std/config\n\nprogram def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+
+
+def _write_manifest_config_tiers_package(root: Path) -> None:
+    """Write a ``devel review`` package with three text params, each naming the tier that
+    must win it: a full command/group/root stack, a group+root stack, and a root-only leaf.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        '\n[config]\nall-tiers = "root"\ngroup-and-root = "root"\nroot-only = "root"\n'
+        '\n[config.devel]\nall-tiers = "group"\ngroup-and-root = "group"\n'
+        '\n[config.devel.review]\nall-tiers = "command"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "program def main() -> unit =\n"
+        "  print tools/logging::all-tiers\n"
+        "  print tools/logging::group-and-root\n"
+        "  print tools/logging::root-only\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        '@param let all-tiers: text = "default"\n'
+        '@param let group-and-root: text = "default"\n'
+        '@param let root-only: text = "default"\n',
+        encoding="utf-8",
+    )
+
+
+def test_manifest_config_tiers_command_beats_group_beats_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One invocation exercises all three tier combinations: command beats group beats root."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_tiers_package(root)
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "command\ngroup\nroot\n"
+
+
+def _write_ambiguous_param_manifest_package(root: Path, config_toml: str) -> None:
+    """Write a ``devel review`` package where two modules declare the same param name.
+
+    ``verbose``'s bare spelling is ambiguous between ``logging`` and
+    ``format``, so only each module's dotted spelling (``logging.verbose``,
+    ``format.verbose``) addresses it.
+    """
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        f"\n{config_toml}",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\nimport tools/format\n\n"
+        "program def main() -> unit =\n"
+        "  print tools/logging::verbose\n"
+        "  print tools/format::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "format.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+
+
+def test_manifest_supplies_a_module_parameter_via_its_dotted_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_ambiguous_param_manifest_package(
+        root, '[config.devel.review]\n"logging.verbose" = true\n'
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "true\nfalse\n"
+
+
+def test_manifest_same_tier_conflicting_spellings_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One manifest table setting both a param's leaf-alias spellings conflicts, not picks."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root, '[config.devel.review]\nverbose = true\n"logging.verbose" = false\n'
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 1
+
+
+def test_manifest_engine_key_conflict_across_two_command_groups_errors_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A program registered under two command paths inherits two peer groups at the same
+    tier; conflicting engine values there report cleanly (exit 1, no traceback), exactly
+    like a module-parameter manifest conflict does."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"tools review" = { program = "tools/main::main" }\n'
+        '"devel review" = { program = "tools/main::main" }\n'
+        "\n[config.tools]\nstrict-json = true\n"
+        "\n[config.devel]\nstrict-json = false\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\n\nprogram def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["tools", "review"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_package_owned_program_with_no_command_gets_only_manifest_root_leaves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``other`` is package-owned but registers no command: only the manifest root applies."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root,
+        "[config]\nstrict-json = true\n"
+        "\n[config.devel]\nstrict-json = false\n"
+        "\n[config.devel.review]\nstrict-json = false\n",
+    )
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    reference_result = invoke(CliRunner(), ["exec", "tools/other::main"])
+    assert reference_result.exit_code == 0
+    assert reference_result.stdout == "true\n"
+
+    file_result = invoke(
+        CliRunner(), ["exec", str(installed.root / MODULE_TREE_DIRNAME / "other.agl")]
+    )
+    assert file_result.exit_code == 0
+    assert file_result.stdout == "true\n"
+
+
+def test_manifest_trace_file_is_anchored_to_the_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative ``trace-file`` resolves against cwd, like a CLI flag value, never against
+    the package root — which for an installed package is immutable."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, '[config]\ntrace-file = "manifest.log"\n')
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert (workdir / "manifest.log").read_text(encoding="utf-8")
+    assert not (installed.root / "manifest.log").exists()
+
+
+def test_engine_setting_precedence_from_exec_through_manifest_to_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[exec]`` < manifest < a file group table < a CLI flag."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, "")
+    install_directory(root, home=home, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+    home_config = home / ".agm" / "config.toml"
+
+    home_config.write_text("[exec]\nstrict-json = false\n", encoding="utf-8")
+    exec_result = invoke(CliRunner(), ["devel", "review"])
+    assert exec_result.exit_code == 0
+    assert exec_result.output.splitlines()[0] == "false"
+
+    # An editable install rescans the live manifest, so rewriting it in place takes
+    # effect on the next invocation without reinstalling.
+    _write_manifest_config_package(root, "[config]\nstrict-json = true\n")
+    manifest_result = invoke(CliRunner(), ["devel", "review"])
+    assert manifest_result.exit_code == 0
+    assert manifest_result.output.splitlines()[0] == "true"
+
+    home_config.write_text(
+        "[exec]\nstrict-json = false\n\n[devel]\nstrict-json = false\n", encoding="utf-8"
+    )
+    file_result = invoke(CliRunner(), ["devel", "review"])
+    assert file_result.exit_code == 0
+    assert file_result.output.splitlines()[0] == "false"
+
+    cli_result = invoke(CliRunner(), ["devel", "review", "--strict-json"])
+    assert cli_result.exit_code == 0
+    assert cli_result.output.splitlines()[0] == "true"
+
+
+def test_a_config_attribute_beats_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nstrict-json = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/config\n\n"
+        "@config(config::strict-json = false)\n"
+        "program def main() -> unit =\n  print std/config::strict-json\n",
+        encoding="utf-8",
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\n"
+
+
+def test_manifest_beats_the_file_module_route_for_a_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(root, "[config.devel.review]\nverbose = true\n")
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agm" / "config.toml").write_text("[logging]\nverbose = false\n", encoding="utf-8")
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[1] == "true"
+
+
+def test_a_config_attribute_beats_the_manifest_for_a_module_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nverbose = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\n"
+        "@config(logging::verbose = false)\n"
+        "program def main() -> unit =\n  print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["devel", "review"])
+
+    assert result.exit_code == 0
+    assert result.output == "false\n"
+
+
+def test_a_cli_flag_and_environment_variable_beat_the_manifest_for_a_module_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n'
+        '\n[commands]\n"devel review" = { program = "tools/main::main" }\n'
+        "\n[config]\nverbose = true\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import tools/logging\n\nprogram def main() -> unit = print tools/logging::verbose\n",
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+        '@param @opt-env("AGM_TOOLS_VERBOSE") let verbose: bool = false\n', encoding="utf-8"
+    )
+    install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    manifest_result = invoke(CliRunner(), ["devel", "review"])
+    assert manifest_result.exit_code == 0
+    assert manifest_result.output == "true\n"
+
+    cli_result = invoke(CliRunner(), ["devel", "review", "--no-verbose"])
+    assert cli_result.exit_code == 0
+    assert cli_result.output == "false\n"
+
+    monkeypatch.setenv("AGM_TOOLS_VERBOSE", "false")
+    environment_result = invoke(CliRunner(), ["devel", "review"])
+    assert environment_result.exit_code == 0
+    assert environment_result.output == "false\n"
+
+
+def test_exec_by_reference_of_a_registered_program_uses_its_manifest_command_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered program's manifest command tier still applies when it is run directly,
+    by reference or by file path, instead of through its command path."""
+    home = tmp_path / "home"
+    root = tmp_path / "tools"
+    _write_manifest_config_package(
+        root,
+        "[config]\nstrict-json = false\n"
+        "\n[config.devel]\nstrict-json = false\n"
+        "\n[config.devel.review]\nstrict-json = true\n",
+    )
+    installed = install_directory(root, home=home)
+    monkeypatch.setenv("HOME", str(home))
+
+    reference_result = invoke(CliRunner(), ["exec", "tools/main::main"])
+    assert reference_result.exit_code == 0
+    assert reference_result.stdout.splitlines()[0] == "true"
+
+    file_result = invoke(
+        CliRunner(), ["exec", str(installed.root / MODULE_TREE_DIRNAME / "main.agl")]
+    )
+    assert file_result.exit_code == 0
+    assert file_result.stdout.splitlines()[0] == "true"

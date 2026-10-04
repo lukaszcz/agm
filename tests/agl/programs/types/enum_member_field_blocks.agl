@@ -1,0 +1,75 @@
+# An enum member's fields written as an indented block under the member, one
+# per line without parentheses or commas: beside fieldless members, with
+# attributes, defaults, `var` markers, generics, the indented enum body, and a
+# scope region; decoded from an agent reply, constructed, matched, mutated, and
+# updated like any other member record.
+enum Shape
+  | Point
+  | Circle
+      radius: int
+  | Rect
+      @doc("horizontal extent")
+      width: int
+      # A comment between two fields is not a field.
+      @arg-named height: int = 1
+  | Label
+      caption: text
+
+enum Tree[T] =
+  Leaf
+  | Node
+      var value: T
+      left: Tree[T]
+      right: Tree[T]
+
+scope Net
+  enum Reply
+    | Ok
+        body: text
+    | @doc("a failed request") Failed
+        code: int
+
+        reason: text = "unknown"
+end Net
+
+def area(shape: Shape) -> int =
+  case shape of
+    | Point => 0
+    | Circle(radius) => 3 * radius * radius
+    | Rect(width, height) => width * height
+    | Label(_) => -1
+
+def total(tree: Tree[int]) -> int =
+  case tree of
+    | Leaf => 0
+    | Node(value, left, right) => value + total(left) + total(right)
+
+def describe(reply: Net::Reply) -> text =
+  case reply of
+    | Net::Reply::Ok(body) => "ok: %{body}"
+    | Net::Reply::Failed(code, reason) => "failed %{code}: %{reason}"
+
+program def main(mode: text, size: int) -> unit =
+  if
+    | mode == "shapes" =>
+        let worker: Agent = AgentCommand("worker")
+        let asked: Shape = ask("Pick a shape.", agent = worker)
+        print asked
+        print(area(asked))
+        print(area(Circle(size)))
+        let rect = Rect(size, height = 4)
+        print rect
+        let wider = rect with width = size + 1
+        print(area(wider))
+        print(Rect(size))
+        print(area(Label("note")))
+    | mode == "tree" =>
+        let node = Node(size, Leaf, Node(2, Leaf, Leaf))
+        print(total(node))
+        node.value := size * 10
+        print(total(node))
+        print node
+    | else =>
+        print(describe(Net::Reply::Ok(body = mode)))
+        print(describe(Net::Reply::Failed(code = size)))
+        print(Net::Reply::Failed(code = size, reason = "busy"))

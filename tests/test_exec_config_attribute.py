@@ -16,6 +16,7 @@ real agent runs in these tests.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from agm.cli_support.args import CheckArgs, ExecArgs
 from agm.commands import check as check_command
 from agm.commands import exec_program as exec_engine
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.prepare import SandboxContext
 from tests._agl_helpers import write_file_program
 from tests._package_helpers import install_directory
 from tests.test_cli_registered_commands import invoke
@@ -219,13 +221,19 @@ class TestConfigTimeoutReachesEveryTimeoutConsumer:
         real_factory = exec_engine.value_driven_agent_factory
         real_session_host = exec_engine.create_agl_session_host
 
-        def factory_spy(*, idle_timeout: float | None) -> object:
+        def factory_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
             captured["agent_idle_timeout"] = idle_timeout
-            return real_factory(idle_timeout=idle_timeout)
+            return real_factory(idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context)
 
-        def session_host_spy(*, idle_timeout: float | None) -> object:
+        def session_host_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
             captured["session_idle_timeout"] = idle_timeout
-            return real_session_host(idle_timeout=idle_timeout)
+            return real_session_host(
+                idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+            )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", factory_spy)
         monkeypatch.setattr(exec_engine, "create_agl_session_host", session_host_spy)
@@ -295,28 +303,7 @@ class TestConfigLogFileDerivesLog:
 
 
 class TestConfigLogFlagInteractions:
-    """Documented contract: ``--no-trace-file`` clears only the CLI seed and never
-    hides a config-table-established trace; ``--no-trace`` always disables."""
-
-    def test_no_trace_file_does_not_suppress_a_config_trace_file(self, tmp_path: Path) -> None:
-        trace_path = tmp_path / "trace.jsonl"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
-            'program def main() -> unit = print "hi"\n',
-        )
-        exec_command.run(
-            ExecArgs(
-                file=str(agl_file),
-                argument_tokens=[],
-                strict_json=None,
-                no_trace=False,
-                trace_file=None,
-                no_trace_file=True,
-            )
-        )
-        assert trace_path.exists()
+    """``--no-trace`` always disables a config-table-established trace."""
 
     def test_no_trace_suppresses_a_config_trace_file(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
@@ -355,32 +342,14 @@ class TestConfigTimeoutValidation:
         assert exc_info.value.code == 1
 
 
-class TestConfigDryRun:
-    def test_dry_run_applies_config_without_executing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A valid ``@config`` engine value never breaks ``--dry-run``, and the
-        static-only pass still never executes the program body."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'import std/config\n\n@config(config::timeout = Some("5s"))\n'
-            'program def main() -> unit = print "ran"\n',
-        )
-        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
-        assert capsys.readouterr().out == ""
-
-
 class TestConfigDefaultAgent:
     def test_config_default_agent_is_seeded(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``default-agent`` is the other enum-backed engine key (``AGENT``
-        kind): a ``@config`` value for it goes through the same executable ->
-        standard identity restamp as ``timeout``/``trace-file`` (``OPTION_TEXT``)."""
+        """``default-agent`` is one of the enum-backed engine keys (``AGENT``
+        kind, alongside ``default-sandbox``'s ``AGENT_SANDBOX``): a ``@config``
+        value for it goes through the same executable -> standard identity
+        restamp as ``timeout``/``trace-file`` (``OPTION_TEXT``)."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
@@ -390,6 +359,25 @@ class TestConfigDefaultAgent:
         )
         exec_command.run(_exec_args_no_trace(agl_file))
         assert "config-agent" in capsys.readouterr().out
+
+
+class TestConfigDefaultSandbox:
+    def test_config_default_sandbox_is_seeded(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``default-sandbox`` is the ``AGENT_SANDBOX`` engine key: a ``@config`` value
+        for it goes through the same executable -> standard identity restamp as
+        ``default-agent``, but for the ``AgentSandbox`` reserved enum."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "import std/config\n\n"
+            "@config(config::default-sandbox = AgentSandbox::Native)\n"
+            "program def main() -> unit = "
+            "print(config::default-sandbox is AgentSandbox::Native)\n",
+        )
+        exec_command.run(_exec_args_no_trace(agl_file))
+        assert capsys.readouterr().out == "true\n"
 
 
 class TestConfigStrictJson:

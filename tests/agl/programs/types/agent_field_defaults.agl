@@ -1,0 +1,15 @@
+# Every standard 'Agent' member field but 'AgentCommand''s command defaults to
+# "": empty construction, named-only construction, a positional model, and
+# equality with the fully spelled empty value.
+import std/io::print
+
+program def main(effort: text) -> unit =
+  print(AgentClaude())
+  print(AgentCodex())
+  print(AgentPi())
+  print(AgentClaude(thinking = effort))
+  print(AgentPi(model = "sonnet", thinking = effort))
+  print(AgentPi(provider = "anthropic"))
+  print(AgentCodex("o3"))
+  print(AgentClaude("opus"))
+  print(AgentPi() == AgentPi("", "", ""))

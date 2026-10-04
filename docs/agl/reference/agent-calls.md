@@ -11,8 +11,8 @@ value that should receive the request:
 ```agl
 ask "Summarize %{topic}"
 reviewer.ask("Review this artifact:\n%{artifact}")
-reviewer.ask("Review %{artifact}", on-parse-error = Retry(n = 2))
-reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
+reviewer.ask("Review %{artifact}", parse-error-retries = 2)
+reviewer.ask::[Review]("Review %{artifact}", parse-error-retries = 2)
 ```
 
 ## `ask` — the agent call function
@@ -22,7 +22,9 @@ reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,
     format: text = "", strict-json: bool = false,
-    on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+    parse-error-retries: int = std/config::parse-error-retries,
+    sandbox: AgentSandbox = std/config::default-sandbox,
+    env: Environ = std/env::environ) -> T
 ```
 
 where `T` is the **target type** — determined from the calling context (see
@@ -33,7 +35,9 @@ An `Agent` value also provides the method form:
 ```text
 Agent::ask(self, prompt: text, format: text = "",
            strict-json: bool = false,
-           on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+           parse-error-retries: int = std/config::parse-error-retries,
+           sandbox: AgentSandbox = std/config::default-sandbox,
+           env: Environ = std/env::environ) -> T
 ```
 
 Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
@@ -80,11 +84,13 @@ parse options. `ask` remains legal as a record/enum **field name**.
 ```text
 Session::ask[T](self, prompt: text, format: text = "",
                 strict-json: bool = false,
-                on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+                parse-error-retries: int = std/config::parse-error-retries) -> T
 ```
 
 It sends the prompt through that live session, so the session's stored agent
-and transport select the backend; it has no `agent` argument. It uses the same
+and transport select the backend; it has no `agent` argument, and no `sandbox`
+argument either — a session's sandboxing mode is fixed when it opens, not
+chosen per call. It uses the same
 contextual or explicit `::[T]` target, concrete-target restriction, parse
 options, and output-contract checking as `ask`. `session.ask $ prompt` uses
 the same single-argument sugar as `reviewer.ask $ prompt`. Parse retries
@@ -109,7 +115,7 @@ let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
 A `$` literal
-([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+([Strings and interpolation](strings-and-interpolation.md#the-literal)) may
 supply the same single argument, inline or as a block; explicit type
 arguments — on either the free function or a receiver method — and
 target-type inference work exactly as for a quoted prompt:
@@ -129,11 +135,11 @@ program def main() -> unit =
 A bare `ask $ ...` uses the default session and `reviewer.ask $ ...` opens
 the short-lived session for its receiver. Use `ask(...)` or
 `reviewer.ask(...)` when setting `format`, `strict-json`, or
-`on-parse-error`. Read the environment in the prompt with
+`parse-error-retries`. Read the environment in the prompt with
 `%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
 environment hole — and pipe the result when chaining is needed, as in
 `print <| ask $ …`
-([Strings and interpolation](strings-and-interpolation.md#the--literal)).
+([Strings and interpolation](strings-and-interpolation.md#the-literal)).
 
 ## Agents as values
 
@@ -147,8 +153,9 @@ program def main() -> unit =
   let reviewer: Agent = AgentClaude("sonnet", "medium")
   let second-opinion = AgentCodex("o3", "high")
   let scripted = AgentCommand("claude -p")
-  let hosted = AgentPi("openai", "gpt-5", "low")
-  let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted]
+  let hosted = AgentPi("openai", "gpt-5") # thinking defaults to ""
+  let configured = AgentClaude() # model and effort from [agent] at dispatch
+  let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted, configured]
   let first-pass: text = review-with(reviewer, "the release notes")
   let second-pass: text = review-with(second-opinion, first-pass)
   print("%{candidates.size()} agents available")
@@ -158,16 +165,21 @@ program def main() -> unit =
 Each member record selects its backend invocation. `AgentCommand` accepts a
 shell-like command string; the provider members carry their model and thinking
 settings. An explicit `agent.ask(...)` uses an ephemeral session for the complete
-parse-retry loop, so its initial invocation is:
+parse-retry loop, so its initial invocation, when it can retry, is (a single-prompt ask
+runs the plain prompt command; see [Sessions](#sessions)):
 
-| Member | Initial invocation for an explicit ask |
+| Member | Initial invocation for a retrying explicit ask |
 | --- | --- |
-| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries require `%{SESSION_ID}` |
+| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries continue the conversation with `%{SESSION_ID}`, else rerun the command with the complete prompt |
 | `AgentClaude(model, thinking)` | `claude -p --session-id <id> --model <model> --effort <thinking>` |
 | `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
 | `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
 
-An empty provider, model, or thinking field omits its flag. `Agent` values are
+Every field except `command` defaults to `""` (`AgentClaude()`,
+`AgentPi(thinking = "low")`). An empty provider, model, or thinking field omits its
+flag, except that it first takes the default the host configures in its `[agent]`
+section, if any ([agent defaults](../../commands/agl.md#agent-defaults)); the value
+itself keeps `""`. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
 inspected, and JSON-encoded like other enum values. At a host boundary, a CLI or TOML
 value whose declared type is `Agent` additionally accepts the compact native-agent and
@@ -186,7 +198,7 @@ Free `ask` uses `Session::default`, which lazily opens one session and snapshots
 the current `std/config::default-agent` when it is first used. Every later free
 `ask` in that run or REPL session uses the same conversation and agent; a later
 `default-agent` write does not switch it. The standard library supplies a
-default; CLI `--default-agent` and `[exec] default-agent` seeds override it, and a
+default, `AgentClaude()`; CLI `--default-agent` and `[exec] default-agent` seeds override it, and a
 source write takes effect before that snapshot is created:
 
 ```agl
@@ -212,15 +224,27 @@ session.close()
 branch.close()
 ```
 
-`Session::open(agent, transport = None, name = "")` opens a session;
-`Session::default()` returns the same lazy default session used by free `ask`.
-`compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
-`set-name(name)`, and `close()` are session operations. `reset` keeps the
-AgL session value but starts a fresh backend conversation; `fork` returns a
-new session whose history begins from the parent; `close` is idempotent, but
-later use of that session raises `SessionError`. Backend support for the other
-operations is runtime-dependent; an unsupported operation raises
-`SessionError`.
+`Session::open(agent, transport = None, name = "", sandbox =
+std/config::default-sandbox, env = std/env::environ)` opens a session;
+`Session::default()` returns the same lazy default session used by free
+`ask`. `compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
+`set-name(name)`, and `close()` are session operations. `reset` keeps the AgL
+session value but starts a fresh backend conversation; `fork` returns a new
+session whose history begins from the parent and whose `sandbox` and `env`
+are inherited from it unchanged; `close` is idempotent, but later use of that
+session raises `SessionError`. Backend support for the other operations is
+runtime-dependent; an unsupported operation raises `SessionError`.
+
+`sandbox` and `env` select the session's sandboxing mode and process
+environment once, at open, exactly as they do for `ask`; the opened session's
+`.sandbox` field reports the former, and neither changes for that session's
+lifetime — not on a later `std/config::default-sandbox` write or
+`std/env::setenv` call, and not through `Session::ask`, which has neither
+argument. `Session::default()` snapshots `std/config::default-sandbox` and
+the ambient `std/env::environ` the same way it snapshots `default-agent`, on
+first use. A `Sandbox`'s `settings` path is normalized (trailing separators
+and `./` segments collapse), so a session's `.sandbox` field may report an
+equivalent but textually different spelling than the one last written.
 
 When `transport` is omitted or `None`, `AgentPi` uses `Rpc`; every other
 agent uses `Cli`. `Rpc` is supported only for `AgentPi`; selecting it for
@@ -239,11 +263,13 @@ process for the session.
 Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
 `Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
 the same transport default, but its session lasts only for that call and its
-retries; use `Session::open` to keep the conversation after the call. A single-attempt
-`Agent::ask` sends exactly one prompt, so its session never has to be continued: an
-`AgentCommand` does not require `%{SESSION_ID}` and the other CLI backends run their plain
-prompt command. Enabling corrective retries makes every attempt share one conversation, so
-an `AgentCommand` then requires the placeholder.
+retries; use `Session::open` to keep the conversation after the call. An `Agent::ask` with
+`parse-error-retries = 0`, or one with a `text` or `unit` target (which can never fail
+parsing), sends exactly one prompt, so the Claude, Codex, and Pi CLI backends run their plain
+prompt command. With corrective retries, every attempt shares one conversation and a retry is a
+short follow-up. An `AgentCommand` without `%{SESSION_ID}` cannot continue one, so each retry
+reruns the command with the original prompt, format instructions, the failed response, and the
+validation summary.
 
 ## Target types: types as contracts
 
@@ -271,7 +297,7 @@ The target type drives the call's **output contract**:
   register more),
 - a JSON Schema derived from the type,
 - format instructions delivered to the agent alongside the prompt,
-- runtime validation, the parse policy on failure, and the typed value bound
+- runtime validation, corrective retries on failure, and the typed value bound
   on success.
 
 `unit` is the exception: the call is dispatched once without an output
@@ -284,7 +310,7 @@ program def main() -> unit =
   ask "Notify the reviewer."
 ```
 
-Because nothing is parsed, `format`, `strict-json`, and `on-parse-error` are
+Because nothing is parsed, `format`, `strict-json`, and `parse-error-retries` are
 invalid for a `unit` target.
 
 You normally never write "Return JSON matching …" yourself — the type
@@ -389,32 +415,71 @@ explicitly selects lenient parsing, overriding a host default. It is a
 static error unless the selected codec is `json`. When omitted, the host
 default applies; the portable default is **lenient recovery** (see below).
 
-### `on-parse-error`
+### `parse-error-retries`
 
-The parse policy for invalid structured output. The value is a `ParsePolicy`
-— one of two members from the standard-library enum:
-
-<!-- agl-check: fragment -->
-```agl
-enum ParsePolicy
-  | Abort
-  | Retry(n: int)
-```
-
-- `Abort` — raise `AgentParseError` on the first invalid output (the default).
-- `Retry(n: N)` — after the initial call, make up to `N` additional
-  corrective calls; raise `AgentParseError` if all fail.
+The number of corrective retries after invalid structured output, an `int`
+evaluated once per call; the call makes at most `1 + parse-error-retries`
+attempts before raising `AgentParseError` ([Parse retries](#parse-retries)).
+When omitted, it reads `std/config::parse-error-retries` at the call, so an
+earlier write to that setting applies. A negative count raises `RangeError` before dispatch.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = reviewer.ask(
-  "Review %{artifact}",
-  on-parse-error = Retry(n = 2)
-)
+let r: Review = reviewer.ask("Review %{artifact}", parse-error-retries = 2)
 ```
 
-A policy on a `text` target produces a static **warning** — text never
-fails parsing, so the policy can never fire.
+On a `text` target it produces a static **warning** — text never fails
+parsing, so no retry can ever fire.
+
+### `sandbox`
+
+Selects the call's sandboxing mode, an `AgentSandbox` value
+([Types](types.md#agentsandbox)): `Disabled`, `Native`, or a `Sandbox` record
+naming resource limits. When omitted, it defaults to
+`std/config::default-sandbox`.
+
+- `Sandbox` (the default) — the agent process runs wrapped by the sandbox
+  runtime in an all-permissions mode; the wrapping process resolves and
+  applies the resource limits the record names.
+- `Native` — the agent process runs unwrapped, in the agent's own
+  don't-ask/auto-approve mode.
+- `Disabled` — the agent process runs unwrapped, with no permission flag
+  added at all.
+
+The all-permissions and don't-ask/auto-approve framing above applies only to
+`AgentClaude` and `AgentCodex`; for `AgentPi` and `AgentCommand` no permission
+flag is ever added, so `Native` and `Disabled` differ only in sandboxing, and
+`Sandbox` runs the agent under its own default permissions.
+
+<!-- agl-check: fragment -->
+```agl
+let r: Review = reviewer.ask("Review %{a}", sandbox = Native)
+let r2: Review = reviewer.ask("Review %{a}", sandbox = Sandbox(memory = Some("8G")))
+```
+
+`sandbox` requires an explicit agent: a free `ask` call with no `agent`
+argument dispatches through the default session, whose sandboxing mode is
+fixed when that session opens (see `Session::ask` above), so an explicit
+`sandbox` on such a call is a static error. Pair `sandbox` with an explicit
+`agent` argument, or use the `reviewer.ask(...)` receiver form.
+
+### `env`
+
+The complete process environment given to the agent process, an `Environ`
+value ([Types](types.md)). When omitted, it defaults to the current ambient
+`std/env::environ` — the same default `exec` uses. Use
+`environ.extended(overrides)` when a call needs an explicit overlay:
+
+<!-- agl-check: fragment -->
+```agl
+let r: Review = reviewer.ask("Review %{a}", env = environ.extended({"TOKEN": token}))
+```
+
+`env`, like `sandbox`, requires an explicit agent: a free `ask` call with no
+`agent` argument dispatches through the default session, whose environment is
+fixed when that session opens, so an explicit `env` on such a call is a
+static error. Pair `env` with an explicit `agent` argument, or use the
+`reviewer.ask(...)` receiver form.
 
 ## The prompt
 
@@ -424,10 +489,11 @@ rendered prompt is delivered to the agent verbatim, together with the
 contract's format instructions; the host must not perform further template
 or environment-variable expansion over it. The prompt is delivered through its
 session. Corrective feedback includes a
-category-based validation summary, never validation paths, keys, or other
-response-derived details. Retries stay in their existing conversation and send
-only that summary plus a JSON-format reminder; they never resend the original
-prompt or invalid response.
+category-based validation summary; the summary never contains validation paths,
+keys, or other response-derived details. A retry in a continuing conversation
+sends only that summary plus a JSON-format reminder; one that cannot continue
+resends the complete prompt with the failed response
+([Parse retries](#parse-retries)).
 
 ## The JSON wire format
 
@@ -440,25 +506,49 @@ rules:
    violations, strict parsing does not).
 3. Records are JSON objects with exactly the fields, each keyed by its
    effective JSON name (declared name unless overridden by
-   [`@name`/`@json-name`](attributes.md#name-and-json-name)).
-4. Enums are JSON objects with a reserved **`"$case"`** tag naming the
-   member's effective JSON tag, plus that member record's fields, each keyed
-   by its effective JSON name. `"$case"` is reserved; `@json-name` rejects
-   `"$case"` as a field's JSON name, so a user field can never collide with
-   it. A record-typed slot for the same value is a plain object with no
-   `"$case"` tag.
-5. Unknown fields are rejected.
-6. Missing required fields are rejected.
+   [`@name`/`@json-name`](attributes.md#name-and-json-name)). A field with a
+   declared [default](types.md#record-types) may be omitted; it then fills
+   from that default.
+4. A **plain enum** — one whose every member is fieldless — is the JSON
+   string of the member's effective JSON tag (declared name unless overridden
+   by [`@name`/`@json-name`](attributes.md#name-and-json-name)). No other
+   shape names a member: a `"$case"` object is rejected.
+5. Any other enum is a JSON object with a reserved **`"$case"`** tag naming
+   the member's effective JSON tag, plus that member record's fields, each
+   keyed by its effective JSON name, with the same default-omission rule as a
+   record field. Every member takes this shape, fieldless ones included.
+   `"$case"` is reserved; `@json-name` rejects `"$case"` as a field's JSON
+   name, so a user field can never collide with it.
+6. An enum's shape follows the slot's enum type, not the value. A record that
+   is a member of both a plain and a non-plain enum is a string in the first
+   slot and a tagged object in the second; in a record-typed slot it is a
+   plain object with no `"$case"` tag.
+7. Unknown fields are rejected.
+8. Missing fields without a declared default are rejected.
 
 Example — for
 
 ```agl
+enum Verdict
+  | Approve
+  | @json-name("needs-work") Revise
+
 enum Review
-  | Pass
+  | Pass(note: text = "ok")
   | Fail(issues: array[text])
 ```
 
-valid responses are:
+the valid `Verdict` responses are:
+
+```json
+"Approve"
+```
+
+```json
+"needs-work"
+```
+
+and valid `Review` responses are:
 
 ```json
 { "$case": "Pass" }
@@ -487,8 +577,9 @@ mechanically from the target type:
 | `json` | `{}` (any JSON value) |
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
-| record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` keyed by effective JSON name |
-| enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name, and `additionalProperties: false` |
+| record | object schema: `additionalProperties: false`, `required` lists every field without a declared default, per-field `properties` keyed by effective JSON name |
+| plain enum | `{"enum": [<tag>, …]}` listing the members' effective JSON tags; when any constructor carries `@doc`, instead `oneOf` of per-member `{"const": <tag>}` schemas, each with its constructor's `@doc` as `description` when present |
+| any other enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
 
 A target that reaches a dict with a non-`text` key is a static error: such a
 dict [does not decode](types.md#convertibility-to-json).
@@ -510,14 +601,14 @@ type. For a JSON-typed target the instructions embed the actual JSON Schema
 precise, authoritative shape rather than a prose paraphrase. They are
 equivalent to:
 
-```text
+````text
 Return exactly one JSON value conforming to the following JSON Schema.
 Do not include Markdown, prose, or code fences.
 
 ```json
 <derived JSON Schema>
 ```
-```
+````
 
 For the permissive `json` type (schema `{}`) only the behavioural preamble is
 emitted, since there is no shape to convey.
@@ -547,37 +638,52 @@ response, then validates it strictly:
 If the response contains two or more top-level JSON values, recovery fails
 as ambiguous. Schema validation is always strict regardless of lenient mode.
 
+When the target is a plain enum and the value recovered above is not one of
+its members, the whole response is searched for its member tags. A response
+naming exactly one member — any number of times, as a whole word, in the
+tag's exact spelling — recovers that member, so `The verdict is Approve.` and
+`{"verdict": "Approve"}` both read as `"Approve"`. Naming two or more
+different members is ambiguous. Only the target itself is searched for: a
+plain enum nested in a record or array takes its exact string.
+
 ### Strict parsing
 
 With `strict-json = true` (or a host default of strict), the response must be
 exactly one bare JSON value with nothing but surrounding whitespace.
 
-## Parse policies and retries
+## Parse retries
 
-For a call with `on-parse-error = Retry(n = N)`, attempt 1 sends the rendered
+For a call with `parse-error-retries = N`, attempt 1 sends the rendered
 prompt plus its output-format instructions. The output is then parsed and
-validated. Each failed parse or validation sends at most `N` corrective
-follow-ups in the **same session** (`N + 1` attempts total). A follow-up contains
-only a category-based validation summary and a reminder to return valid JSON;
-it does not repeat the original prompt, output contract, or invalid response.
-The summary never exposes response-derived paths, keys, or values. Success
-returns the typed value; exhausting the attempts raises **`AgentParseError`**.
+validated. Each failed parse or validation sends at most `N` retries
+(`N + 1` attempts total). When the session continues a conversation — every
+default and explicit session, and every explicit-agent ask except through an
+`AgentCommand` without `%{SESSION_ID}` — a retry is a corrective follow-up in the
+**same session** containing only a category-based validation summary and a
+reminder to return valid JSON; it does not repeat the original prompt, output
+contract, or invalid response. Otherwise each retry reruns the command with the
+complete one-shot prompt: the original prompt, its output-format instructions,
+the failed response, the validation summary, and the reminder. The summary
+never exposes response-derived paths, keys, or values. Success returns the
+typed value; exhausting the attempts raises **`AgentParseError`**.
 
-With `Abort` (the default), the first parse or validation failure raises
-`AgentParseError` directly. This retry rule applies equally to the default,
-explicit-agent, and explicit-session forms.
+With `N = 0`, the first parse or validation failure raises `AgentParseError`
+directly.
 
 ## Transport and session failures
 
-A failed `ask` transport — for example a process spawn failure, nonzero exit,
-idle timeout, output that is not valid UTF-8, or a failed Pi RPC prompt —
-raises **`AgentCallError`**. Undecodable output surfaces as
-`cause = "protocol_failure"`, with the message giving the byte offset of the
-first invalid byte; the stderr tail in `metadata` is `""` if it is itself
-undecodable. It is catchable and is never retried by `on-parse-error`, with
-no opt-out: agent CLIs are specified to emit UTF-8. **`SessionError`** instead
-reports a session lifecycle, capability, or non-ask backend failure: opening or
-using a closed session, an unsupported operation or transport, and failed
+A failed `ask` transport — for example a process spawn failure, a sandbox
+preparation failure, nonzero exit, idle timeout, output that is not valid
+UTF-8, or a failed Pi RPC prompt — raises **`AgentCallError`**. Undecodable
+output surfaces as `cause = "protocol_failure"`, with the message giving the
+byte offset of the first invalid byte; the stderr tail in `metadata` is `""`
+if it is itself undecodable. It is catchable and is never retried by
+`parse-error-retries`, with no opt-out: agent CLIs are specified to emit UTF-8.
+The exception message includes the captured stderr tail when available; the same
+tail is retained in `metadata`.
+**`SessionError`** instead reports a session lifecycle, capability, or
+non-ask backend failure: opening or using a closed session, a sandbox
+preparation failure at open, an unsupported operation or transport, and failed
 compaction/fork/reset/name/stats operations. `SessionError.operation` names the
 operation. `AgentParseError` is only for output that arrived but could not meet
 the requested structured contract.
@@ -585,7 +691,7 @@ the requested structured contract.
 ## Text targets
 
 For a `text` target the raw output is bound verbatim — no parsing, no
-validation. `on-parse-error` on such a call draws a static warning.
+validation. `parse-error-retries` on such a call draws a static warning.
 
 ## What the agent receives
 
@@ -595,8 +701,9 @@ Each dispatch delivers to the host agent:
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
-- the 0-based attempt number; retries include only a category-based validation
-  summary and a format reminder. The summary excludes response-derived
+- the 0-based attempt number; a retry in a continuing conversation includes
+  only a category-based validation summary and a format reminder
+  ([Parse retries](#parse-retries)). The summary excludes response-derived
   validation paths, keys, and values.
 
 See [Host environment](host-environment.md).
@@ -614,7 +721,8 @@ ask-request[T](
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 ```
 
@@ -623,8 +731,13 @@ captures its receiver instead. The type argument and the parse-shaping options
 select the output contract exactly as they do for `ask`, and the target type
 comes from the type argument alone — never from context, whose expected type
 here is the request record rather than the output the request asks for. Without
-one, the request describes a `text` output, as `ask` does. The builder never
-dispatches, retries, parses, or emits trace events.
+one, the request describes a `text` output, as `ask` does. `sandbox` is
+recorded on the built request unchanged; since `ask-request` never dispatches,
+it accepts `sandbox` even without an explicit `agent` (unlike `ask`, it never
+routes through a session). Unlike `ask`, `ask-request` has no `env`
+parameter: the built `AgentRequest` record carries no environment field
+either, since a printed or inspected record must never risk leaking secrets.
+The builder never dispatches, retries, parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl

@@ -1,6 +1,6 @@
-# Agent::ask lifecycle failures are catchable SessionErrors.
+# A malformed command placeholder rejects the ephemeral session open as a catchable AgentCallError.
 program def main() -> unit =
   try
-    let _: text = AgentCommand("writer").ask("calculate the total")
-  catch SessionError =>
-    print "session error"
+    let _: text = AgentCommand("writer \%{SESSION_ID").ask("calculate the total")
+  catch AgentCallError =>
+    print "open failed"

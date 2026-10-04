@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,6 @@ from agm.agl.pipeline import _wire_extern_registry
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import check_program
-from agm.core import dry_run
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots
@@ -27,7 +25,7 @@ _STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
     """Run *source*'s entry ``program def main() -> unit`` (no arguments)."""
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = PipelineDriver.prepare_program(source, entry_path=path, roots=roots)
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
@@ -68,8 +66,6 @@ program def main() -> unit =
     ("call", "path", "operation"),
     (
         ('fs::read("missing.txt")', "missing.txt", "read"),
-        ('fs::write("missing/child.txt", "content")', "missing/child.txt", "write"),
-        ('fs::append("missing/child.txt", "content")', "missing/child.txt", "append"),
         ('fs::list("missing")', "missing", "list"),
         ('fs::remove("missing.txt")', "missing.txt", "remove"),
         ('fs::copy("missing.txt", "other.txt")', "missing.txt", "copy"),
@@ -177,28 +173,6 @@ program def main() -> unit =
     assert result.error.fields["operation"] == "glob"
 
 
-def test_fs_temp_dir_raises_fs_error_when_tmpdir_is_not_valid_unicode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # ``tempfile.gettempdir`` caches its first result process-wide, so ``TMPDIR``
-    # alone is not reliable across the test session; patch it directly instead.
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: os.fsdecode(b"/tmp/h\xffome"))
-
-    result = _run_file(
-        """import std/fs
-program def main() -> unit =
-  let _ = fs::temp-dir()
-""",
-        tmp_path / "main.agl",
-        roots=agl_roots(),
-    )
-
-    assert not result.ok
-    assert result.error is not None
-    assert result.error.type_name == "FsError"
-    assert result.error.fields["operation"] == "temp-dir"
-
-
 def test_fs_try_read_of_an_invalid_path_returns_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -266,37 +240,99 @@ program def main() -> unit =
     )
 
 
-def test_fs_writes_are_suppressed_and_logged_in_dry_run(
+def test_fs_write_append_and_mkdir_create_missing_parent_directories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    dry_run.set_enabled(True)
 
     result = _run_file(
         """import std/fs
 program def main() -> unit =
-  fs::write("created.txt", "first")
-  fs::append("created.txt", " second")
-  fs::mkdir("created")
-  fs::copy("missing.txt", "copied.txt")
-  fs::move("missing.txt", "moved.txt")
-  fs::remove("missing.txt")
+  fs::write("created/by/write/deep/file.txt", "contents")
+  fs::append("created/by/append/deep/file.txt", "appended")
+  fs::mkdir("created/by/mkdir/deep")
+  print(fs::read("created/by/write/deep/file.txt"))
+  print(fs::read("created/by/append/deep/file.txt"))
+  print(fs::is-dir("created/by/mkdir/deep"))
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),
     )
 
     assert result.ok
-    assert not (tmp_path / "created.txt").exists()
-    assert not (tmp_path / "created").exists()
-    assert capsys.readouterr().out == (
-        "dry-run: agm write-file created.txt\n"
-        "dry-run: agm append-file created.txt\n"
-        "dry-run: agm mkdir created\n"
-        "dry-run: agm copy-file missing.txt copied.txt\n"
-        "dry-run: agm move missing.txt moved.txt\n"
-        "dry-run: agm unlink missing.txt\n"
+    assert (tmp_path / "created" / "by" / "write" / "deep" / "file.txt").is_file()
+    assert (tmp_path / "created" / "by" / "append" / "deep" / "file.txt").is_file()
+    assert (tmp_path / "created" / "by" / "mkdir" / "deep").is_dir()
+    assert capsys.readouterr().out == "contents\nappended\ntrue\n"
+
+
+def test_fs_copy_and_move_create_missing_destination_parent_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_file(
+        """import std/fs
+program def main() -> unit =
+  fs::write("source.txt", "contents")
+  fs::copy("source.txt", "created/by/copy/file.txt")
+  fs::move("source.txt", "created/by/move/file.txt")
+  print(fs::read("created/by/copy/file.txt"))
+  print(fs::read("created/by/move/file.txt"))
+  print(fs::exists("source.txt"))
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
     )
+
+    assert result.ok
+    assert capsys.readouterr().out == "contents\ncontents\nfalse\n"
+
+
+@pytest.mark.parametrize("operation", ("copy", "move"))
+def test_fs_copy_and_move_of_missing_source_create_no_destination_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_file(
+        f"""import std/fs
+program def main() -> unit =
+  fs::{operation}("missing.txt", "out/a/b.txt")
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "FsError"
+    assert result.error.fields["path"] == "missing.txt"
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("operation", ("copy", "move"))
+def test_fs_copy_and_move_report_uncreatable_destination_parent_by_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "source.txt").write_text("contents", encoding="utf-8")
+    (tmp_path / "blocker").write_text("file", encoding="utf-8")
+
+    result = _run_file(
+        f"""import std/fs
+program def main() -> unit =
+  fs::{operation}("source.txt", "blocker/sub/b.txt")
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "FsError"
+    assert result.error.fields["path"] == "blocker/sub/b.txt"
+    assert (tmp_path / "source.txt").is_file()
 
 
 def test_fs_externs_honor_the_existing_extern_capability_gate() -> None:

@@ -574,9 +574,10 @@ class ModuleSources(SourcesHost):
         """The root enum inline member module qualifier *chain*, in *site*, injects as *member*.
 
         A module qualifier is ``::`` alone (this module's own root) or one
-        import route. Its surface injects the terminal name of its root
-        enums' inline members; a referenced member keeps its own path and is
-        never injected. Two injected members are ambiguous, repaired by the
+        import route. Own root inline members win over builtin prelude members.
+        Its surface injects the terminal name of root enums' inline members.
+        A referenced member keeps its own path and is never injected.
+        Two injected members are ambiguous, repaired by the
         first in declaration order, and a name only a root enum references
         is refused.
         """
@@ -596,10 +597,15 @@ class ModuleSources(SourcesHost):
         else:
             ref = self._level_value(self._layer_chain(self._root_scope), member)
             layer = ContributionLayer.DECLARED
+            constructors = tuple(
+                candidate
+                for candidate in self._constructor_candidates.get(member, ())
+                if is_root_inline_member(candidate)
+            )
+            own = tuple(c for c in constructors if c.owner_module_id == self._module_id)
             injected = {
                 candidate: render_qualified_name(chain, f"{candidate.owner_path[0]}::{member}")
-                for candidate in self._constructor_candidates.get(member, ())
-                if candidate.owner_module_id == self._module_id and is_root_inline_member(candidate)
+                for candidate in own or tuple(c for c in constructors if c.is_builtin)
             }
             # Earlier REPL entries' root types, then this entry's.
             roots = (

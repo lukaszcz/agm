@@ -11,8 +11,8 @@ Covers everything upstream of the boundary walkers (``test_agl_extern_boundary.p
 
 Interpreter dispatch of an extern call is a later stage of this effort, so
 tests below that exercise the full pipeline stop at ``check_only`` (static
-passes, lowering, and dry-run inventory only) rather than evaluating a
-program that calls an extern.
+passes and lowering only) rather than evaluating a program that calls an
+extern.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from agm.agl.runtime.externs import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core import fs
-from tests._agl_helpers import file_program, prepare_inline_command
+from tests._agl_helpers import file_program, prepare_inline_code
 from tests.agl.ir_harness import age_file, write_companion_file, write_module_file
 from tests.agl.module_graph import load_graph
 
@@ -166,7 +166,7 @@ class TestCompanionPathDerivation:
 
         assert graph.modules[ENTRY_ID].companion_path == companion
 
-        result = PipelineDriver().run(
+        result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
             file_program(source),
             entry_path=tmp_path / "entry.agl",
             roots=_roots(tmp_path),
@@ -189,7 +189,7 @@ class TestCompanionPathDerivation:
     def test_missing_companion_becomes_prepared_program_diagnostic(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(root),
             default_stdlib=False,
@@ -980,8 +980,8 @@ class TestFailFastDiagnostics:
         """The same wiring runs from the real pipeline entry point, cleanly (no crash)."""
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
-        driver = PipelineDriver()
-        prepared = prepare_inline_command(
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1002,8 +1002,8 @@ class TestOrdering:
             "lib/mod",
             f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
-        driver = PipelineDriver()
-        prepared = prepare_inline_command(
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code(
             'import lib/mod::*\n1 + "a"',
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1033,8 +1033,8 @@ class TestOrdering:
                 [Diagnostic(message=_INJECTED_CONTRACT_DIAGNOSTIC, line=1)],
             ),
         )
-        driver = PipelineDriver()
-        prepared = prepare_inline_command(
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1051,8 +1051,8 @@ class TestRegistryPopulatedViaPipeline:
     ) -> None:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
-        driver = PipelineDriver()
-        prepared = prepare_inline_command(
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1075,8 +1075,8 @@ class TestRegistryPopulatedViaPipeline:
         """``run_prepared`` itself performs real-run extern wiring."""
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
-        driver = PipelineDriver()
-        prepared = prepare_inline_command(
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,

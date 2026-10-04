@@ -102,6 +102,7 @@ def test_companion_can_raise_a_synthesized_exception_through_the_carrier() -> No
                 declared_name="Problem",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "detail"),
+                field_json_names=("message", "detail"),
             )
         },
     )
@@ -147,6 +148,7 @@ def test_carrier_name_is_reserved_when_an_agl_exception_uses_it(tmp_path: Path) 
                 declared_name="AglException",
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
+                field_json_names=("message",),
             )
         },
     )

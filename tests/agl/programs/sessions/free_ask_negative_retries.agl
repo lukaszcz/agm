@@ -1,0 +1,11 @@
+# A negative count on a free ask raises RangeError before the default session opens.
+import std/config
+
+program def main(pi: bool) -> unit =
+  if
+    | pi => std/config::default-agent := AgentPi("writer", "model", "high")
+    | else => std/config::default-agent := AgentCommand("writer")
+  try
+    let _: int = ask("p", parse-error-retries = -1)
+  catch RangeError =>
+    print "range"

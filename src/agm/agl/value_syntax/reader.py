@@ -254,15 +254,15 @@ def _parse_ctor(source: str, start: int, word: str, pos: int) -> tuple[ValueNode
 
 
 def read_ctor_head(source: str) -> tuple[str | None, str] | None:
-    """Return ``(qualifier, name)`` when *source* opens with a constructor call.
+    """Return ``(qualifier, name)`` when *source* is a constructor call or bare name.
 
     Skips leading whitespace, then reads exactly the qualifier/name prefix
     :func:`_parse_ctor` reads -- the same whitespace handling around ``::``
     and before ``(`` -- so a caller probing for an attempted call (the host
     Agent-text dispatch) can never diverge from how the reader itself treats
-    the same text. Returns ``None`` for anything that is not a name opening
-    a call: a bare name with no ``(``, a malformed qualifier chain, or text
-    that is not a name at all.
+    the same text. A name alone (``Circle``, the no-argument form) counts;
+    ``None`` is returned for a name followed by anything but ``(``, a
+    malformed qualifier chain, or text that is not a name at all.
     """
     pos = _skip_ws(source, 0)
     end = lexical.scan_name(source, pos)
@@ -274,7 +274,7 @@ def read_ctor_head(source: str) -> tuple[str | None, str] | None:
     except ValueSyntaxError:
         return None
     peek = _skip_ws(source, after)
-    if peek >= len(source) or source[peek] != "(":
+    if peek < len(source) and source[peek] != "(":
         return None
     return qualifier, name
 

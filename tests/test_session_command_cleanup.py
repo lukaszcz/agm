@@ -17,7 +17,9 @@ from agm.agent.session import (
     SessionOperations,
     SessionService,
 )
+from agm.agent.spec import PermissionMode
 from agm.commands import exec_program
+from agm.sandbox.request import SandboxLimits
 from tests._agl_helpers import write_file_program
 from tests.test_exec_command import file_args
 
@@ -27,8 +29,17 @@ class _SessionHost:
         self.close_calls = 0
         self.close_error = close_error
 
-    def open(self, _agent: object, _transport: str, *, name: str = "") -> str:
-        del name
+    def open(
+        self,
+        _agent: object,
+        _transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        del name, permission_mode, sandbox, env
         return "session"
 
     def close_all(self) -> None:
@@ -73,6 +84,7 @@ def test_exec_keeps_a_failed_run_result_primary_when_session_cleanup_fails(
 
 class _InterruptingBackend:
     operations = SessionOperations()
+    continues_conversation = True
 
     def __init__(self) -> None:
         self.opened = False
@@ -110,9 +122,19 @@ class _RecordingSessionService(SessionService):
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         handle = super().open(
-            agent, transport, name=name, ephemeral=ephemeral, single_prompt=single_prompt
+            agent,
+            transport,
+            name=name,
+            ephemeral=ephemeral,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
         )
         self.opened_handle = handle
         return handle

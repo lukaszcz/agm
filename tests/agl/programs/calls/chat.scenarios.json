@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "free_chat_reports_launch_failure_and_resumes",
+      "params": {"method": false},
+      "expect": {"stdout": "spawn_failure\nresumed\n", "calls": {}}
+    },
+    {
+      "name": "bound_chat_reports_sandbox_failure_and_resumes",
+      "params": {"method": true},
+      "expect": {"stdout": "spawn_failure\nresumed\n", "calls": {}}
+    }
+  ]
+}

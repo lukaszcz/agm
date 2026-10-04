@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "member_names_round_trip_as_strings",
+      "params": {
+        "verdict": "Pass",
+        "verdict-json": "\"Pass\"",
+        "report-json": "{\"verdict\": \"fail\", \"history\": [\"Pass\", \"n/a\"], \"by-name\": {\"a\": \"Pass\"}, \"marker\": \"Token\", \"flag\": \"On\", \"outcome\": {\"$case\": \"fail\"}}"
+      },
+      "expect": {
+        "stdout": "\"Pass\"\n[\"Pass\", \"fail\", \"n/a\"]\n\"Token\"\n\"Off\"\n{\"$case\": \"Pass\"}\n{}\ndecoded pass\ntrue\ntrue\nfail\n{\"verdict\": \"fail\", \"history\": [\"Pass\", \"n/a\"], \"by-name\": {\"a\": \"Pass\"}, \"marker\": \"Token\", \"flag\": \"On\", \"outcome\": {\"$case\": \"fail\"}}\n"
+      }
+    },
+    {
+      "name": "tag_object_is_not_a_plain_enum_value",
+      "params": {
+        "verdict": "fail",
+        "verdict-json": "{\"$case\": \"Pass\"}",
+        "report-json": "{\"verdict\": {\"$case\": \"Pass\"}, \"history\": [], \"by-name\": {}, \"marker\": \"Blank\", \"flag\": \"Off\", \"outcome\": {\"$case\": \"Pass\"}}"
+      },
+      "expect": {
+        "stdout": "\"fail\"\n[\"Pass\", \"fail\", \"n/a\"]\n\"Token\"\n\"Off\"\n{\"$case\": \"fail\"}\n{}\nverdict invalid: json -> Verdict\nfalse\nreport invalid: text -> Report\n"
+      }
+    },
+    {
+      "name": "json_name_param_and_value_syntax_text",
+      "params": {
+        "verdict": "\"n/a\"",
+        "verdict-json": "Unknown",
+        "report-json": "Report(verdict = Unknown, history = [fail], by-name = {}, marker = Blank, flag = Off, outcome = Retry(after = 3))"
+      },
+      "expect": {
+        "stdout": "\"n/a\"\n[\"Pass\", \"fail\", \"n/a\"]\n\"Token\"\n\"Off\"\nnot an outcome\n{}\nverdict is not json: Unknown\ntrue\nunknown\n{\"verdict\": \"n/a\", \"history\": [\"fail\"], \"by-name\": {}, \"marker\": \"Blank\", \"flag\": \"Off\", \"outcome\": {\"$case\": \"Retry\", \"after\": 3}}\n"
+      }
+    },
+    {
+      "name": "unknown_member_and_non_string_are_rejected",
+      "params": {
+        "verdict": "Unknown",
+        "verdict-json": "\"Maybe\"",
+        "report-json": "{\"verdict\": \"Pass\", \"history\": [3], \"by-name\": {}, \"marker\": \"Blank\", \"flag\": \"Off\", \"outcome\": {\"$case\": \"Pass\"}}"
+      },
+      "expect": {
+        "stdout": "\"n/a\"\n[\"Pass\", \"fail\", \"n/a\"]\n\"Token\"\n\"Off\"\nnot an outcome\n{}\nverdict invalid: json -> Verdict\nfalse\nreport invalid: text -> Report\n"
+      }
+    },
+    {
+      "name": "param_rejects_the_tag_object",
+      "params": {
+        "verdict": "{\"$case\": \"Pass\"}",
+        "verdict-json": "\"Pass\"",
+        "report-json": "{}"
+      },
+      "expect": {
+        "host_error": {"message_contains": ["verdict"]}
+      }
+    }
+  ]
+}

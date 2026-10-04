@@ -6,7 +6,10 @@ Public API
   :class:`~agm.agl.modules.loader.ModuleGraph`: one ``ModuleResolution`` per
   module.
 - :class:`ModuleResolution` — frozen dataclass carrying one module's
-  ``Program`` plus side tables keyed by ``node_id``.
+  ``Program`` plus side tables keyed by ``node_id``; its
+  ``param_bindings()`` yields every ``@param``-marked static binding.
+- :class:`ParamBinding` — one such binding, paired with its ``@param``
+  attribute payload.
 - :class:`BindingRef` — resolved reference to a scope binding.
 - :class:`BuiltinKind` — enum classifying contextual built-in Call nodes.
 - :class:`AglScopeError` — fatal scope error (span-aware ``AglError``
@@ -25,6 +28,7 @@ from agm.agl.scope.symbols import (
     BindingRef,
     BuiltinKind,
     ModuleResolution,
+    ParamBinding,
     ScopeNode,
 )
 
@@ -33,6 +37,7 @@ __all__ = [
     "BindingRef",
     "BuiltinKind",
     "ModuleResolution",
+    "ParamBinding",
     "ResolvedModule",
     "ResolvedProgram",
     "ScopeNode",

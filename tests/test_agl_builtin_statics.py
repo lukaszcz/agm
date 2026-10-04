@@ -169,7 +169,7 @@ def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Pa
         encoding="utf-8",
     )
 
-    driver = PipelineDriver()
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     prepared = driver.prepare_program(
         "program def main() -> unit =\n  let session = Session::default()\n  ()\n",
         roots=RootSet(roots=frozenset({tmp_path})),
@@ -194,7 +194,7 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
         encoding="utf-8",
     )
 
-    prepared = PipelineDriver().prepare_program(
+    prepared = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).prepare_program(
         "program def main() -> unit =\n  let session = Session::default()\n  ()\n",
         roots=RootSet(roots=frozenset({tmp_path})),
     )

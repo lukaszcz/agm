@@ -1,0 +1,129 @@
+import std/env::Environ
+# `chdir` raises `FsError`; imported so the companion can construct it.
+import std/fs::FsError
+import std/option::Option
+import std/path::path
+
+@doc("End the AgL host process with portable status `code`.")
+extern def exit(code: int = 0) -> unit
+
+@doc("""
+  Return an absolute path with existing symlinks resolved.
+
+  Normalizes any missing suffix. Raises `EncodingError` if the resolved path is not valid Unicode.
+""")
+extern def canonicalize(path: path) -> path
+
+@doc("""
+  Return the current working directory.
+
+  Raises `std/fs::FsError(path = ".", operation = "cwd")` if the directory no longer exists, or
+  `EncodingError` if it is not valid Unicode.
+""")
+extern def cwd() -> path
+
+@doc("Return this process identifier.")
+extern def pid() -> int
+
+@doc("""
+  Return this host's name.
+
+  Raises `EncodingError` if the host name is not valid Unicode.
+""")
+extern def hostname() -> text
+
+@extern-name("temp_dir")
+@doc("""
+  Return the host's temporary directory.
+
+  Raises `EncodingError` if the directory is not valid Unicode.
+""")
+extern def temp-dir() -> path
+
+scope ChdirInternals
+  @extern-name("chdir")
+  @doc("Change the working directory and update `OLDPWD` and `PWD` in the given variables.")
+  extern def raw-chdir(dir: path, vars: dict[text, text]) -> unit
+end ChdirInternals
+
+@doc("""
+  Change the host working directory and update `OLDPWD` and `PWD` in `environ`.
+
+  Records the previous directory in `OLDPWD` and the new `cwd()` in `PWD`. Restores the starting
+  directory when the host session ends, if it remains accessible. Raises `std/fs::FsError(path =
+  dir, operation = "chdir")` on failure, or `EncodingError` if the previous or new directory is not
+  valid Unicode, restoring the previous directory when possible. A deleted working directory can be
+  left; `OLDPWD` then keeps the previous `PWD`, and that directory cannot be restored.
+""")
+def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.vars)
+
+@extern-name("is_interactive")
+@doc("Check if standard input and output are both connected to a terminal.")
+extern def is-interactive() -> bool
+
+@doc("""
+  Find an executable on the given environment's `PATH`, or return `None`.
+
+  Uses the host default `PATH` when the environment has no `PATH`.
+""")
+extern def which(name: text, env: Environ = std/env::environ) -> Option[path]
+
+@doc("Return the host platform identifier.")
+extern def platform() -> text
+
+@extern-name("cpu_count")
+@doc("Return the usable CPU count, at least 1.")
+extern def cpu-count() -> int
+
+@doc("""
+  Return the real user's passwd name, or `None` when absent.
+
+  Raises `EncodingError` if the name is not valid Unicode.
+""")
+extern def user() -> Option[text]
+
+# Raised by `edit` and `open`. `exit-code` is `Some(code)` for a non-zero
+# exit, or `None` when there was nothing to launch. `command` is what failed
+# to launch or exit: the editor (the `VISUAL`/`EDITOR` value, or the last
+# fallback, `vi`, when none is found), `sh` if the shell itself is missing, or
+# the opener.
+exception LaunchError extends Exception
+  command: text
+  exit-code: Option[int]
+
+@doc("""
+  Edit a file with the configured editor and wait for it to exit.
+
+  Opens `file` for editing: the first non-empty `VISUAL`, then `EDITOR`, from `env`, else the first
+  of `micro`, `vi` found on `env`'s `PATH`. Blocks until the editor exits, inheriting stdio; the
+  editor value is a shell snippet (`code --wait` works). `env` is the child's complete environment,
+  not an overlay on AGM's own. While waiting, AGM ignores SIGINT and SIGQUIT (git's editor behavior)
+  and restores them once the editor exits. Raises `LaunchError`: `exit-code = None` when the editor
+  command itself could not be found (including a shell "command not found"), `Some(code)` for any
+  other non-zero exit.
+""")
+extern def edit(file: path, env: Environ = std/env::environ) -> unit
+
+@doc("""
+  Edit the initial text in a temporary file and return the resulting text.
+
+  Round-trips `initial` through the editor: writes it to a fresh `std/fs::temp-file(suffix)`, calls
+  `edit`, reads back the result, and removes the temporary file. A failed `edit` (raised
+  `LaunchError`) leaves the temporary file for `std/fs::temp-file`'s own host-session-end cleanup.
+""")
+def edit-text(initial: text, suffix: text = ".md", env: Environ = std/env::environ) -> text =
+  let file = std/fs::temp-file(suffix)
+  std/fs::write(file, initial)
+  edit(file, env)
+  let content = std/fs::read(file)
+  std/fs::remove(file)
+  content
+
+@doc("""
+  Open a file or URL with the desktop default application.
+
+  Uses `open` on darwin or `xdg-open` elsewhere, found on `env`'s `PATH`. The child receives `env`
+  as its complete environment. Waits for the opener to exit. Raises `LaunchError` if the opener is
+  unavailable or exits with a non-zero status.
+""")
+extern def open(target: text, env: Environ = std/env::environ) -> unit

@@ -20,7 +20,7 @@ from agm.agl.semantics.values import IntValue
 from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
-from tests._agl_helpers import REPO_STDLIB_ROOT, run_inline_command
+from tests._agl_helpers import REPO_STDLIB_ROOT, run_inline_code
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 _PACKAGE = Path(__file__).parent / "agl" / "packages" / "python_requirement"
@@ -46,8 +46,11 @@ def _roots(*, loose: Path | None = None, package: Path = _PACKAGE) -> RootSet:
 
 
 def _run(source: str, *, loose: Path | None = None, package: Path = _PACKAGE) -> RunResult:
-    return run_inline_command(
-        PipelineDriver(), source, roots=_roots(loose=loose, package=package), default_stdlib=False
+    return run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        source,
+        roots=_roots(loose=loose, package=package),
+        default_stdlib=False,
     )
 
 

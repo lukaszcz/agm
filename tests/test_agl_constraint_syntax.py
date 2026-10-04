@@ -267,7 +267,9 @@ class TestConstraintScopeValidation:
             "program def main() -> unit = ()\n"
         )
         prepared = PipelineDriver.prepare_program(source, default_stdlib=False)
-        discovery = PipelineDriver().discover_programs(prepared)
+        discovery = PipelineDriver(
+            get_sandbox_context=None, resolve_agent_spec=None
+        ).discover_programs(prepared)
         assert discovery.checked is None
         (diagnostic,) = discovery.diagnostics
         assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (3, 5, 11)

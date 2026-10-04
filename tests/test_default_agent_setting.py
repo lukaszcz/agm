@@ -9,58 +9,25 @@ from pathlib import Path
 import pytest
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-from agm.agl.pipeline import PipelineDriver, RunResult
+from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.agents import agent_member_name
-from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
+from agm.agl.semantics.values import RecordValue, TextValue
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
-from tests._agl_helpers import agent_value, agl_roots, prepare_inline_command, run_inline_command
-
-
-def _file_program(body: str) -> str:
-    """Build an explicit file entry while leaving import headers at the root."""
-    lines = body.splitlines()
-    headers: list[str] = []
-    while lines and lines[0].startswith("import "):
-        headers.append(lines.pop(0))
-    return "\n".join(
-        (*headers, "program def main() -> unit =", *(f"  {line}" for line in lines), "")
-    )
-
-
-def _run(
-    source: str,
-    *,
-    seed: dict[str, Value] | None = None,
-    host_settings_policy: object | None = None,
-) -> RunResult:
-    result = run_inline_command(
-        PipelineDriver(),
-        source,
-        roots=agl_roots(),
-        builtin_host_settings=seed,
-        host_settings_policy=host_settings_policy,
-    )
-    assert isinstance(result, RunResult)
-    return result
-
-
-def _assert_agent_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
-    """Verify *actual* is the expected ``Agent`` variant with the expected payload.
-
-    *is_variant* is an ``is`` member test run inside the program's own
-    source (bound alongside *actual*): the running program loads real stdlib,
-    so its own ``Agent`` enum carries that program's own nominal identity,
-    distinct from the reserved-fallback identity *expected* (built by the
-    shared ``agent_value`` test helper) carries. Only a cast evaluated inside
-    that same program can compare identity correctly; fields compare directly
-    since they carry no identity of their own.
-    """
-    assert is_variant == BoolValue(True)
-    assert isinstance(actual, RecordValue)
-    assert actual.fields == expected.fields
+from tests._agl_helpers import (
+    agent_value,
+    agl_roots,
+    prepare_inline_code,
+    write_file_program,
+)
+from tests._agl_helpers import (
+    assert_shape as _assert_shape,
+)
+from tests._agl_helpers import (
+    run_program as _run,
+)
 
 
 def test_engine_key_uses_the_agent_nominal_type() -> None:
@@ -107,12 +74,12 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     )
 
     assert result.ok
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["initial"],
         result.bindings["initial-is-claude"],
-        agent_value("AgentClaude", model="sonnet", thinking="medium"),
+        agent_value("AgentClaude", model="", thinking=""),
     )
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["updated"],
         result.bindings["updated-is-command"],
         agent_value("AgentCommand", command="command"),
@@ -170,7 +137,7 @@ def test_exec_uses_stdlib_default_agent_when_no_host_seed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    write_file_program(program, "import std/config\nprint std/config::default-agent\n")
 
     assert (
         exec_command.run(
@@ -200,12 +167,12 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     )
 
     assert result.ok
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["seeded"],
         result.bindings["seeded-is-codex"],
         agent_value("AgentCodex", model="o3", thinking="medium"),
     )
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["written"],
         result.bindings["written-is-pi"],
         agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
@@ -252,10 +219,9 @@ def test_exec_agent_source_cli_and_config_precedence(
         "" if source_literal is None else f"std/config::default-agent := {source_literal}\n"
     )
     program = tmp_path / "program.agl"
-    program.write_text(
-        _file_program(
-            f"import std/config\n{source_write}let value = std/config::default-agent\nprint value\n"
-        )
+    write_file_program(
+        program,
+        f"import std/config\n{source_write}let value = std/config::default-agent\nprint value\n",
     )
     monkeypatch.setattr(
         exec_engine,
@@ -301,7 +267,7 @@ def test_program_table_default_agent_beats_exec_default_agent(
         f"[prog.main]\ndefault-agent = {program_literal!r}\n"
     )
     program = tmp_path / "prog.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    write_file_program(program, "import std/config\nprint std/config::default-agent\n")
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -334,7 +300,7 @@ def test_cli_default_agent_beats_program_table(
         f"[prog.main]\ndefault-agent = {program_literal!r}\n"
     )
     program = tmp_path / "prog.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    write_file_program(program, "import std/config\nprint std/config::default-agent\n")
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -370,7 +336,7 @@ def test_exec_config_runner_key_leaves_the_default_agent_unset(
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text('[exec]\nrunner = "claude \'oops"\n')
     program = tmp_path / "program.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    write_file_program(program, "import std/config\nprint std/config::default-agent\n")
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -394,7 +360,7 @@ def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "ran"\n'))
+    write_file_program(program, 'print "ran"\n')
 
     assert (
         exec_command.run(
@@ -418,7 +384,7 @@ def test_exec_rejects_text_that_opens_a_member_call_but_fails_to_read_from_cli(
     """Text naming a real ``Agent`` member commits to constructor-call syntax:
     a read failure inside it is a host error, not a verbatim command."""
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
+    write_file_program(program, 'print "not-run"\n')
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
@@ -448,7 +414,7 @@ def test_exec_rejects_non_string_agent_value_from_config(
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text(f"[exec]\ndefault-agent = {toml_value}\n")
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
+    write_file_program(program, 'print "not-run"\n')
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -480,7 +446,7 @@ def test_exec_treats_non_agent_syntax_from_config_as_a_command(
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "ran"\n'))
+    write_file_program(program, 'print "ran"\n')
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -501,7 +467,7 @@ def test_exec_rejects_blank_agent_literal_from_cli(
 ) -> None:
     """A blank ``--default-agent`` is a host-shape error, diagnosed before any AgL parsing."""
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
+    write_file_program(program, 'print "not-run"\n')
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
@@ -534,7 +500,7 @@ def test_exec_rejects_malformed_agent_command_literal_from_cli(
     first statement (its own ``print``, ahead of its first ``ask``) runs.
     """
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "before ask"\nask "hello"\n'))
+    write_file_program(program, 'print "before ask"\nask "hello"\n')
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
@@ -559,7 +525,7 @@ def test_exec_allows_well_formed_agent_command_literal_from_cli(
 ) -> None:
     """A well-formed ``AgentCommand`` literal is not rejected, and the program runs."""
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "ran"\n'))
+    write_file_program(program, 'print "ran"\n')
 
     assert (
         exec_command.run(
@@ -589,13 +555,12 @@ def test_source_write_of_malformed_agent_command_stays_a_runtime_error(
     it -- never a host-configuration exit.
     """
     program = tmp_path / "program.agl"
-    program.write_text(
-        _file_program(
-            "import std/config\n"
-            'print "before ask"\n'
-            'std/config::default-agent := AgentCommand("nonexistent-bin -p \'oops")\n'
-            'ask "hello"\n'
-        )
+    write_file_program(
+        program,
+        "import std/config\n"
+        'print "before ask"\n'
+        'std/config::default-agent := AgentCommand("nonexistent-bin -p \'oops")\n'
+        'ask "hello"\n',
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -617,8 +582,8 @@ class TestMalformedAgentCommandAtConstruction:
     """
 
     def test_seeded_malformed_command_text_is_a_pre_execution_diagnostic(self) -> None:
-        driver = PipelineDriver()
-        prepared = prepare_inline_command("()", entry_path=None, roots=agl_roots())
+        driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        prepared = prepare_inline_code("()", entry_path=None, roots=agl_roots())
         result = driver.run_prepared(
             prepared,
             builtin_host_settings={
@@ -628,22 +593,3 @@ class TestMalformedAgentCommandAtConstruction:
         assert not result.ok
         assert result.diagnostics
         assert result.error is None
-
-
-def test_restamp_engine_setting_ignores_non_enum_backed_keys() -> None:
-    """A boolean-kind or unrecognized key carries no host-enum identity to restamp.
-
-    ``trace``/``strict-json`` are boolean-kind and an unrecognized name is not a
-    key at all, so :func:`restamp_engine_setting` leaves such a value untouched
-    regardless of the ``from``/``to`` tables given.
-    """
-    from agm.agl.runtime.engine_config import restamp_engine_setting
-
-    stray = agent_value("AgentCommand", command="unused")
-    for key in ("trace", "strict-json", "not-an-engine-key"):
-        assert (
-            restamp_engine_setting(
-                key, stray, from_table=NO_BUILTIN_DECLARATIONS, to_table=NO_BUILTIN_DECLARATIONS
-            )
-            is stray
-        )

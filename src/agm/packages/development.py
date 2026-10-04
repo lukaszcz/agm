@@ -4,7 +4,11 @@ A development tree is live source, so its manifest's command table is
 incomplete until the commands its own programs register are merged in
 (:mod:`agm.packages.source_commands`). Discovery loads manifests with
 ``commands_complete=False`` for that reason; it mounts module roots and
-resolves dependencies, and never reads the command table.
+resolves dependencies, and never reads the command table. A command host
+completes a development package's table only once it owns the program
+actually selected (``commands/exec_program.py:_package_program_route`),
+so mounting module roots here never pays for an AST scan of code nothing
+imports.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ def containing_development_package(
         canonical_root, manifest.name, manifest.version, home=home, env=env
     ):
         return None
-    return PackageInfo(canonical_root, manifest)
+    return PackageInfo(canonical_root, manifest, commands_complete=False)
 
 
 def discover_development_packages(
@@ -103,7 +107,7 @@ def _declared_dependency(root: Path, name: str, minimum: semver.Version) -> Pack
             f"development dependency {name!r} requires at least {minimum}, "
             f"but path declares {manifest.version}"
         )
-    return PackageInfo(root, manifest)
+    return PackageInfo(root, manifest, commands_complete=False)
 
 
 def _containing_package_root(anchor: Path) -> Path | None:

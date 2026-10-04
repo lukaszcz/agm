@@ -2,11 +2,15 @@ import std/errors::ArithmeticError
 import std/errors::RangeError
 
 scope IntInternals
+  @doc("Raise an integer to the given exponent.")
   extern def int_pow(self: int, exponent: int) -> int
 end IntInternals
 
 scope DecimalInternals
+  @doc("Return the square root.")
   extern def sqrt(self: decimal) -> decimal
+
+  @doc("Raise the value to the integer exponent.")
   extern def pow(self: decimal, exponent: int) -> decimal
 end DecimalInternals
 
@@ -16,45 +20,79 @@ end bool
 let pi: decimal = 3.141592653589793238462643383
 let e: decimal = 2.718281828459045235360287471
 
+@doc("Return the absolute value.")
 def int::abs(self) -> int = if self < 0 => -self else => self
+@doc("Return the smaller of the two values.")
 def int::min(self, other: int) -> int = if self < other => self else => other
+@doc("Return the larger of the two values.")
 def int::max(self, other: int) -> int = if self > other => self else => other
+@doc("Clamp the value between the lower and upper bounds.")
 def int::clamp(self, lower: int, upper: int) -> int = self.max(lower).min(upper)
+@doc("Return -1, 0, or 1 when this value is less than, equal to, or greater than the other.")
 def int::compare(self, other: int) -> int =
   if
     | self < other => -1
     | self > other => 1
     | else => 0
+@doc("""
+  Raise the value to the integer exponent.
+
+  Raises `RangeError` when the exponent is negative.
+""")
 def int::pow(self, exponent: int) -> int =
   if exponent < 0 => raise RangeError(message = "integer exponent must be non-negative") else =>
     IntInternals::int_pow(self, exponent)
+@doc("Return -1, 0, or 1 for a negative, zero, or positive value.")
 def int::sign(self) -> int =
   if
     | self < 0 => -1
     | self > 0 => 1
     | else => 0
+@doc("Convert the integer to a decimal.")
 def int::to-decimal(self) -> decimal = self as decimal
 
+@doc("Return the absolute value.")
 def decimal::abs(self) -> decimal = if self < 0 => -self else => self
+@doc("Return the smaller of the two values.")
 def decimal::min(self, other: decimal) -> decimal = if self < other => self else => other
+@doc("Return the larger of the two values.")
 def decimal::max(self, other: decimal) -> decimal = if self > other => self else => other
+@doc("Clamp the value between the lower and upper bounds.")
 def decimal::clamp(self, lower: decimal, upper: decimal) -> decimal = self.max(lower).min(upper)
+@doc("Return -1, 0, or 1 when this value is less than, equal to, or greater than the other.")
 def decimal::compare(self, other: decimal) -> int =
   if
     | self < other => -1
     | self > other => 1
     | else => 0
+@doc("Return -1, 0, or 1 for a negative, zero, or positive value.")
 def decimal::sign(self) -> int =
   if
     | self < 0 => -1
     | self > 0 => 1
     | else => 0
+@doc("Round down to the nearest integer.")
 extern def decimal::floor(self) -> int
+
+@doc("Round up to the nearest integer.")
 extern def decimal::ceil(self) -> int
+
+@doc("Round to the given number of decimal places using half-even rounding.")
 extern def decimal::round(self, digits: int = 0) -> decimal
+
+@doc("""
+  Return the square root.
+
+  Raises `RangeError` when the value is negative.
+""")
 def decimal::sqrt(self) -> decimal =
   if self < 0 => raise RangeError(message = "square root requires a non-negative decimal") else =>
     DecimalInternals::sqrt(self)
+@doc("""
+  Raise the value to the integer exponent.
+
+  Raises `RangeError` when zero is raised to a negative exponent.
+""")
 def decimal::pow(self, exponent: int) -> decimal =
   if
     | exponent == 0 => 1.0
@@ -62,6 +100,7 @@ def decimal::pow(self, exponent: int) -> decimal =
         raise RangeError(message = "zero decimal base requires a non-negative exponent")
     | else => DecimalInternals::pow(self, exponent)
 
+@doc("Return the sum of the integers, or zero for an empty array.")
 def sum(values: array[int]) -> int =
   var total = 0
   for value in values do
@@ -69,6 +108,7 @@ def sum(values: array[int]) -> int =
   done
   total
 
+@doc("Return the sum of the decimals, or zero for an empty array.")
 def sum-decimal(values: array[decimal]) -> decimal =
   var total: decimal = 0.0
   for value in values do

@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "all_defaulted",
+      "params": {
+        "mode": "all_defaulted",
+        "input": "{\"verbose\": true}"
+      },
+      "expect": {
+        "stdout": "Retry(count = 3)\ntrue\n"
+      }
+    },
+    {
+      "name": "positional_zone",
+      "params": {
+        "mode": "positional_zone",
+        "input": "{\"label\": \"custom\"}"
+      },
+      "expect": {
+        "stdout": "Point(1, 2)\ntrue\n"
+      }
+    },
+    {
+      "name": "template_hole",
+      "params": {
+        "mode": "template_hole",
+        "input": "{\"keep\": false}"
+      },
+      "expect": {
+        "stdout": "tag=Tag(n = 7)\ntrue\n"
+      }
+    }
+  ]
+}

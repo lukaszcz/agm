@@ -8,16 +8,26 @@ an :class:`EngineSeedTiers`; :meth:`EngineSeedTiers.merged` flattens them, with
 room for a caller-supplied middle tier, into the one mapping the engine seeds
 from, and :meth:`EngineSeedTiers.trace_decision` reads the same resolution back
 as the host's own trace-file decision, so a run's log file and its readable
-``trace`` setting can never disagree.
+``trace`` setting can never disagree. :func:`host_agent_spec_resolver` builds
+the dispatch-time agent defaults both hosts apply from ``[agent]``.
 """
 
 from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
+from agm.agent.spec_defaults import AgentSpecResolver, configured_defaults_resolver
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.runtime.engine_config import (
+    raw_option_str,
+    validate_engine_leaf_value,
+    validate_engine_value,
+)
+from agm.agl.runtime.option import option_text
+from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.config.engine_keys import (
     ENGINE_KEYS,
     EngineKeyKind,
@@ -27,13 +37,79 @@ from agm.config.engine_keys import (
 from agm.core.log import TraceDecision
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import Value
+    from agm.cli_support.args import ExecutionOptionValues
     from agm.config.general import ExecConfig
+    from agm.core.toml import TomlDict
 
-__all__ = ["EngineSeedTiers", "build_host_engine_seeds"]
+__all__ = [
+    "EngineSeedTiers",
+    "build_host_engine_seeds",
+    "execution_cli_values",
+    "host_agent_spec_resolver",
+    "resolve_timeout",
+]
+
+
+def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | None]:
+    """Return the engine settings *args*' execution flags explicitly set.
+
+    A present ``None`` is an explicit empty ``Option`` (``--no-timeout``).
+    """
+    values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        values["strict-json"] = args.strict_json
+    if args.timeout is not None:
+        values["timeout"] = args.timeout
+    elif args.no_timeout:
+        values["timeout"] = None
+    if args.no_trace:
+        values["trace"] = False
+    elif args.trace:
+        values["trace"] = True
+    if args.trace_file is not None:
+        values["trace-file"] = args.trace_file
+    if args.default_agent is not None:
+        values["default-agent"] = args.default_agent
+    if args.default_sandbox is not None:
+        values["default-sandbox"] = args.default_sandbox
+    if args.debug is not None:
+        values["debug"] = args.debug
+    if args.parse_error_retries is not None:
+        values["parse-error-retries"] = args.parse_error_retries
+    return values
+
+
+def resolve_timeout(engine_seeds: "Mapping[str, Value]") -> float | None:
+    """Parse the merged ``timeout`` seed into seconds; ``None`` when unset or cleared.
+
+    Every tier's value is validated when decoded, so it always parses.
+    """
+    from agm.core.parse import parse_timeout
+
+    seed = engine_seeds.get("timeout")
+    if not isinstance(seed, RecordValue):
+        return None
+    text = option_text(seed, nominals=NO_BUILTIN_DECLARATIONS)
+    return None if text is None else parse_timeout(text)
+
+
+def resolve_strict_json(engine_seeds: "Mapping[str, Value]") -> bool:
+    """Return the merged ``strict-json`` seed; ``False`` when unset."""
+    seed = engine_seeds.get("strict-json")
+    return isinstance(seed, BoolValue) and seed.value
+
+
+def host_agent_spec_resolver(merged_config: "TomlDict") -> AgentSpecResolver:
+    """Build the ``[agent]`` dispatch defaults; exit 1 naming the key when it is invalid."""
+    try:
+        return configured_defaults_resolver(merged_config)
+    except ValueError as exc:
+        print(f"Error: invalid agent configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def _configured_value(
@@ -51,22 +127,12 @@ def _configured_value(
     return configured_value
 
 
-def _validate_cli_timeout(raw: str) -> None:
-    """Reject an unparsable ``--timeout`` value eagerly, before anything runs.
-
-    ``convert_config_value`` only checks ``--timeout``'s value decodes as
-    ``Option[text]``, never that it is a valid duration — that conversion
-    happens once at its use site (:func:`~agm.core.parse.parse_timeout`).
-    Validating it here, alongside every other CLI decode failure, keeps a
-    malformed flag from surfacing only after the static pipeline has already
-    run.
-    """
-    from agm.core.parse import parse_timeout
-
+def _exit_on_invalid[T](key_name: str, origin: str, check: "Callable[[], T]") -> T:
+    """Run *check*; on ``ValueError`` print an origin-tagged error and exit 1."""
     try:
-        parse_timeout(raw)
+        return check()
     except ValueError as exc:
-        print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
+        print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 
@@ -77,26 +143,33 @@ def _decode_engine_value(
 
     Shared by the ordinary per-key seeding loop and the derived ``trace`` rule,
     so both go through one decode-failure contract (message and exit code).
+    Decoding — including ``timeout``'s duration-syntax check — is
+    :func:`~agm.agl.runtime.engine_config.validate_engine_leaf_value`'s rule,
+    so a CLI flag, a config-file entry, and a package manifest leaf fail
+    identically.
     """
-    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
+    return _exit_on_invalid(
+        key_name, origin, partial(validate_engine_leaf_value, key_name, raw, type_table)
+    )
 
-    try:
-        return convert_config_value(key_name, raw, ENGINE_KEY_TYPES[key_name], type_table)
-    except ValueError as exc:
-        print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+
+def validate_config_engine_values(values: "Mapping[str, Value]") -> None:
+    """Validate every decoded ``@config`` engine value, exiting 1 naming the first invalid key.
+
+    Applies :func:`~agm.agl.runtime.engine_config.validate_engine_value`
+    whether or not a higher tier overrides the value, like a CLI or
+    config-table value.
+    """
+    for name, value in values.items():
+        _exit_on_invalid(name, "@config", partial(validate_engine_value, name, value))
 
 
 @dataclass(frozen=True)
 class EngineSeedTiers:
     """``cli`` (explicit CLI flags) above ``upper`` (primary table) above ``lower`` (fallback).
 
-    The three tiers are independent: ``upper``/``lower`` always reflect the
-    config tables, whether or not ``cli`` also names the same key — this
-    matters for ``trace-file``, where ``--no-trace-file`` clears only the CLI
-    seed and must not hide a config-table path from the derived ``trace`` rule
-    (see :meth:`merged`). ``cli`` still wins the actual seeded value for a
-    key it names.
+    A config value the CLI overrides is absent from ``upper``/``lower``.
+    ``cli_trace`` is the derived ``trace`` setting an explicit CLI flag fixes.
     """
 
     cli: "Mapping[str, Value]"
@@ -173,23 +246,21 @@ class EngineSeedTiers:
     def _resolve_trace(self, config_result: "Mapping[str, Value]") -> "Value | None":
         """Recompute the derived ``trace`` setting.
 
-        An explicit CLI ``trace``, or a non-``None`` CLI ``trace-file``, wins
-        outright. Otherwise ``trace`` is derived from *config_result* alone
+        An explicit CLI ``trace`` or ``trace-file`` wins outright. Otherwise
+        ``trace`` is derived from *config_result* alone
         (``lower``/*middle*/``upper``, ``cli`` excluded): when it names
         ``trace`` or ``trace-file`` at all, ``trace`` is true iff its ``trace``
         is true or its ``trace-file`` resolves to a real path (``Some``) — each
-        key independently carrying whichever tier won that merge. Left
+        key independently carrying whichever tier won that merge. Otherwise an
+        effective ``debug`` (CLI, else config) turns ``trace`` on. Left
         unconfigured everywhere, ``trace`` stays absent (``None``).
-
-        Excluding ``cli`` here (beyond its own fast path) is deliberate:
-        ``--no-trace-file`` clears only the CLI seed, not a trace a config
-        table independently establishes.
         """
+        from agm.agl.semantics.values import BoolValue
+
+        debug = self.cli.get("debug", config_result.get("debug"))
         if self.cli_trace is not None:
             raw, origin = self.cli_trace
         elif "trace" in config_result or "trace-file" in config_result:
-            from agm.agl.semantics.values import BoolValue
-
             trace_value = config_result.get("trace")
             is_trace_true = isinstance(trace_value, BoolValue) and trace_value.value
             # The config layer follows the declared register relation a
@@ -198,6 +269,8 @@ class EngineSeedTiers:
                 "trace-file", self._trace_file_text(config_result) is not None
             )
             origin = "trace/trace-file configuration"
+        elif isinstance(debug, BoolValue) and debug.value:
+            raw, origin = True, "debug"
         else:
             return None
 
@@ -216,20 +289,18 @@ def build_host_engine_seeds(
     ``cli`` holds every explicitly supplied CLI value; ``upper`` holds every
     *primary_table* value; ``lower`` holds every *fallback_table* value not
     already covered by *primary_table*. A table value the CLI overrides is
-    not decoded, except ``trace-file``, which the derived ``trace`` rule still
-    reads from the config tiers. A setting
-    left to its default in every source stays absent from every tier, so a
-    ``builtin var`` initializer supplies it instead of being suppressed by a
-    host-side floor. ``cli_values`` contains only explicitly supplied CLI
-    values; its present ``None`` values represent an explicit empty
+    not decoded. A setting left to its default in every source stays absent
+    from every tier, so a ``builtin var`` initializer supplies it instead of
+    being suppressed by a host-side floor. ``cli_values`` contains only
+    explicitly supplied CLI values; a present ``None`` is an explicit empty
     ``Option``. ``trace`` is seeded like any other key here;
     :meth:`EngineSeedTiers.merged` recomputes it once the ``trace-file``
     implication and any caller-supplied middle tier are folded in.
 
     Every key, ``default-agent`` included, decodes through
-    :func:`~agm.agl.runtime.engine_config.convert_config_value` against one
-    shared seeded ``TypeTable``. A decode failure prints an error naming the
-    offending key and its origin (``--<name>`` for a CLI flag, otherwise
+    :func:`~agm.agl.runtime.engine_config.validate_engine_leaf_value` against
+    one shared seeded ``TypeTable``. A decode failure prints an error naming
+    the offending key and its origin (``--<name>`` for a CLI flag, otherwise
     ``configuration key <name>``) to stderr and exits 1 here, before anything
     runs.
     """
@@ -243,15 +314,10 @@ def build_host_engine_seeds(
     lower: dict[str, Value] = {}
     for spec in ENGINE_KEYS:
         if spec.name in cli_values:
-            if spec.name == "timeout" and cli_values["timeout"] is not None:
-                _validate_cli_timeout(cast(str, cli_values["timeout"]))
             cli[spec.name] = _decode_engine_value(
                 spec.name, cli_values[spec.name], f"--{spec.name}", type_table
             )
-            # An overridden table value is never decoded, except ``trace-file``:
-            # ``--no-trace-file`` leaves a configured trace path enabling ``trace``.
-            if spec.name != "trace-file":
-                continue
+            continue
         if spec.name in primary_table:
             tier = upper
         elif spec.name in fallback:
@@ -268,7 +334,7 @@ def build_host_engine_seeds(
 
     if "trace" in cli_values:
         cli_trace: tuple[object, str] | None = (cli_values["trace"], "--trace")
-    elif cli_values.get("trace-file") is not None:
+    elif "trace-file" in cli_values:
         cli_trace = (True, "--trace-file")
     else:
         cli_trace = None

@@ -7,84 +7,116 @@ enum Optional[T]
   | Option::None
   | Default
 
+@doc("Apply the function to a present value, preserving other variants.")
 def Optional::map[T, U](self, f: (T) -> U) -> Optional[U] =
   case self of
     | None => None
     | Some(value) => Some(f(value))
     | Default => Default
 
+@doc("Apply the function to a present value and return its result, preserving other variants.")
 def Optional::and-then[T, U](self, f: (T) -> Optional[U]) -> Optional[U] =
   case self of
     | None => None
     | Some(value) => f(value)
     | Default => Default
 
+@doc("Keep a present value only when it satisfies the predicate, preserving other variants.")
 def Optional::select[T](self, p: (T) -> bool) -> Optional[T] =
   case self of
     | None => None
     | Some(value) => (if p(value) => self else => None)
     | Default => Default
 
+@doc("Return `other` when this value is `None`, otherwise return this value.")
 def Optional::or[T](self, other: Optional[T]) -> Optional[T] =
   case self of
     | None => other
     | Some(_) => self
     | Default => Default
 
+@doc("Call the fallback when this value is `None`, otherwise return this value.")
 def Optional::or-else[T](self, f: () -> Optional[T]) -> Optional[T] =
   case self of
     | None => f()
     | Some(_) => self
     | Default => Default
 
-def Optional::unwrap-or[T](self, default: T, x: T) -> T =
+@doc("""
+  Return the present value, or `other` when this value is `None`.
+
+  Uses `default` when this value is `Default`.
+""")
+def Optional::unwrap-or[T](self, default: T, other: T) -> T =
   case self of
-    | None => x
+    | None => other
     | Some(value) => value
     | Default => default
 
+@doc("""
+  Return the present value, or call the fallback when this value is `None`.
+
+  Uses `default` when this value is `Default`.
+""")
 def Optional::unwrap-or-else[T](self, default: T, f: () -> T) -> T =
   case self of
     | None => f()
     | Some(value) => value
     | Default => default
 
+@doc("""
+  Return the present value.
+
+  Raises `UnwrapError` when this value is `None`.
+
+  Uses `default` when this value is `Default`.
+""")
 def Optional::unwrap[T](self, default: T) -> T =
   case self of
     | None => raise UnwrapError(message = "Optional has no value")
     | Some(value) => value
     | Default => default
 
+@doc("Check if this value is `Some`.")
 def Optional::is-some[T](self) -> bool =
   case self of
     | None => false
     | Some(_) => true
     | Default => false
 
+@doc("Check if this value is `None`.")
 def Optional::is-none[T](self) -> bool =
   case self of
     | None => true
     | Some(_) => false
     | Default => false
 
+@doc("Check if this value is `Default`.")
 def Optional::is-default[T](self) -> bool =
   case self of
     | None => false
     | Some(_) => false
     | Default => true
 
+@doc("Call the function only when a value is present.")
 def Optional::each[T](self, f: (T) -> unit) -> unit =
   case self of
     | None => ()
     | Some(value) => f(value)
     | Default => ()
 
+@doc("""
+  Convert a present value to `Ok`, or `None` to `Err(error)`.
+
+  Uses `default` when this value is `Default`.
+""")
 def Optional::to-result[T, E](self, default: T, error: E) -> Result[T, E] =
   case self of
     | None => Err(error)
     | Some(value) => Ok(value)
     | Default => Ok(default)
 
+@doc("Convert to an option, replacing `Default` with `Some(default)`.")
 def Optional::to-option[T](self, default: T) -> Option[T] =
   case self of
     | None => None

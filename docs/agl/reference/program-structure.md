@@ -83,8 +83,10 @@ REPL has no entry: a `program def` declared there is an ordinary function.
 ### Parameters
 
 The selected program's value parameters are its **external inputs**. The
-parameter list defaults to the **named-only** zone: a plain `name: text`
-parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
+parameter list defaults to the **named-only** zone. On the command line a
+required `name: text` fills a positional slot, while a defaulted parameter —
+and a required `bool`, `Option[T]`, or `Optional[T]` — is addressed by
+`--name`. `@arg-pos` opens a positional slot;
 `@arg-std` accepts both. Presentation attributes (`@doc`, `@opt-name`,
 `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`) shape the flag; see
 [Attributes](attributes.md#host-parameter-attributes).
@@ -241,7 +243,10 @@ The settings and their types are:
 | `trace-file` | `Option[path]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
 | `default-agent` | `Agent` | Default value for `ask` calls. |
+| `default-sandbox` | `AgentSandbox` | Default `sandbox` value for `ask`-like calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
+| `debug` | `bool` | Keep `std/fs` temporary paths when the host session ends. |
+| `parse-error-retries` | `int` | Default `parse-error-retries` for `ask`; never negative. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it
 governs the statements that follow it, in program order. An assignment target

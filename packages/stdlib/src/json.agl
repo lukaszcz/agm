@@ -2,22 +2,51 @@ import std/option::Option
 import std/result::Result
 import std/errors::{JsonParseError, KeyError}
 
-# A `\uD8xx`/`\uDCxx` escape that does not combine with an adjacent partner
-# into one scalar character is a parse error; a combining pair is one
-# character, as elsewhere in AgL.
+@doc("""
+  Parse a JSON text value.
+
+  Raises `JsonParseError` when the input is invalid.
+
+  A `\\uD8xx`/`\\uDCxx` escape that does not combine with an adjacent partner into one scalar
+  character is a parse error; a combining pair is one character, as elsewhere in AgL.
+""")
 extern def parse(value: text) -> json
+
+@doc("Parse a JSON text value, returning `JsonParseError` as `Err`.")
 def try-parse(value: text) -> Result[json, JsonParseError] =
   try Ok(parse(value)) catch JsonParseError as e => Err(e)
 
 @extern-name("parse_lenient")
+@doc("""
+  Parse a JSON value recovered from surrounding text or a Markdown code fence.
+
+  Raises `JsonParseError` when a single valid JSON value cannot be recovered.
+""")
 extern def parse-lenient(value: text) -> json
+
+@doc("Recover and parse a JSON value, returning `JsonParseError` as `Err`.")
 def try-parse-lenient(value: text) -> Result[json, JsonParseError] =
   try Ok(parse-lenient(value)) catch JsonParseError as e => Err(e)
 
+@doc("Return the JSON kind: null, bool, int, decimal, text, array, or object.")
 extern def json::kind(self) -> text
+
+@doc("Return the number of array elements or object entries, or zero for other kinds.")
 extern def json::size(self) -> int
+
+@doc("Return the object's keys, or an empty array for other kinds.")
 extern def json::keys(self) -> array[text]
+
+@doc("Check if the JSON value is an object containing the key.")
 extern def json::has(self, key: text) -> bool
+
+@doc("""
+  Return the object's value for the key.
+
+  Raises `KeyError` when the key is absent or the value is not an object.
+""")
 extern def json::get(self, key: text) -> json
+
 @extern-name("get_option")
+@doc("Return the object's value for the key, or `None` when absent or not an object.")
 extern def json::get?(self, key: text) -> Option[json]

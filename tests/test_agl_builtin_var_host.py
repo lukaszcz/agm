@@ -69,13 +69,19 @@ def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
     return kinds, rendered
 
 
+_RETRIES_DECL = "builtin var parse-error-retries: int = 4\n"
+
+
 def _write_command_stdlib(root: Path, config: str) -> Path:
     """Create the minimal stdlib needed to exercise the real exec command."""
     stdlib_root = root / "stdlib"
     config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        'import std/prelude::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n' + config,
+        'import std/prelude::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n'
+        "builtin var default-sandbox: AgentSandbox = Disabled\n"
+        + ("" if "builtin var parse-error-retries" in config else _RETRIES_DECL)
+        + config,
         encoding="utf-8",
     )
     for source in (_STDLIB / "src").iterdir():

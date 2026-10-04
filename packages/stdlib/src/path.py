@@ -64,12 +64,12 @@ def relative(path: str, base: str) -> str:
 
 
 def is_absolute(path: str) -> bool:
-    """Return whether *path* is absolute on the host platform."""
+    """Check if *path* is absolute on the host platform."""
     return os.path.isabs(path)
 
 
 def is_under(path: str, base: str) -> bool:
-    """Return whether *path* lexically resolves inside *base*, or is *base* itself."""
+    """Check if *path* lexically resolves inside *base*, or is *base* itself."""
     return PurePath(os.path.normpath(path)).is_relative_to(os.path.normpath(base))
 
 

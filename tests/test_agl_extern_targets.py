@@ -581,30 +581,15 @@ class TestNestedGenericTargets:
 
 
 class TestInventory:
-    def test_call_site_record_is_unchanged(self) -> None:
+    def test_type_directed_extern_records_a_target_contract(self) -> None:
         checked = _check(_QUERY + 'let answer: int = query("q")\nanswer')
-        (site,) = checked.call_sites
-        assert (site.callee, site.codec_name, site.target_type) == ("query", "extern", IntType())
+        (spec,) = checked.target_contract_specs[_let_call(checked, "answer")]
+        assert (spec.codec_name, spec.target_type) == ("json", IntType())
         assert checked.contract_specs == {}
 
     def test_ordinary_extern_records_no_target_contract(self) -> None:
         checked = _check("extern def id[T](value: T) -> T\nlet same = id(1)\nsame")
         assert checked.target_contract_specs == {}
-
-    def test_dry_run_inventory_is_unchanged(self, tmp_path: Path) -> None:
-        program = lower_extern_program(
-            _QUERY + 'let answer: int = query("q")\nanswer',
-            "def query(question):\n    return 0\n",
-            tmp_path,
-        )
-        entries = [
-            entry
-            for entry in program.dry_run_inventory
-            if entry.module.is_entry and entry.callee == "query"
-        ]
-        assert [
-            (entry.codec_name, entry.target_type_label, entry.has_schema) for entry in entries
-        ] == [("extern", "int", False)]
 
 
 # ---------------------------------------------------------------------------
@@ -948,10 +933,12 @@ class TestContractTypeTree:
         assert _display(program, root) == "Team"
         schema = _schema(root)
         assert isinstance(schema, dict)
-        assert [variant["properties"]["$case"] for variant in schema["oneOf"]] == [
-            {"const": "billing"},
-            {"const": "Technical"},
-        ]
+        assert schema == {
+            "oneOf": [
+                {"const": "billing", "description": "Invoices and refunds."},
+                {"const": "Technical"},
+            ]
+        }
         assert [tag for tag, _member in root.members] == ["billing", "Technical"]
         (_, billing), (_, technical) = root.members
         assert (billing.kind, billing.doc) == (TypeNodeKind.MEMBER, "Invoices and refunds.")
@@ -995,6 +982,15 @@ class TestContractTypeTree:
         schema = _schema(root)
         assert isinstance(schema, dict)
         assert list(schema["properties"]) == ["urgent", "owner", "notes"]
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["urgent"] == {
+            "type": "boolean",
+            "description": "Is it urgent?",
+        }
+        owner_schema = properties["owner"]
+        assert isinstance(owner_schema, dict)
+        assert owner_schema["description"] == "Who handles it?"
 
     def test_generic_record_of_enum(self, tmp_path: Path) -> None:
         program = _lower(
@@ -1071,7 +1067,9 @@ class TestContractTypeTree:
     def test_inline_member_fields_carry_docs(self, tmp_path: Path) -> None:
         program = _lower(
             _QUERY + "enum Shape\n"
-            '  | Circle(@doc("The radius.") radius: decimal, label: text)\n'
+            "  | Circle\n"
+            '      @doc("The radius.") radius: decimal\n'
+            "      label: text\n"
             "  | Dot\n"
             'let shape: Shape = query("q")\n0',
             tmp_path,
@@ -1083,6 +1081,12 @@ class TestContractTypeTree:
             ("radius", "The radius."),
             ("label", None),
         ]
+        circle_schema = _schema(circle)
+        assert isinstance(circle_schema, dict)
+        assert circle_schema["properties"]["radius"] == {
+            "type": "number",
+            "description": "The radius.",
+        }
         assert dot.fields == ()
 
     def test_generic_record_field_docs_survive_substitution(self, tmp_path: Path) -> None:

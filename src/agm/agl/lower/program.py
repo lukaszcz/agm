@@ -16,7 +16,6 @@ from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode, ParamDec
 from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
-    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     FunctionDescriptor,
@@ -31,11 +30,11 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import module as module_cache
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
-    _contract_has_schema,
     _LinkState,
     _Lowerer,
     builtin_nominals_from_declarations,
     reserved_fallback_superseded,
+    reserved_field_defaults,
 )
 from agm.agl.lower.nominal_descriptors import (
     enum_descriptor,
@@ -50,10 +49,7 @@ from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     FuncDef,
-    LetDecl,
-    VarDecl,
     static_binding_name,
-    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -78,7 +74,9 @@ def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
 
 
 def _descriptor_for_skipped_identity(
-    nominal: NominalId, type_table: TypeTable
+    nominal: NominalId,
+    type_table: TypeTable,
+    field_defaults: Mapping[NominalId, tuple[IrExpr | None, ...]],
 ) -> NominalDescriptor:
     """Build a descriptor for an identity a kept declaration references but that was itself skipped.
 
@@ -90,14 +88,22 @@ def _descriptor_for_skipped_identity(
     typedef = type_table.typedef_of(nominal.value)
     handle = typedef.handle()
     if isinstance(handle, RecordType):
-        return record_descriptor(typedef, handle, type_table, bears_name_path=False)
+        return record_descriptor(
+            typedef, handle, type_table, bears_name_path=False, field_defaults=field_defaults
+        )
     return exception_descriptor(
-        typedef, cast(ExceptionType, handle), type_table, bears_name_path=False
+        typedef,
+        cast(ExceptionType, handle),
+        type_table,
+        bears_name_path=False,
+        field_defaults=field_defaults,
     )
 
 
 def _add_missing_enum_member_descriptors(
-    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+    nominals: dict[NominalId, NominalDescriptor],
+    type_table: TypeTable,
+    field_defaults: Mapping[NominalId, tuple[IrExpr | None, ...]],
 ) -> None:
     """Close the nominal table over records referenced by retained enums.
 
@@ -114,11 +120,13 @@ def _add_missing_enum_member_descriptors(
         if variant.member not in nominals
     }
     for nominal in missing:
-        nominals[nominal] = _descriptor_for_skipped_identity(nominal, type_table)
+        nominals[nominal] = _descriptor_for_skipped_identity(nominal, type_table, field_defaults)
 
 
 def _add_missing_exception_base_descriptors(
-    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+    nominals: dict[NominalId, NominalDescriptor],
+    type_table: TypeTable,
+    field_defaults: Mapping[NominalId, tuple[IrExpr | None, ...]],
 ) -> None:
     """Close the nominal table over exception bases referenced by retained exceptions.
 
@@ -135,7 +143,7 @@ def _add_missing_exception_base_descriptors(
         nominal = pending.pop()
         if nominal is None or nominal in nominals:
             continue
-        descriptor = _descriptor_for_skipped_identity(nominal, type_table)
+        descriptor = _descriptor_for_skipped_identity(nominal, type_table, field_defaults)
         nominals[nominal] = descriptor
         pending.append(descriptor.base)
 
@@ -197,19 +205,13 @@ def _param_tables(
     decoders: dict[StaticBindingKey, ParamDecoder] = {}
     spans: dict[StaticBindingKey, SourceSpan] = {}
     for module_id, checked_module in modules.items():
-        attributes = checked_module.resolved.attributes
-        for item in static_items(checked_module.resolved.program.body.items):
-            if not isinstance(item, (LetDecl, VarDecl)):
-                continue
-            name = static_binding_name(item)
-            binding_node_id = static_binding_node_id(item)
-            if binding_node_id not in attributes.params:
-                continue
-            key = static_binding_key(module_id, (segment.name for segment in item.scope_path), name)
-            bindings[key] = decl_to_sym[binding_node_id]
-            binding_type = checked_module.type_env.binding_type_of(binding_node_id)
+        for binding in checked_module.resolved.param_bindings():
+            name = static_binding_name(binding.item)
+            key = static_binding_key(module_id, binding.scope_path, name)
+            bindings[key] = decl_to_sym[binding.node_id]
+            binding_type = checked_module.type_env.binding_type_of(binding.node_id)
             decoders[key] = build_param_decoder(binding_type, type_table)
-            spans[key] = item.span
+            spans[key] = binding.item.span
     return bindings, decoders, spans
 
 
@@ -303,6 +305,7 @@ def lower_program(
         link.sources[source_id] = SourceFile(
             display_name=display_name,
             normalized_text=normalized,
+            file_name=cm.resolved.program.span.source.label,
         )
         module_source_ids[mid] = source_id
 
@@ -320,72 +323,7 @@ def lower_program(
         typedef.decl_node_id for typedef in type_table.entries() if typedef.is_inline_enum_member
     }
 
-    # Step 2: Build nominals from the authoritative TypeTable declarations.
-    # Aliases do not have a TypeDef, so this also excludes their transparent
-    # source spellings without comparing concatenated scope names. ``entries()``
-    # yields every declaration the table retains -- including a superseded one
-    # and one from an unpromoted REPL entry -- so each descriptor also records
-    # whether its identity currently bears its own name path, via the same
-    # name index ``TypeTable.get`` itself resolves through: an authoritative,
-    # order-independent answer to "which declaration does this name mean now?"
-    # that the extern boundary later uses to resolve a companion's bare/dotted
-    # nominal lookup. A seeded reserved shape a standard-library declaration
-    # supersedes is skipped: the source declaration is the identity the host
-    # mints for that name.
-    for typedef in type_table.entries():
-        if _superseded_reserved(typedef, type_table):
-            continue
-        nominal = NominalId(typedef.decl_node_id)
-        bears_name_path = (
-            type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
-        )
-        handle = typedef.handle()
-        match handle:
-            case RecordType():
-                link.nominals[nominal] = record_descriptor(
-                    typedef, handle, type_table, bears_name_path=bears_name_path
-                )
-            case EnumType():
-                link.nominals[nominal] = enum_descriptor(
-                    typedef, handle, type_table, bears_name_path=bears_name_path
-                )
-            case _:
-                link.nominals[nominal] = exception_descriptor(
-                    typedef, handle, type_table, bears_name_path=bears_name_path
-                )
-
-    _add_builtin_nominals(link.nominals, type_table)
-
-    # Generic declarations live outside program_type_table. Runtime nominal
-    # identity erases type arguments, so register each generic template once.
-    # Field/variant NAMES are read directly off the registered TypeDef (never
-    # instantiated — a generic template has no concrete type_args).
-    # ``bears_name_path`` compares the identity being registered against the
-    # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
-    # name-index answer ``TypeTable.is_current`` gives for a non-generic
-    # declaration above. Inline members remain excluded just as they are in
-    # that pass, because a generic member also appears in this template loop.
-    for cm in checked.modules.values():
-        for generic in cm.type_env.all_generic_types().values():
-            typ = generic.template
-            nominal = NominalId(typ.decl_id)
-            generic_typedef = type_table.named(typ.module_id, typ.name, typ.scope_path)
-            bears_name_path = (
-                generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
-            )
-            if isinstance(typ, RecordType):
-                link.nominals[nominal] = record_descriptor(
-                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
-                )
-            else:
-                link.nominals[nominal] = enum_descriptor(
-                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
-                )
-
-    _add_missing_enum_member_descriptors(link.nominals, type_table)
-    _add_missing_exception_base_descriptors(link.nominals, type_table)
-
-    # Step 3: Phase 1 — pre-allocate every static runtime symbol before any
+    # Step 2: Phase 1 — pre-allocate every static runtime symbol before any
     # body is lowered. Function ids enable calls across root and named-scope
     # declaration paths; binding symbols make library lets/vars available to
     # their functions while their initializers retain dependency order below.
@@ -411,7 +349,7 @@ def lower_program(
         module_lowerers[mid] = lowerer
         lowerer.prealloc_static_symbols(cm.resolved.program.body)
 
-    # Step 4: Phase 2 — lower bodies in the loader's dependency/SCC order.
+    # Step 3: Phase 2 — lower bodies in the loader's dependency/SCC order.
     # Type checking intentionally preserves its own presentation order, so it
     # retains the loader's reverse-topological components separately for this
     # execution-sensitive pass. Within an import cycle, the loader's stable
@@ -489,8 +427,88 @@ def lower_program(
                     tuple(lowerer.resources),
                     seed,
                     seed + (1 << 32),
+                    dict(lowerer.field_defaults),
                 ),
             )
+
+    # Step 4: Build nominals from the authoritative TypeTable declarations.
+    # Aliases do not have a TypeDef, so this also excludes their transparent
+    # source spellings without comparing concatenated scope names. ``entries()``
+    # yields every declaration the table retains -- including a superseded one
+    # and one from an unpromoted REPL entry -- so each descriptor also records
+    # whether its identity currently bears its own name path, via the same
+    # name index ``TypeTable.get`` itself resolves through: an authoritative,
+    # order-independent answer to "which declaration does this name mean now?"
+    # that the extern boundary later uses to resolve a companion's bare/dotted
+    # nominal lookup. A seeded reserved shape a standard-library declaration
+    # supersedes is skipped: the source declaration is the identity the host
+    # mints for that name.
+    for typedef in type_table.entries():
+        if _superseded_reserved(typedef, type_table):
+            continue
+        nominal = NominalId(typedef.decl_node_id)
+        bears_name_path = (
+            type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
+        )
+        if (reserved_defaults := reserved_field_defaults(typedef)) is not None:
+            link.field_defaults[nominal] = reserved_defaults
+        handle = typedef.handle()
+        match handle:
+            case RecordType():
+                link.nominals[nominal] = record_descriptor(
+                    typedef,
+                    handle,
+                    type_table,
+                    bears_name_path=bears_name_path,
+                    field_defaults=link.field_defaults,
+                )
+            case EnumType():
+                link.nominals[nominal] = enum_descriptor(
+                    typedef, handle, type_table, bears_name_path=bears_name_path
+                )
+            case _:
+                link.nominals[nominal] = exception_descriptor(
+                    typedef,
+                    handle,
+                    type_table,
+                    bears_name_path=bears_name_path,
+                    field_defaults=link.field_defaults,
+                )
+
+    _add_builtin_nominals(link.nominals, type_table, link.field_defaults)
+
+    # Generic declarations live outside program_type_table. Runtime nominal
+    # identity erases type arguments, so register each generic template once.
+    # Field/variant NAMES are read directly off the registered TypeDef (never
+    # instantiated — a generic template has no concrete type_args).
+    # ``bears_name_path`` compares the identity being registered against the
+    # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
+    # name-index answer ``TypeTable.is_current`` gives for a non-generic
+    # declaration above. Inline members remain excluded just as they are in
+    # that pass, because a generic member also appears in this template loop.
+    for cm in checked.modules.values():
+        for generic in cm.type_env.all_generic_types().values():
+            typ = generic.template
+            nominal = NominalId(typ.decl_id)
+            generic_typedef = type_table.named(typ.module_id, typ.name, typ.scope_path)
+            bears_name_path = (
+                generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
+            )
+            if isinstance(typ, RecordType):
+                link.nominals[nominal] = record_descriptor(
+                    generic_typedef,
+                    typ,
+                    type_table,
+                    bears_name_path=bears_name_path,
+                    field_defaults=link.field_defaults,
+                )
+            else:
+                link.nominals[nominal] = enum_descriptor(
+                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
+                )
+
+    _add_missing_enum_member_descriptors(link.nominals, type_table, link.field_defaults)
+    _add_missing_exception_base_descriptors(link.nominals, type_table, link.field_defaults)
 
     # Inventory every declaration, including ones without defaults and ones
     # retained from earlier REPL entries, so structural validation can verify
@@ -502,28 +520,6 @@ def lower_program(
         if isinstance(item, BuiltinVarDecl)
     )
 
-    payloads = contract_payloads if contract_payloads is not None else {}
-    dry_run_entries: list[DryRunEntry] = []
-    for module_id, cm in checked.modules.items():
-        if module_id not in checked.runtime_modules:
-            continue
-        for csr in cm.call_sites:
-            dry_run_entries.append(
-                DryRunEntry(
-                    module=module_id,
-                    callee=csr.callee,
-                    codec_name=csr.codec_name,
-                    target_type_label=repr(csr.target_type),
-                    has_schema=_contract_has_schema(
-                        cm.contract_specs.get(csr.node_id),
-                        payloads.get(csr.node_id),
-                    ),
-                    parse_policy=csr.parse_policy,
-                    line=csr.line,
-                    col=csr.col,
-                )
-            )
-    dry_run_inventory = tuple(dry_run_entries)
     _add_exception_field_encodes(link.exception_field_encodes, link.nominals, type_table)
     live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
     program_symbols = {
@@ -560,7 +556,6 @@ def lower_program(
         param_spans=param_spans,
         contracts=dict(link.contracts),
         target_contracts=dict(link.target_contracts),
-        dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
         builtin_var_declarations=builtin_var_declarations,
         exception_field_encodes=dict(link.exception_field_encodes),

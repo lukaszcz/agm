@@ -48,8 +48,8 @@ Each surface a program runs under reserves its own flag inventory.
 ``EXEC_RESERVED_FLAGS`` is ``agm exec``'s: the flags it declares itself
 (``--help``, ``-p``, ``--program``, …) union every engine-key
 flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: its
-``agm exec`` run-time options (``REGISTERED_RUN_FLAGS``) and ``--dry-run``
-beside the help flags every program command owns. A program
+``agm exec`` run-time options (``REGISTERED_RUN_FLAGS``) beside the help
+flags every program command owns. A program
 parameter can never be projected onto its surface's reserved flags —
 :func:`build_program_command` reports the collision instead.
 
@@ -61,14 +61,15 @@ end-of-options marker visible to it across Click's own parse.
 Nested optional handling
 ------------------------
 
-Only the outermost type gets special CLI treatment. A non-optional flag's
-``VALUE`` token passes through verbatim, exactly like a positional token:
+Only the outermost type gets special CLI treatment, and a ``VALUE`` token is
+read the same way whether it follows a flag or fills a positional slot. A
+non-optional token passes through verbatim:
 ``decode_param_value`` already reads a raw string against the parameter's
 own decoder (host Agent syntax, strict JSON, or AgL value syntax alike), so
 reading it again here would duplicate that step and lose its diagnostic,
 anchored at the parameter's declaration, on a malformed value.
 
-An ``Option[T]`` or ``Optional[T]`` flag is the one boxing exception. Its raw value is an
+An ``Option[T]`` or ``Optional[T]`` token is the one boxing exception. Its raw value is an
 :class:`~agm.agl.runtime.arguments.OptionSome` box around the token, built by
 :func:`option_some_raw` — ``decode_param_value``'s deferred-decode path reads
 a boxed ``Some`` payload against ``T``'s own field schema (host-text dispatch
@@ -103,11 +104,19 @@ from agm.agl.semantics.types import (
     BoolType,
     JsonType,
     TextType,
+    is_negatable_host_type,
     is_standard_agent_enum,
     is_standard_option_enum,
     is_standard_optional_enum,
 )
 from agm.agl.zones import ParamZone
+from agm.cli_support.execution_options import (
+    EXECUTION_OPTION_NAMES,
+    execution_option_flags,
+    write_execution_options,
+)
+from agm.config.engine_keys import ENGINE_KEYS, EngineKeySpec
+from agm.util.text import keep_indented_paragraphs
 
 if TYPE_CHECKING:
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -132,6 +141,7 @@ __all__ = [
     "build_program_command",
     "contains_help_flag",
     "engine_key_flags",
+    "engine_key_option_flags",
     "exec_program_help",
     "exec_program_name",
     "native_raw_value",
@@ -339,29 +349,36 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
         inner_form = _bare_value_form(inner)
     else:
         form = _bare_value_form(type_)
-    negated = form is ValueForm.BOOL or _is_nullable_value_form(form)
     return ProjectedOption(
         flag=f"--{name}",
-        negative_flag=f"--no-{name}" if negated else None,
+        negative_flag=f"--no-{name}" if is_negatable_host_type(type_) else None,
         value_form=form,
         option_inner=inner if _is_nullable_value_form(form) else None,
         option_inner_form=inner_form,
     )
 
 
+def engine_key_option_flags(spec: EngineKeySpec) -> tuple[str, str | None]:
+    """Return one engine key's CLI flag and its negative, if any.
+
+    The key runs through :func:`project_option` against its AgL type, exactly
+    like a program parameter. A key whose value turns its register on has no
+    negative: the register's own (``--no-trace``) turns it off.
+    """
+    projected = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
+    return projected.flag, None if spec.enables_register else projected.negative_flag
+
+
 def engine_key_flags() -> frozenset[str]:
     """Return the CLI flags the engine-key catalog reserves.
 
-    Every engine key runs through :func:`project_option` against its AgL
-    type, exactly like a program parameter — the single derivation shared
-    with :data:`EXEC_RESERVED_FLAGS`, so the two can never disagree. Iterates
-    ``semantics.engine_keys.ENGINE_KEY_TYPES``, whose keys are exactly the
-    engine-key names, so the lookup is total by construction.
+    The single derivation shared with :data:`EXEC_RESERVED_FLAGS`, so the two
+    can never disagree.
     """
     flags: set[str] = set()
-    for name, agl_type in ENGINE_KEY_TYPES.items():
-        projected = project_option(name, agl_type)
-        flags.update((projected.flag, *_spelling_tuple(projected.negative_flag)))
+    for spec in ENGINE_KEYS:
+        flag, negative_flag = engine_key_option_flags(spec)
+        flags.update((flag, *_spelling_tuple(negative_flag)))
     return frozenset(flags)
 
 
@@ -379,7 +396,7 @@ def engine_key_flags() -> frozenset[str]:
 # there and forgotten here fails.
 _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     {
-        "--command",
+        "--code",
         "-c",
         "--program",
         "-p",
@@ -390,27 +407,25 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
         # ``--param`` tokens pass through to it, and recognises these itself.
         "--help",
         "-h",
-        "--dry-run",
         "--no-stdlib",
     }
 )
 
-# ``agm exec``'s reserved flag strings: declared built-ins UNION engine-key
-# flags (both polarities). Collision checking is verbatim — no
-# underscore/hyphen normalisation.
-EXEC_RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
-
-# ``agm exec``'s run-time options a package-registered command parses too: every
-# engine-key flag and ``--max-call-depth``. ``agm.cli_dispatch`` takes the options
-# themselves from ``agm exec``'s command by these spellings.
-REGISTERED_RUN_FLAGS: frozenset[str] = engine_key_flags() | {"--max-call-depth"}
-
-# A package-registered command's reserved flag strings: its run-time options,
-# ``--dry-run`` and help. Its program may claim ``agm exec``'s other spellings
-# (``-p``, ``--module-path``, …), which select sources a registration fixes.
-REGISTERED_RESERVED_FLAGS: frozenset[str] = (
-    frozenset({*HELP_FLAGS, "--dry-run"}) | REGISTERED_RUN_FLAGS
+# ``agm exec``'s reserved flag strings: built-ins plus every shared execution
+# option. Collision checking is verbatim — no underscore/hyphen normalisation.
+EXEC_RESERVED_FLAGS: frozenset[str] = (
+    _BUILTIN_EXEC_FLAGS | engine_key_flags() | execution_option_flags()
 )
+
+# ``agm exec``'s run-time options a package-registered command parses too.
+# ``agm.cli_dispatch`` takes the options themselves from ``agm exec``'s command
+# by these spellings.
+REGISTERED_RUN_FLAGS: frozenset[str] = execution_option_flags()
+
+# A package-registered command's reserved flag strings: its run-time options
+# and help. Its program may claim ``agm exec``'s other spellings
+# (``-p``, ``--module-path``, …), which select sources a registration fixes.
+REGISTERED_RESERVED_FLAGS: frozenset[str] = frozenset(HELP_FLAGS) | REGISTERED_RUN_FLAGS
 
 # The end-of-options marker. ``agm exec`` consumes one only when it is what
 # names the FILE; any other marker belongs to the program and reaches it.
@@ -422,7 +437,7 @@ class ExecTail:
     """``agm exec``'s source selector and the tokens the program itself reads.
 
     ``file`` is the FILE argument — a path or an installed reference — or
-    ``None`` when the invocation names none (``-c/--command``, or nothing at
+    ``None`` when the invocation names none (``-c/--code``, or nothing at
     all). ``tokens`` is every remaining tail token in written order, for the
     selected program's own command to read.
     """
@@ -433,10 +448,14 @@ class ExecTail:
 
 @dataclass(frozen=True, slots=True)
 class ParsedTail:
-    """Raw program arguments and module-parameter values from one CLI tail."""
+    """Raw program arguments and module-parameter values from one CLI tail.
+
+    ``positionally_filled`` names the parameters a positional token supplied.
+    """
 
     arguments: ProgramArguments
     params: dict["StaticBindingKey", object]
+    positionally_filled: frozenset[str] = frozenset()
 
     @property
     def positional(self) -> tuple[object, ...]:
@@ -749,7 +768,7 @@ def option_some_raw(value: object) -> OptionSome:
     """Box one raw ``Option[T]`` "Some" value for ``decode_param_value`` to decode.
 
     The single place this box is built — shared by :func:`_positive_raw`,
-    for a CLI flag's raw ``VALUE`` token, and by the config-table path
+    for a CLI raw ``VALUE`` token, and by the config-table path
     (``commands.exec_program``), for an already-native TOML/JSON value read
     from a program's qualified table. Decoding *value* (host-text dispatch
     when it is a string, as is otherwise) and wrapping it into the enum's
@@ -798,16 +817,16 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
 
 
 def _positive_raw(projected: ProjectedOption, token: str) -> object:
-    """Build the raw value for one value-taking flag's ``VALUE`` token.
+    """Build the raw value for one ``VALUE`` token: a flag's, or a positional slot's.
 
-    Only value-taking forms reach here —
-    the caller (:meth:`ProgramCommand.parse`) never calls this for a ``BOOL``
-    form, whose ``takes_value`` is ``False``. Every non-optional form takes
-    its token verbatim: ``decode_param_value`` reads a string raw value
-    through the shared host-text dispatch, so parsing it here would duplicate
-    that step and lose its diagnostic. An optional token is boxed for the same
-    deferred decode against ``T``'s own field type, except for ``Optional``'s
-    exact ``default`` shortcut.
+    The one reading of a value token, so a parameter's flag, its ``@opt-env``
+    variable and its positional slot accept the same spellings. Every
+    non-optional form takes its token verbatim: ``decode_param_value`` reads a
+    string raw value through the shared host-text dispatch, so parsing it
+    here would duplicate that step and lose its diagnostic. An optional token
+    is boxed for the same deferred decode against ``T``'s own field type,
+    except for ``Optional``'s exact ``default`` shortcut. A ``bool`` flag
+    takes no token and never reaches here; a ``bool`` slot's token is verbatim.
     """
     if projected.value_form is ValueForm.OPTIONAL and token == "default":
         return optional_default_raw()
@@ -1042,7 +1061,7 @@ def _positive_option(
         default=None,
         multiple=True,
         envvar=spec.env,
-        help=spec.doc,
+        help=None if spec.doc is None else keep_indented_paragraphs(spec.doc),
         hidden=spec.hidden,
     )
 
@@ -1130,7 +1149,7 @@ def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) 
         spelling = (
             f"{spelling} {entry.param.cli.metavar or _default_metavar(entry.param, projected)}"
         )
-    help_text = entry.param.cli.doc or ""
+    help_text = keep_indented_paragraphs(entry.param.cli.doc or "")
     if entry.param.cli.env is not None:
         environment = f"[env var: {entry.param.cli.env}]"
         help_text = f"{help_text}  {environment}" if help_text else environment
@@ -1162,27 +1181,34 @@ class _ProgramClickCommand(click.Command):
         params: list[click.Parameter],
         description: str | None,
         usage_slots: tuple[str, ...],
+        positional_help: tuple[tuple[str, str], ...] = (),
         parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
         module_help_sections: tuple[
             tuple[str, tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]], ...
         ] = (),
         ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
         surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
+        list_execution_options: bool = False,
         context_settings: dict[str, bool] | None = None,
     ) -> None:
         settings: dict[str, bool] = {} if context_settings is None else dict(context_settings)
         super().__init__(
             name=name,
             params=params,
-            help=description,
+            help=None if description is None else keep_indented_paragraphs(description),
             add_help_option=False,
             context_settings=settings,
         )
         self.usage_slots = usage_slots
+        self.positional_help = positional_help
         self.parameter_sections = parameter_sections
         self.module_help_sections = module_help_sections
         self.ambiguous_options = {} if ambiguous_options is None else ambiguous_options
         self.surface_entries = {} if surface_entries is None else surface_entries
+        self.list_execution_options = list_execution_options
+        self.execution_option_params = tuple(
+            param for param in params if param.name in EXECUTION_OPTION_NAMES
+        )
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         """Turn Click's invalid ambiguity value syntax into the candidate diagnostic."""
@@ -1256,18 +1282,23 @@ class _ProgramClickCommand(click.Command):
         return [*options, *self.usage_slots]
 
     def format_options(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        """Render program options, then module-parameter sections."""
+        """Render program options, module parameters, and shared execution options."""
         section_params = {
             id(param) for _title, params in self.parameter_sections for param in params
         }
+        execution_param_ids = {id(param) for param in self.execution_option_params}
         own_options = [
             record
             for param in self.get_params(ctx)
             if id(param) not in section_params
+            if id(param) not in execution_param_ids
             if (record := param.get_help_record(ctx)) is not None
         ]
         with formatter.section("Options"):
             formatter.write_dl(own_options)
+        if self.positional_help:
+            with formatter.section("Arguments"):
+                formatter.write_dl(list(self.positional_help))
         for title, entries in self.module_help_sections:
             records = [
                 _module_help_record(entry, projected)
@@ -1277,6 +1308,12 @@ class _ProgramClickCommand(click.Command):
             if records:
                 with formatter.section(f"Parameters of {title}"):
                     formatter.write_dl(records)
+        write_execution_options(
+            formatter,
+            EXECUTION_OPTION_NAMES
+            if self.list_execution_options
+            else {param.name for param in self.execution_option_params if param.name is not None},
+        )
 
 
 def _build_click_command(
@@ -1285,6 +1322,7 @@ def _build_click_command(
     params: Sequence[click.Parameter],
     description: str | None,
     usage_slots: tuple[str, ...],
+    positional_help: tuple[tuple[str, str], ...] = (),
     extra_options: Sequence[click.Parameter] = (),
     parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
     module_help_sections: tuple[
@@ -1292,6 +1330,7 @@ def _build_click_command(
     ] = (),
     ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
     surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
+    list_execution_options: bool = False,
     context_settings: dict[str, bool] | None = None,
 ) -> _ProgramClickCommand:
     """Assemble one program command: its own parameters, then *extra_options*, then help.
@@ -1306,10 +1345,12 @@ def _build_click_command(
         params=[*params, *extra_options, _help_option()],
         description=description,
         usage_slots=usage_slots,
+        positional_help=positional_help,
         parameter_sections=parameter_sections,
         module_help_sections=module_help_sections,
         ambiguous_options=ambiguous_options,
         surface_entries=surface_entries,
+        list_execution_options=list_execution_options,
         context_settings=context_settings,
     )
 
@@ -1337,12 +1378,13 @@ def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
 class ProgramCommand:
     """One program's whole CLI surface: a ``click.Command`` and what it stands for.
 
-    ``command`` parses tokens; ``positional`` lists positional-capable
-    parameters (``POSITIONAL_ONLY``, ``STANDARD``) in declaration order; and
-    ``options`` pairs every name-addressable parameter (``STANDARD``,
-    ``NAMED_ONLY``) with its projected CLI option, in the same order the
-    command's own options were built from. A ``STANDARD`` parameter appears
-    in both, since it accepts either a positional token or ``--name``.
+    ``command`` parses tokens; ``positional`` lists CLI positional-capable
+    parameters in declaration order; and
+    ``options`` pairs every AgL name-addressable parameter (``STANDARD``,
+    ``NAMED_ONLY``) with its projected value form. An unzoned required
+    parameter whose type has no negative polarity also appears in
+    ``positional``; its Click option exists only for an environment
+    fallback, when declared.
 
     ``options`` also carries the external↔declared correspondence: each entry
     holds the parameter's declared name and the external name its flags were
@@ -1367,12 +1409,11 @@ class ProgramCommand:
         Click owns the token conventions: short options and their bundles,
         attached and ``--x=V`` values, the ``--`` end-of-options marker, and
         an option's value being whatever token follows it. Every non-option
-        token lands in the catch-all positional slot unconditionally — the
-        shared zone binder (``runtime.arguments.bind_program_arguments``)
-        pairs positional values with parameters left to right and diagnoses
-        an excess positional argument itself, with a message that depends on
-        whether the program declares any named-only parameters, so capping
-        here would pre-empt that one diagnosis.
+        token lands in the catch-all positional slot unconditionally, and one
+        that fills a slot is read as that parameter's flag value would be. An
+        implicit positional CLI value is mapped to its AgL named parameter;
+        the shared zone binder diagnoses any excess positional arguments, except
+        a surplus after tokens routed by name, which it would misreport.
 
         A parameter whose value came from neither a token nor its
         ``@opt-env`` variable is left out of the result entirely, so a host
@@ -1385,7 +1426,8 @@ class ProgramCommand:
             running the program.
         :raises ValueError: for any Click usage error (unknown option,
             missing value, a value given to a flag), for a parameter supplied
-            more than once, or for an optional-enum parameter given both
+            more than once, for a surplus positional token after tokens routed
+            by name, or for an optional-enum parameter given both
             polarities on the command line. A malformed ``VALUE`` — including
             a malformed optional payload (see the module docstring) — is
             not raised here: it reaches this method's caller as a deferred
@@ -1399,8 +1441,22 @@ class ProgramCommand:
         except click.UsageError as exc:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
-        positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
-        positional_names = self.positionally_filled_names(len(positional))
+        cli_tokens = cast(tuple[str, ...], values[_POSITIONAL_DEST])
+        flagged = frozenset(
+            param.name
+            for index, (param, _projected) in enumerate(self.options)
+            if _from_commandline(ctx, _positive_dest(index))
+            or _from_commandline(ctx, _negative_dest(index))
+        )
+        slots = self._token_slots(len(cli_tokens), flagged)
+        if any(slot is None for slot, _by_name in slots) and any(
+            by_name for _slot, by_name in slots
+        ):
+            # Tokens routed by name leave the binder's positional list short
+            # of the slots it walks, so it would pair a surplus token with a
+            # slot already filled instead of reporting the overflow.
+            raise ValueError("Too many positional arguments")
+        positionally_filled = frozenset(slot.name for slot, _by_name in slots if slot is not None)
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
@@ -1416,11 +1472,21 @@ class ProgramCommand:
                 flag=projected.flag,
                 negative_flag=projected.negative_flag or projected.flag,
                 paired_polarities=True,
-                suppress_positive=param.name in positional_names
+                suppress_positive=param.name in positionally_filled
                 and _from_environment(ctx, _positive_dest(index)),
             )
             if value is not _NOT_SUPPLIED:
                 named[param.name] = value
+        positional: list[object] = []
+        for token, (slot, by_name) in zip(cli_tokens, slots, strict=True):
+            if slot is None:
+                positional.append(token)
+                continue
+            value = _positive_raw(project_option(slot.cli.name, slot.type), token)
+            if by_name:
+                named[slot.name] = value
+            else:
+                positional.append(value)
         module_params: dict[StaticBindingKey, object] = {}
         for offset, (entry, projected) in enumerate(self.module_options, start=len(self.options)):
             # Every module spelling is resolved ahead of the parse, so a
@@ -1440,7 +1506,9 @@ class ProgramCommand:
             if value is not _NOT_SUPPLIED:
                 module_params[entry.param.key] = value
         return ParsedTail(
-            arguments=ProgramArguments(positional=positional, named=named), params=module_params
+            arguments=ProgramArguments(positional=tuple(positional), named=named),
+            params=module_params,
+            positionally_filled=positionally_filled,
         )
 
     def value_token_indexes(
@@ -1467,12 +1535,10 @@ class ProgramCommand:
         once every positional-capable parameter is filled. Every token after
         ``--`` fills one.
         """
-        count = self._read_tokens(tokens, host_options)[1]
-        if count >= len(self.positional) or (
-            self._read_tokens([*tokens, token], host_options)[1] == count
-        ):
+        _indexes, count, flagged = self._read_tokens(tokens, host_options)
+        if self._read_tokens([*tokens, token], host_options)[1] == count:
             return None
-        return self.positional[count]
+        return self._token_slots(count + 1, flagged)[-1][0]
 
     def value_options(
         self,
@@ -1480,11 +1546,12 @@ class ProgramCommand:
         """Return each value-taking parameter with the spellings its value follows.
 
         Program and module option spellings that take a value are included;
-        a ``--no-x`` negative never takes a value.
+        a ``--no-x`` negative never takes a value. Implicitly positional
+        parameters have no flag and are omitted.
         """
         result: list[tuple["ProgramParamInfo | ParamBindingInfo", tuple[str, ...]]] = []
         for param, projected in self.options:
-            if not projected.takes_value:
+            if not projected.takes_value or param.cli.cli_positional:
                 continue
             result.append((param, (projected.flag, *_spelling_tuple(_short_flag(param)))))
         for entry, projected in self.module_options:
@@ -1499,17 +1566,27 @@ class ProgramCommand:
 
     def _read_tokens(
         self, tokens: Sequence[str], host_options: OptionValueMap
-    ) -> tuple[frozenset[int], int]:
-        """Return the separate option-value indexes in *tokens* and its positional token count."""
+    ) -> tuple[frozenset[int], int, frozenset[str]]:
+        """Return *tokens*' separate option-value indexes, positional count, and named parameters.
+
+        The named parameters are the program parameters an option token
+        supplies by name — the ``flagged`` set :meth:`_token_slots` takes.
+        """
         long_options: dict[str, bool] = {}
         short_options: dict[str, bool] = {}
+        spelled_names: dict[str, str] = {}
         for param, projected in self.options:
+            if param.cli.cli_positional:
+                continue
             long_options[projected.flag] = projected.takes_value
+            spelled_names[projected.flag] = param.name
             if projected.negative_flag is not None:
                 long_options[projected.negative_flag] = False
+                spelled_names[projected.negative_flag] = param.name
             short = _short_flag(param)
             if short is not None:
                 short_options[short] = projected.takes_value
+                spelled_names[short] = param.name
         for entry, projected in self.module_options:
             for spelling in entry.option_spellings:
                 if spelling.startswith("--"):
@@ -1520,6 +1597,7 @@ class ProgramCommand:
                     short_options[spelling] = projected.takes_value
 
         values: set[int] = set()
+        flagged: set[str] = set()
         positional = 0
         index = 0
         while index < len(tokens):
@@ -1533,6 +1611,8 @@ class ProgramCommand:
                 continue
             if token.startswith("--"):
                 flag, separator, _value = token.partition("=")
+                if flag in spelled_names:
+                    flagged.add(spelled_names[flag])
                 if separator or not long_options.get(flag, False):
                     index += 1
                     continue
@@ -1546,6 +1626,8 @@ class ProgramCommand:
                     takes_value = short_options.get(f"-{short}")
                     if takes_value is None:
                         continue
+                    if f"-{short}" in spelled_names:
+                        flagged.add(spelled_names[f"-{short}"])
                     if takes_value and offset + 1 == len(short_group) and index + 1 < len(tokens):
                         values.add(index + 1)
                         index += 2
@@ -1559,7 +1641,7 @@ class ProgramCommand:
             else:
                 positional += 1
             index += 1
-        return frozenset(values), positional
+        return frozenset(values), positional, frozenset(flagged)
 
     def render_help(
         self,
@@ -1567,6 +1649,7 @@ class ProgramCommand:
         *,
         description: str | None = None,
         extra_options: Sequence[click.Parameter] = (),
+        list_execution_options: bool = False,
     ) -> str:
         """Render this command's help as the invocation *program_name* spells it.
 
@@ -1574,19 +1657,22 @@ class ProgramCommand:
         slots; the description is the program's ``@doc`` unless *description*
         supplies one of the host's own (a package manifest's, say); and the
         options are this program's visible flags with their own ``@doc`` and
-        metavars, followed by *extra_options* — flags the host adds around the
-        program, such as ``--dry-run`` — and the help flags themselves.
+        metavars, followed by *extra_options* — recognized execution flags go
+        into the final ``Execution options`` section, while other additions
+        stay under ``Options``.
         """
         command = _build_click_command(
             program_name,
             params=self.params,
             description=self.command.help if description is None else description,
             usage_slots=self.command.usage_slots,
+            positional_help=self.command.positional_help,
             extra_options=extra_options,
             parameter_sections=self.command.parameter_sections,
             module_help_sections=self.command.module_help_sections,
             ambiguous_options=self.command.ambiguous_options,
             surface_entries=self.command.surface_entries,
+            list_execution_options=list_execution_options,
         )
         return _format_help(command, program_name)
 
@@ -1600,7 +1686,7 @@ class ProgramCommand:
         """
         spellings: list[str] = []
         for param, projected in self.options:
-            if param.cli.hidden:
+            if param.cli.hidden or param.cli.cli_positional:
                 continue
             spellings.extend(param_spellings(param, projected))
         for entry, _projected in self.module_options:
@@ -1609,18 +1695,36 @@ class ProgramCommand:
         spellings.extend(HELP_FLAGS)
         return tuple(spellings)
 
-    def positionally_filled_names(self, count: int) -> frozenset[str]:
-        """Return the declared names *count* positional tokens fill.
+    def _token_slots(
+        self, count: int, flagged: frozenset[str]
+    ) -> "list[tuple[ProgramParamInfo | None, bool]]":
+        """Pair each of *count* positional tokens with the slot it fills.
 
-        The shared binder (``runtime.arguments.bind_program_arguments``) pairs
-        positional values with positional-capable parameters left to right,
-        without skipping, so the first *count* of them are the ones a token
-        supplied. Held here so every surface deciding whether a positional
-        token outranks a lower-precedence layer — an ``@opt-env`` fallback in
-        :meth:`parse`, a configured value in ``commands.exec_program`` — reads
-        the binder's pairing rule from one place.
+        Tokens fill :attr:`positional` left to right. A slot whose parameter
+        the command line already supplied by name (*flagged*) is passed over
+        when a CLI-positional slot follows, since that slot is reachable by
+        position alone; otherwise the token lands on it and the shared binder
+        reports the duplicate. Each pair's flag says whether the token must
+        travel by name: it fills a CLI-positional slot, or a slot after a
+        passed-over one, which the binder's left-to-right pairing would
+        misplace. A token past the last slot pairs with ``None``.
         """
-        return frozenset(param.name for param in self.positional[:count])
+        slots = self.positional
+        result: list[tuple[ProgramParamInfo | None, bool]] = []
+        position = 0
+        passed_over = False
+        for _ in range(count):
+            while (
+                position < len(slots)
+                and slots[position].name in flagged
+                and any(slot.cli.cli_positional for slot in slots[position + 1 :])
+            ):
+                position += 1
+                passed_over = True
+            slot = slots[position] if position < len(slots) else None
+            result.append((slot, slot is not None and (slot.cli.cli_positional or passed_over)))
+            position += 1
+        return result
 
 
 def _check_reservation(
@@ -1706,7 +1810,7 @@ def build_program_command(
     parameter's own spelling — so one parameter's ``--no-<name>`` negation
     can never silently steal a different parameter literally named
     ``no-<name>``, and two parameters can never claim the same short.
-    Positional-only parameters never enter the flag namespace and so are
+    Positional-only CLI parameters never enter the flag namespace and so are
     never checked. Returns a :class:`ReservedFlagError` or
     :class:`DuplicateOptionFlagError` for the caller to render on the first
     collision found, in declaration order.
@@ -1716,13 +1820,16 @@ def build_program_command(
     help a reader of this program sees.
     """
     signature = program.parameters
-    positional = tuple(p for p in signature if p.kind in _POSITIONAL_ZONES)
+    positional = tuple(p for p in signature if p.kind in _POSITIONAL_ZONES or p.cli.cli_positional)
     options = tuple(
         (p, project_option(p.cli.name, p.type))
         for p in signature
         if p.kind in _NAME_ADDRESSABLE_ZONES
     )
-    collision = _check_reservation(options, reserved_flags)
+    collision = _check_reservation(
+        tuple((param, projected) for param, projected in options if not param.cli.cli_positional),
+        reserved_flags,
+    )
     if collision is not None:
         return collision
     from agm.cli_support.param_surface import build_param_surface
@@ -1735,7 +1842,19 @@ def build_program_command(
     )
     click_params: list[click.Parameter] = [_positional_argument()]
     for index, (param, projected) in enumerate(options):
-        click_params.extend(_click_params(index, param, projected))
+        if param.cli.cli_positional:
+            if param.cli.env is not None:
+                click_params.append(
+                    _positive_option(
+                        index,
+                        param,
+                        projected,
+                        (f"--_program-env-{index}",),
+                        environment_only=True,
+                    )
+                )
+        else:
+            click_params.extend(_click_params(index, param, projected))
     sections: dict[str, list[click.Parameter]] = {}
     help_sections: dict[str, list[tuple[ParamSurfaceEntry, ProjectedOption]]] = {}
     for offset, (entry, projected) in enumerate(module_options, start=len(options)):
@@ -1751,6 +1870,13 @@ def build_program_command(
         params=click_params,
         description=program.doc,
         usage_slots=_usage_slots(positional),
+        positional_help=tuple(
+            (param.cli.metavar or param.cli.name, keep_indented_paragraphs(param.cli.doc))
+            for param in positional
+            if param.cli.doc is not None
+            and not param.cli.hidden
+            and (param.kind is ParamZone.POSITIONAL_ONLY or param.cli.cli_positional)
+        ),
         parameter_sections=tuple(
             (section, tuple(section_params)) for section, section_params in sections.items()
         ),
@@ -1838,6 +1964,7 @@ def render_program_help(
     program_name: str,
     description: str | None = None,
     extra_options: "Sequence[click.Parameter]" = (),
+    list_execution_options: bool = False,
 ) -> str:
     """Render the help of the command *program_name* invokes.
 
@@ -1848,7 +1975,10 @@ def render_program_help(
     """
     if program_command is not None:
         return program_command.render_help(
-            program_name, description=description, extra_options=extra_options
+            program_name,
+            description=description,
+            extra_options=extra_options,
+            list_execution_options=list_execution_options,
         )
     command = _build_click_command(
         program_name,
@@ -1856,12 +1986,17 @@ def render_program_help(
         description=description,
         usage_slots=(),
         extra_options=extra_options,
+        list_execution_options=list_execution_options,
     )
     return _format_help(command, program_name)
 
 
 def exec_program_help(
-    program_command: "ProgramCommand | None", *, file: str | None, program: str | None
+    program_command: "ProgramCommand | None",
+    *,
+    file: str | None,
+    program: str | None,
+    extra_options: "Sequence[click.Parameter]" = (),
 ) -> str:
     """Render the help of the ``agm exec`` invocation *program_command* was selected by.
 
@@ -1871,7 +2006,10 @@ def exec_program_help(
     recognized while parsing produce the same page.
     """
     return render_program_help(
-        program_command, program_name=exec_program_name(file=file, program=program)
+        program_command,
+        program_name=exec_program_name(file=file, program=program),
+        extra_options=extra_options,
+        list_execution_options=True,
     )
 
 
@@ -1883,7 +2021,7 @@ def exec_program_name(*, file: str | None, program: str | None) -> str:
     usage line — and the ``-p`` selection when one was made, so the usage
     line stands for the command that was actually run.
     """
-    parts = ["agm", "exec", "-c COMMAND" if file is None else file]
+    parts = ["agm", "exec", "-c SOURCE" if file is None else file]
     if program is not None:
         parts.extend(("-p", program))
     return " ".join(parts)

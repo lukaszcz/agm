@@ -1,4 +1,4 @@
-"""Filesystem helpers that respect dry-run mode."""
+"""Filesystem helpers; those used by ``--dry-run`` commands respect dry-run mode."""
 
 from __future__ import annotations
 
@@ -92,6 +92,12 @@ def stat(path: Path) -> os.stat_result:
     """Return stat information for *path*."""
 
     return path.stat()
+
+
+def lstat(path: Path) -> os.stat_result:
+    """Return stat information for *path* itself, without following a final symbolic link."""
+
+    return path.lstat()
 
 
 def identity_stamp(path: Path) -> IdentityStamp:
@@ -219,11 +225,8 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
 
 
 def copy_file(source: Path, destination: Path) -> None:
-    """Copy one file unless dry-run is enabled."""
+    """Copy one file with its metadata."""
 
-    if dry_run.enabled():
-        dry_run.print_operation("copy-file", f"{display_path(source)} {display_path(destination)}")
-        return
     shutil.copy2(source, destination)
 
 
@@ -247,11 +250,8 @@ def backup_file(path: Path) -> None:
 
 
 def move(source: Path, destination: Path) -> None:
-    """Move a file or directory unless dry-run is enabled."""
+    """Move a file or directory."""
 
-    if dry_run.enabled():
-        dry_run.print_operation("move", f"{display_path(source)} {display_path(destination)}")
-        return
     shutil.move(source, destination)
 
 

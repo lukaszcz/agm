@@ -74,6 +74,7 @@ __all__ = [
     "VariantEncode",
     "dict_key_form",
     "forwarded_encode_key",
+    "is_plain_enum",
     "resolve_schema_ref",
 ]
 
@@ -124,7 +125,14 @@ class FieldDecode:
     only), for a value-syntax reader binding constructor arguments with the
     shared zone binder. ``alias`` is the field's ``@name`` spelling when it
     differs from ``name`` (an additional legal value-syntax spelling), or
-    ``None`` when the field carries no alias.
+    ``None`` when the field carries no alias. ``default_index`` is set exactly
+    when the field's declaration carries a constant default, to the field's
+    position in its declaring nominal's own
+    ``NominalDescriptor.fields``/``field_defaults`` -- the key a decode-time
+    default fill (``runtime.convert.decode_value``'s ``default_resolver``)
+    uses to evaluate the real default expression. A missing JSON key or an
+    omitted constructor argument is then legal rather than an error.
+    ``None`` for a field with no default.
     """
 
     name: str
@@ -132,6 +140,7 @@ class FieldDecode:
     schema: "DecodeSchema"
     zone: ParamZone
     alias: str | None
+    default_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +162,7 @@ class RecordDecode:
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields.
+    """One enum member's terminal name, JSON tag, identity, display name, and fields.
 
     ``alias`` is the member's own ``@name`` spelling when it differs from
     ``name``, or ``None`` when the member carries no alias.
@@ -169,9 +178,9 @@ class VariantDecode:
 
 @dataclass(frozen=True, slots=True)
 class EnumDecode:
-    """Decode a JSON object (with a ``$case`` discriminator) into an enum.
+    """Decode an enum: a member's JSON tag string when plain, else a ``$case``-tagged object.
 
-    ``name`` is the enum's terminal declared name (unqualified, unlike
+    See :func:`is_plain_enum`. ``name`` is the enum's terminal declared name (unqualified, unlike
     ``display_name``). ``host_agent`` is ``True`` exactly for the standard
     library's ``Agent`` enum (see
     ``semantics.types.is_standard_agent_enum``); an enum has no ``@name``
@@ -319,7 +328,7 @@ class ExceptionEncode:
 
 @dataclass(frozen=True, slots=True)
 class VariantEncode:
-    """One enum member's terminal name, JSON ``$case`` tag, identity, and ordered field encoders."""
+    """One enum member's terminal name, JSON tag, identity, and ordered field encoders."""
 
     name: str
     json_name: str
@@ -329,7 +338,10 @@ class VariantEncode:
 
 @dataclass(frozen=True, slots=True)
 class EnumEncode:
-    """Encode an enum slot with its member-selected ``$case`` tag."""
+    """Encode an enum slot: the member's JSON tag string when plain, else a ``$case`` object.
+
+    See :func:`is_plain_enum`.
+    """
 
     nominal: NominalId
     variants: tuple[VariantEncode, ...]
@@ -415,6 +427,15 @@ def dict_key_form(schema: EncodeSchema) -> DictKeyForm:
     if isinstance(schema, EnumEncode) and all(not variant.fields for variant in schema.variants):
         return DictKeyForm.OBJECT_STRINGIFIED
     return DictKeyForm.ENTRIES
+
+
+def is_plain_enum(schema: "EnumDecode | EnumEncode") -> bool:
+    """Whether every member of *schema* is fieldless.
+
+    A plain enum crosses JSON as its member's tag string; any other enum as a
+    ``$case``-tagged object.
+    """
+    return not any(variant.fields for variant in schema.variants)
 
 
 def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:

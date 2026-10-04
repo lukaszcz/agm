@@ -1,18 +1,21 @@
 import std/config
+import std/env::Environ
 import std/errors::Exception
 import std/option::Option
-
-builtin
-enum ParsePolicy =
-  | Abort
-  | Retry(n: int)
+import std/sandbox::Sandbox
 
 builtin
 enum Agent
   | AgentCommand(command: text)
-  | AgentClaude(model: text, thinking: text)
-  | AgentCodex(model: text, thinking: text)
-  | AgentPi(provider: text, model: text, thinking: text)
+  | AgentClaude(model: text = "", thinking: text = "")
+  | AgentCodex(model: text = "", thinking: text = "")
+  | AgentPi(provider: text = "", model: text = "", thinking: text = "")
+
+builtin
+enum AgentSandbox
+  | Disabled
+  | Native
+  | std/sandbox::Sandbox
 
 builtin
 record AgentRequest
@@ -24,6 +27,7 @@ record AgentRequest
   attempt: int
   previous-error: Option[text]
   metadata: json
+  sandbox: AgentSandbox
 
 builtin
 exception AgentCallError extends Exception
@@ -42,31 +46,77 @@ exception AgentParseError extends Exception
   attempts: int
   metadata: json
 
+@doc("""
+  Ask an agent and parse its response as the requested type.
+
+  Raises `AgentCallError` on invocation failure or `AgentParseError` when parsing fails after the
+  configured retries.
+""")
 builtin def ask[T](
   prompt: text,
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
+  sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
 ) -> T
+
+@doc("""
+  Ask an agent and parse its response as the requested type.
+
+  Raises `AgentCallError` on invocation failure or `AgentParseError` when parsing fails after the
+  configured retries.
+""")
 builtin def Agent::ask[T](
   self,
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
+  sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
 ) -> T
+
+@doc("Build an agent request for the requested response type without invoking the agent.")
 builtin def Agent::ask-request[T](
   self,
   prompt: text,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
+
+@doc("Build an agent request for the requested response type without invoking the agent.")
 builtin def ask-request[T](
   prompt: text,
   agent: Agent = std/config::default-agent,
   format: text = "",
   strict-json: bool = false,
-  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  parse-error-retries: int = std/config::parse-error-retries,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
+
+@doc("""
+  Open the agent's interactive terminal UI and wait for it to exit.
+
+  Starts a fresh conversation with `prompt`, inheriting stdio. Uses configured agent defaults,
+  sandboxing, and `env`. While waiting, AGM ignores SIGINT and SIGQUIT as for `std/os::edit`.
+  Has no idle timeout or response parsing. Raises `AgentCallError` on launch failure or nonzero exit.
+""")
+extern def chat(
+  prompt: text = "",
+  agent: Agent = std/config::default-agent,
+  sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
+) -> unit
+
+@extern-name("agent_chat")
+@doc("Open this agent's interactive terminal UI; see `chat`.")
+extern def Agent::chat(
+  self,
+  prompt: text = "",
+  sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
+) -> unit

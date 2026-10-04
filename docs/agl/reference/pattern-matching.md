@@ -32,7 +32,7 @@ pattern_field  ::= pattern                                (* positional sub-patt
 
 Matches anything, binds nothing. The same spelling is the unreadable discard
 binder in `let _ = value` and `var _ = value`; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding).
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding).
 
 <!-- agl-check: fragment -->
 ```agl
@@ -73,7 +73,7 @@ case result of
 At a `case` branch root, a bare name is never a variable binder: it must
 denote a visible fieldless constructor. By contrast, a bare `let`-root name
 always introduces an immutable binder visible in the continuation; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding). Ordinary
 value bindings do not alter case-constructor lookup; capitalization carries no
 meaning ([Lexical structure](lexical-structure.md)).
 
@@ -132,7 +132,12 @@ The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 When a bare name is classified as a constructor, it matches **fieldless**
 records only, whether an enum member, a standalone record, or an alias leading
 to one. A bare name for a record that has fields is a static error:
-write `Fail()` to ignore its fields or destructure them. Empty parentheses
+write `Fail()` to ignore its fields or destructure them — even when every
+field has a `=` default, unlike a bare constructor reference in value
+position, which constructs immediately with its defaults (see [Fieldless and
+all-defaulted constructor
+references](expressions.md#fieldless-and-all-defaulted-constructor-references)).
+Empty parentheses
 ignore every field, including named-only fields. The call and qualified forms
 apply to every member record and to standalone records; the bare form is a
 convenience for the common fieldless case. A record constructor such as

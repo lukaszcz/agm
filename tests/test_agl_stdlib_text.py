@@ -54,6 +54,7 @@ def _text_companion() -> _TextCompanion:
                 declared_name="IndexError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "index", "length"),
+                field_json_names=("message", "index", "length"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },

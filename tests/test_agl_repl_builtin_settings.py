@@ -20,13 +20,29 @@ from shutil import copyfile
 
 import pytest
 
-from agm.agl.ir.program import ValueDescriptors
-from agm.agl.repl import EntryResult, ReplSession
+from agm.agl.repl import ReplSession
 from agm.agl.runtime.engine_config import build_engine_config_seeds
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
-from tests._agl_helpers import agent_value
+from tests._agl_helpers import (
+    agent_value,
+)
+from tests._agl_helpers import (
+    eval_ok as _ok,
+)
+from tests._agl_helpers import (
+    read_config_result as _read_result,
+)
+from tests._agl_helpers import (
+    record_variant as _variant,
+)
+from tests._agl_helpers import (
+    repl_session as _session,
+)
+from tests._agl_helpers import (
+    unopened_repl_session as _unopened_session,
+)
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
@@ -43,10 +59,22 @@ def _copy_core_and_option(directory: Path) -> None:
         additions += "builtin var timeout: Option[text] = Option[text]::None\n"
     if "builtin var default-agent" not in config:
         additions += 'builtin var default-agent: Agent = AgentCommand("runner")\n'
+    if "builtin var default-sandbox" not in config:
+        additions += "builtin var default-sandbox: AgentSandbox = Disabled\n"
+    if "builtin var parse-error-retries" not in config:
+        additions += "builtin var parse-error-retries: int = 4\n"
     if additions:
-        imports = (
-            "" if "std/prelude::{Option" in config else "import std/prelude::{Option, Agent}\n"
-        )
+        # An existing ``import std/prelude::{Option, ...}`` line may not yet
+        # name every symbol a freshly added default needs: extend it in place
+        # rather than adding a second, conflicting import of the same names.
+        if "std/prelude::{Option" in config:
+            config = config.replace(
+                "std/prelude::{Option, Agent}",
+                "std/prelude::{Option, Agent, AgentSandbox}",
+            )
+            imports = ""
+        else:
+            imports = "import std/prelude::{Option, Agent, AgentSandbox}\n"
         config_path.write_text(imports + config + additions, encoding="utf-8")
 
 
@@ -61,58 +89,11 @@ class _FencedAgent:
         return AgentResponse(content="```json\n42\n```")
 
 
-def _unopened_session(**kwargs: object) -> ReplSession:
-    """Build a session over the repository standard library, left unopened.
-
-    For the tests that must observe the initial ``std/config`` load from the
-    entry that triggers it.
-    """
-    kwargs.setdefault("stdlib_root", _STDLIB_ROOT)
-    return ReplSession(**kwargs)
-
-
-def _session(**kwargs: object) -> ReplSession:
-    """Build a session over the repository standard library and open it.
-
-    ``agm.commands.repl`` opens a session before accepting an entry, which
-    loads and type-checks the initial library image; going through
-    :meth:`ReplSession.open` here exercises that same startup and lets the
-    session reuse the process-wide bootstrap image instead of re-checking the
-    standard library once per test.
-    """
-    session = _unopened_session(**kwargs)
-    session.open()
-    return session
-
-
-def _ok(session: ReplSession, text: str) -> EntryResult:
-    result = session.eval_entry(text)
-    assert result.ok, f"entry {text!r} failed: {result.diagnostics} {result.error}"
-    return result
-
-
-def _read_result(session: ReplSession, key: str) -> EntryResult:
-    """Import-and-read *key*, returning the full entry result (value + descriptors)."""
-    result = _ok(session, f"std/config::{key}")
-    assert result.value is not None
-    return result
-
-
 def _read(session: ReplSession, key: str) -> Value:
     """Import-and-read *key*, returning the read value of a later-entry read."""
     value = _read_result(session, key).value
     assert value is not None
     return value
-
-
-def _variant(value: Value, descriptors: ValueDescriptors) -> str:
-    """Return the terminal member name a ``RecordValue``'s nominal resolves to.
-
-    A ``RecordValue`` carries only its opaque ``NominalId``; its scoped
-    display spelling comes from the entry's own descriptor table.
-    """
-    assert isinstance(value, RecordValue)
-    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
 
 
 def _assert_setting(session: ReplSession, key: str, expected: object) -> None:
@@ -154,6 +135,8 @@ _PERSISTED_WRITES = [
         ("AgentCommand", "command", TextValue("scripted")),
         id="default-agent",
     ),
+    pytest.param("debug", "true", BoolValue(True), id="debug"),
+    pytest.param("parse-error-retries", "7", IntValue(7), id="parse-error-retries"),
 ]
 
 
@@ -284,6 +267,8 @@ def _host_seeded_session(
     trace: bool | None = None,
     trace_file: str | None = None,
     default_agent: str | None = None,
+    debug: bool | None = None,
+    parse_error_retries: int | None = None,
 ) -> ReplSession:
     """Build a session with explicit host seeds ONLY for the given keys.
 
@@ -300,6 +285,10 @@ def _host_seeded_session(
         raw["trace"] = trace
     if trace_file is not None:
         raw["trace-file"] = trace_file
+    if debug is not None:
+        raw["debug"] = debug
+    if parse_error_retries is not None:
+        raw["parse-error-retries"] = parse_error_retries
     engine_base = build_engine_config_seeds(raw)
     if default_agent is not None:
         engine_base["default-agent"] = agent_value("AgentCommand", command=default_agent)
@@ -328,7 +317,9 @@ def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "builtin var strict-json: bool = true\n"
         'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
         "builtin var trace: bool = true\n"
-        'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+        'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n'
+        "builtin var debug: bool = true\n"
+        "builtin var parse-error-retries: int = 9\n",
         encoding="utf-8",
     )
     _copy_core_and_option(config_path.parent)
@@ -358,6 +349,14 @@ _HOST_SEED_PRECEDENCE = [
         ("AgentCommand", "command", TextValue("host")),
         id="default-agent",
     ),
+    pytest.param({"debug": True}, "debug", "false", BoolValue(True), id="debug"),
+    pytest.param(
+        {"parse_error_retries": 3},
+        "parse-error-retries",
+        "8",
+        IntValue(3),
+        id="parse-error-retries",
+    ),
 ]
 
 
@@ -366,7 +365,7 @@ class TestResetHostSeedPrecedence:
 
     ``strict-json`` (including a falsy ``False`` host seed) is pinned in
     :class:`TestDefaultsAndSeeding` above; this class covers the remaining
-    four keys.  The ``timeout`` case seeds through ``engine_base`` (e.g.
+    other keys.  The ``timeout`` case seeds through ``engine_base`` (e.g.
     CLI/config); the driver-argument channel gets its own test below.
     """
 
@@ -473,6 +472,8 @@ _DECLARED_DEFAULT_PRECEDENCE = [
         ("AgentCommand", "command", TextValue("declared")),
         id="default-agent",
     ),
+    pytest.param("debug", "false", BoolValue(True), id="debug"),
+    pytest.param("parse-error-retries", "8", IntValue(9), id="parse-error-retries"),
 ]
 
 
@@ -585,7 +586,9 @@ class TestResetRestoresMixedSeedOrigins:
             "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
-            'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+            'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n'
+            "builtin var debug: bool = true\n"
+            "builtin var parse-error-retries: int = 9\n",
             encoding="utf-8",
         )
         _copy_core_and_option(config_path.parent)

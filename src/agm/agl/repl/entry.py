@@ -44,12 +44,12 @@ class EntryResult:
         scope region carries the path it opened.
     ``value``
         The echoed runtime value (expression value or new binding value); ``None``
-        for declarations, statements, ``check_only`` runs, and failures.
+        for declarations, statements, type entries, and failures.
     ``descriptors``
         The descriptor view for rendering the entry's compiled program (nominal
-        display spellings, function labels). Set for every successfully
-        evaluated entry, regardless of ``kind``; ``None`` for check-only runs
-        and failures.
+        display spellings, function labels). Set for every entry that reaches
+        evaluation, regardless of ``kind``; ``None`` for type entries and
+        failures, which never evaluate.
     ``value_type``
         The static type of the echoed value; ``None`` when not applicable.
     ``type_display``
@@ -82,8 +82,8 @@ class EntryResult:
         ``True`` iff there are no error diagnostics AND no runtime error.
     ``trace_path``
         Path of the JSONL trace file the entry's records were appended to, or
-        ``None`` when tracing is disabled (no ``--trace-file``) or for a
-        ``check_only`` (dry-run) entry, which writes no trace.
+        ``None`` when tracing is disabled (no ``--trace-file``) or for an
+        entry that never reached evaluation (a type entry or a failure).
     ``installed``
         Names installed before a failed entry stopped. Empty for pre-execution
         failures and successful entries.

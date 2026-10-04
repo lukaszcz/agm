@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 
-from agm.command_catalog import RESERVED_COMMAND_NAMES
+from agm.command_catalog import RESERVED_CONFIG_SECTION_NAMES, SCHEMA_CONFIG_SECTION_NAMES
 from agm.config.general import GeneralConfig
 from agm.core.toml import TomlDict
 
-# These tables describe AGM's configuration schema rather than AgL modules, and
-# key their own nested tables by user-chosen names — a dependency, a module
-# root, a package pin. ``params`` is retained here to prevent the removed legacy
-# ``[params.*]`` namespace from being interpreted as an AgL module route.
-SCHEMA_CONFIG_SECTION_NAMES = frozenset({"deps", "modules", "packages", "params"})
-RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | SCHEMA_CONFIG_SECTION_NAMES
 _MISSING = object()
 
 
@@ -59,40 +53,108 @@ def resolve_qualified_values(
 ) -> dict[QualifiedConfigKey, object]:
     """Resolve *keys* from the normalized layers of *config*.
 
-    Values in later layers replace values from earlier ones, including when the
-    layers use different valid suffix spellings. Each individual layer still
-    rejects conflicting spellings. Requiring :class:`GeneralConfig` prevents a
-    caller from accidentally resolving the merged view after layer provenance
-    has been lost.
+    Each key resolves in specificity tiers, most specific first: its exact
+    route, then tables inherited from a proper prefix of a command path,
+    deepest first (e.g. ``[devel]`` feeding ``devel review``). Every tier is
+    resolved independently across all layers, even one a higher tier already
+    resolved, so a conflict in a shadowed tier still errors; a value from a
+    higher tier wins regardless of which layer supplied it.
     """
 
-    layers = config.layers
+    unique_keys = _dedupe_keys(keys)
+    tiers_by_key = {
+        key: (
+            route_table_paths(key.module_segments, key.scope_path, key.command_paths),
+            *_inherited_group_paths(_config_command_paths(key.command_paths)),
+        )
+        for key in unique_keys
+    }
+    return _resolve_tiers(config.layers, unique_keys, tiers_by_key)
+
+
+def _resolve_tiers(
+    layers: tuple[TomlDict, ...],
+    keys: tuple[QualifiedConfigKey, ...],
+    tiers_by_key: Mapping[QualifiedConfigKey, tuple[tuple[tuple[str, ...], ...], ...]],
+) -> dict[QualifiedConfigKey, object]:
+    """Resolve *keys* tier by tier, most specific first, keeping each key's first hit.
+
+    *tiers_by_key* maps every key to its own ordered specificity tiers (each
+    tier itself a tuple of equally specific table paths); a key with fewer
+    tiers than another simply contributes nothing once its own are exhausted.
+    Shared by :func:`resolve_qualified_values` (exact route, then inherited
+    groups) and :func:`resolve_manifest_values` (a program's own command
+    table, then inherited groups, then the manifest root).
+    """
+    resolved: dict[QualifiedConfigKey, object] = {}
+    tier_count = max((len(tiers) for tiers in tiers_by_key.values()), default=0)
+    for index in range(tier_count):
+        tier_paths = {
+            key: tiers[index] if index < len(tiers) else () for key, tiers in tiers_by_key.items()
+        }
+        for key, value in _resolve_tier(layers, keys, tier_paths).items():
+            resolved.setdefault(key, value)
+    return resolved
+
+
+def _dedupe_keys(keys: Iterable[QualifiedConfigKey]) -> tuple[QualifiedConfigKey, ...]:
     # ``dict.fromkeys`` would be shorter but is untyped under the repo's
     # ``disallow_any_expr`` setting.
-    seen_keys: set[QualifiedConfigKey] = set()
-    unique_keys_list: list[QualifiedConfigKey] = []
+    seen: set[QualifiedConfigKey] = set()
+    ordered: list[QualifiedConfigKey] = []
     for key in keys:
-        if key not in seen_keys:
-            seen_keys.add(key)
-            unique_keys_list.append(key)
-    unique_keys = tuple(unique_keys_list)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return tuple(ordered)
 
+
+def _inherited_group_paths(
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[tuple[str, ...], ...], ...]:
+    """Return every proper, non-empty prefix of *command_paths*, tiered deepest first.
+
+    Each element is one specificity tier's table paths — the prefixes at one
+    depth, deduplicated in first-seen order; a prefix that is itself one of
+    *command_paths* still counts.
+    """
+    by_depth: dict[int, list[tuple[str, ...]]] = {}
+    seen: set[tuple[str, ...]] = set()
+    for command_path in command_paths:
+        for depth in range(1, len(command_path)):
+            prefix = command_path[:depth]
+            if prefix in seen:
+                continue
+            seen.add(prefix)
+            by_depth.setdefault(depth, []).append(prefix)
+    return tuple(tuple(by_depth[depth]) for depth in sorted(by_depth, reverse=True))
+
+
+def _resolve_tier(
+    layers: tuple[TomlDict, ...],
+    keys: tuple[QualifiedConfigKey, ...],
+    paths_by_key: Mapping[QualifiedConfigKey, tuple[tuple[str, ...], ...]],
+) -> dict[QualifiedConfigKey, object]:
+    """Resolve *keys* against *paths_by_key*'s tables across every layer.
+
+    One specificity tier: :func:`resolve_qualified_values` calls this once per
+    tier, most specific first, each time with that tier's own table paths.
+    *paths_by_key* must map every one of *keys*, even to an empty tuple when a
+    key has no table at this tier.
+    """
     resolved: dict[QualifiedConfigKey, object] = {}
     for layer in layers:
-        for key in unique_keys:
-            if any(
-                _table_path_replaced(layer, path)
-                for path in route_table_paths(
-                    key.module_segments, key.scope_path, key.command_paths
-                )
-            ):
+        for key in keys:
+            if any(_table_path_replaced(layer, path) for path in paths_by_key[key]):
                 resolved.pop(key, None)
-        resolved.update(_resolve_layer(layer, unique_keys))
+        resolved.update(_resolve_layer(layer, keys, paths_by_key))
     return resolved
 
 
 def _resolve_layer(
-    layer: TomlDict, keys: tuple[QualifiedConfigKey, ...]
+    layer: TomlDict,
+    keys: tuple[QualifiedConfigKey, ...],
+    paths_by_key: Mapping[QualifiedConfigKey, tuple[tuple[str, ...], ...]],
 ) -> dict[QualifiedConfigKey, object]:
     matches_by_value: dict[
         tuple[tuple[str, ...], str],
@@ -101,7 +163,7 @@ def _resolve_layer(
     values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], str, object]]] = {}
 
     for key in keys:
-        for path in route_table_paths(key.module_segments, key.scope_path, key.command_paths):
+        for path in paths_by_key[key]:
             table = _table_at(layer, path)
             if table is None:
                 continue
@@ -134,34 +196,163 @@ def _resolve_layer(
     return resolved
 
 
-def configured_leaf_tables(
-    config: GeneralConfig,
+def _leaf_table_paths(
     module_segments: tuple[str, ...],
-    scope_path: tuple[str, ...] = (),
-    command_paths: tuple[tuple[str, ...], ...] = (),
-) -> dict[str, tuple[str, ...]]:
-    """Return each leaf key set on one route, mapped to the table that sets it.
+    scope_path: tuple[str, ...],
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Return one route's exact-route paths plus its inherited group tables, deepest first."""
+    paths = list(route_table_paths(module_segments, scope_path, command_paths))
+    for tier in _inherited_group_paths(_config_command_paths(command_paths)):
+        paths.extend(tier)
+    return tuple(paths)
 
-    The tables are exactly the ones :func:`resolve_qualified_values` reads for a
-    key on this route, across every layer, so a name is reported only when a
-    lookup on that route could observe it. A nested table addresses a route of
-    its own — a scope region or a program scope — and is never a leaf here.
 
-    A leaf reported with the table it was actually read from lets a diagnostic
-    name the spelling its reader wrote, rather than whichever spelling this
-    route happens to consult first.
-    """
-    paths = route_table_paths(module_segments, scope_path, command_paths)
-    tables: dict[str, tuple[str, ...]] = {}
-    for layer in config.layers:
+def _leaf_entries(
+    layers: Iterable[TomlDict], paths: Iterable[tuple[str, ...]]
+) -> Iterator[tuple[str, tuple[str, ...]]]:
+    """Yield ``(leaf, table path)`` for each non-table key of *paths* in *layers*, in scan order."""
+    for layer in layers:
         for path in paths:
             table = _table_at(layer, path)
             if table is None:
                 continue
             for name, value in table.items():
                 if not isinstance(value, dict):
-                    tables.setdefault(name, path)
+                    yield name, path
+
+
+def configured_leaf_tables(
+    config: GeneralConfig,
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...] = (),
+    command_paths: tuple[tuple[str, ...], ...] = (),
+) -> dict[str, tuple[str, ...]]:
+    """Return each leaf key the exact route sets, mapped to one table that sets it.
+
+    A nested table addresses a route of its own — a scope region or a program
+    scope — and is never a leaf here. A leaf is reported with the table it was
+    actually read from, so a diagnostic can name the spelling its reader
+    wrote; when several layers set the same leaf on different tables, only the
+    first one a layer scan meets is kept, since this names one table for a
+    single-route diagnostic (undeclared-key warnings) — inherited group tables
+    never count as a leaf here, since a descendant command may be the one that
+    actually consumes them; :func:`configured_leaf_table_candidates` reports
+    those too, for a check that must not depend on layer order.
+    """
+    paths = route_table_paths(module_segments, scope_path, command_paths)
+    tables: dict[str, tuple[str, ...]] = {}
+    for name, path in _leaf_entries(config.layers, paths):
+        tables.setdefault(name, path)
     return tables
+
+
+def configured_leaf_table_candidates(
+    config: GeneralConfig,
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...] = (),
+    command_paths: tuple[tuple[str, ...], ...] = (),
+) -> dict[str, frozenset[tuple[str, ...]]]:
+    """Return each leaf key set on a route or its inherited tables, mapped to every table.
+
+    Unlike :func:`configured_leaf_tables`, this also reports inherited group
+    tables, and collects every distinct table across every layer instead of
+    naming one: the cross-route ambiguity check this feeds must consider every
+    table either route's leaf was ever read from, not just whichever layer
+    scan happens to meet first.
+    """
+    paths = _leaf_table_paths(module_segments, scope_path, command_paths)
+    tables: dict[str, set[tuple[str, ...]]] = {}
+    for name, path in _leaf_entries(config.layers, paths):
+        tables.setdefault(name, set()).add(path)
+    return {name: frozenset(paths_seen) for name, paths_seen in tables.items()}
+
+
+def _manifest_layer(manifest_config: TomlDict) -> tuple[TomlDict, ...]:
+    """Wrap *manifest_config* as the single layer manifest routes resolve against.
+
+    Every manifest table path is prefixed with ``"config"``, since
+    ``package.toml``'s own ``[config]``/``[config.a.b]`` tables are the real
+    TOML spelling a diagnostic should name — not a synthetic anchor.
+    """
+    return ({"config": manifest_config},)
+
+
+def _manifest_tiers(
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[tuple[str, ...], ...], ...]:
+    """Return one manifest route's tiers, most specific first, ``"config"``-prefixed.
+
+    A program's own command paths (exact), then each inherited group tier
+    deepest first, then the manifest root — no module-suffix or
+    quoted-anchor routes, since a manifest names commands only.
+    """
+    exact = tuple(("config", *segment) for segment in command_paths)
+    inherited = tuple(
+        tuple(("config", *segment) for segment in tier)
+        for tier in _inherited_group_paths(command_paths)
+    )
+    return (exact, *inherited, (("config",),))
+
+
+def resolve_manifest_values(
+    manifest_config: TomlDict, keys: Iterable[QualifiedConfigKey]
+) -> dict[QualifiedConfigKey, object]:
+    """Resolve *keys* from a package manifest's ``[config]`` table.
+
+    See :func:`_manifest_tiers` for tier order; reuses :func:`_resolve_tiers`
+    against the manifest as a single ``"config"``-prefixed layer.
+    """
+    unique_keys = _dedupe_keys(keys)
+    tiers_by_key = {key: _manifest_tiers(key.command_paths) for key in unique_keys}
+    return _resolve_tiers(_manifest_layer(manifest_config), unique_keys, tiers_by_key)
+
+
+def manifest_leaf_tables(
+    manifest_config: TomlDict, command_paths: tuple[tuple[str, ...], ...]
+) -> dict[str, tuple[str, ...]]:
+    """Return each leaf key one of a manifest route's tables sets, with that table's path.
+
+    Mirrors :func:`configured_leaf_tables` for a package manifest: the most
+    specific table setting a leaf — command table, then inherited group,
+    then root — is the one named, same tiers :func:`resolve_manifest_values`
+    resolves values through. Used to extend the ambiguous-bare-leaf check
+    over manifest tables, not just config-file ones.
+    """
+    paths = [path for tier in _manifest_tiers(command_paths) for path in tier]
+    tables: dict[str, tuple[str, ...]] = {}
+    for name, path in _leaf_entries(_manifest_layer(manifest_config), paths):
+        tables.setdefault(name, path)
+    return tables
+
+
+def param_spellings_for(
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...],
+    name: str,
+    *,
+    is_entry: bool,
+) -> tuple[str, ...]:
+    """Return every unique spelling addressing a ``@param`` binding, bare name first.
+
+    The bare name, then one dotted spelling per non-anchor
+    :func:`route_table_paths` entry (module-suffix or command-path routes
+    only — anchor routes contain a slash and have no config-table use here),
+    shortest route first. An entry-module binding has no dotted spellings.
+    Shared by CLI/config projection (:mod:`agm.cli_support.param_surface`)
+    and package manifest ``[config]`` leaf validation.
+    """
+    spellings = [name]
+    if not is_entry:
+        spellings.extend(
+            ".".join((*path, name))
+            for path in route_table_paths(module_segments, scope_path)
+            if all("/" not in segment for segment in path)
+        )
+    unique: dict[str, None] = {}
+    for spelling in spellings:
+        unique[spelling] = None
+    return tuple(unique)
 
 
 def route_table_paths(
@@ -175,15 +366,15 @@ def route_table_paths(
     anchor, then each *command path* the declaration is registered under, whose
     own segments are the whole table path: ``agm dev review`` reads
     ``[dev.review]``. AGM's top-level configuration sections are excluded,
-    except that a
-    single-segment loose-file module named after a *command* may address one of
-    its nested declaration tables: a command section holds its own settings as
-    leaf keys, so a table one level below it is free. A section keyed by AGM's
-    own schema (:data:`SCHEMA_CONFIG_SECTION_NAMES`) is excluded at every
-    depth, because its nested tables already belong to user-chosen names, so a
-    loose file named ``packages.agl`` has no config table for its programs at
-    all. This is the single routing rule shared by value resolution and leaf
-    enumeration, so a caller can tell which routes a given table serves.
+    except that a single-segment loose-file module named after a *command* may
+    address one of its nested declaration tables: a command section holds its
+    own settings as leaf keys, so a table one level below it is free. A
+    section keyed by AGM's own schema (:data:`SCHEMA_CONFIG_SECTION_NAMES`) is
+    excluded at every depth, because its nested tables already belong to
+    user-chosen names, so a loose file named ``packages.agl`` -- or a command
+    registered as ``agent review`` -- has no config table for its programs at
+    all. Value resolution and leaf enumeration both start from this exact-route
+    list before either adds any inherited group-table paths of its own.
     """
     suffix_paths = [
         (*module_segments[-depth:], *scope_path) for depth in range(1, len(module_segments) + 1)
@@ -201,14 +392,24 @@ def route_table_paths(
         if (not is_reserved_root or is_nested_loose_file_route) and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)
-    for command_path in command_paths:
-        # A registered command path never starts at a reserved section: package
-        # validation rejects such a registration, so a command table cannot
-        # collide with AGM's own configuration schema.
+    for command_path in _config_command_paths(command_paths):
         if command_path not in seen_paths:
             seen_paths.add(command_path)
             paths.append(command_path)
     return tuple(paths)
+
+
+def _config_command_paths(
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
+    """*command_paths* that address config-file tables: none rooted at a schema section.
+
+    Package validation rejects such a registration, but the activation index
+    tolerates one from an earlier install (e.g. ``agent review``). Like a loose
+    file named after a schema section, it has no config table, exact or
+    inherited, so its tables never collide with AGM's own schema.
+    """
+    return tuple(path for path in command_paths if path[0] not in SCHEMA_CONFIG_SECTION_NAMES)
 
 
 def _table_at(config: TomlDict, path: tuple[str, ...]) -> dict[str, object] | None:

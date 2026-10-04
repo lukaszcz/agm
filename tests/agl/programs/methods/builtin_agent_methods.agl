@@ -11,7 +11,7 @@ program def main(mode: text) -> unit =
           "How many?",
           format = "json",
           strict-json = true,
-          on-parse-error = Abort,
+          parse-error-retries = 0,
         )
         print(count)
     | mode == "defaulted" =>

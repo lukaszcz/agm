@@ -358,8 +358,13 @@ def test_read_ctor_head_allows_leading_whitespace() -> None:
     assert read_ctor_head("  \n Circle(1)") == (None, "Circle")
 
 
-def test_read_ctor_head_none_for_bare_name_without_call() -> None:
-    assert read_ctor_head("Circle") is None
+def test_read_ctor_head_bare_name() -> None:
+    assert read_ctor_head("Circle") == (None, "Circle")
+    assert read_ctor_head(" Shape :: Circle ") == ("Shape", "Circle")
+
+
+def test_read_ctor_head_none_for_name_followed_by_other_text() -> None:
+    assert read_ctor_head("Circle --flag") is None
 
 
 def test_read_ctor_head_none_for_text_not_opening_with_a_name() -> None:

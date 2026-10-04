@@ -59,8 +59,10 @@ from agm.agl.ir import (
     IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
+    IrMakeRecord,
     IrNominalCaseKey,
     IrProgramParam,
     IrRenderTemplate,
@@ -91,7 +93,7 @@ from agm.agl.ir.contracts import (
     TypeNodeRef,
     TypeTree,
 )
-from agm.agl.ir.ids import ContractId
+from agm.agl.ir.ids import HOST_SOURCE_ID, ContractId
 from agm.agl.ir.nodes import IrContract, IrExpr
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError, validate_ir
@@ -908,6 +910,7 @@ class TestDeepTierNominalDescriptor:
             kind=NominalKind.RECORD,
             fields=("x", "y"),
             mutable_fields=mutable_fields,
+            field_json_names=("x", "y"),
         )
         with pytest.raises(InvalidIrError, match="mutable fields"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
@@ -1049,6 +1052,11 @@ class TestDeepTierLocationSourceId:
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog)
+
+    def test_host_source_location_has_no_source_to_check(self) -> None:
+        node = IrConstInt(location=loc(source_id=HOST_SOURCE_ID), value=0)
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog)  # no exception
 
     def test_location_source_id_missing_skipped_cheap(self) -> None:
         bad_loc = loc(source_id=SID1)
@@ -2126,6 +2134,171 @@ class TestIrDirectCall:
         with pytest.raises(InvalidIrError, match="9999"):
             validate_ir(prog)
 
+    def test_use_default_out_of_position_raises_even_with_deep_false(self) -> None:
+        """UseDefault's position invariant is cheap (node-local): checked in both
+        tiers, unlike the arity/default-presence checks, which need the
+        resolved callee params and so run only under ``deep``.
+        """
+        call = _make_direct_call(FN0, args=(UseDefault(param_index=99),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, call),))
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog, deep=False)
+
+
+class TestConstructorFieldUseDefault:
+    """``UseDefault`` field-slot invariants on ``IrMakeRecord``/``IrMakeException``.
+
+    Mirrors ``TestIrDirectCall``'s ``UseDefault`` argument checks: the same
+    sentinel, now indexing a constructed nominal's own
+    ``NominalDescriptor.field_defaults`` instead of a callee's params.
+    """
+
+    def test_valid_omitted_record_field_passes(self) -> None:
+        """A UseDefault slot for a field with a declared default passes."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None, IrConstInt(location=LOC, value=0)),
+            field_json_names=("x", "y"),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", UseDefault(1))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        validate_ir(prog)  # no exception
+
+    def test_valid_omitted_exception_field_passes(self) -> None:
+        """A UseDefault slot on IrMakeException for a defaulted field passes."""
+        from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode, ScalarKind
+
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Problem",
+            kind=NominalKind.EXCEPTION,
+            fields=("code",),
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+            field_json_names=("code",),
+        )
+        make = IrMakeException(LOC, NOM0, (("code", UseDefault(0)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        prog.exception_field_encodes[NOM0] = (
+            ExceptionFieldEncode("code", "code", EncodePlan(ScalarEncode(ScalarKind.INT))),
+        )
+        validate_ir(prog)  # no exception
+
+    def test_use_default_out_of_position_raises(self) -> None:
+        """UseDefault at the wrong slot position raises InvalidIrError."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+            field_json_names=("x",),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(99)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog)
+
+    def test_use_default_for_non_defaulted_field_raises(self) -> None:
+        """UseDefault for a field with no declared default raises InvalidIrError."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(None,),
+            field_json_names=("x",),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(0)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="no default"):
+            validate_ir(prog)
+
+    def test_use_default_out_of_position_raises_even_with_deep_false(self) -> None:
+        """A constructor UseDefault's position invariant is checked in both
+        tiers too, consistent with IrDirectCall's arguments.
+        """
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(99)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),))
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog, deep=False)
+
+    def test_constructor_field_slot_count_mismatch_raises(self) -> None:
+        """More field slots than the nominal declares raises InvalidIrError,
+        not a bare IndexError from indexing past ``field_defaults``.
+        """
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(None,),
+            field_json_names=("x",),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", IrConstInt(LOC, 2))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="field slots"):
+            validate_ir(prog)
+
+    def test_constructor_field_name_mismatch_raises(self) -> None:
+        """A field slot named differently than the nominal's declared field at
+        that position raises InvalidIrError.
+        """
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None, IrConstInt(location=LOC, value=0)),
+            field_json_names=("x", "y"),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("z", IrConstInt(LOC, 2))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="field slot 1 is named 'z'"):
+            validate_ir(prog)
+
+    def test_record_field_defaults_length_must_match_fields(self) -> None:
+        """A record descriptor's field_defaults must be as long as its fields."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None,),
+            field_json_names=("x", "y"),
+        )
+        with pytest.raises(InvalidIrError, match="field_defaults"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
+
+    def test_enum_descriptor_cannot_declare_field_defaults(self) -> None:
+        """An enum descriptor must have an empty field_defaults."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Color",
+            kind=NominalKind.ENUM,
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+        )
+        with pytest.raises(InvalidIrError, match="field_defaults"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
+
 
 class TestExternTargetOperands:
     """A type-directed extern call leads with one registered ``IrContract`` per target."""
@@ -2521,8 +2694,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         validate_ir(prog, deep=False)  # no exception
@@ -2539,8 +2713,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {})  # empty contracts
         with pytest.raises(InvalidIrError, match="9999"):
@@ -2571,8 +2746,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
@@ -2606,8 +2782,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="duplicate.*A"):
@@ -2640,8 +2817,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="defs but decode is None"):
@@ -2671,35 +2849,9 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
         validate_ir(prog, deep=True)  # no exception
-
-    def test_ir_exec_bad_max_attempts_raises_deep(self) -> None:
-        """IrExec with max_attempts=0 raises InvalidIrError in deep mode."""
-        from agm.agl.ir.contracts import TextContractRequest
-        from agm.agl.ir.ids import ContractId
-        from agm.agl.ir.nodes import IrExec
-
-        cid = ContractId(value=0)
-        contract = TextContractRequest(
-            codec_name="text",
-            strict_json=None,
-            target_type_label="text",
-            structured_exec=False,
-            format_instructions="",
-        )
-        node = IrExec(
-            location=LOC,
-            command=IrConstText(location=LOC, value="echo hi"),
-            env=IrConstText(location=LOC, value="env"),
-            cwd=IrConstText(location=LOC, value="cwd"),
-            timeout=IrConstText(location=LOC, value="timeout"),
-            contract_id=cid,
-            max_attempts=0,  # invalid
-        )
-        prog = self._make_prog_with_contract(node, {cid: contract})
-        with pytest.raises(InvalidIrError, match="max_attempts"):
-            validate_ir(prog, deep=True)

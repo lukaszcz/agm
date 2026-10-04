@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 __all__ = [
+    "HOST_SOURCE_ID",
     "ContractId",
     "FunctionId",
     "Location",
@@ -36,6 +37,11 @@ class SourceId:
     """
 
     value: int
+
+
+#: Source of host-synthesized IR (e.g. reserved field defaults), which has no
+#: source text: it has no entry in ``ExecutableProgram.sources``.
+HOST_SOURCE_ID = SourceId(-1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +105,9 @@ class NominalId:
 class Location:
     """Source location carried by every IR node.
 
-    ``source_id`` is a handle into ``ExecutableProgram.sources``.
-    Offsets are byte (character) positions in the normalised source text;
+    ``source_id`` is a handle into ``ExecutableProgram.sources``, except
+    :data:`HOST_SOURCE_ID`, which has no entry there. Offsets are byte
+    (character) positions in the normalised source text;
     ``start_line`` and ``start_col`` are 1-based and 0-based respectively
     (matching the conventions used by the lexer/parser).
     """

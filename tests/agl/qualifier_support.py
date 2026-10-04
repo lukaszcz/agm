@@ -365,7 +365,7 @@ def _last_initializer(text: str) -> str:
     """The initializer text of the last ``let`` or ``var`` binding *text* writes."""
     bindings: list[LetDecl | VarDecl] = []
     walk(
-        parse_entry_module(text, entry_path=None, inline_command=True).program,
+        parse_entry_module(text, entry_path=None, inline_code=True).program,
         lambda node: bindings.append(node) if isinstance(node, (LetDecl, VarDecl)) else None,
     )
     span = max(bindings, key=lambda binding: binding.span.start_offset).value.span
@@ -851,7 +851,7 @@ def file_source(source: str) -> tuple[str, int]:
     indented. Returns the file text and the offset its body starts at: the
     text's length when there is none.
     """
-    items = parse_entry_module(source, entry_path=None, inline_command=True).program.body.items
+    items = parse_entry_module(source, entry_path=None, inline_code=True).program.body.items
     statements: tuple[Item, ...] = ()
     for item in items:
         if isinstance(item, FuncDef) and item.is_synthetic and isinstance(item.body, Block):

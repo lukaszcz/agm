@@ -52,10 +52,11 @@ class TestExecConfigFromConfigFiles:
         home = tmp_path / "home"
         home.mkdir()
         cfg = self._config(home, tmp_path)
-        assert cfg.strict_json is False
+        assert cfg.strict_json is None
         assert cfg.timeout is None
-        assert cfg.trace is False
+        assert cfg.trace is None
         assert cfg.trace_file is None
+        assert cfg.echo is False
 
     def test_exec_settings_load_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -65,6 +66,14 @@ class TestExecConfigFromConfigFiles:
         cfg = self._config(home, tmp_path)
         assert cfg.strict_json is True
         assert cfg.timeout == pytest.approx(1800.0)
+
+    def test_agent_output_echo_loads_from_toml(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("[exec]\necho = true\n")
+
+        assert self._config(home, tmp_path).echo is True
 
     def test_project_config_overrides_home(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

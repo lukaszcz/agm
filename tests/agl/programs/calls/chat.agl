@@ -1,0 +1,14 @@
+import std/env::Environ
+
+program def main(method: bool) -> unit =
+  let worker = AgentCommand("agm-chat-test-command-missing")
+  let prompt = "Help me debug %{method}"
+  try
+    if method =>
+      let converse = worker.chat
+      converse(prompt, Sandbox, Environ({"PATH": ""}))
+    else =>
+      chat(prompt, worker, Disabled, Environ({"PATH": ""}))
+  catch AgentCallError as error =>
+    print error.cause
+  print "resumed"

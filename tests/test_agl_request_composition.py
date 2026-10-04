@@ -34,6 +34,7 @@ def test_initial_prompt_includes_the_format_contract_for_each_json_mode(strict_j
         AgentRequest(
             agent=AgentCommand(command="runner"),
             prompt="Count.",
+            env={},
             output_contract=contract,
         )
     )
@@ -43,7 +44,7 @@ def test_initial_prompt_includes_the_format_contract_for_each_json_mode(strict_j
 
 def test_initial_prompt_without_a_format_contract_is_just_the_original_prompt() -> None:
     prompt = compose_initial_agent_prompt(
-        AgentRequest(agent=AgentCommand(command="runner"), prompt="Count.")
+        AgentRequest(agent=AgentCommand(command="runner"), prompt="Count.", env={})
     )
 
     assert prompt == "Count."
@@ -65,6 +66,7 @@ def test_corrective_follow_up_contains_feedback_without_recomposing_the_initial_
         AgentRequest(
             agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
+            env={},
             attempt=1,
             previous_invalid_output="not-a-number",
             validation_errors=[
@@ -104,6 +106,7 @@ def test_session_corrective_follow_up_omits_the_original_prompt_and_invalid_outp
         AgentRequest(
             agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
+            env={},
             attempt=1,
             previous_invalid_output="not-a-number",
             validation_errors=[
@@ -132,6 +135,7 @@ def test_corrective_follow_up_without_a_format_contract_keeps_the_json_reminder(
         AgentRequest(
             agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
+            env={},
             attempt=1,
         )
     )

@@ -196,7 +196,7 @@ def load_graph(
         roots=roots,
         default_stdlib=default_stdlib,
         spaced_qualifiers=parsed.spaced_qualifiers,
-        default_label="<command>",
+        default_label="<code>",
         source_text=normalize_newlines(entry_source),
     )
     return graph
@@ -305,7 +305,7 @@ def build_inline_entry_graph(
     which classifies by phase without needing this module's own item-view
     stripping).
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
     return build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,

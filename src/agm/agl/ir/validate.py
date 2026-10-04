@@ -23,8 +23,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
     5. The root symbol of every ``IrAssign`` is mutable (``mutable=True``).
-    6. Every ``Location`` on every node: its
-       ``source_id`` exists in ``program.sources``; and
+    6. Every ``Location`` on every node: its ``source_id`` is
+       ``HOST_SOURCE_ID`` or exists in ``program.sources``; and
        ``0 <= start_offset <= end_offset <= len(normalized_text)``.
     7. ``program.functions`` contains every callable descriptor. A reference
        from ``IrMakeClosure``/``IrDirectCall`` (or a symbol owner) must resolve
@@ -99,7 +99,15 @@ from agm.agl.ir.contracts import (
     TypeTreeEntry,
     forwarded_encode_key,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import (
+    HOST_SOURCE_ID,
+    ContractId,
+    FunctionId,
+    Location,
+    NominalId,
+    SourceId,
+    SymbolId,
+)
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -285,8 +293,13 @@ def _check_location_cheap(loc: Location) -> None:
 
 
 def _check_location_deep(loc: Location, ctx: _Context) -> None:
-    """Validate cross-reference invariants on a ``Location`` (deep tier)."""
+    """Validate cross-reference invariants on a ``Location`` (deep tier).
+
+    A :data:`~agm.agl.ir.ids.HOST_SOURCE_ID` location has no source to check.
+    """
     source_id: SourceId = loc.source_id
+    if source_id == HOST_SOURCE_ID:
+        return
     if source_id not in ctx.program.sources:
         raise InvalidIrError(
             f"Location references source_id={source_id!r} which is not in program.sources"
@@ -339,6 +352,81 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         raise InvalidIrError(
             f"IR node references nominal {nominal!r} which is not in program.nominals"
         )
+
+
+def _validate_use_default_slot(
+    context: str,
+    noun: str,
+    value: UseDefault,
+    index: int,
+    ctx: _Context,
+    has_default: "bool | None",
+) -> None:
+    """Validate one ``UseDefault`` sentinel: shared by call arguments and
+    constructor field slots.
+
+    The sentinel's ``param_index`` must equal its list position -- a
+    structural, node-local invariant with no program-table dependency, so it
+    is checked unconditionally, in both tiers. Whether the referenced slot
+    actually carries a default requires the callee's/nominal's resolved
+    parameter table, so it is checked only under ``ctx.deep`` and only when
+    *has_default* is supplied (``None`` when the caller has no such table to
+    resolve, e.g. an unresolved ``function_id``/nominal under the cheap tier).
+    *context* is prose already naming the call/construction (e.g.
+    ``"IrDirectCall to function_id=3"``); *noun* is ``"parameter"`` or
+    ``"field"``.
+    """
+    if value.param_index != index:
+        raise InvalidIrError(
+            f"{context}: UseDefault at position {index} has param_index="
+            f"{value.param_index} (must equal its position)"
+        )
+    if ctx.deep and has_default is False:
+        raise InvalidIrError(f"{context}: UseDefault for {noun} {index} which has no default")
+
+
+def _validate_constructor_fields(
+    nominal: NominalId,
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]",
+    ctx: _Context,
+    node_name: str,
+) -> None:
+    """Validate an ``IrMakeRecord``/``IrMakeException``'s field slots.
+
+    Mirrors ``IrDirectCall``'s argument checks: field-slot count and name
+    parity against the constructed nominal's own declared fields, then each
+    ``UseDefault`` slot through :func:`_validate_use_default_slot` (deep tier
+    only, since both need the resolved ``NominalDescriptor``). Every other
+    slot is a plain expression.
+    """
+    if ctx.deep:
+        _check_nominal_in_table(nominal, ctx)
+    desc = ctx.program.nominals.get(nominal)
+    context = f"{node_name} for nominal {nominal!r}"
+    if ctx.deep and desc is not None:
+        if len(fields) != len(desc.fields):
+            raise InvalidIrError(
+                f"{context} has {len(fields)} field slots but the nominal declares"
+                f" {len(desc.fields)} fields"
+            )
+        for index, (fname, _fexpr) in enumerate(fields):
+            if fname != desc.fields[index]:
+                raise InvalidIrError(
+                    f"{context}: field slot {index} is named {fname!r} but the nominal"
+                    f" declares {desc.fields[index]!r} at that position"
+                )
+    for index, (_fname, fexpr) in enumerate(fields):
+        if isinstance(fexpr, UseDefault):
+            _validate_use_default_slot(
+                context,
+                "field",
+                fexpr,
+                index,
+                ctx,
+                desc.field_defaults[index] is not None if ctx.deep and desc is not None else None,
+            )
+        else:
+            _validate_expr(fexpr, ctx)
 
 
 def _check_nominal_field(nominal: NominalId, field: str, ctx: _Context, node_name: str) -> None:
@@ -572,6 +660,31 @@ def _check_nominal_fields(
         raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
+def _check_field_decode_defaults(
+    fields: "tuple[FieldDecode, ...]", field_defaults: "tuple[object | None, ...]", owner: str
+) -> None:
+    """Require each ``FieldDecode.default_index`` to agree with its declaring descriptor.
+
+    Mirrors :func:`_validate_use_default_slot`'s construction-side check on the
+    decode side: a set ``default_index`` must equal the field's own position,
+    and the descriptor's ``field_defaults`` entry at that index must not be
+    ``None``.
+    """
+    for index, fdec in enumerate(fields):
+        if fdec.default_index is None:
+            continue
+        if fdec.default_index != index:
+            raise InvalidIrError(
+                f"{owner} field {fdec.name!r} has default_index={fdec.default_index}"
+                f" (must equal its position {index})"
+            )
+        if field_defaults[index] is None:
+            raise InvalidIrError(
+                f"{owner} field {fdec.name!r} has default_index set but its nominal"
+                " declares no default at that position"
+            )
+
+
 def _walk_decode_schema(
     decode: DecodeSchema, defs: "Mapping[str, DecodeSchema]", ctx: _Context
 ) -> None:
@@ -603,6 +716,7 @@ def _walk_decode_schema(
             if name != record.declared_name:
                 raise InvalidIrError(f"RecordDecode name disagrees with nominal {nominal!r}")
             _check_nominal_fields(fields, record.fields, record.field_json_names, "RecordDecode")
+            _check_field_decode_defaults(fields, record.field_defaults, "RecordDecode")
             for rdec in fields:
                 _walk_decode_schema(rdec.schema, defs, ctx)
         case EnumDecode(nominal=nominal, display_name=display_name, variants=variants, name=name):
@@ -638,6 +752,9 @@ def _walk_decode_schema(
                     )
                 _check_nominal_fields(
                     variant.fields, member.fields, member.field_json_names, "EnumDecode variant"
+                )
+                _check_field_decode_defaults(
+                    variant.fields, member.field_defaults, "EnumDecode variant"
                 )
                 for vdec in variant.fields:
                     _walk_decode_schema(vdec.schema, defs, ctx)
@@ -1090,17 +1207,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrMakeRecord(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-            for _fname, fexpr in fields:
-                _validate_expr(fexpr, ctx)
+            _validate_constructor_fields(nominal, fields, ctx, "IrMakeRecord")
 
         case IrMakeException(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-            for _fname, field_expr in fields:
-                _validate_expr(field_expr, ctx)
+            _validate_constructor_fields(nominal, fields, ctx, "IrMakeException")
 
         case IrMakeConstructor(nominal=nominal):
             _validate_location(node.location, ctx)
@@ -1202,23 +1313,18 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrContract references contract_id={contract.contract_id!r}"
                         " which is not in program.target_contracts"
                     )
-            if ctx.deep:
-                params = ctx.program.functions[fn_id].params
-                for index, arg in enumerate(arguments[targets:]):
-                    if isinstance(arg, UseDefault):
-                        if arg.param_index != index:
-                            raise InvalidIrError(
-                                f"IrDirectCall to function_id={fn_id!r}: UseDefault at"
-                                f" position {index} has param_index={arg.param_index}"
-                                " (must equal its position)"
-                            )
-                        if params[index].default is None:
-                            raise InvalidIrError(
-                                f"IrDirectCall to function_id={fn_id!r}: UseDefault for"
-                                f" parameter {index} which has no default"
-                            )
-            for arg in arguments[targets:]:
-                if not isinstance(arg, UseDefault):
+            params = ctx.program.functions[fn_id].params if ctx.deep else None
+            for index, arg in enumerate(arguments[targets:]):
+                if isinstance(arg, UseDefault):
+                    _validate_use_default_slot(
+                        f"IrDirectCall to function_id={fn_id!r}",
+                        "parameter",
+                        arg,
+                        index,
+                        ctx,
+                        params[index].default is not None if params is not None else None,
+                    )
+                else:
                     _validate_expr(arg, ctx)
 
         case IrContract():
@@ -1248,44 +1354,61 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
 
-        case IrAsk(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+        case IrAsk(
+            agent=agent_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            parse_error_retries=retries_expr,
+            sandbox=sandbox_expr,
+            env=env_expr,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(retries_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
+            _validate_expr(env_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrAsk references contract_id={contract_id!r}"
                         " which is not in program.contracts"
                     )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
-                    )
 
-        case IrSessionOpen(agent=agent_expr, transport=transport_expr, name=name_expr):
+        case IrSessionOpen(
+            agent=agent_expr,
+            transport=transport_expr,
+            name=name_expr,
+            sandbox=sandbox_expr,
+            env=env_expr,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             if transport_expr is not None:
                 _validate_expr(transport_expr, ctx)
             _validate_expr(name_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
+            _validate_expr(env_expr, ctx)
 
-        case IrSessionDefault():
+        case IrSessionDefault(env=env_expr):
             _validate_location(node.location, ctx)
+            _validate_expr(env_expr, ctx)
 
-        case IrSessionAsk(session=session_expr, prompt=prompt_expr, contract_id=contract_id):
+        case IrSessionAsk(
+            session=session_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            parse_error_retries=retries_expr,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(session_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(retries_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrSessionAsk references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrSessionAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrSessionOp(session=session_expr, op=op, arg=arg_expr):
@@ -1303,19 +1426,23 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if arg_expr is not None:
                 _validate_expr(arg_expr, ctx)
 
-        case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+        case IrAskRequest(
+            agent=agent_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            parse_error_retries=retries_expr,
+            sandbox=sandbox_expr,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
+            _validate_expr(retries_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrAskRequest references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrAskRequest has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrExec(
@@ -1324,21 +1451,21 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             cwd=cwd_expr,
             timeout=timeout_expr,
             contract_id=contract_id,
+            parse_error_retries=retries_expr,
+            sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(command_expr, ctx)
             _validate_expr(env_expr, ctx)
             _validate_expr(cwd_expr, ctx)
             _validate_expr(timeout_expr, ctx)
+            _validate_expr(retries_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
                         f"IrExec references contract_id={contract_id!r}"
                         " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrExec has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case IrBuiltinLoad(key=key):
@@ -1432,6 +1559,18 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"{nom_desc.kind!r} descriptor for nominal {nom_key!r} has"
                 f" {len(nom_desc.field_json_names)} field_json_names for"
                 f" {len(nom_desc.fields)} fields"
+            )
+
+        if nom_desc.kind in (NominalKind.RECORD, NominalKind.EXCEPTION):
+            if len(nom_desc.field_defaults) != len(nom_desc.fields):
+                raise InvalidIrError(
+                    f"{nom_desc.kind!r} descriptor for nominal {nom_key!r} has"
+                    f" {len(nom_desc.field_defaults)} field_defaults but"
+                    f" {len(nom_desc.fields)} fields"
+                )
+        elif nom_desc.field_defaults:
+            raise InvalidIrError(
+                f"enum descriptor for nominal {nom_key!r} must have empty field_defaults"
             )
 
         if nom_desc.kind is NominalKind.EXCEPTION:

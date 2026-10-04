@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, cast
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.runtime.externs import ExternRuntimeState
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.self_validation import self_validation_enabled
 
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.infix import Fixity
     from agm.agl.ir.builtin_vars import BuiltinVarKey
@@ -78,6 +80,7 @@ if TYPE_CHECKING:
         TypeEnvironment,
     )
     from agm.packages.model import PackageInfo
+    from agm.sandbox.prepare import SandboxContext
 
 
 # Layout-only token types that carry no statement to evaluate.
@@ -274,8 +277,11 @@ class ReplSession:
         default_call_depth_limit: int | None = None,
         agent_dispatcher: "AgentFn | None" = None,
         session_host: "SessionHost | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        resolve_agent_spec: "AgentSpecResolver | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
+        echo_agent_output: bool = False,
         engine_base: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
         param_seed_resolver: (
@@ -371,12 +377,12 @@ class ReplSession:
         self._current: dict[str, Value] = dict(self._engine_seed)
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
-        # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
-        # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
-        # The COMMAND validates/creates the path up front; the session assumes it
-        # is writable but the no-op store tolerates failure (it disables itself).
+        # ``TraceStore`` appending JSONL records to this one file. The COMMAND
+        # validates/creates the path up front; the session assumes it is writable
+        # but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
         self._initial_trace_path = trace_path
+        self._echo_agent_output = echo_agent_output
 
         # Internal runtime owns the registrations + host-environment assembly.
         # It never runs an entry on the session's behalf, so it is given none
@@ -389,10 +395,15 @@ class ReplSession:
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
         self._session_host = effective_session_host
+        # Companion state (``std/fs`` temporary paths, ...) lives for the whole
+        # session: every entry's interpreter shares this bag; :meth:`close` ends it.
+        self._extern_runtime_state = ExternRuntimeState()
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
             session_host=effective_session_host,
+            get_sandbox_context=get_sandbox_context,
+            resolve_agent_spec=resolve_agent_spec,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default
@@ -721,8 +732,7 @@ class ReplSession:
         """Parse → resolve → typecheck → matchcompile → lower/eval one entry.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` stops after match compilation without lowering,
-        executing, promoting, or advancing the node-id counter.
+        fails.
 
         REPL-only fallback: when the entry fails to evaluate as a program, the
         loop tries to read it as a bare type expression (e.g. ``int``, a declared
@@ -855,12 +865,11 @@ class ReplSession:
         block = Block(items=(alias,), span=span, node_id=start_id + 1)
         return Program(body=block, span=span, node_id=start_id + 2), fresh_name, start_id + 3
 
-    def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
+    def _eval_entry_pipeline(self, text: str, *, check_only: bool) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` stops after match compilation without lowering,
-        executing, promoting, or advancing the node-id counter.
+        fails.
         """
         from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
@@ -892,6 +901,32 @@ class ReplSession:
             next_start_id=next_start_id,
             check_only=check_only,
             spaced_qualifiers=spaced_qualifiers,
+        )
+
+    def _build_check_only_result(
+        self,
+        program: "Program",
+        checked: "CheckedModule",
+        warnings: list[Diagnostic],
+    ) -> EntryResult:
+        """Build the EntryResult for a ``check_only`` (type-only) run.
+
+        No value, no evaluation, no promotion, no trace.  The value_type for an
+        expression entry is the checked node type of the expression; for a binding
+        it is the declared binding type.
+        """
+        kind, name = self._classify(checked.resolved.program)
+        return EntryResult(
+            kind=kind,
+            name=name,
+            value=None,
+            value_type=self._value_type_of_last(checked),
+            diagnostics=[],
+            warnings=warnings,
+            error=None,
+            ok=True,
+            quote_strings=self._quote_strings_for_entry(program),
+            type_table=checked.type_env.type_table,
         )
 
     def _fail(
@@ -1050,32 +1085,6 @@ class ReplSession:
             self._current["strict-json"] = snapshot["strict-json"]
         self._shell_exec_timeout = interp.shell_exec_timeout
         self._builtin_var_values = interp.builtin_vars
-
-    def _build_check_only_result(
-        self,
-        program: "Program",
-        checked: "CheckedModule",
-        warnings: list[Diagnostic],
-    ) -> EntryResult:
-        """Build the EntryResult for a ``check_only`` (type-only) run.
-
-        No value, no evaluation, no promotion, no trace.  The value_type for an
-        expression entry is the checked node type of the expression; for a binding
-        it is the declared binding type.
-        """
-        kind, name = self._classify(checked.resolved.program)
-        return EntryResult(
-            kind=kind,
-            name=name,
-            value=None,
-            value_type=self._value_type_of_last(checked),
-            diagnostics=[],
-            warnings=warnings,
-            error=None,
-            ok=True,
-            quote_strings=self._quote_strings_for_entry(program),
-            type_table=checked.type_env.type_table,
-        )
 
     def _advance_node_ids(self, next_start_id: int) -> None:
         """Consume node ids for an entry that failed after lowering began."""
@@ -1511,9 +1520,9 @@ class ReplSession:
         """Static type carried by the entry's final value, or ``None``.
 
         A bare expression retains its checked type. A trailing ``let``/``var``
-        reports the declared binding type for the REPL declaration echo, except
-        that an initializer which always exits reports ``bottom``. Shared by the
-        check-only result builder and the success echo so the two agree.
+        reports the declared binding type for the REPL declaration echo. Only
+        called after checking; ``check_only`` retains a diverging initializer's
+        bottom type without evaluating it.
         """
         from agm.agl.syntax.nodes import (
             Binder,
@@ -1894,13 +1903,22 @@ class ReplSession:
             name for name, _, _, _ in owned_constructors(ENTRY_ID, self._session_type_paths)
         )
 
+    def close(self) -> None:
+        """Close the session's companion state, honoring the current ``debug`` setting."""
+        debug = self._current.get("debug")
+        self._extern_runtime_state.close_all(
+            debug=debug is not None and cast("BoolValue", debug).value
+        )
+
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, source, ids).
 
+        Closes the session's companion state first (see :meth:`close`).
         Restores the live engine settings (strict-json/timeout)
         to their values at session construction, undoing any effect-at-binding
         from ``std/config`` writes entered during the session.
         """
+        self.close()
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment

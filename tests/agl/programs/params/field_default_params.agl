@@ -1,0 +1,14 @@
+# A program parameter of a record type with constructor field defaults: the
+# host text supplying it may be an explicit call, an omitted-field call, the
+# bare all-defaulted spelling, or JSON lacking the defaulted keys -- all four
+# decode through the same compiled ``ParamDecoder``.
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+
+program def main(cfg: Config) -> unit =
+  print cfg.retry.count
+  print cfg.verbose

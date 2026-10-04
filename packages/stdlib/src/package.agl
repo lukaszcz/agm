@@ -1,4 +1,16 @@
 import std/path::path
 
+@doc("""
+  Resolve a literal resource path relative to the declaring package or module.
+
+  Uses the package root for packaged modules and the module directory otherwise. The target must
+  exist inside that directory; invalid paths fail before execution.
+""")
 builtin def resource(path: path) -> path
+
+@doc("""
+  Return the declaring package's root, or the module directory for an unpackaged module.
+
+  Requires a module file; inline sources and REPL entries have no resource directory.
+""")
 builtin def resource-dir() -> path

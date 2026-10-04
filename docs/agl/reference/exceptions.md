@@ -32,8 +32,14 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type; omitting `extends` means
 `extends Exception`. Constructor fields include the inherited fields first,
-followed by fields declared on the subtype. An exception that declares no fields
-of its own omits the body:
+followed by fields declared on the subtype. A field with `= <constant expr>`
+is optional, inherited defaults included: a `raise`/construction that omits
+it uses the default. Unlike a record or enum member, an exception is never
+constructible from a bare reference, even when every field has a default
+(see [Fieldless and all-defaulted constructor
+references](expressions.md#fieldless-and-all-defaulted-constructor-references)):
+exception construction always needs an explicit call, `raise Abort(...)`.
+An exception with no own fields omits the body:
 
 ```agl
 exception DeployError extends Exception
@@ -153,7 +159,7 @@ CastError(message = "cannot parse \"x\" as int", source-type = "text", target-ty
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
 rendering rules. Use `e as json` to obtain the JSON object of the fields of
 *e*'s runtime exception type (see [Nominal types
-`as json`](types.md#nominal-types-as-json--structural-encoding)); use `e as
+`as json`](types.md#nominal-types-as-json-structural-encoding)); use `e as
 text` to obtain the same AgL-form string. A field value with no JSON
 representation (such as a function or a cyclic value) makes the cast raise
 `CastError` (`as?` yields `None`); only the report of an uncaught exception
@@ -191,7 +197,7 @@ initializer exits, in which case it has bottom type. See
 try
   let review: Review = reviewer.ask(
     "Review %{artifact}",
-    on-parse-error = Retry(n = 2)
+    parse-error-retries = 2
   )
   print "reviewed: %{review}"
 catch AgentParseError as e =>
@@ -312,22 +318,36 @@ called on `Err`. It carries only the inherited `message` field.
 ### `FsError`
 
 `std/fs` raises `FsError` for a failed filesystem operation. In addition to
-`message`, it carries `path: text` and `operation: text`.
+`message`, it carries `path: text` and `operation: text`. `std/os::chdir` also
+raises it, with `path` the directory that could not be entered.
 
 `fs::list` and `fs::glob` also raise it when a directory entry or match is not
-valid Unicode, and `fs::temp-dir` when the host's temporary directory is;
-`path` is then the directory or pattern that was asked for, and the message
-names the offending entry with its undecodable bytes escaped. The whole call
-fails rather than the entry being skipped.
+valid Unicode, and `fs::temp-file` and `fs::temp-dir` when the host's
+temporary directory is; `path` is then the directory or pattern that was
+asked for, and the message names the offending entry with its undecodable
+bytes escaped. The whole call fails rather than the entry being skipped.
 
 ### `EncodingError`
 
-`std/path` (`absolute`, `relative`, `expand-user`, `home`) and `std/process`
-(`cwd`, `hostname`) raise `EncodingError` when the host returns text that is
-not valid Unicode.
+`std/path` (`absolute`, `relative`, `expand-user`, `home`) and `std/os`
+(`cwd`, `hostname`, `temp-dir`, `chdir`, `user`) raise `EncodingError` when the
+host returns text that is not valid Unicode.
 
 ```text
 raw: text   # the host text, with its undecodable bytes escaped
+```
+
+### `LaunchError`
+
+`std/os::edit` and `std/os::open` raise `LaunchError` when nothing could be
+launched (`exit-code = None`) or the launched process exited non-zero
+(`exit-code = Some(code)`). `command` is the editor (the `VISUAL`/`EDITOR`
+value, or the last fallback, `vi`, when none is found — also when a shell
+reports it as not found), `sh` if the shell itself is missing, or the opener.
+
+```text
+command: text
+exit-code: Option[int]
 ```
 
 ## Built-in exception catalog
@@ -337,7 +357,7 @@ Field lists below are in addition to the base `message`.
 ### `AgentCallError`
 
 An agent **transport** failure: the agent could not run. Not eligible for
-`on-parse-error` retries ([Agent calls](agent-calls.md)).
+`parse-error-retries` retries ([Agent calls](agent-calls.md)).
 
 ```text
 agent: Agent      # the selected backend
@@ -352,7 +372,7 @@ undecodable stderr tail in `metadata` is `""`.
 ### `AgentParseError`
 
 Structured agent output failed parsing or validation after all attempts
-allowed by the parse policy.
+allowed by `parse-error-retries`.
 
 ```text
 agent: Agent            # selected backend
@@ -371,11 +391,14 @@ A shell command failed to run, exited nonzero, timed out, or produced output
 that is not valid UTF-8, in the **parsed or unit form** of `exec` ([Shell
 execution](shell-execution.md)). The structured form raises it on spawn
 failure, timeout, or undecodable output, but represents a nonzero exit as
-`ExecResult` data.
+`ExecResult` data. A `sandbox`-prepared command that fails to prepare (for
+example, unresolvable sandbox settings) raises it in every form, exactly like
+a spawn failure — no shell process is ever started.
 
 ```text
 command: text     # the rendered command
-exit-code: int    # -1 for spawn failure or timeout without an exit status
+exit-code: int    # -1 for spawn failure, sandbox preparation failure, or a
+                  # timeout without an exit status
 stdout: text      # "" if stdout was captured but is not valid UTF-8
 stderr: text      # "" if stderr was captured but is not valid UTF-8
 timed-out: bool
@@ -383,7 +406,7 @@ timed-out: bool
 
 An undecodable stream's field is always `""`; the message names the stream
 and the byte offset of the first invalid byte. A decode failure in the
-parsed form is never retried by `on-parse-error`.
+parsed form is never retried by `parse-error-retries`.
 
 ### `SessionError`
 
@@ -469,7 +492,8 @@ operation: text    # the operator, conversion, or std/math function name,
 ### `TypeError`
 
 Raised by an engine-setting write the host cannot accept — a `timeout` whose
-text is not a duration ([Host environment](host-environment.md#engine-settings)).
+text is not a duration, or a blank `trace-file`
+([Host environment](host-environment.md#engine-settings)).
 
 ```text
 (base fields only)
@@ -616,8 +640,12 @@ pattern: text   # the pattern that failed to compile
 
 Raised when `int.pow` receives a negative exponent, `decimal.sqrt` receives a
 negative receiver, `decimal.pow` receives a negative exponent on a zero base,
-or a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
-loop entry. Carries only the base fields. It is catchable.
+a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
+loop entry, a negative `parse-error-retries` is written
+([Host environment](host-environment.md#engine-settings)), or a call's
+`parse-error-retries` option is negative (raised before any dispatch;
+[Agent calls](agent-calls.md#parse-error-retries)). Carries only the base
+fields. It is catchable.
 
 ```text
 (base fields only)
@@ -662,16 +690,17 @@ how equality and tracing treat one.
 | Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
+| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, non-positive range `for` step (`by k` with `k ≤ 0`), or negative `parse-error-retries` write or call option | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero, a decimal result outside the fixed context's range, or an `int`-to-`decimal` conversion outside that range | `ArithmeticError` |
-| Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
+| Engine-setting write the host rejects (unparseable `timeout`, blank `trace-file`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
 | `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape, or holds a number a `json` value cannot hold | `JsonParseError` |
 | `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
-| `std/path` or `std/process` host text that is not valid Unicode | `EncodingError` |
+| `std/path` or `std/os` host text that is not valid Unicode | `EncodingError` |
+| `std/os::edit`/`std/os::open` — nothing to launch, or the launched process exited non-zero | `LaunchError` |
 | `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
 | `std/toml` parsing — input is not well-formed TOML, or holds a number a `json` value cannot hold | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, or an integer is outside signed 64-bit range | `TomlRenderError` |

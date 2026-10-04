@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "cast_then_ask",
+      "params": { "mode": "cast_then_ask", "input": "{}" },
+      "agents": { "worker": ["{}"] },
+      "expect": { "stdout": "3\n3\n", "calls": { "worker": 1 } }
+    },
+    {
+      "name": "ask_then_cast",
+      "params": { "mode": "ask_then_cast", "input": "{}" },
+      "agents": { "worker": ["{}"] },
+      "expect": { "stdout": "3\n3\n", "calls": { "worker": 1 } }
+    }
+  ]
+}

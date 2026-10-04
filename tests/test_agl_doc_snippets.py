@@ -1,10 +1,9 @@
 """Static-compile guard for every AgL snippet in the reference docs.
 
 Every ```agl fenced block under ``docs/agl/reference/*.md`` is discovered and
-run through AgL's full static pipeline — the same passes ``agm exec --dry-run``
-performs (lex → parse → scope → typecheck → matchcompile → lower), with no
-agent ever executed. This keeps the documentation's examples from silently
-rotting as the language evolves.
+run through AgL's full static pipeline (lex → parse → scope → typecheck →
+matchcompile → lower), with no agent ever executed. This keeps the
+documentation's examples from silently rotting as the language evolves.
 
 A block's expectation is declared by an HTML comment on the line immediately
 preceding its opening fence:
@@ -22,7 +21,7 @@ added doc example is checked automatically unless it is explicitly opted out.
 "Statically compiles" means the pipeline reached a lowered program. A program
 that lowers but would fail only at run time — for example a required
 ``program def`` value parameter left unbound here — still counts as
-compiling, exactly as ``--dry-run`` treats it.
+compiling.
 """
 
 from __future__ import annotations
@@ -101,7 +100,7 @@ def test_reference_docs_do_not_skip_snippets() -> None:
 
 
 def _unused_agent(request: AgentRequest) -> str:
-    """A default agent that is never invoked (the pipeline stops at --dry-run).
+    """A default agent that static checking never invokes.
 
     Registering one mirrors ``agm exec``'s default runner floor: it satisfies
     each program's declared agents and the built-in ``ask`` so a block that
@@ -113,14 +112,16 @@ def _unused_agent(request: AgentRequest) -> str:
 def _statically_compiles(source: str) -> tuple[bool, list[str]]:
     """Return whether *source* reaches a lowered program, plus any diagnostics.
 
-    Runs the full static pipeline without executing anything, as
-    ``agm exec --dry-run`` does. ``check_prepared`` never resolves or
-    validates a program's arguments, so a required value parameter with no
-    default is silently accepted here and only lowering failures are reported.
+    Runs the full static pipeline without executing anything.
+    ``check_prepared`` never resolves or validates a program's arguments,
+    so a required value parameter with no default is silently accepted here
+    and only lowering failures are reported.
     """
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        driver = PipelineDriver(agent_dispatcher=_unused_agent)
+        driver = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=_unused_agent, get_sandbox_context=None
+        )
         prepared = driver.prepare_program(source)
         result = driver.check_prepared(prepared)
     diagnostics = [diag.message for diag in result.diagnostics]

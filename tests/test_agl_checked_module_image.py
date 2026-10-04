@@ -101,7 +101,7 @@ end Region
 
 def region-example() -> int = Region::scoped-value(Region::Marker(value = 5))
 
-def region-exec-example() -> text = exec("ls", on-parse-error = Abort())
+def region-exec-example() -> text = exec("ls", parse-error-retries = 0)
 """
 
 _EXTERN_SRC = """\

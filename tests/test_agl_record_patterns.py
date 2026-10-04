@@ -402,3 +402,19 @@ def test_a_pattern_name_referenced_where_its_outside_reading_is_ambiguous_is_rej
     assert error.span.start_offset == entry.index("Red()")
     assert entry[error.span.start_offset : error.span.end_offset] == "Red"
     assert len(error.origins) == 2
+
+
+def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
+    """``::AgentCommand`` names the prelude variant the current module can see."""
+    checked = accept(
+        'let agent: Agent = AgentCommand(command = "x")\n'
+        'case agent of | ::AgentCommand(command) => command | _ => ""\n'
+    )
+
+    case = checked.resolved.program.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
+    assert selected is not None
+    assert selected.owner_name == "AgentCommand"

@@ -1,0 +1,5 @@
+# Two distinct members of one enum never widen to each other, so comparing
+# them is still a static error.
+program def main() -> unit =
+  let r = (Some(1) == None)
+  r

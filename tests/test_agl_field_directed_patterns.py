@@ -77,7 +77,11 @@ def test_lowering_uses_selected_constructor_slot_for_calls() -> None:
 def test_nested_names_follow_the_matched_field() -> None:
     _check(
         "enum Flag\n  | on\n  | off\n"
-        "enum Packet\n  | packet(first: int, second: int, flag: Flag, label: text)\n"
+        "enum Packet\n  | packet\n"
+        "      first: int\n"
+        "      second: int\n"
+        "      flag: Flag\n"
+        "      label: text\n"
         'let value = packet(1, 2, on(), "ok")\n'
         "case value of | packet(first, second, flag = on, label = label as renamed) => renamed"
     )
@@ -183,19 +187,21 @@ def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_p
     )
     check_program(resolve_program(graph), HostCapabilities())
     _check(
-        "enum Holder\n  | holder(policy: ParsePolicy)\n"
-        "let item = holder(ParsePolicy::Retry(n = 1))\n"
-        "case item of | holder(ParsePolicy::Retry(n)) => n"
+        "enum Holder\n  | holder(agent: Agent)\n"
+        'let item = holder(AgentCommand(command = "x"))\n'
+        "case item of | holder(AgentCommand(command)) => command"
     )
 
 
 def test_named_only_pattern_shorthand_uses_the_same_field_rule() -> None:
     _check(
-        "enum Packet\n  | packet(@arg-named value: int)\n"
+        "enum Packet\n  | packet\n"
+        "      @arg-named value: int\n"
         "let item = packet(value = 1)\ncase item of | packet(value) => value"
     )
     _reject_type(
         "enum Flag\n  | on\n"
-        "enum Packet\n  | packet(@arg-named on: Flag)\n"
+        "enum Packet\n  | packet\n"
+        "      @arg-named on: Flag\n"
         "let item = packet(on = on())\ncase item of | packet(on) => 1"
     )

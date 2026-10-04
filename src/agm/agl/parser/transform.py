@@ -737,7 +737,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+        # Grammar: _field_block
         return tuple(a for a in args if isinstance(a, syntax.Param))
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
@@ -747,14 +747,14 @@ class AstBuilder(Transformer):
     record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        # Grammar: attributes? VAR? field_name COLON type_expr
+        # Grammar: attributes? VAR? field_name COLON type_expr (EQ or_expr)?
         rest = _without_attributes(args)
         name_tok = _find_name_token(rest)
-        type_expr = _find_type_expr(rest)
+        type_expr, default = _extract_ann_and_optional_expr(rest)
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
-            default=None,
+            default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             mutable=any(isinstance(arg, Token) and arg.type == "VAR" for arg in rest),
@@ -841,15 +841,15 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
         )
 
-    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: LPAR field_list? RPAR
-        return next((cast(tuple[syntax.Param, ...], a) for a in args if _is_field_tuple(a)), ())
+    variant_paren_payload = record_paren_body
+    variant_indent_payload = record_indent_body
 
     def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: field_inline (COMMA field_inline)* COMMA?
         return tuple(a for a in args if isinstance(a, syntax.Param))
 
-    # Grammar: attributes? VAR? field_name COLON type_expr — same shape as ``field_def``.
+    # Grammar: attributes? VAR? field_name COLON type_expr (EQ or_expr)? — same shape as
+    # ``field_def``.
     field_inline = field_def
 
     # ------------------------------------------------------------------

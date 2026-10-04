@@ -237,7 +237,7 @@ class TestDiscoverProgramsForTarget:
         source.write_text("program def main() -> unit = ()\n", encoding="utf-8")
 
         programs, referenced = discover_programs_for_target(
-            file=str(source), command=None, module_paths=None, no_stdlib=True
+            file=str(source), code=None, module_paths=None, no_stdlib=True
         )
 
         assert tuple(program.name for program in programs) == ("main",)
@@ -259,7 +259,7 @@ class TestDiscoverProgramsForTarget:
         monkeypatch.chdir(tmp_path)
 
         assert discover_programs_for_target(
-            file="World", command=None, module_paths=None, no_stdlib=True
+            file="World", code=None, module_paths=None, no_stdlib=True
         ) == ((), None)
 
         captured = capsys.readouterr()

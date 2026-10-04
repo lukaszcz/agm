@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -153,13 +154,21 @@ def patch_for_proj_dir(settings: JsonDict, proj_dir: Path) -> JsonDict:
 
 
 def sandbox_settings_path(
-    settings_dir: Path, command_name: str, alias_command_name: str | None = None
+    settings_dir: Path, command_name: str | None, alias_command_name: str | None = None
 ) -> Path:
+    """Return the settings file for *command_name* (or its alias) in *settings_dir*.
+
+    *command_name* and *alias_command_name* must already be normalized sandbox
+    profile names (`agm.sandbox.profile.profile_name`); this module never
+    derives one itself, so it stays independent of the sandbox domain.
+    ``command_name=None`` (an unknown/unsplittable command) skips the
+    per-name probe entirely, leaving only the unqualified ``default.json``.
+    """
+
     for candidate_name in [command_name, alias_command_name]:
         if candidate_name is None:
             continue
-        executable_name = Path(candidate_name).name or candidate_name
-        command_settings = settings_dir / f"{executable_name}.json"
+        command_settings = settings_dir / f"{candidate_name}.json"
         if command_settings.is_file():
             return command_settings
     return settings_dir / "default.json"
@@ -170,11 +179,20 @@ def sandbox_settings_candidates(
     cwd: Path,
     home: Path,
     proj_dir: Path | None,
-    command_name: str,
+    command_name: str | None,
     alias_command_name: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> list[Path]:
+    """Return the settings paths a request would consider, in order.
+
+    *command_name* and *alias_command_name* must already be normalized
+    sandbox profile names; see `sandbox_settings_path`.
+    """
+
     candidates = [
-        sandbox_settings_path(agm_home_dir(home=home) / "sandbox", command_name, alias_command_name)
+        sandbox_settings_path(
+            agm_home_dir(home=home, env=env) / "sandbox", command_name, alias_command_name
+        )
     ]
     if proj_dir is not None:
         candidates.append(
@@ -211,8 +229,13 @@ def _first_missing_component(target: Path, cwd: Path) -> Path | None:
     return None
 
 
-def track_bwrap_artifacts(settings_path: Path, cwd: Path) -> list[Path]:
-    data = load_settings(settings_path)
+def track_bwrap_artifacts(data: JsonDict, cwd: Path) -> list[Path]:
+    """Return the not-yet-existing paths *data*'s ``filesystem.denyWrite`` policy implies.
+
+    Takes already-loaded settings *data* rather than a path, so a caller that
+    has already parsed the settings file (merging, patching) never re-reads
+    or re-parses it.
+    """
 
     mandatory_deny_paths = [
         ".gitconfig",

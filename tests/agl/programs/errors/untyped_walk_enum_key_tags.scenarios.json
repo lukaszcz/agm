@@ -11,7 +11,7 @@
               {"key": {"$case": "bleu"}, "value": {"$case": "None"}},
               {"key": {"$case": "gr"}, "value": {"$case": "None"}}
             ],
-            "c": {"$case": "bleu"}
+            "c": "bleu"
           },
           "message_contains": [
             "boom"

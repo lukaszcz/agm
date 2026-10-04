@@ -127,7 +127,7 @@ from agm.agl.syntax.types import (
 )
 from agm.agl.syntax.visitor import walk
 from agm.core.process import CapturedOutput, ProcessCaptureResult
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -878,6 +878,82 @@ class TestDeclarations:
         assert en.members[0].name == "Empty"
         assert en.members[0].fields == ()
 
+    def test_enum_member_field_block(self) -> None:
+        en = first(
+            parse(
+                "enum Shape\n"
+                "  | Point\n"
+                "  | Circle\n"
+                "      radius: int\n"
+                "  | Rect\n"
+                "      var width: int\n"
+                "      height: int = 1\n"
+                "  | Label(caption: text)\n"
+                "let after = 1"
+            )
+        )
+        assert isinstance(en, EnumDef)
+        assert [member.name for member in en.members] == ["Point", "Circle", "Rect", "Label"]
+        assert [[field.name for field in member.fields] for member in en.members] == [
+            [],
+            ["radius"],
+            ["width", "height"],
+            ["caption"],
+        ]
+        rect = en.members[2]
+        assert tuple(field.mutable for field in rect.fields) == (True, False)
+        assert rect.fields[0].default is None
+        assert rect.fields[1].default is not None
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "enum E =\n  A\n    x: int\n  | B\n    y: text",
+            "enum E\n  | A\n      x: int\n  | B\n      y: text\n",
+            "enum E | A\n  x: int\n| B\n  y: text",
+            "scope S\n  enum E\n    | A\n        x: int\n    | B\n        y: text\nend S",
+        ],
+        ids=("indented-body", "flat", "inline-first-member", "scope-region"),
+    )
+    def test_enum_member_field_block_matches_the_parenthesized_form(self, source: str) -> None:
+        en = first(parse(source))
+        if isinstance(en, ScopeRegion):
+            en = en.items[0]
+        assert isinstance(en, EnumDef)
+        assert [
+            (member.name, [field.name for field in member.fields]) for member in en.members
+        ] == [
+            ("A", ["x"]),
+            ("B", ["y"]),
+        ]
+
+    def test_enum_member_field_block_attributes(self) -> None:
+        en = first(
+            parse(
+                "enum Opt\n"
+                '  | @doc("m") Some\n'
+                '      @doc("v")\n'
+                "      value: int\n"
+                "      @arg-named tag: text\n"
+                "      plain: bool"
+            )
+        )
+        assert isinstance(en, EnumDef)
+        assert attribute_names(en.members[0]) == ["doc"]
+        assert [attribute_names(field) for field in en.members[0].fields] == [
+            ["doc"],
+            ["arg-named"],
+            [],
+        ]
+
+    def test_enum_member_reference_rejects_a_field_block(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("enum RR\n  | ::R1\n      x: int")
+
+    def test_enum_member_field_block_takes_no_commas(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("enum E\n  | A\n      x: int,\n      y: int")
+
     def test_enum_member_references(self) -> None:
         en = first(
             parse(
@@ -947,6 +1023,46 @@ class TestDeclarations:
         assert exc.name == "MultiErr"
         assert len(exc.fields) == 2
         assert [f.name for f in exc.fields] == ["code", "reason"]
+
+    def test_record_def_field_with_default_inline(self) -> None:
+        rec = first(parse("record Point(x: int, y: int = 0)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].default is None
+        assert isinstance(rec.fields[1].default, IntLit)
+        assert rec.fields[1].default.value == 0
+
+    def test_record_def_field_with_default_indented(self) -> None:
+        rec = first(parse("record Point\n  x: int\n  y: int = 0"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].default is None
+        assert isinstance(rec.fields[1].default, IntLit)
+        assert rec.fields[1].default.value == 0
+
+    def test_record_def_field_with_default_and_mutable_marker(self) -> None:
+        rec = first(parse("record Point(var x: int, y: int = 0)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].mutable is True
+        assert rec.fields[1].mutable is False
+        assert isinstance(rec.fields[1].default, IntLit)
+
+    def test_record_def_field_with_default_and_attribute(self) -> None:
+        rec = first(parse('record Point(@doc("x coord") x: int, y: int = 0)'))
+        assert isinstance(rec, RecordDef)
+        assert attribute_names(rec.fields[0]) == ["doc"]
+        assert isinstance(rec.fields[1].default, IntLit)
+
+    def test_enum_member_field_with_default(self) -> None:
+        en = first(parse('enum Result | Ok(value: int, label: text = "ok")'))
+        assert isinstance(en, EnumDef)
+        member = en.members[0]
+        assert member.fields[0].default is None
+        assert member.fields[1].default is not None
+
+    def test_exception_field_with_default(self) -> None:
+        exc = first(parse('exception MyErr(msg: text = "failed", code: int)'))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].default is not None
+        assert exc.fields[1].default is None
 
     def test_program_keyword_requires_a_definition(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -5111,7 +5227,9 @@ class TestVerbatimTextLiteral:
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_command(PipelineDriver(), "exec $ true")
+            result = run_inline_code(
+                PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None), "exec $ true"
+            )
 
         assert result.ok
 

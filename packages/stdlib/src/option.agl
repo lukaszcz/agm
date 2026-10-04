@@ -7,58 +7,74 @@ enum Option[T] =
 
 exception UnwrapError extends Exception
 
+@doc("Apply the function to a present value, preserving other variants.")
 def Option::map[T, U](self, f: (T) -> U) -> Option[U] =
   case self of
     | None => None
     | Some(value) => Some(f(value))
 
+@doc("Apply the function to a present value and return its result, preserving other variants.")
 def Option::and-then[T, U](self, f: (T) -> Option[U]) -> Option[U] =
   case self of
     | None => None
     | Some(value) => f(value)
 
+@doc("Keep a present value only when it satisfies the predicate, preserving other variants.")
 def Option::select[T](self, p: (T) -> bool) -> Option[T] =
   case self of
     | None => None
     | Some(value) => (if p(value) => self else => None)
 
+@doc("Return `other` when this value is `None`, otherwise return this value.")
 def Option::or[T](self, other: Option[T]) -> Option[T] =
   case self of
     | None => other
     | Some(_) => self
 
+@doc("Call the fallback when this value is `None`, otherwise return this value.")
 def Option::or-else[T](self, f: () -> Option[T]) -> Option[T] =
   case self of
     | None => f()
     | Some(_) => self
 
-def Option::unwrap-or[T](self, x: T) -> T =
+@doc("Return the present value, or `other` when this value is `None`.")
+def Option::unwrap-or[T](self, other: T) -> T =
   case self of
-    | None => x
+    | None => other
     | Some(value) => value
 
+@doc("Return the present value, or call the fallback when this value is `None`.")
 def Option::unwrap-or-else[T](self, f: () -> T) -> T =
   case self of
     | None => f()
     | Some(value) => value
 
+@doc("""
+  Return the present value.
+
+  Raises `UnwrapError` when this value is `None`.
+""")
 def Option::unwrap[T](self) -> T =
   case self of
     | None => raise UnwrapError(message = "Option has no value")
     | Some(value) => value
 
+@doc("Check if this value is `Some`.")
 def Option::is-some[T](self) -> bool =
   case self of
     | None => false
     | Some(_) => true
 
+@doc("Check if this value is `None`.")
 def Option::is-none[T](self) -> bool = not self.is-some()
 
+@doc("Call the function only when a value is present.")
 def Option::each[T](self, f: (T) -> unit) -> unit =
   case self of
     | None => ()
     | Some(value) => f(value)
 
+@doc("Convert a present value to `Ok`, or `None` to `Err(error)`.")
 def Option::to-result[T, E](self, error: E) -> Result[T, E] =
   case self of
     | None => Err(error)

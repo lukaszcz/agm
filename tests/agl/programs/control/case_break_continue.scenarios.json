@@ -7,9 +7,9 @@
       },
       "agents": {
         "src": [
-          "{\"$case\": \"Count\"}",
-          "{\"$case\": \"Count\"}",
-          "{\"$case\": \"Stop\"}"
+          "\"Count\"",
+          "\"Count\"",
+          "\"Stop\""
         ]
       },
       "expect": {
@@ -26,8 +26,8 @@
       },
       "agents": {
         "src": [
-          "{\"$case\": \"Skip\"}",
-          "{\"$case\": \"Count\"}"
+          "\"Skip\"",
+          "\"Count\""
         ]
       },
       "expect": {
@@ -44,9 +44,9 @@
       },
       "agents": {
         "src": [
-          "{\"$case\": \"Count\"}",
-          "{\"$case\": \"Count\"}",
-          "{\"$case\": \"Count\"}"
+          "\"Count\"",
+          "\"Count\"",
+          "\"Count\""
         ]
       },
       "expect": {

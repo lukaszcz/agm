@@ -34,6 +34,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.convert import (
+    DefaultResolver,
     _clean_validation_message,
     decode_value,
     validator_for_schema,
@@ -68,7 +69,13 @@ class AglCastConversion(Exception):
         self.raw = raw
 
 
-def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescriptors) -> Value:
+def run_recipe(
+    recipe: ConversionRecipe,
+    value: Value,
+    descriptors: ValueDescriptors,
+    *,
+    default_resolver: DefaultResolver | None = None,
+) -> Value:
     """Execute *recipe* against *value*; raise ``AglCastConversion`` on failure.
 
     An ``as json`` encode instead propagates the serializer's own
@@ -98,7 +105,9 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
             match decode_strategy:
                 case ConversionStrategy.NARROW_DECIMAL_TO_INT:
                     value = cast(DecimalValue, value)
-                    return _decode_from_json(recipe, value.value, value, descriptors)
+                    return _decode_from_json(
+                        recipe, value.value, value, descriptors, default_resolver
+                    )
                 case ConversionStrategy.PARSE_TEXT_THEN_DECODE:
                     value = cast(TextValue, value)
                     try:
@@ -115,10 +124,12 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
                             target_label=recipe.target_label,
                             raw=render_value(value, descriptors),
                         ) from exc
-                    return _decode_from_json(recipe, parsed, value, descriptors)
+                    return _decode_from_json(recipe, parsed, value, descriptors, default_resolver)
                 case ConversionStrategy.DECODE_JSON:
                     value = cast(JsonValue, value)
-                    return _decode_from_json(recipe, value.raw, value, descriptors)
+                    return _decode_from_json(
+                        recipe, value.raw, value, descriptors, default_resolver
+                    )
                 case _ as unreachable_decode:  # pragma: no cover
                     assert_never(unreachable_decode)
         case _ as unreachable:  # pragma: no cover
@@ -126,7 +137,11 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
 
 
 def _decode_from_json(
-    recipe: DecodeConversionRecipe, obj: object, value: Value, descriptors: ValueDescriptors
+    recipe: DecodeConversionRecipe,
+    obj: object,
+    value: Value,
+    descriptors: ValueDescriptors,
+    default_resolver: DefaultResolver | None,
 ) -> Value:
     """JSON-Schema validate → decode."""
     errors = list(validator_for_schema(recipe.json_schema).iter_errors(obj))
@@ -140,7 +155,9 @@ def _decode_from_json(
         )
 
     try:
-        return decode_value(recipe.decode, obj, dict(recipe.defs))
+        return decode_value(
+            recipe.decode, obj, dict(recipe.defs), default_resolver=default_resolver
+        )
     except ValueError as exc:
         raise AglCastConversion(
             f"Value conversion failed: {exc}",

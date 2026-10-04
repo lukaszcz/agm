@@ -79,7 +79,8 @@ def run(args: DepSwitchArgs) -> None:
         raise SystemExit(1)
 
     mkdir(target_dir.parent, parents=True, exist_ok=True)
-    git_helpers.fetch(repo_path)
+    if not args.no_fetch:
+        git_helpers.fetch(repo_path)
     if args.create_branch:
         default_branch = git_helpers.default_branch_from_repo(repo_path)
         git_helpers.worktree_add(

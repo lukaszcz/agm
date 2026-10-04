@@ -22,7 +22,7 @@ from agm.cli_support.program_options import (
     build_program_command,
 )
 from agm.core.parse import parse_timeout
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import NONE_FIELD, prepare_inline_code, run_inline_code, some_field
 from tests._jev_helpers import (
     JEV_MODULE,
     SYSONE_ROOT,
@@ -116,14 +116,19 @@ def probe(state: json) -> unit =
   let keyed-score = jev::ask-score::[Level]("Level?", state, api-key = None)
   ()
 """
-    result = PipelineDriver().check_prepared(prepare_inline_command(source, roots=jev_roots()))
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).check_prepared(
+        prepare_inline_code(source, roots=jev_roots())
+    )
 
     assert result.ok, result.diagnostics
 
 
 def test_registry_returns_the_loaded_jev_companion() -> None:
     registry = ExternRegistry()
-    companion = load_jev_companion(PipelineDriver(extern_registry=registry), registry)
+    companion = load_jev_companion(
+        PipelineDriver(resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None),
+        registry,
+    )
 
     assert callable(companion.open_client)
     assert callable(companion.system_one)
@@ -238,7 +243,9 @@ def test_scripted_timeout_reports_the_request_timeout(monkeypatch: pytest.Monkey
 
 def test_transport_installs_into_a_callers_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = ExternRegistry()
-    driver = PipelineDriver(extern_registry=registry)
+    driver = PipelineDriver(
+        resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None
+    )
 
     transport = install_jev_transport(monkeypatch, driver, registry, [_NOUL_EXCHANGE])
     companion = registry.loaded_companion(JEV_MODULE)
@@ -326,7 +333,7 @@ def _run_jev(
     """Run *body* as ``main``'s body after *declarations* against scripted *outcomes*,
     retries off by default."""
     mount = mount_jev(monkeypatch, outcomes)
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver,
         _program(body, declarations),
         roots=jev_roots(),
@@ -334,14 +341,6 @@ def _run_jev(
         **run_kwargs,
     )
     return result, mount
-
-
-_NONE = {"$case": "None"}
-
-
-def _some(value: object) -> dict[str, object]:
-    """A raised exception's ``Option`` field holding *value*, as ``RunError.fields`` shows it."""
-    return {"$case": "Some", "value": value}
 
 
 def _printed(capsys: pytest.CaptureFixture[str]) -> list[str]:
@@ -525,7 +524,7 @@ def test_a_missing_or_mistyped_answer_raises_a_traced_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == "answers.question"
-    assert result.error.fields["request-id"] == _some("req-3")
+    assert result.error.fields["request-id"] == some_field("req-3")
     mount.transport.assert_complete()
     failures = [r for r in _trace_records(trace_path) if r["kind"] == "jev_failure"]
     assert [(r["error_type"], r["status"], r["request_id"]) for r in failures] == [
@@ -624,7 +623,7 @@ def test_none_settings_leave_the_sdk_environment_defaults(monkeypatch: pytest.Mo
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
     )
 
-    result = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    result = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
 
     assert result.ok, result.error
     mount.transport.assert_complete()
@@ -632,7 +631,7 @@ def test_none_settings_leave_the_sdk_environment_defaults(monkeypatch: pytest.Mo
 
 def _cli_module_params(driver: PipelineDriver, source: str, tokens: list[str]) -> dict[str, object]:
     """Module parameter values ``agm exec`` would parse from *tokens* for *source*'s program."""
-    discovery = driver.discover_programs(prepare_inline_command(source, roots=jev_roots()))
+    discovery = driver.discover_programs(prepare_inline_code(source, roots=jev_roots()))
     (program,) = [program for program in discovery.programs if program.module.is_entry]
     params = tuple(discovery.params_for(program))
     command = build_program_command(program, EXEC_RESERVED_FLAGS, params)
@@ -660,7 +659,7 @@ def test_the_api_key_option_falls_back_to_its_environment_variable(
     # Only the parsed setting may carry the key now, not the SDK's own lookup.
     monkeypatch.delenv("TYPESAFE_API_KEY")
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, source, roots=jev_roots(), module_params={**_NO_RETRIES, **module_params}
     )
 
@@ -772,7 +771,7 @@ let _ = jev::system-one(state, billing, base-url = Some("https://api.typesafe.ai
     log = _log_clients(monkeypatch, mount.companion)
     settings = mount.companion.Settings
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, _program(body), roots=jev_roots(), module_params=_NO_RETRIES
     )
 
@@ -796,8 +795,8 @@ def test_pooled_clients_close_when_the_run_fails_and_each_run_opens_its_own(
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
     )
 
-    first = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
-    second = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    first = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    second = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
 
     assert first.ok, first.error
     assert second.error is not None
@@ -821,8 +820,13 @@ _ERROR_BODY = {"error": "scripted failure detail"}
         (400, {}, "JevRequestError", {}),
         (404, {}, "JevRequestError", {}),
         (422, {}, "JevRequestError", {}),
-        (429, {"retry-after-ms": "1500"}, "JevRateLimitError", {"retry-after-ms": _some(1500)}),
-        (429, {}, "JevRateLimitError", {"retry-after-ms": _NONE}),
+        (
+            429,
+            {"retry-after-ms": "1500"},
+            "JevRateLimitError",
+            {"retry-after-ms": some_field(1500)},
+        ),
+        (429, {}, "JevRateLimitError", {"retry-after-ms": NONE_FIELD}),
         (500, {}, "JevServerError", {}),
         (529, {}, "JevServerError", {}),
         (409, {}, "JevApiError", {}),
@@ -846,7 +850,7 @@ def test_an_unsuccessful_response_raises_its_jev_api_error(
     assert result.error is not None
     assert result.error.type_name == type_name
     assert result.error.fields["status"] == status
-    assert result.error.fields["request-id"] == _some("req-9")
+    assert result.error.fields["request-id"] == some_field("req-9")
     assert result.error.fields["body"] == _ERROR_BODY
     assert "scripted failure detail" in str(result.error.fields["message"])
     for name, value in fields.items():
@@ -880,7 +884,7 @@ def test_a_request_without_a_response_raises_its_jev_error(
 
     assert result.error is not None
     assert result.error.type_name == type_name
-    assert result.error.fields["request-id"] == _NONE
+    assert result.error.fields["request-id"] == NONE_FIELD
     assert result.error.fields[field]
     mount.transport.assert_complete()
 
@@ -915,7 +919,7 @@ def test_a_structurally_invalid_success_body_raises_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == field_path
-    assert result.error.fields["request-id"] == _some("req-4")
+    assert result.error.fields["request-id"] == some_field("req-4")
     mount.transport.assert_complete()
 
 
@@ -935,13 +939,13 @@ def test_an_sdk_error_of_no_specific_class_raises_plain_jev_error(
     if api_key_env is None:
         monkeypatch.delenv("TYPESAFE_API_KEY")
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, _program(body), roots=jev_roots(), module_params=_NO_RETRIES
     )
 
     assert result.error is not None
     assert result.error.type_name == "JevError"
-    assert result.error.fields["request-id"] == _NONE
+    assert result.error.fields["request-id"] == NONE_FIELD
     assert mount.transport.requests == []
 
 
@@ -1548,5 +1552,5 @@ def test_an_answer_outside_the_target_raises_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == field_path
-    assert result.error.fields["request-id"] == _some("req-5")
+    assert result.error.fields["request-id"] == some_field("req-5")
     mount.transport.assert_complete()

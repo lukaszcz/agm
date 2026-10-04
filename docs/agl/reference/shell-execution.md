@@ -40,17 +40,49 @@ is a static error.
 exec(
   command: text,
   env: Environ = std/env::environ,
-  cwd: Option[text] = Option[text]::None,
+  cwd: Option[path] = Option[path]::None,
   timeout: Option[text] = std/config::timeout,
+  sandbox: Option[Sandbox] = Option[Sandbox]::None,
 ) -> ExecResult
 ```
 
 `env` is the complete environment given to the shell; it replaces rather than
-merges with the AGM process environment. The default is the startup ambient
-`std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
-needs an explicit overlay. `cwd` is an optional working directory and `timeout`
-is an optional idle timeout duration. The single-argument sugar below supplies
-only the command, so it uses all three defaults.
+merges with the AGM process environment. The default is the current ambient
+`std/env::environ`, which carries `PWD`/`OLDPWD` as `std/os::chdir` updates
+them. Use `environ.extended(overrides)` when a command needs an explicit
+overlay. `cwd` is an optional working directory the command runs in; `None`
+(the default) means the process working directory — the same directory
+`std/os::chdir` changes — and it never affects which sandbox configuration
+applies (see `sandbox` below). `timeout` is an optional idle timeout
+duration. The single-argument sugar below supplies only the command, so it
+uses all four defaults.
+
+`sandbox` selects the command's sandboxing, a `Sandbox` record
+([Types](types.md#sandbox)) naming resource limits, or `None` (the default)
+for an unsandboxed run:
+
+<!-- agl-check: fragment -->
+```agl
+let r: text = exec("make test", sandbox = Some(Sandbox()))
+let r2: text = exec("make test", sandbox = Some(Sandbox(memory = Some("8G"))))
+```
+
+When present, the wrapping process resolves and applies the record's
+resource limits, selecting settings by the command's **first shell word** —
+`"make test"` selects settings named for `make`, never for `sh`, the shell
+`exec` itself runs the command under. A command whose first word cannot be
+determined (for example, an empty or unsplittable command) selects the
+unqualified default settings. Sandbox configuration -- including an explicit
+but relative `settings` path -- always resolves from the host's own
+location, never from `cwd`: a command run against a directory supplied at
+the call site cannot supply the settings that confine it. A sandbox
+preparation failure raises `ExecError` exactly like a spawn failure.
+
+`Sandbox`'s `memory` and `swap` fields ([Types](types.md#sandbox)) are each
+`Optional[text]` with three states: `Default` (the field's own default)
+resolves against configuration — the first-shell-word-keyed `[run.<name>]`
+limit, else the general `[run]` limit, else a built-in floor — `None` means
+no limit, and `Some("8G")` applies that limit verbatim.
 
 ## Single-argument sugar
 
@@ -65,7 +97,7 @@ program def main() -> unit =
 With named arguments, parentheses are required.
 
 A `$` literal
-([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+([Strings and interpolation](strings-and-interpolation.md#the-literal)) may
 supply the same single argument, inline or as a block:
 
 ```agl
@@ -120,7 +152,7 @@ program def main() -> unit =
 it returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout;
 and a `unit` target discards successful output. Use `exec(...)` instead when
 the command needs named parsing options (`format`, `strict-json`, or
-`on-parse-error`).
+`parse-error-retries`).
 
 ## Interpolation in shell templates
 
@@ -174,7 +206,7 @@ not produce an `ExecResult` with `timed-out = true`.
 ### Parsed form — target is any non-`ExecResult` or `unit` type
 
 When the target type is neither `ExecResult` nor `unit`, `exec` parses stdout
-into that type (honouring `format`, `strict-json`, and `on-parse-error`) and
+into that type (honouring `format`, `strict-json`, and `parse-error-retries`) and
 **raises `ExecError` on a nonzero exit**:
 
 <!-- agl-check: fragment -->
@@ -182,7 +214,7 @@ into that type (honouring `format`, `strict-json`, and `on-parse-error`) and
 let out: text = exec "cat %{path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
-  on-parse-error = Retry(n = 1)
+  parse-error-retries = 1
 )
 ```
 
@@ -201,14 +233,15 @@ program def main() -> unit =
   let completed: unit = exec "make lint"
 ```
 
-Because no output is parsed, `format`, `strict-json`, and `on-parse-error` are
+Because no output is parsed, `format`, `strict-json`, and `parse-error-retries` are
 invalid for a `unit` target.
 
 ## Execution semantics
 
-1. The rendered command runs via the host shell (`sh -c` semantics),
-   un-sandboxed, with the user's privileges, using its `env`, `cwd`, and
-   `timeout` arguments.
+1. The rendered command runs via the host shell (`sh -c` semantics), with
+   the user's privileges, using its `env`, `cwd`, and `timeout` arguments.
+   With `sandbox = None` (the default) it runs unsandboxed; with a `Sandbox`
+   record it runs wrapped by the sandbox runtime instead.
 2. Standard output and standard error are captured.
 3. In the **parsed form**, on success (exit status 0), trailing newlines are
    stripped from stdout — as in `$(…)` command substitution — and the result
@@ -223,7 +256,7 @@ invalid for a `unit` target.
 | Form / outcome | Streams decoded | On undecodable bytes |
 |-----------------|------------------|-----------------------|
 | Structured, any exit | stdout and stderr | raises `ExecError`; a decodable stream keeps its text, the undecodable one is `""` |
-| Parsed or text, exit 0 | stdout | raises `ExecError` immediately — never an `on-parse-error` retry, since the bytes did not fail to parse; they cannot be text at all |
+| Parsed or text, exit 0 | stdout | raises `ExecError` immediately — never a `parse-error-retries` retry, since the bytes did not fail to parse; they cannot be text at all |
 | Parsed/text/unit, nonzero exit | stdout and stderr, for the `ExecError` fields | the nonzero-exit `ExecError` is raised as usual; each undecodable field is `""` |
 | Unit, exit 0 | none — stdout is discarded | no error |
 | Timeout (any form) | stdout and stderr, both truncated | the timeout `ExecError` is raised; an incomplete **trailing** UTF-8 sequence is dropped rather than treated as invalid (`timed-out = true` already marks the output incomplete); an invalid byte elsewhere still fails |
@@ -249,16 +282,19 @@ named parameters as `ask`:
 
 - `format` — codec name (a `text` value); normally auto-selected.
 - `strict-json` — `bool`; opts the JSON codec into strict parsing.
-- `on-parse-error` — `ParsePolicy`; controls retry behavior on parse
-  failures in the parsed form. In the structured and unit forms, where no
+- `parse-error-retries` — `int`; the number of retries after a parse failure
+  in the parsed form. It defaults to `0` and, unlike `ask`'s, never reads
+  `std/config::parse-error-retries`. A negative count raises `RangeError`
+  before the command is spawned. In the structured and unit forms, where no
   stdout parsing happens, passing this parameter is a static error.
 
 ## Retries
 
-**Retries re-run the command.** Unlike an `ask` retry — which sends
-corrective feedback in the same conversation — an `exec` retry executes the
-command again with the same evaluated spawn parameters; each invocation is
-traced separately. If every attempt fails to parse, `ExecError` is raised.
+**Retries re-run the command.** Unlike an `ask` retry, which sends
+corrective feedback ([Parse retries](agent-calls.md#parse-retries)), an `exec`
+retry executes the command again with the same evaluated spawn parameters;
+each invocation is traced separately. If every attempt fails to parse,
+`ExecError` is raised.
 
 ## Exceptions
 

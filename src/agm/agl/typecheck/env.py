@@ -345,41 +345,6 @@ class OwnerMember(NamedTuple):
 
 @_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CallSiteRecord(_Record):
-    """Static call-site descriptor recorded by the checker for one agent/exec call.
-
-    Captured in ``_check_agent_call`` — the one place where the call's resolved
-    callee kind, parse policy, and source span are all already in hand — so the
-    ``--dry-run`` inventory is derived from the checker's work
-    rather than from a second AST walk.
-
-    ``node_id``
-        The ``AgentCall`` node id; keys into ``contract_specs`` and the host's
-        materialized-contract table when the call has an output contract.
-    ``callee``
-        The agent or executor name (``"ask"``, ``"exec"``, or a registered
-        agent name).
-    ``target_type`` / ``codec_name``
-        Inventory data for the call. ``codec_name`` is ``"none"`` for a
-        ``unit`` target, which has no output contract.
-    ``parse_policy``
-        ``"abort"`` / ``"retry[N]"`` / ``"default"`` (when the call set no
-        explicit ``on_parse_error`` policy).
-    ``line`` / ``col``
-        1-based source line and column of the call site.
-    """
-
-    node_id: int
-    callee: str
-    target_type: Type
-    codec_name: str
-    parse_policy: str
-    line: int
-    col: int
-
-
-@_pickles_by_name
-@dataclass(frozen=True, slots=True)
 class OutputContractSpec(_Record):
     """Statically derived output contract for one ``ask``/``exec`` call, or for one
     target parameter of a type-directed extern occurrence (always strict ``json``).
@@ -528,11 +493,6 @@ class CheckedModule(_Record):
         reference, method projection, partial application) → one strict JSON
         ``OutputContractSpec`` per target parameter of the callee
         (``FunctionSignature.target_params``), in declaration order.
-    ``call_sites``
-        Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
-        order — captured by the checker.  The ``--dry-run`` inventory is
-        built from this plus ``contract_specs``; it is never re-derived by
-        re-walking the AST.
     ``warnings``
         Tuple of warning-severity ``Diagnostic`` records collected during the
         pass.  The checker raises on the first *error*; warnings are
@@ -592,7 +552,6 @@ class CheckedModule(_Record):
     resolved: ModuleResolution
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
-    call_sites: tuple[CallSiteRecord, ...]
     warnings: tuple[Diagnostic, ...]
     type_env: TypeEnvironment
     function_signatures: dict[str, FunctionSignature]
@@ -678,7 +637,6 @@ def assert_checked_output_closed(
     node_types: Mapping[int, Type],
     contract_specs: Mapping[int, OutputContractSpec],
     target_contract_specs: Mapping[int, tuple[OutputContractSpec, ...]],
-    call_sites: Iterable[CallSiteRecord],
     function_signatures: Mapping[str, FunctionSignature],
     cast_specs: Mapping[int, CastSpec],
     argument_bindings: ArgumentBindings,
@@ -700,7 +658,6 @@ def assert_checked_output_closed(
             *node_types.values(),
             *(spec.target_type for spec in contract_specs.values()),
             *(spec.target_type for specs in target_contract_specs.values() for spec in specs),
-            *(site.target_type for site in call_sites),
             *(signature.result for signature in function_signatures.values()),
             *(
                 param.type
@@ -725,7 +682,6 @@ def assert_checked_module_output_closed(checked: CheckedModule) -> None:
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
         target_contract_specs=checked.target_contract_specs,
-        call_sites=checked.call_sites,
         function_signatures=checked.function_signatures,
         cast_specs=checked.cast_specs,
         argument_bindings=checked.argument_bindings,
@@ -967,7 +923,6 @@ class CheckedModuleImage(_Record):
 
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
-    call_sites: tuple[CallSiteRecord, ...]
     warnings: tuple[Diagnostic, ...]
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
@@ -1190,7 +1145,7 @@ class TypeEnvironment:
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
-        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always available.
+        # Built-in prelude types (AgL: ExecResult, Agent) are always available.
         self._types.update(BUILTIN_PRELUDE_TYPES)
 
     def module_interface(self) -> ModuleTypeInterface:
@@ -1759,8 +1714,8 @@ class TypeEnvironment:
         """Mark a function declaration ``node_id`` as an ``extern def``.
 
         Consulted by ``_check_declared_name_call`` so that direct calls to an
-        extern (own-module or imported) are recorded as dry-run call sites the
-        same way ``ask``/``exec`` calls are.
+        extern (own-module or imported) get the same target-contract validation
+        ``ask``/``exec`` calls do.
         """
         self._extern_node_ids.add(node_id)
         self._record_fact(ExternNodeIdFact(node_id=node_id))

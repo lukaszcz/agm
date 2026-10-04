@@ -1,0 +1,7 @@
+record P
+  n: int = 0
+  t: text
+
+program def main() -> unit =
+  let p = P(t = "x")
+  p

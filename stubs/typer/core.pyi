@@ -7,7 +7,6 @@ from collections.abc import Callable
 import click
 from click.shell_completion import CompletionItem
 
-
 class TyperOption(click.Option):
     def __init__(
         self,
@@ -19,16 +18,16 @@ class TyperOption(click.Option):
         is_eager: bool = ...,
         is_flag: bool | None = ...,
         help: str | None = ...,
+        hidden: bool = ...,
+        autocompletion: Callable[[click.Context, list[str], str], list[str]] | None = ...,
     ) -> None: ...
-
 
 class TyperGroup:
     def resolve_command(
         self, ctx: click.Context, args: list[str]
     ) -> tuple[str | None, TyperCommand | None, list[str]]: ...
     def get_params(self, ctx: click.Context) -> list[click.Parameter]: ...
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]: ...
-
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem[str]]: ...
 
 class TyperCommand:
     """Typed façade for Typer's Click command base."""
@@ -44,4 +43,4 @@ class TyperCommand:
     def invoke(self, ctx: click.Context) -> None: ...
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]: ...
     def get_params(self, ctx: click.Context) -> list[click.Parameter]: ...
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]: ...
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem[str]]: ...

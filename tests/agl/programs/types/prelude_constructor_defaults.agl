@@ -1,11 +1,11 @@
 # Built-in record and enum payload fields follow the standard default.
 
-program def main(exit-code: int, retries: int) -> unit =
+program def main(exit-code: int, command: text) -> unit =
   let result = ExecResult("out", exit-code, "err", false)
-  let policy: ParsePolicy = ParsePolicy::Retry(retries)
+  let agent: Agent = AgentCommand(command)
 
   print result.stdout
   print result.exit-code
-  case policy of
-    | ParsePolicy::Retry(n) => print n
-    | ParsePolicy::Abort => print 0
+  case agent of
+    | AgentCommand(command) => print command
+    | _ => print "other"

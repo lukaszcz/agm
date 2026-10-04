@@ -30,6 +30,7 @@ from agm.agl.semantics.types import (
     ExceptionType,
     FunctionType,
     InferenceVarType,
+    IntType,
     RecordType,
     TextType,
     Type,
@@ -42,22 +43,16 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     BoolLit,
-    Call,
-    CallArg,
     CompleteCall,
     Expr,
-    IntLit,
     NamedArg,
-    QualifierAnchor,
     StringLit,
-    VarRef,
 )
 from agm.agl.syntax.resources import ResourceError, resource_path
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.arguments import bind_call_args
 from agm.agl.typecheck.env import (
     AglTypeError,
-    CallSiteRecord,
     OutputContractSpec,
     ParamSpec,
     TypeEnvironment,
@@ -96,7 +91,6 @@ class PendingBuiltinObligation:
     kind: BuiltinObligationKind
     format_name: str | None
     strict_json: bool | None
-    parse_policy: str
     # (name, span) of every parse-shaping named arg present, in canonical order.
     # Retained so region-close diagnostics point at the offending argument rather
     # than the whole call span.
@@ -104,13 +98,13 @@ class PendingBuiltinObligation:
 
     @property
     def has_parse_shaping_option(self) -> bool:
-        """Whether any of ``format`` / ``strict-json`` / ``on-parse-error`` is set."""
+        """Whether any of ``format`` / ``strict-json`` / ``parse-error-retries`` is set."""
         return bool(self.parse_option_spans)
 
     @property
-    def has_parse_error_option(self) -> bool:
-        """Whether the ``on-parse-error`` option is set."""
-        return any(name == "on-parse-error" for name, _ in self.parse_option_spans)
+    def has_parse_error_retries_option(self) -> bool:
+        """Whether the ``parse-error-retries`` option is set."""
+        return any(name == "parse-error-retries" for name, _ in self.parse_option_spans)
 
     def strict_json_span(self) -> SourceSpan:
         """Return the span of the ``strict-json`` option.
@@ -142,8 +136,6 @@ class BuiltinCheckCtx(Protocol):
     def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None: ...
 
     def _record_explicit_builtin_target(self, node_id: int, target_type: Type) -> None: ...
-
-    def _append_call_site(self, call_site: CallSiteRecord) -> None: ...
 
     def _append_warning(self, warning: Diagnostic) -> None: ...
 
@@ -256,12 +248,23 @@ class BuiltinCallChecker:
     """
 
     _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict-json", "on-parse-error"}
+        {"agent", "format", "strict-json", "parse-error-retries", "sandbox", "env"}
+    )
+
+    # ask-request never accepts 'env': the built request record has no env
+    # field (printing a record must never leak secrets).
+    _ASK_REQUEST_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
+        {"agent", "format", "strict-json", "parse-error-retries", "sandbox"}
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"env", "cwd", "timeout", "format", "strict-json", "on-parse-error"}
+        {"env", "cwd", "timeout", "sandbox", "format", "strict-json", "parse-error-retries"}
     )
+
+    # ask arguments meaningful only when the call carries its own agent: a
+    # bare 'ask' with no 'agent' dispatches through the fixed-at-open default
+    # session, so neither has any effect there.
+    _SESSION_FIXED_ASK_ARGS: frozenset[str] = frozenset({"sandbox", "env"})
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
         self._ctx = ctx
@@ -305,7 +308,6 @@ class BuiltinCallChecker:
                     ),
                     format_name=None,
                     strict_json=None,
-                    parse_policy="default",
                     parse_option_spans=(),
                 )
             )
@@ -322,7 +324,6 @@ class BuiltinCallChecker:
                     kind=BuiltinObligationKind.EXEC,
                     format_name=None,
                     strict_json=None,
-                    parse_policy="default",
                     parse_option_spans=(),
                 )
             )
@@ -404,9 +405,15 @@ class BuiltinCallChecker:
     # --- Session statics ---
 
     def check_session_open(self, node: CompleteCall) -> Type:
-        """Type-check ``Session::open(agent, transport?, name?)``."""
+        """Type-check ``Session::open(agent, transport?, name?, sandbox?, env?)``."""
         session_transport = self.contract_enum("SessionTransport")
         transport = self._ctx._env.type_table.option_handle(session_transport)
+        # Resolved whenever 'std/env' is loaded, whether the call names 'env'
+        # or supplies it positionally: a standard library without 'std/env'
+        # loaded never has to name 'Environ' just to open a session without
+        # it, exactly as 'ask'/'exec' stay lazy.
+        env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
+        env_type: Type = UnitType() if env_type_def is None else env_type_def.handle()
         return self._check_static_call(
             node,
             "Session::open",
@@ -429,6 +436,18 @@ class BuiltinCallChecker:
                     kind=ParamZone.STANDARD,
                     has_default=True,
                 ),
+                ParamSpec(
+                    name="sandbox",
+                    type=self.contract_type("AgentSandbox"),
+                    kind=ParamZone.STANDARD,
+                    has_default=True,
+                ),
+                ParamSpec(
+                    name="env",
+                    type=env_type,
+                    kind=ParamZone.STANDARD,
+                    has_default=True,
+                ),
             ),
             self.contract_type("Session"),
         )
@@ -447,9 +466,14 @@ class BuiltinCallChecker:
     def check_session_ask(
         self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
-        """Type-check ``Session.ask`` with its receiver-owned agent selection."""
-        if any(argument.name == "agent" for argument in node.named_args):
-            raise AglTypeError("Session.ask does not accept an explicit agent.", span=node.span)
+        """Type-check ``Session.ask`` with its receiver-owned agent and fixed sandbox mode."""
+        for forbidden, label in (
+            ("agent", "an explicit agent"),
+            ("sandbox", "an explicit sandbox mode"),
+            ("env", "an explicit environment"),
+        ):
+            if any(argument.name == forbidden for argument in node.named_args):
+                raise AglTypeError(f"Session.ask does not accept {label}.", span=node.span)
         return self.check_ask(node, expected=expected)
 
     def check_session_compact(
@@ -685,7 +709,25 @@ class BuiltinCallChecker:
     def check_ask(
         self, node: CompleteCall, *, expected: Type | None, receiver_type: Type | None = None
     ) -> Type:
-        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``."""
+        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``.
+
+        A bare call with no explicit ``agent`` dispatches through the default
+        session at lowering (see ``lower.lowerer``'s ``ASK`` case), which, like
+        any session ask, carries no per-call sandbox or environment operand:
+        an explicit ``sandbox``/``env`` here would be silently ineffective, so
+        each is rejected the same way ``Session.ask`` rejects them.
+        """
+        if receiver_type is None and not any(
+            argument.name == "agent" for argument in node.named_args
+        ):
+            for argument in node.named_args:
+                if argument.name in self._SESSION_FIXED_ASK_ARGS:
+                    raise AglTypeError(
+                        f"ask does not accept an explicit {argument.name!r} without an "
+                        "explicit agent: without 'agent', ask dispatches through the default "
+                        "session, which fixes its sandbox mode and environment at open.",
+                        span=node.span,
+                    )
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -751,15 +793,19 @@ class BuiltinCallChecker:
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
+        base_allowed = (
+            self._ASK_REQUEST_ALLOWED_NAMED_ARGS
+            if kind is BuiltinObligationKind.ASK_REQUEST
+            else self._ASK_ALLOWED_NAMED_ARGS
+        )
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS
-            - ({"agent"} if receiver_type is not None else set()),
+            allowed_named=base_allowed - ({"agent"} if receiver_type is not None else set()),
             receiver_type=receiver_type,
             agent_request_type=agent_request_type,
         )
-        format_name, strict_json, parse_policy = self._parse_options(named)
+        format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
                 node_id=node.node_id,
@@ -769,7 +815,6 @@ class BuiltinCallChecker:
                 kind=kind,
                 format_name=format_name,
                 strict_json=strict_json,
-                parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
             )
         )
@@ -835,6 +880,24 @@ class BuiltinCallChecker:
                 agent_na.value.span,
                 agent_na.value,
             )
+        if "sandbox" in named:
+            sandbox_na = named["sandbox"]
+            expected_sandbox_type = self._ctx._env.type_table.record_fields(agent_request_type)[
+                "sandbox"
+            ]
+            sandbox_type = self._ctx._check_expr(sandbox_na.value, expected=expected_sandbox_type)
+            self._ctx._assert_assignable_from(
+                sandbox_type,
+                expected_sandbox_type,
+                sandbox_na.value.span,
+                sandbox_na.value,
+            )
+        if "env" in named:
+            env_na = named["env"]
+            env_type = self._resolve_environ_type(callee, env_na.span)
+            env_type_actual = self._ctx._check_expr(env_na.value, expected=env_type)
+            self._ctx._assert_assignable_from(env_type_actual, env_type, env_na.span, env_na.value)
+        self._check_parse_error_retries_option(named)
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -861,44 +924,27 @@ class BuiltinCallChecker:
                     "are ignored and have no output contract.",
                     span=offending_span,
                 )
-            codec_name = "none"
-            parse_policy = "default"
-        else:
-            spec = self._record_parsed_contract(obligation, use="an agent output type")
-            codec_name = spec.codec_name
-            parse_policy = obligation.parse_policy
-        self._append_call_site(obligation, codec_name, parse_policy)
+            return
+        self._record_parsed_contract(obligation, use="an agent output type")
 
-    def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
-        """Warn when ``on-parse-error`` is set on a text target, where it can never fire."""
-        if not (obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)):
+    def _warn_noop_parse_error_retries_on_text(self, obligation: PendingBuiltinObligation) -> None:
+        """Warn when ``parse-error-retries`` is set on a text target, where it can never fire."""
+        if not (
+            obligation.has_parse_error_retries_option
+            and isinstance(obligation.target_type, TextType)
+        ):
             return
         self._ctx._append_warning(
             Diagnostic(
                 message=(
-                    "'on-parse-error' has no effect on a text target: a text result "
-                    "never fails parsing, so the policy can never fire."
+                    "'parse-error-retries' has no effect on a text target: a text result "
+                    "never fails parsing, so no retry can ever fire."
                 ),
                 line=obligation.span.start_line,
                 column=obligation.span.start_col,
                 end_line=obligation.span.end_line,
                 end_column=obligation.span.end_col,
                 severity="warning",
-            )
-        )
-
-    def _append_call_site(
-        self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
-    ) -> None:
-        self._ctx._append_call_site(
-            CallSiteRecord(
-                node_id=obligation.node_id,
-                callee=obligation.kind.value,
-                target_type=obligation.target_type,
-                codec_name=codec_name,
-                parse_policy=parse_policy,
-                line=obligation.span.start_line,
-                col=obligation.span.start_col,
             )
         )
 
@@ -929,7 +975,8 @@ class BuiltinCallChecker:
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
         self._check_exec_spawn_options(named)
-        format_name, strict_json, parse_policy = self._parse_options(named)
+        self._check_parse_error_retries_option(named)
+        format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
                 node_id=node.node_id,
@@ -939,23 +986,30 @@ class BuiltinCallChecker:
                 kind=BuiltinObligationKind.EXEC,
                 format_name=format_name,
                 strict_json=strict_json,
-                parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
             )
         )
         return target_type
 
+    def _resolve_environ_type(self, subject: str, span: SourceSpan) -> Type:
+        """Resolve the loaded ``std/env::Environ`` type for an 'env' argument.
+
+        Shared by every built-in that accepts an ``env`` operand (``exec``,
+        ``ask``, ``Agent::ask``, ``Session::open``).
+        """
+        env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
+        if env_type_def is None:
+            raise AglTypeError(
+                f"{subject} 'env' requires std/env::Environ, which this standard library "
+                "does not provide.",
+                span=span,
+            )
+        return env_type_def.handle()
+
     def _check_exec_spawn_options(self, named: dict[str, NamedArg[Expr]]) -> None:
         """Check the non-codec ``exec`` options against their stdlib types."""
         if "env" in named:
-            env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
-            if env_type_def is None:
-                raise AglTypeError(
-                    "exec 'env' requires std/env::Environ, which this standard library "
-                    "does not provide.",
-                    span=named["env"].span,
-                )
-            env_type = env_type_def.handle()
+            env_type = self._resolve_environ_type("exec", named["env"].span)
             actual = self._ctx._check_expr(named["env"].value, expected=env_type)
             self._ctx._assert_assignable_from(
                 actual, env_type, named["env"].span, named["env"].value
@@ -968,6 +1022,22 @@ class BuiltinCallChecker:
             self._ctx._assert_assignable_from(
                 actual, option_text, named[name].span, named[name].value
             )
+        if "sandbox" in named:
+            sandbox_type = self._ctx._env.type_table.option_handle(
+                self.contract_type("Sandbox"), standard=True
+            )
+            actual = self._ctx._check_expr(named["sandbox"].value, expected=sandbox_type)
+            self._ctx._assert_assignable_from(
+                actual, sandbox_type, named["sandbox"].span, named["sandbox"].value
+            )
+
+    def _check_parse_error_retries_option(self, named: dict[str, NamedArg[Expr]]) -> None:
+        """Check a ``parse-error-retries`` argument as an ordinary ``int`` expression."""
+        if "parse-error-retries" not in named:
+            return
+        retries = named["parse-error-retries"]
+        actual = self._ctx._check_expr(retries.value, expected=IntType())
+        self._ctx._assert_assignable_from(actual, IntType(), retries.span, retries.value)
 
     def _standard_option_text_type(self) -> EnumType:
         """Return the loaded ``std/option::Option[text]`` handle when present."""
@@ -978,7 +1048,7 @@ class BuiltinCallChecker:
 
         The single source of truth every checker-side resolution of a
         host-contract built-in nominal (``ExecResult``, ``AgentRequest``,
-        ``Agent``, ``ParsePolicy``) goes through: a program's own ``builtin
+        ``Agent``) goes through: a program's own ``builtin
         record``/``builtin enum`` declaration of *name* — at whatever scope
         path it is written, so a scoped declaration is recognized at its own
         path rather than the root — when the shared ``TypeTable`` has one
@@ -1174,9 +1244,7 @@ class BuiltinCallChecker:
 
     # --- shared parse-option handling (ask / exec) ---
 
-    def _parse_options(
-        self, named: dict[str, NamedArg[Expr]]
-    ) -> tuple[str | None, bool | None, str]:
+    def _parse_options(self, named: dict[str, NamedArg[Expr]]) -> tuple[str | None, bool | None]:
         """Validate static option syntax without selecting a target-dependent codec."""
         format_name: str | None = None
         if "format" in named:
@@ -1194,11 +1262,7 @@ class BuiltinCallChecker:
                     "'strict-json' must be a static bool literal.", span=strict_na.span
                 )
             strict_json = strict_na.value.value
-        parse_policy = "default"
-        if "on-parse-error" in named:
-            parse_na = named["on-parse-error"]
-            parse_policy = self._extract_parse_policy_str(parse_na.value, parse_na.span)
-        return format_name, strict_json, parse_policy
+        return format_name, strict_json
 
     @staticmethod
     def _collect_parse_option_spans(
@@ -1207,7 +1271,7 @@ class BuiltinCallChecker:
         """Capture the spans of the parse-shaping named args for later diagnostics."""
         return tuple(
             (name, named[name].span)
-            for name in ("format", "strict-json", "on-parse-error")
+            for name in ("format", "strict-json", "parse-error-retries")
             if name in named
         )
 
@@ -1237,7 +1301,7 @@ class BuiltinCallChecker:
         )
         spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
         self._ctx._record_contract_spec(obligation.node_id, spec)
-        self._warn_noop_parse_error_on_text(obligation)
+        self._warn_noop_parse_error_retries_on_text(obligation)
         return spec
 
     def _finalize_exec(self, obligation: PendingBuiltinObligation) -> None:
@@ -1258,8 +1322,7 @@ class BuiltinCallChecker:
             # recognized at its own path rather than the root canonical one.
             exec_result = self.contract_record("ExecResult")
             if target_type != exec_result:
-                spec = self._record_parsed_contract(obligation, use="an exec output type")
-                self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
+                self._record_parsed_contract(obligation, use="an exec output type")
                 return
             # ``exec`` will mint an ``ExecResult`` record directly: apply the
             # same host-coherence check as ``ask``/``ask-request`` (currently
@@ -1276,104 +1339,6 @@ class BuiltinCallChecker:
             spec = OutputContractSpec(target_type, "text", None, structured_exec=True)
 
         self._ctx._record_contract_spec(obligation.node_id, spec)
-        self._append_call_site(obligation, spec.codec_name, "default")
-
-    # --- on_parse_error policy extraction ---
-
-    def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
-        """Extract a static ``ParsePolicy`` constructor as an inventory string.
-
-        *arg* must actually RESOLVE (through the same constructor-identity
-        mechanism ordinary expression-checking uses,
-        :meth:`BuiltinCheckCtx._constructor_ref_for`) to a genuine
-        constructor — not merely share a constructor's bare spelling. A local
-        binding that shadows the name (``let Abort = ParsePolicy::Retry(n =
-        3)``) resolves to that binding, not any constructor, so
-        ``_constructor_ref_for`` returns ``None`` for it and it is rejected
-        here exactly like any other non-constructor expression, matching how
-        the surrounding checker treats a shadowed constructor name everywhere
-        else (e.g. ``_check_builtin_var``'s constant-expression check).
-        """
-        if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
-            callee = arg.callee
-            if not self._accepts_as_parse_policy_constructor(callee):
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return self._extract_parse_policy_variant(callee.name, arg.named_args, span)
-        # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
-        if (
-            isinstance(arg, VarRef)
-            and arg.name == "Abort"
-            and self._accepts_as_parse_policy_constructor(arg)
-        ):
-            return "abort"
-        raise AglTypeError(
-            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
-            span=span,
-        )
-
-    def _accepts_as_parse_policy_constructor(self, ref: VarRef) -> bool:
-        """Whether *ref* denotes an accepted ``ParsePolicy`` constructor spelling.
-
-        Resolves *ref* through :meth:`BuiltinCheckCtx._constructor_ref_for` so
-        a local binding that shadows the name is never mistaken for the
-        constructor it shadows.
-
-        Unqualified (and current-module-anchored, ``::Retry``) spellings are
-        accepted whenever they resolve to ANY constructor — not necessarily
-        one this program's own ``ParsePolicy`` declares. The built-in
-        ``Abort`` EXCEPTION and ``ParsePolicy``'s nullary ``Abort`` variant
-        share that one bare root spelling, and ordinary name resolution picks
-        one of them (the exception, today); accepting either is unambiguous
-        in this position, since only a ``ParsePolicy`` constructor is ever a
-        legal ``on-parse-error`` value, and it preserves the unqualified
-        spelling's existing leniency while still closing the actual
-        shadowing hole (a binding that resolves to no constructor at all).
-
-        A qualified spelling (other than the current-module anchor) must
-        instead resolve to the exact constructor of this program's own
-        ``ParsePolicy`` (:meth:`contract_type`) that its final
-        segment names — the bare root ``ParsePolicy::`` prefix when the
-        program declares none of its own, or that declaration's own scope
-        path (e.g. ``A::ParsePolicy::``) when it does — so a scoped
-        ``ParsePolicy`` is recognized at its own path exactly like the root
-        one, and an unrelated same-named constructor is rejected.
-        """
-        chain = ref.qualifier
-        if chain is None or chain.anchor is QualifierAnchor.CURRENT_MODULE:
-            return self._ctx._constructor_ref_for(ref.node_id) is not None
-        parse_policy_type = self.contract_enum("ParsePolicy")
-        ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
-        return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)
-
-    def _extract_parse_policy_variant(
-        self, name: str, named_args: tuple[NamedArg[CallArg], ...], span: SourceSpan
-    ) -> str:
-        """Extract Abort or Retry variant from ParsePolicy call."""
-        if name == "Abort":
-            if named_args:
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return "abort"
-        if name == "Retry":
-            n_arg = next((a for a in named_args if a.name == "n"), None)
-            if n_arg is None or not isinstance(n_arg.value, IntLit):
-                raise AglTypeError(
-                    "'on-parse-error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return f"retry[{n_arg.value.value}]"
-        raise AglTypeError(
-            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
-            span=span,
-        )
 
     # --- codec helpers ---
 

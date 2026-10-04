@@ -10,6 +10,9 @@ from typing import Protocol
 import click
 import pytest
 from click.testing import CliRunner, Result
+from typer import Exit as TyperExit
+from typer._click import Context as TyperContext
+from typer.core import TyperCommand, TyperGroup
 from typer.main import get_command
 
 import agm.cli as cli
@@ -43,6 +46,7 @@ import agm.commands.worktree.remove as worktree_remove_command
 import agm.parser as parser_helpers
 from agm.core import dry_run as dry_run_state
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from tests._help_helpers import assert_lists_execution_options
 
 
 class RecordedArgs(Protocol):
@@ -73,6 +77,62 @@ def make_recorder(
 
 
 class TestConfigCopy:
+    def test_commands_without_dry_run_behavior_reject_the_option(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.check as check_command
+        import agm.commands.config.env as config_env_command
+        import agm.commands.dep.list as dep_list_command
+        import agm.commands.pkg.check as pkg_check_command
+        import agm.commands.pkg.info as pkg_info_command
+        import agm.commands.pkg.list as pkg_list_command
+        import agm.commands.workspace.list as workspace_list_command
+
+        calls: list[bool] = []
+
+        def record(*args: object, **kwargs: object) -> None:
+            calls.append(True)
+
+        for command in (
+            check_command,
+            config_env_command,
+            dep_list_command,
+            pkg_check_command,
+            pkg_info_command,
+            pkg_list_command,
+            workspace_list_command,
+        ):
+            monkeypatch.setattr(command, "run", record)
+
+        for argv in (
+            ["check", "source.agl", "--dry-run"],
+            ["config", "env", "--dry-run"],
+            ["dep", "list", "--dry-run"],
+            ["pkg", "check", "--dry-run"],
+            ["pkg", "info", "alpha", "--dry-run"],
+            ["pkg", "list", "--dry-run"],
+            ["workspace", "list", "--dry-run"],
+        ):
+            result = invoke(runner, argv)
+            assert result.exit_code != 0, argv
+
+        assert calls == []
+
+    def test_read_only_groups_and_root_reject_dry_run(self, runner: CliRunner) -> None:
+        for argv in (
+            ["help", "--dry-run"],
+            ["--dry-run", "check", "source.agl"],
+            ["config", "--dry-run", "env"],
+            ["dep", "--dry-run", "list"],
+            ["pkg", "--dry-run", "list"],
+            ["sync", "--dry-run", "fetch"],
+            ["tmux", "--dry-run", "open"],
+            ["workspace", "--dry-run", "list"],
+            ["worktree", "--dry-run", "new", "branch"],
+        ):
+            result = invoke(runner, argv)
+            assert result.exit_code != 0, argv
+
     def test_config_cp(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, config_copy_command)
         result = invoke(runner, ["config", "cp", "mydir"])
@@ -134,6 +194,7 @@ class TestPackageLifecycle:
 
         assert invoke(runner, ["pkg", "create", "package", "-o", "out.agmpkg"]).exit_code == 0
         assert invoke(runner, ["pkg", "install", "--editable", "--shadow", "source"]).exit_code == 0
+        assert invoke(runner, ["pkg", "install", "--reinstall", "source"]).exit_code == 0
         assert invoke(runner, ["pkg", "uninstall", "alpha"]).exit_code == 0
         assert invoke(runner, ["pkg", "list"]).exit_code == 0
         assert invoke(runner, ["pkg", "info", "alpha"]).exit_code == 0
@@ -143,6 +204,8 @@ class TestPackageLifecycle:
         assert install_calls[0].source == "source"
         assert install_calls[0].editable is True
         assert install_calls[0].shadow is True
+        assert install_calls[1].source == "source"
+        assert install_calls[1].reinstall is True
         assert uninstall_calls[0].name == "alpha"
         assert len(list_calls) == 1
         assert info_calls[0].name == "alpha"
@@ -281,6 +344,19 @@ class TestWorktreeNew:
         assert len(calls) == 1
         assert calls[0].worktrees_dir == "/custom"
         assert calls[0].branch == "feat/z"
+
+    @pytest.mark.parametrize("command", [["worktree", "new"], ["wt", "new"]])
+    def test_wt_new_no_fetch(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        command: list[str],
+    ) -> None:
+        calls = make_recorder(monkeypatch, worktree_new_command)
+        result = invoke(runner, [*command, "--no-fetch", "feat/z"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
 
     def test_wt_new_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "new"])
@@ -495,6 +571,13 @@ class TestDep:
         assert len(calls) == 1
         assert calls[0].create_branch is True
 
+    def test_dep_switch_no_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, dep_switch_command)
+        result = invoke(runner, ["dep", "switch", "--no-fetch", "mylib", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
+
     def test_dep_rm(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, dep_remove_command)
         result = invoke(runner, ["dep", "rm", "mylib/feat/x"])
@@ -537,7 +620,7 @@ class TestSync:
         assert result.exit_code == 0
         assert len(calls) == 1
 
-    def test_sync_fetch_accepts_global_dry_run(
+    def test_sync_fetch_accepts_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         observed: list[bool] = []
@@ -547,7 +630,7 @@ class TestSync:
             observed.append(dry_run_state.enabled())
 
         monkeypatch.setattr(sync_fetch_command, "run", record)
-        result = invoke(runner, ["--dry-run", "sync", "fetch"])
+        result = invoke(runner, ["sync", "fetch", "--dry-run"])
         assert result.exit_code == 0
         assert observed == [True]
 
@@ -567,7 +650,7 @@ class TestSync:
         assert result.exit_code == 0
         assert len(calls) == 1
 
-    def test_sync_pull_accepts_global_dry_run(
+    def test_sync_pull_accepts_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         observed: list[bool] = []
@@ -577,7 +660,7 @@ class TestSync:
             observed.append(dry_run_state.enabled())
 
         monkeypatch.setattr(sync_pull_command, "run", record)
-        result = invoke(runner, ["--dry-run", "sync", "pull"])
+        result = invoke(runner, ["sync", "pull", "--dry-run"])
         assert result.exit_code == 0
         assert observed == [True]
 
@@ -1000,6 +1083,19 @@ class TestOpen:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].branch == "feat/x"
+
+    @pytest.mark.parametrize("command", [["open"], ["workspace", "open"], ["wsp", "open"]])
+    def test_open_no_fetch(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        command: list[str],
+    ) -> None:
+        calls = make_recorder(monkeypatch, workspace_open_command)
+        result = invoke(runner, [*command, "--no-fetch", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
 
     def test_open_with_pane_count(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, workspace_open_command)
@@ -1844,13 +1940,30 @@ class TestEveryCommandHasHelpText:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"
 
     def test_every_overview_command_has_help_text(self) -> None:
-        from agm.cli import _COMMAND_OVERVIEW, _HELP_TEXTS
+        from agm.cli import _COMMAND_OVERVIEW
 
         for name, _ in _COMMAND_OVERVIEW:
-            canonical = name.split(" (")[0]
-            assert canonical in _HELP_TEXTS, (
-                f"overview lists '{canonical}' but _HELP_TEXTS has no entry"
-            )
+            text = parser_helpers.help_text_for(name)
+            assert text is not None, f"overview lists '{name}' without help text"
+            assert text.startswith(f"agm {name}")
+
+    def test_every_command_path_has_help_listing_dry_run_exactly_when_accepted(self) -> None:
+        def walk(command: TyperCommand | TyperGroup, path: tuple[str, ...]) -> None:
+            text = parser_helpers._help_text_for_path(path)
+            accepts = any("--dry-run" in param.opts for param in command.params)
+            assert ("--dry-run" in text) == accepts, " ".join(path)
+            if isinstance(command, TyperGroup):
+                for name in command.list_commands(TyperContext(command)):
+                    subcommand = command.get_command(TyperContext(command), name)
+                    assert subcommand is not None
+                    walk(subcommand, (*path, name))
+
+        root = get_command(cli.app)
+        assert isinstance(root, TyperGroup)
+        for name in root.list_commands(TyperContext(root)):
+            command = root.get_command(TyperContext(root), name)
+            assert command is not None
+            walk(command, (name,))
 
     def test_aliases_point_to_valid_commands(self) -> None:
         from agm.cli import _HELP_ALIASES, _HELP_TEXTS
@@ -1928,7 +2041,7 @@ class TestPrintContextHelp:
     def test_prints_overview_for_root_command(self, capsys: pytest.CaptureFixture[str]) -> None:
         root = click.Context(click.Command("agm"))
         root.parent = None
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._print_context_help(root, None, True)
         captured = capsys.readouterr()
         assert "agm - Agent Management Framework" in captured.out
@@ -1937,7 +2050,7 @@ class TestPrintContextHelp:
         root = click.Context(click.Command("agm"))
         root.parent = None
         sub = click.Context(click.Command("open"), parent=root, info_name="open")
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._print_context_help(sub, None, True)
         captured = capsys.readouterr()
         assert "agm open" in captured.out
@@ -2021,7 +2134,7 @@ class TestParseLoopArgs:
         assert args.command_name is None
 
     def test_empty_args_with_command_optional_false_exits(self) -> None:
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._parse_loop_args([], command_path=["loop"], command_optional=False)
 
     def test_no_log_and_log_file_mutually_exclusive_with_command(self) -> None:
@@ -2158,10 +2271,19 @@ class TestParserHelpers:
             "--default-agent",
             "--timeout",
             "--no-timeout",
-            "--no-trace-file",
         ):
             assert option in result
         assert "--runner" not in result
+
+    @pytest.mark.parametrize("command", ["exec", "repl"])
+    def test_execution_options_follow_the_command_options(self, command: str) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path([command], file=output)
+        result = output.getvalue()
+
+        assert_lists_execution_options(result)
+        assert result.index("Options:") < result.index("Execution options:")
+        assert result.index("Execution options:") < result.index("Exit codes:")
 
     def test_exec_help_lists_installed_program_reference(self) -> None:
         output = io.StringIO()
@@ -2399,14 +2521,10 @@ class TestExecModulePathOption:
 class TestExecEngineFlagExclusivity:
     """Parser-contract tests for exec's mutually exclusive engine flags."""
 
-    def test_exec_rejects_trace_file_with_no_trace_file(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_exec_rejects_trace_file_with_no_trace(self, runner: CliRunner, tmp_path: Path) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(
-            runner, ["exec", str(agl_file), "--trace-file", "out.log", "--no-trace-file"]
-        )
+        result = invoke(runner, ["exec", str(agl_file), "--trace-file", "out.log", "--no-trace"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
@@ -2417,19 +2535,25 @@ class TestExecEngineFlagExclusivity:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_exec_rejects_removed_no_trace_file_flag(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        assert invoke(runner, ["exec", str(agl_file), "--no-trace-file"]).exit_code != 0
+
     def test_every_negatable_engine_key_excludes_its_own_negative(self) -> None:
         """The rule is derived from the projection, so a new key brings its own."""
-        from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
-        from agm.cli_support.program_options import project_option
+        from agm.cli_support.program_options import engine_key_option_flags
         from agm.cli_support.run_options import _exclusive_flag_groups
         from agm.config.engine_keys import ENGINE_KEYS
 
         groups = _exclusive_flag_groups()
         for spec in ENGINE_KEYS:
-            option = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
-            if option.negative_flag is None:
+            flag, negative_flag = engine_key_option_flags(spec)
+            if negative_flag is None:
                 continue
-            both = {option.flag, option.negative_flag}
+            both = {flag, negative_flag}
             assert any(both <= set(group) for group in groups), spec.name
 
     def test_register_members_exclude_the_registers_switch(self) -> None:
@@ -2506,6 +2630,42 @@ class TestMaxCallDepthOption:
         assert result.exit_code == 0, result.output
         assert len(calls) == 1
         assert getattr(calls[0], "max_call_depth") == 7
+
+
+class TestParseErrorRetriesOption:
+    """``--parse-error-retries`` reaches exec and repl argument containers."""
+
+    @pytest.mark.parametrize(
+        ("command", "flags", "expected"),
+        [
+            ("exec", ["--parse-error-retries", "3"], 3),
+            ("exec", [], None),
+            ("repl", ["--parse-error-retries", "0"], 0),
+            ("repl", [], None),
+        ],
+    )
+    def test_flag_passed_to_args(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        command: str,
+        flags: list[str],
+        expected: int | None,
+    ) -> None:
+        import agm.commands.exec as exec_mod
+        import agm.commands.repl as repl_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod if command == "exec" else repl_mod, "run", calls.append)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        target = [str(agl_file)] if command == "exec" else []
+
+        result = invoke(runner, [command, *flags, *target])
+
+        assert result.exit_code == 0, result.output
+        assert getattr(calls[0], "parse_error_retries") == expected
 
 
 class TestParseLoopSelectArgsExtraPromptMutualExclusion:

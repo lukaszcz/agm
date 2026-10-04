@@ -906,7 +906,7 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
                 binders="(_)",
                 stdlib=True,
             ),
-            AglScopeError,
+            None,
             id="current-module-prelude-option-member",
         ),
         pytest.param(
@@ -925,14 +925,14 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
         pytest.param(
             _Spelling(
                 header="",
-                subject="ParsePolicy",
-                sample="ParsePolicy::Retry(n = 1)",
-                spelling="::Retry",
-                arguments="(n = 2)",
-                binders="(n)",
+                subject="Agent",
+                sample='AgentCommand(command = "worker")',
+                spelling="::AgentCommand",
+                arguments='(command = "worker")',
+                binders="(command)",
                 stdlib=True,
             ),
-            AglScopeError,
+            None,
             id="current-module-builtin-member",
         ),
         pytest.param(

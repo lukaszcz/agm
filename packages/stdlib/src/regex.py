@@ -40,7 +40,7 @@ def _match(match: re.Match[str]) -> object:
 
 
 def test(pattern: str, s: str) -> bool:
-    """Return whether *pattern* occurs anywhere in *s*."""
+    """Check if *pattern* occurs anywhere in *s*."""
     return _compile(pattern).search(s) is not None
 
 

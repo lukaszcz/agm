@@ -661,3 +661,417 @@ def test_supplied_and_program_route_tiers_combine_over_module_route() -> None:
 
     assert tiers.upper == {program_routed.key: True}
     assert tiers.lower == {module_only.key: True}
+
+
+def test_a_group_table_supplies_a_module_parameter_via_the_program_route() -> None:
+    """``[devel]`` feeds a program registered under ``devel review``."""
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = resolve_param_values(
+        _config({"devel": {"verbose": True}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert tiers.upper == {binding.key: True}
+
+
+def test_rejects_a_group_table_leaf_claimed_by_peer_parameters() -> None:
+    """A config group table setting an ambiguous bare leaf errors, as a manifest one does."""
+    first = _binding("first/logging", "verbose")
+    second = _binding("second/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config({"devel": {"verbose": True}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (first, second)),
+        )
+
+    assert first.declaration_path in str(exc_info.value)
+    assert second.declaration_path in str(exc_info.value)
+
+
+def test_a_nearer_command_table_beats_an_inherited_group_table() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = resolve_param_values(
+        _config({"devel": {"review": {"verbose": True}, "verbose": False}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert tiers.upper == {binding.key: True}
+
+
+def test_an_unconsumed_group_table_leaf_draws_no_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    resolve_param_values(
+        _config({"devel": {"unrelated": True}}),
+        program,
+        {},
+        entry_segments=("workflow",),
+        command_paths=(("devel", "review"),),
+        surface=_surface(program, (binding,)),
+    )
+
+    assert capsys.readouterr().err == ""
+
+
+def test_rejects_a_group_table_leaf_ambiguous_with_a_module_route() -> None:
+    """A leaf an inherited table sets is ambiguous against a same-named module route."""
+    own = _binding("app/main", "x")
+    imported = _binding("devel", "x")
+    program = _program(closure=(own.module, imported.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config({"devel": {"x": True}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (own, imported)),
+        )
+
+    assert own.declaration_path in str(exc_info.value)
+    assert imported.declaration_path in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "layers",
+    [
+        ({"devel": {"x": True}}, {"devel": {"review": {"x": True}}}),
+        ({"devel": {"review": {"x": True}}}, {"devel": {"x": True}}),
+        ({"devel": {"x": True, "review": {"x": True}}},),
+    ],
+    ids=["inherited_then_exact", "exact_then_inherited", "both_in_one_layer"],
+)
+def test_rejects_a_group_table_ambiguity_regardless_of_layer_order(
+    layers: tuple[Mapping[str, object], ...],
+) -> None:
+    """The exact route also setting the leaf must not hide the inherited-table ambiguity."""
+    own = _binding("app/main", "x")
+    imported = _binding("devel", "x")
+    program = _program(closure=(own.module, imported.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        resolve_param_values(
+            _config(*layers),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (own, imported)),
+        )
+
+    assert own.declaration_path in str(exc_info.value)
+    assert imported.declaration_path in str(exc_info.value)
+
+
+class TestManifestConfigMergesBelowConfigFileRoutes:
+    """A package manifest ``[config]`` value ranks below file routes, above module route."""
+
+    def test_a_manifest_command_table_supplies_a_module_parameter(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert tiers.lower == {binding.key: True}
+        assert tiers.upper == {}
+
+    def test_a_manifest_group_table_supplies_a_module_parameter(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"verbose": True}},
+        )
+
+        assert tiers.lower == {binding.key: True}
+
+    def test_a_manifest_root_leaf_supplies_a_module_parameter(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(),
+            surface=_surface(program, (binding,)),
+            package_config={"verbose": True},
+        )
+
+        assert tiers.lower == {binding.key: True}
+
+    def test_manifest_wins_over_the_file_module_route(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config({"logging": {"verbose": False}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert tiers.lower == {binding.key: True}
+
+    def test_a_file_program_route_wins_over_the_manifest(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config({"workflow": {"run": {"verbose": False}}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert tiers.upper == {binding.key: False}
+        assert tiers.lower == {}
+
+    def test_a_file_group_table_wins_over_the_manifest(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config({"devel": {"verbose": False}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert tiers.upper == {binding.key: False}
+        assert tiers.lower == {}
+
+    def test_no_manifest_leaves_leaves_the_module_route_default(self) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config({"logging": {"verbose": True}}),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config=None,
+        )
+
+        assert tiers.lower == {binding.key: True}
+
+    def test_a_cli_supplied_value_wins_over_the_manifest(self) -> None:
+        """A parsed CLI/environment value forms ``upper`` and beats a manifest leaf in ``lower``,
+        exactly like a program-route config value does."""
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+        tiers = resolve_param_values(
+            _config(),
+            program,
+            {binding.key: False},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, (binding,)),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert tiers.upper == {binding.key: False}
+        assert tiers.lower == {}
+
+    def test_a_manifest_same_tier_conflicting_spelling_errors(self) -> None:
+        own = _binding("A/logging", "x")
+        program = _program(closure=(ModuleId.from_path("app/main"), own.module))
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_param_values(
+                _config(),
+                program,
+                {},
+                entry_segments=("workflow",),
+                command_paths=(("devel", "review"),),
+                surface=_surface(program, (own,)),
+                package_config={"devel": {"review": {"x": True, "logging.x": False}}},
+            )
+
+    def test_a_manifest_ambiguous_bare_leaf_errors_like_a_config_file_one(self) -> None:
+        """A manifest table setting a bare leaf two peer parameters claim is rejected too."""
+        first = _binding("first/logging", "verbose")
+        second = _binding("second/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+        with pytest.raises(QualifiedConfigLookupError) as exc_info:
+            resolve_param_values(
+                _config(),
+                program,
+                {},
+                entry_segments=("workflow",),
+                command_paths=(("devel", "review"),),
+                surface=_surface(program, (first, second)),
+                package_config={"devel": {"review": {"verbose": True}}},
+            )
+
+        assert first.declaration_path in str(exc_info.value)
+        assert second.declaration_path in str(exc_info.value)
+
+    def test_a_manifest_group_table_ambiguous_leaf_errors(self) -> None:
+        """The ambiguity check also reaches an inherited manifest group table."""
+        first = _binding("first/logging", "verbose")
+        second = _binding("second/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_param_values(
+                _config(),
+                program,
+                {},
+                entry_segments=("workflow",),
+                command_paths=(("devel", "review"),),
+                surface=_surface(program, (first, second)),
+                package_config={"devel": {"verbose": True}},
+            )
+
+    def test_a_manifest_root_ambiguous_leaf_errors(self) -> None:
+        """The ambiguity check also reaches the manifest root."""
+        first = _binding("first/logging", "verbose")
+        second = _binding("second/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_param_values(
+                _config(),
+                program,
+                {},
+                entry_segments=("workflow",),
+                command_paths=(),
+                surface=_surface(program, (first, second)),
+                package_config={"verbose": True},
+            )
+
+
+class TestUnusedManifestLeafWarnings:
+    """A manifest command-table leaf the selected program does not consume is reported."""
+
+    @staticmethod
+    def _resolve(
+        package_config: Mapping[str, object],
+        *,
+        package_command_paths: frozenset[tuple[str, ...]] = frozenset(),
+        command_paths: tuple[tuple[str, ...], ...] = (("devel", "review"),),
+    ) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+        resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=command_paths,
+            surface=_surface(program, (binding,)),
+            package_command_paths=package_command_paths,
+            package_config=dict(package_config),
+        )
+
+    def test_warns_for_a_command_table_leaf_naming_no_reachable_parameter(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve({"devel": {"review": {"other.level": 1}}})
+
+        reported = capsys.readouterr().err
+        assert "other.level" in reported
+        assert "devel.review" in reported
+
+    def test_warns_for_a_command_table_leaf_the_program_signature_shadows(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        binding = _binding("A/logging", "verbose")
+        program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+        resolve_param_values(
+            _config(),
+            program,
+            {},
+            entry_segments=("workflow",),
+            command_paths=(("devel", "review"),),
+            surface=_surface(program, ()),
+            package_config={"devel": {"review": {"verbose": True}}},
+        )
+
+        assert "verbose" in capsys.readouterr().err
+
+    def test_a_consumed_leaf_draws_no_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._resolve({"devel": {"review": {"logging.verbose": True}}})
+
+        assert capsys.readouterr().err == ""
+
+    def test_an_engine_setting_leaf_draws_no_warning(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve({"devel": {"review": {"trace": True}}})
+
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.parametrize(
+        "package_config",
+        [{"devel": {"unrelated": True}}, {"unrelated": True}],
+        ids=["group", "root"],
+    )
+    def test_an_inherited_table_leaf_draws_no_warning(
+        self, package_config: Mapping[str, object], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A sibling command may be the one that consumes an inherited default."""
+        self._resolve(package_config)
+
+        assert capsys.readouterr().err == ""
+
+    def test_a_table_with_a_registered_descendant_draws_no_warning(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._resolve(
+            {"devel": {"review": {"unrelated": True}}},
+            package_command_paths=frozenset({("devel", "review"), ("devel", "review", "deep")}),
+        )
+
+        assert capsys.readouterr().err == ""

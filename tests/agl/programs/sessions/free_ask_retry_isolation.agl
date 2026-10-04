@@ -1,7 +1,7 @@
-# Explicit Agent asks keep parse-error retries in one ephemeral session.
+# A command without a session placeholder retries as a self-contained one-shot prompt.
 program def main() -> unit =
   let answer: int = AgentCommand("writer").ask(
     "calculate the total",
-    on-parse-error = Retry(n = 1),
+    parse-error-retries = 1,
   )
   print answer

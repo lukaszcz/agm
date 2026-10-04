@@ -20,6 +20,7 @@
     },
     {
       "name": "empty_typed_response_fails_parse",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "ask": [
           "quiet"

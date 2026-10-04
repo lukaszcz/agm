@@ -5,7 +5,7 @@
       "agents": {
         "reviewer": [
           "{\"name\": \"root\", \"children\": [{\"name\": \"ready\", \"children\": []}]}",
-          "{\"$case\": \"completed\"}"
+          "\"completed\""
         ]
       },
       "expect": {
@@ -20,7 +20,7 @@
       "agents": {
         "reviewer": [
           "{\"name\": \"root\", \"children\": [{\"name\": \"later\", \"children\": []}]}",
-          "{\"$case\": \"waiting\"}"
+          "\"waiting\""
         ]
       },
       "expect": {

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import click
 import pytest
+from typer.core import TyperGroup, TyperOption
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -52,6 +53,7 @@ from agm.cli_support.program_options import (
     split_exec_tail,
 )
 from tests._agl_helpers import next_decl_id
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 
 _SPAN = SourceSpan(1, 1, 1, 2, 0, 1)
 _TABLE = create_seeded_type_table()
@@ -88,6 +90,7 @@ def _param(
     hidden: bool = False,
     doc: str | None = None,
     is_path: bool = False,
+    cli_positional: bool = False,
 ) -> ProgramParamInfo:
     return ProgramParamInfo(
         name=name,
@@ -102,6 +105,7 @@ def _param(
             metavar=metavar,
             hidden=hidden,
             doc=doc,
+            cli_positional=cli_positional,
         ),
         is_path=is_path,
     )
@@ -137,9 +141,19 @@ def _registered_command_flags() -> set[str]:
     return {
         flag
         for param in command.params
-        if isinstance(param, click.Option)
+        if isinstance(param, TyperOption)
         for flag in (*param.opts, *param.secondary_opts)
     }
+
+
+#: A parameter doc whose indented listing must print one item per line.
+_LISTING_DOC = "Aspects, e.g.:\n  simplicity\n  efficiency"
+
+
+def _keeps_listing_lines(help_text: str) -> bool:
+    """Report whether *help_text* prints :data:`_LISTING_DOC`'s items on their own lines."""
+    lines = [line.strip() for line in help_text.splitlines()]
+    return "simplicity" in lines and lines[lines.index("simplicity") + 1] == "efficiency"
 
 
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
@@ -310,6 +324,12 @@ class TestEngineKeyFlags:
         assert "--default-agent" in flags
         assert "--no-default-agent" not in flags
 
+    def test_register_enabling_engine_key_contributes_only_its_positive_flag(self) -> None:
+        """``--no-trace`` turns tracing off; ``trace-file`` has no negative of its own."""
+        flags = engine_key_flags()
+        assert "--trace-file" in flags
+        assert "--no-trace-file" not in flags
+
     def test_exec_reserves_every_engine_key_flag(self) -> None:
         assert engine_key_flags() <= EXEC_RESERVED_FLAGS
 
@@ -326,12 +346,12 @@ class TestEngineKeyFlags:
         from agm import cli
 
         group = typer.main.get_command(cli.app)
-        assert isinstance(group, click.Group)
+        assert isinstance(group, TyperGroup)
         exec_command = group.commands["exec"]
         declared = {
             flag
             for param in exec_command.params
-            if isinstance(param, click.Option)
+            if isinstance(param, TyperOption)
             for flag in (*param.opts, *param.secondary_opts)
         }
 
@@ -467,7 +487,9 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
-    @pytest.mark.parametrize("flag", ["max-call-depth", "trace-file", "no-timeout"])
+    @pytest.mark.parametrize(
+        "flag", ["max-call-depth", "trace-file", "no-timeout", "default-sandbox"]
+    )
     def test_run_time_exec_flags_are_reserved_on_a_registered_command(self, flag: str) -> None:
         result = build_program_command(
             _program(_param("value", TextType(), external=flag)), REGISTERED_RESERVED_FLAGS
@@ -483,12 +505,13 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
-    def test_registered_command_reserves_its_own_dry_run_flag(self) -> None:
-        result = build_program_command(
-            _program(_param("dry-run", BoolType())), REGISTERED_RESERVED_FLAGS
-        )
+    @pytest.mark.parametrize("reserved", [EXEC_RESERVED_FLAGS, REGISTERED_RESERVED_FLAGS])
+    def test_dry_run_spelling_is_available_to_program_parameters(
+        self, reserved: frozenset[str]
+    ) -> None:
+        result = build_program_command(_program(_param("dry-run", BoolType())), reserved)
 
-        assert result == ReservedFlagError(parameter="dry-run", flag="--dry-run")
+        assert isinstance(result, ProgramCommand)
 
     @pytest.mark.parametrize("reserved", [EXEC_RESERVED_FLAGS, REGISTERED_RESERVED_FLAGS])
     def test_help_flags_are_reserved_on_every_surface(self, reserved: frozenset[str]) -> None:
@@ -708,7 +731,7 @@ class TestParseOption:
     @pytest.mark.parametrize(
         "token",
         [
-            "claude/sonnet-custom",
+            "claude/sonnet:custom",
             '{"$case":"AgentCommand","command":"worker --flag"}',
         ],
     )
@@ -841,6 +864,104 @@ class TestParsePositional:
     def test_a_leading_dash_positional_is_spelled_after_the_end_of_options_marker(self) -> None:
         args = _command(_param("first", IntType(), ParamZone.POSITIONAL_ONLY)).parse(["--", "-5"])
         assert args.positional == ("-5",)
+
+    def test_a_token_skips_a_standard_slot_filled_by_name_to_reach_a_cli_positional_slot(
+        self,
+    ) -> None:
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--n", "2", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"n": "2", "name": "Bob"}
+
+    def test_tokens_fill_every_slot_in_order_when_none_is_filled_by_name(self) -> None:
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["3", "Bob"])
+        assert args.positional == ("3",)
+        assert args.named == {"name": "Bob"}
+
+    def test_a_standard_slot_after_a_skipped_one_is_still_filled_by_the_next_token(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("b", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--a", "1", "x", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"a": "1", "b": "x", "name": "Bob"}
+
+    def test_a_standard_slot_filled_by_name_is_not_skipped_without_a_cli_positional_slot(
+        self,
+    ) -> None:
+        """The skip exists only so a slot reachable by position alone is
+        reachable; otherwise a positional token for a named slot stays a
+        duplicate for the binder to reject."""
+        command = _command(
+            _param("first", TextType(), ParamZone.POSITIONAL_ONLY),
+            _param("tag", TextType(), ParamZone.STANDARD, has_default=True),
+        )
+        args = command.parse(["a", "x", "--tag", "y"])
+        assert args.positional == ("a", "x")
+        assert args.named == {"tag": "y"}
+
+    def test_an_environment_value_does_not_make_a_slot_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("P_N", "5")
+        command = _command(
+            _param("n", IntType(), ParamZone.STANDARD, has_default=True, env="P_N"),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["7", "Bob"])
+        assert args.positional == ("7",)
+        assert args.named == {"name": "Bob"}
+
+    def test_a_surplus_token_after_a_slot_filled_by_name_is_a_usage_error(self) -> None:
+        """The binder pairs a leftover positional token with the first
+        positional-capable parameter, misreporting it as a duplicate."""
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD),
+            _param("b", TextType(), cli_positional=True),
+        )
+        with pytest.raises(ValueError):
+            command.parse(["--a", "1", "x", "y"])
+
+    def test_a_surplus_token_after_a_cli_positional_slot_is_a_usage_error(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD),
+            _param("b", TextType(), cli_positional=True),
+        )
+        with pytest.raises(ValueError):
+            command.parse(["1", "x", "y"])
+
+    @pytest.mark.parametrize("zone", [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD])
+    def test_a_positional_option_token_is_boxed_like_a_flag_value(self, zone: ParamZone) -> None:
+        args = _command(_param("region", _option_type(TextType()), zone)).parse(["eu"])
+        assert args.positional == (OptionSome("eu"),)
+
+    def test_a_positional_optional_token_reads_the_default_shortcut(self) -> None:
+        command = _command(_param("file", _optional_type(TextType()), ParamZone.POSITIONAL_ONLY))
+        assert command.parse(["default"]).positional == ({"$case": "Default"},)
+        assert command.parse(["out.txt"]).positional == (OptionSome("out.txt"),)
+
+    def test_a_positional_option_token_routed_by_name_is_boxed(self) -> None:
+        command = _command(
+            _param("a", TextType(), ParamZone.STANDARD, has_default=True),
+            _param("region", _option_type(TextType()), ParamZone.STANDARD),
+            _param("name", TextType(), cli_positional=True),
+        )
+        args = command.parse(["--a", "1", "eu", "Bob"])
+        assert args.positional == ()
+        assert args.named == {"a": "1", "region": OptionSome("eu"), "name": "Bob"}
+
+    def test_a_token_past_the_last_slot_stays_verbatim(self) -> None:
+        command = _command(_param("region", _option_type(TextType()), ParamZone.POSITIONAL_ONLY))
+        assert command.parse(["eu", "extra"]).positional == (OptionSome("eu"), "extra")
 
     def test_a_leading_dash_option_value_is_spelled_inline_or_as_the_next_token(self) -> None:
         param = _param("n", IntType())
@@ -992,7 +1113,7 @@ class TestNativeRawValue:
         """A native string value is boxed, not resolved: decoding is deferred."""
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
 
-        assert native_raw_value(projected, "codex/o3-high") == OptionSome("codex/o3-high")
+        assert native_raw_value(projected, "codex/o3:high") == OptionSome("codex/o3:high")
 
     def test_config_agent_option_keeps_a_native_tagged_object(self) -> None:
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
@@ -1088,6 +1209,27 @@ class TestRenderHelp:
 
         assert "Tags one artifact." in command.render_help("main")
 
+    def test_an_indented_example_block_in_the_program_doc_keeps_its_lines(self) -> None:
+        doc = "Refines a subject.\n\nExamples:\n  agm refine main\n  agm refine tip\n"
+
+        text = _command(doc=doc).render_help("main")
+
+        assert "  Examples:\n    agm refine main\n    agm refine tip\n" in text
+        assert "\x08" not in text
+
+    def test_prose_in_the_program_doc_still_rewraps(self) -> None:
+        text = _command(doc="Refines\na subject.").render_help("main")
+
+        assert "Refines a subject." in text
+
+    @pytest.mark.parametrize("zone", [ParamZone.NAMED_ONLY, ParamZone.POSITIONAL_ONLY])
+    def test_an_indented_example_block_in_a_parameter_doc_keeps_its_lines(
+        self, zone: ParamZone
+    ) -> None:
+        command = _command(_param("aspects", TextType(), zone, doc=_LISTING_DOC))
+
+        assert _keeps_listing_lines(command.render_help("main"))
+
     def test_a_supplied_description_overrides_the_program_doc(self) -> None:
         command = _command(_param("tag", TextType()), doc="Tags one artifact.")
 
@@ -1146,6 +1288,21 @@ class TestRenderHelp:
         assert "--tag" in text
         assert "--dry-run" in text
         assert "Check only." in text
+
+    def test_exec_runtime_options_render_in_a_shared_section_at_the_end(self) -> None:
+        from typer.main import get_command
+
+        from agm.cli import app
+        from agm.cli_dispatch import registered_run_options
+
+        run_options = registered_run_options(click.Context(get_command(app)))
+        text = _command(_param("tag", TextType())).render_help(
+            "agm publish", extra_options=run_options
+        )
+        assert_lists_execution_options(text)
+        assert execution_options_is_last(text)
+        assert text.index("Execution options:") > text.index("--tag")
+        assert "--help" in text.partition("Execution options:")[0]
 
     def test_a_parameterless_program_renders_usage_and_options_only(self) -> None:
         text = _command().render_help("main")
@@ -1316,13 +1473,47 @@ class TestCompletionQueries:
 
     @pytest.mark.parametrize(
         ("tokens", "expected"),
-        [(["--trace-file", "trace.jsonl", "--dry-run"], "source"), (["--trace-file"], None)],
+        [
+            ([], "std"),
+            (["--std", "x"], "mode"),
+            (["--std=x"], "mode"),
+            (["-s", "x"], "mode"),
+            (["-sx"], "mode"),
+            (["--std", "x", "m"], None),
+            (["m"], "mode"),
+        ],
+    )
+    def test_the_next_positional_slot_skips_slots_supplied_by_name(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        command = _command(
+            _param("std", TextType(), ParamZone.STANDARD, short="s"),
+            _param("mode", TextType(), cli_positional=True),
+        )
+
+        slot = command.next_positional(tokens, "m")
+
+        assert (None if slot is None else slot.name) == expected
+
+    def test_a_positional_token_supplies_the_slot_it_fills_not_the_first_slot(self) -> None:
+        command = _command(
+            _param("std", TextType(), ParamZone.STANDARD),
+            _param("mode", TextType(), cli_positional=True),
+        )
+
+        parsed = command.parse(["--std", "x", "m"])
+
+        assert parsed.positionally_filled == frozenset({"mode"})
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [(["--trace-file", "trace.jsonl", "--no-stdlib"], "source"), (["--trace-file"], None)],
     )
     def test_host_options_and_their_values_fill_no_slot(
         self, tokens: list[str], expected: str | None
     ) -> None:
         slot = self._command().next_positional(
-            tokens, "b.txt", host_options={"--trace-file": True, "--dry-run": False}
+            tokens, "b.txt", host_options={"--trace-file": True, "--no-stdlib": False}
         )
 
         assert (None if slot is None else slot.name) == expected
@@ -1335,6 +1526,13 @@ class TestCompletionQueries:
             ("out", ("--out", "-o")),
             ("tag", ("--tag",)),
         ]
+
+    def test_value_options_omit_implicitly_positional_parameters(self) -> None:
+        command = _command(
+            _param("name", TextType(), cli_positional=True), _param("count", IntType())
+        )
+
+        assert [param.name for param, _ in command.value_options()] == ["count"]
 
 
 class TestOptionSpellings:
@@ -1631,6 +1829,14 @@ class TestModuleParameterOptions:
 
         assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
 
+    def test_an_indented_example_block_in_a_module_parameter_doc_keeps_its_lines(self) -> None:
+        program = self._program()
+        aspects = _module_param(program.module, "aspects", TextType(), doc=_LISTING_DOC)
+
+        command = _command_with_module_params(program, aspects)
+
+        assert _keeps_listing_lines(command.render_help("agm exec tool.agl"))
+
     def test_help_renders_a_short_only_module_parameter(self) -> None:
         program = self._program()
         verbose = _module_param(program.module, "verbose", BoolType(), short="v")
@@ -1756,7 +1962,7 @@ class TestModuleParameterOptions:
         command = _command_with_module_params(program, message, enabled)
 
         assert command.value_token_indexes(
-            ["--message", "--dry-run", "-m", "--no-stdlib", "--enabled"]
+            ["--message", "--no-stdlib", "-m", "--no-stdlib", "--enabled"]
         ) == frozenset({1, 3})
 
     def test_value_options_include_path_typed_module_parameters(self) -> None:
@@ -1838,7 +2044,7 @@ class TestHostLookingProgramValues:
             "word",
             "--verbose",
             "--message",
-            "--dry-run",
+            "--no-stdlib",
             "--region",
             "--no-stdlib",
             "--no-region",
@@ -1862,11 +2068,11 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--dry-run"], command, frozenset({"--dry-run"})
+            ["--message", "--no-stdlib"], command, frozenset({"--no-stdlib"})
         )
 
         assert protected == ["--message", "agm-program-value-1"]
-        assert replacements == {"agm-program-value-1": "--dry-run"}
+        assert replacements == {"agm-program-value-1": "--no-stdlib"}
 
     @pytest.mark.parametrize("value", ["-pnot-a-program", "-csource", "-Idir"])
     def test_protection_recognizes_attached_host_short_option_values(self, value: str) -> None:
@@ -1883,30 +2089,30 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--trace-file", "--message", "--dry-run"],
+            ["--trace-file", "--message", "--no-stdlib"],
             command,
-            {"--trace-file": True, "--dry-run": False},
+            {"--trace-file": True, "--no-stdlib": False},
         )
 
-        assert protected == ["--trace-file", "--message", "--dry-run"]
+        assert protected == ["--trace-file", "--message", "--no-stdlib"]
         assert replacements == {}
 
     def test_bare_marker_used_as_a_program_value_is_protected(self) -> None:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--", "--dry-run"], command, {"--dry-run": False}
+            ["--message", "--", "--no-stdlib"], command, {"--no-stdlib": False}
         )
 
-        assert protected == ["--message", "agm-program-value-1", "--dry-run"]
+        assert protected == ["--message", "agm-program-value-1", "--no-stdlib"]
         assert replacements == {"agm-program-value-1": "--"}
 
     def test_preview_placeholder_does_not_collide_with_a_literal_token(self) -> None:
         from agm.cli_support.program_options import protect_potential_program_values
 
         assert protect_potential_program_values(
-            ["--message", "--dry-run", "agm-program-preview-1"],
-            {"--dry-run": False},
+            ["--message", "--no-stdlib", "agm-program-preview-1"],
+            {"--no-stdlib": False},
         ) == ["--message", "agm-program-preview-1-1", "agm-program-preview-1"]
 
     def test_value_scan_walks_past_a_short_flag_in_a_bundle(self) -> None:
@@ -1921,27 +2127,27 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--dry-run", "agm-program-value-1"],
+            ["--message", "--no-stdlib", "agm-program-value-1"],
             command,
-            frozenset({"--dry-run"}),
+            frozenset({"--no-stdlib"}),
         )
 
         assert protected == ["--message", "agm-program-value-1-1", "agm-program-value-1"]
-        assert replacements == {"agm-program-value-1-1": "--dry-run"}
+        assert replacements == {"agm-program-value-1-1": "--no-stdlib"}
 
     def test_protection_leaves_unselected_and_non_host_values_unchanged(self) -> None:
         command = _command(_param("message", TextType()))
 
         assert protect_host_option_values(
-            ["--message", "value"], command, frozenset({"--dry-run"})
+            ["--message", "value"], command, frozenset({"--no-stdlib"})
         ) == (
             ["--message", "value"],
             {},
         )
         assert protect_host_option_values(
-            ["--message", "--dry-run"], None, frozenset({"--dry-run"})
+            ["--message", "--no-stdlib"], None, frozenset({"--no-stdlib"})
         ) == (
-            ["--message", "--dry-run"],
+            ["--message", "--no-stdlib"],
             {},
         )
 
@@ -1957,7 +2163,7 @@ class TestExecProgramName:
         )
 
     def test_an_inline_source_is_named_by_its_option(self) -> None:
-        assert exec_program_name(file=None, program=None) == "agm exec -c COMMAND"
+        assert exec_program_name(file=None, program=None) == "agm exec -c SOURCE"
 
 
 # ---------------------------------------------------------------------------

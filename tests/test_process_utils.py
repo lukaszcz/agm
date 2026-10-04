@@ -10,6 +10,8 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,6 +33,7 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
     terminate_process,
+    terminating_signals_exit,
     terminating_signals_raise_interrupt,
 )
 
@@ -116,6 +119,7 @@ def _patch_start_process(
         isolate_process_group: bool,
         stdin_text: str | None,
         interrupt_cleanup_cmd: list[str] | None = None,
+        stdout_to_file: bool = False,
     ) -> tuple[
         subprocess.Popen[bytes],
         list[threading.Thread],
@@ -377,27 +381,6 @@ class TestKillProcessGroup:
         assert proc.poll() is not None
         # Should not raise
         kill_process_group(proc)
-
-    def test_signals_an_explicit_process_group_instead_of_the_pid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A caller that isolated the child under its own group names it explicitly."""
-        groups: list[int] = []
-
-        class FakeProcess:
-            pid = 99999
-
-            def poll(self) -> int | None:
-                return None
-
-        def fake_killpg(pgid: int, sig: signal.Signals) -> None:
-            groups.append(pgid)
-            raise ProcessLookupError
-
-        monkeypatch.setattr(os, "killpg", fake_killpg)
-        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()), pgid=4242)
-
-        assert groups == [4242]
 
     def test_handles_process_lookup_error_on_killpg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeProcess:
@@ -1689,13 +1672,49 @@ class TestTerminationSignalsReachCleanup:
             with terminating_signals_raise_interrupt():
                 os.kill(os.getpid(), signal.SIGHUP)
 
-    def test_the_guard_restores_the_previous_dispositions(self) -> None:
+    @pytest.mark.parametrize("signum", (signal.SIGTERM, signal.SIGHUP))
+    def test_a_signal_inside_the_exit_guard_exits_with_its_conventional_status(
+        self, signum: signal.Signals
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            with terminating_signals_exit():
+                os.kill(os.getpid(), signum)
+
+        assert exc_info.value.code == 128 + signum
+
+    @pytest.mark.parametrize(
+        "guard", (terminating_signals_raise_interrupt, terminating_signals_exit)
+    )
+    def test_the_guard_restores_the_previous_dispositions(
+        self, guard: Callable[[], AbstractContextManager[None]]
+    ) -> None:
         before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
 
-        with terminating_signals_raise_interrupt():
+        with guard():
             pass
 
         assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
+
+    @pytest.mark.parametrize(
+        "guard", (terminating_signals_raise_interrupt, terminating_signals_exit)
+    )
+    def test_the_guard_is_a_no_op_off_the_main_thread(
+        self, guard: Callable[[], AbstractContextManager[None]]
+    ) -> None:
+        errors: list[BaseException] = []
+
+        def enter_guard() -> None:
+            try:
+                with guard():
+                    pass
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=enter_guard)
+        thread.start()
+        thread.join()
+
+        assert errors == []
 
     def test_a_registered_cleanup_command_arms_termination_signals(self) -> None:
         """While the child runs, SIGTERM must route into the cleanup path."""

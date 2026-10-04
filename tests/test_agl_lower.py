@@ -470,6 +470,36 @@ def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
     ) == (IrCapture(box_symbol, by_cell=False),)
 
 
+def test_constructor_descriptor_carries_lowered_field_defaults() -> None:
+    """A record's ``NominalDescriptor.field_defaults`` holds the lowered default
+    expression per field, ``None`` for a required field, in declaration order —
+    the same shape a function's ``IrFunctionParam.default`` carries.
+    """
+    from tests.agl.ir_harness import nominal_id_for
+
+    program = _lower("record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1)\n()")
+    nominal = nominal_id_for(program, "Point")
+    desc = program.nominals[nominal]
+    assert desc.fields == ("x", "y")
+    assert desc.field_defaults[0] is None
+    assert isinstance(desc.field_defaults[1], IrConstInt)
+    assert desc.field_defaults[1].value == 0
+
+
+def test_constructor_call_omitting_a_defaulted_field_lowers_to_use_default() -> None:
+    """A constructor call omitting a defaulted field lowers ``UseDefault(index)`` for
+    it, the same sentinel an omitted call argument uses against its callee's own
+    ``FunctionDescriptor.params`` — one code path, not a second default mechanism.
+    """
+    program = _lower("record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1)\n()")
+    entry = program.modules[program.entry_module]
+    root_capture = _let_root_capture(entry.initializers[0])
+    assert isinstance(root_capture.value, IrMakeRecord)
+    fields_dict = dict(root_capture.value.fields)
+    assert isinstance(fields_dict["x"], IrConstInt)
+    assert fields_dict["y"] == UseDefault(param_index=1)
+
+
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
     executable = _lower(
         "record Box[T]\n"
@@ -1171,7 +1201,7 @@ class TestSourcesTable:
         """
         prog = _lower("()")
         (src_id,) = prog.sources
-        assert prog.sources[src_id].display_name == "<command>"
+        assert prog.sources[src_id].display_name == "<code>"
 
     def test_source_normalized_text(self) -> None:
         src = "()"
@@ -1208,7 +1238,7 @@ class TestNominalsEmpty:
             )
 
         assert prog.nominals[nominal_id_for(prog, "ExecResult")].kind is NominalKind.RECORD
-        assert prog.nominals[nominal_id_for(prog, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[nominal_id_for(prog, "Agent")].kind is NominalKind.ENUM
         assert prog.nominals[nominal_id_for(prog, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_mutable_record_nominal_names_its_mutable_fields(self) -> None:
@@ -2824,6 +2854,102 @@ class TestHostOpLowering:
             assert node.contract_id in prog.contracts, (
                 f"{type(node).__name__}.contract_id {node.contract_id} not in program.contracts"
             )
+
+    def test_ask_sandbox_lowers_the_explicit_operand(self) -> None:
+        """ask(..., sandbox = ...) lowers the operand rather than loading the default."""
+        from agm.agl.ir.nodes import IrBuiltinLoad, IrMakeRecord
+
+        source = (
+            'let impl = AgentCommand("impl")\n'
+            'let r: text = ask("prompt", agent = impl, sandbox = AgentSandbox::Native)\n()'
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (ask_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind)) and isinstance(_let_root_capture(n).value, IrAsk)
+        ]
+        ask = ask_bind.value
+        assert isinstance(ask, IrAsk)
+        assert not isinstance(ask.sandbox, IrBuiltinLoad)
+        assert isinstance(ask.sandbox, IrMakeRecord)
+
+    def test_ask_without_sandbox_lowers_the_default_sandbox_builtin_load(self) -> None:
+        """An agent-routed ask() without 'sandbox' loads std/config::default-sandbox."""
+        from agm.agl.ir.builtin_vars import builtin_var_key
+        from agm.agl.ir.nodes import IrBuiltinLoad
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
+        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (ask_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind)) and isinstance(_let_root_capture(n).value, IrAsk)
+        ]
+        ask = ask_bind.value
+        assert isinstance(ask, IrAsk)
+        assert isinstance(ask.sandbox, IrBuiltinLoad)
+        assert ask.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
+
+    def test_ask_request_sandbox_lowers_the_explicit_operand(self) -> None:
+        """ask-request(..., sandbox = ...) lowers its own explicit operand, undecoded."""
+        from agm.agl.ir.nodes import IrAskRequest, IrBuiltinLoad, IrMakeRecord
+
+        source = 'let req = ask-request("prompt", sandbox = AgentSandbox::Disabled)\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (req_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        ]
+        req = req_bind.value
+        assert isinstance(req, IrAskRequest)
+        assert not isinstance(req.sandbox, IrBuiltinLoad)
+        assert isinstance(req.sandbox, IrMakeRecord)
+
+    def test_ask_request_without_sandbox_lowers_the_default_sandbox_builtin_load(self) -> None:
+        """An ask-request() without 'sandbox' loads std/config::default-sandbox, like ask()."""
+        from agm.agl.ir.builtin_vars import builtin_var_key
+        from agm.agl.ir.nodes import IrAskRequest, IrBuiltinLoad
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("prompt", agent = worker)\n()'
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (req_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        ]
+        req = req_bind.value
+        assert isinstance(req, IrAskRequest)
+        assert isinstance(req.sandbox, IrBuiltinLoad)
+        assert req.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
+
+    def test_session_ask_lowers_with_no_sandbox_operand(self) -> None:
+        """Session::ask lowers to IrSessionAsk, which carries no sandbox field at all."""
+        from agm.agl.ir.nodes import IrSessionAsk
+
+        source = 'let s = Session::default()\nlet r: text = s.ask("prompt")\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        session_ask_binds = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrSessionAsk)
+        ]
+        assert len(session_ask_binds) == 1
+        assert not hasattr(session_ask_binds[0].value, "sandbox")
 
 
 # ---------------------------------------------------------------------------

@@ -150,7 +150,6 @@ from agm.agl.ir.operations import (
     ToJson,
 )
 from agm.agl.ir.program import (
-    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     ExternFunctionBody,
@@ -188,7 +187,6 @@ __all__ = [
     "DecodeSchema",
     "DictDecode",
     "DictEncode",
-    "DryRunEntry",
     "EncodeDefinition",
     "EncodePlan",
     "EncodeSchema",

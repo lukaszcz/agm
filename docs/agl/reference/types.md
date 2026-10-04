@@ -205,7 +205,7 @@ Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
 every alias shares the same underlying object. Elements and values are read
 with indexing (`xs[0]`, `metadata["key"]`). An array or dict can be updated
-in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#destructive-assignment)
 for the assignment-root rules and evaluation order. There is no `len`
 operator.
 
@@ -384,7 +384,7 @@ A `T` requiring structure parses strict JSON or
 data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
 `text as json`, which wraps the text as a JSON string instead of parsing it
 (see [`text as json` — embedding, not
-parsing](#text-as-json--embedding-not-parsing)). A `text` target returns the
+parsing](#text-as-json-embedding-not-parsing)). A `text` target returns the
 text unchanged.
 
 `T` comes from an explicit `::[T]` type argument or the contextual expected
@@ -463,24 +463,15 @@ timed-out: bool
 
 Field access works normally: `res.stdout`, `res.exit-code`, etc.
 
-### `ParsePolicy`
-
-An enum used as the `on-parse-error` argument to `ask` and typed `exec`:
-
-```text
-enum ParsePolicy
-  | Abort
-  | Retry(n: int)
-```
-
-`Abort` is the portable default. `Retry(n: N)` permits up to `N`
-corrective retries after the initial attempt.
-
 ### `Agent`
 
 `Agent` is a built-in enum describing an agent backend. Its members are the
-record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
-`AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
+record types `AgentCommand(command)`, `AgentClaude(model = "", thinking = "")`,
+`AgentCodex(model = "", thinking = "")`, and
+`AgentPi(provider = "", model = "", thinking = "")`, so `AgentClaude()` and
+`AgentClaude(thinking = "high")` are valid; an empty field selects no provider,
+model, or effort unless the host configures a default
+([`agm exec`](../../commands/agl.md#agent-defaults)).
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
 member record exposes its own fields and, through the member/enum method rule
 ([Methods](functions.md#methods)), `Agent`'s own methods. Its standard-library
@@ -488,6 +479,36 @@ member record exposes its own fields and, through the member/enum method rule
 `agent.ask(...)` and `agent.ask-request(...)` select that agent for the
 operation. Projecting either member produces a function value that captures
 that agent; see [Agent calls](agent-calls.md) for dispatch behavior.
+
+### `Sandbox`
+
+`Sandbox` is a built-in record naming a sandboxed run's resource limits:
+
+```text
+record Sandbox
+  memory:   Optional[text] = Default
+  swap:     Optional[text] = Default
+  settings: Option[path]   = None
+  patch:    bool           = true
+```
+
+Every field defaults, so the bare `Sandbox`, the empty call `Sandbox()`, and a
+partial call such as `Sandbox(memory = Some("8G"))` are all valid
+constructions (see [Fieldless and all-defaulted constructor
+references](expressions.md#fieldless-and-all-defaulted-constructor-references)).
+
+### `AgentSandbox`
+
+`AgentSandbox` is a built-in enum selecting a sandboxing mode: `Disabled`,
+`Native`, or a referenced `Sandbox` record ([Enum types](#enum-types)). Because
+the third member references `Sandbox` rather than declaring its own record, a
+`Sandbox` value widens into an `AgentSandbox`-typed slot with no rewrapping,
+and `is`/`case` reach it under its own name (`Sandbox`, not
+`AgentSandbox::Sandbox`) — see [Enum member
+construction](expressions.md#enum-member-construction) and `is`/`is not`
+([Expressions](expressions.md)). See
+[Engine settings](host-environment.md#engine-settings) for
+`std/config::default-sandbox`.
 
 ### `AgentRequest`
 
@@ -504,13 +525,15 @@ record AgentRequest
   attempt:             int
   previous-error:      Option[text]
   metadata:            json
+  sandbox:             AgentSandbox
 ```
 
 `target-type`, `format-instructions`, and `json-schema` record the output
 contract selected by the call's type argument and parse-shaping options; the
 latter two are `None` whenever the contract has nothing to state, as for a
 `text` output. `previous-error` is `None` because it constructs only the
-first-attempt request.
+first-attempt request. `sandbox` is the call's `sandbox` argument, defaulting
+to `std/config::default-sandbox` exactly as it does for `ask`.
 
 ### `SessionTransport`
 
@@ -527,15 +550,23 @@ record Session
   id:        text
   agent:     Agent
   transport: SessionTransport
+  sandbox:   AgentSandbox
 ```
 
-Create one with `Session::open(agent, transport = None, name = "")`, or obtain
-the lazy default conversation with `Session::default()`. Its methods are `ask`,
+Create one with `Session::open(agent, transport = None, name = "", sandbox =
+std/config::default-sandbox, env = std/env::environ)`, or obtain the lazy
+default conversation with `Session::default()`. Its methods are `ask`,
 `compact`, `reset`, `fork`, `stats`, `set-name`, and `close`; each can also be
 projected as a receiver-capturing function value. `Session::open`,
 `Session::default`, and qualified method names are function values as well.
 Backend support for optional lifecycle operations varies. See
 [Agent calls](agent-calls.md#sessions).
+
+`sandbox` and `env` fix the session's sandboxing mode and process environment
+for its whole lifetime, decided once when the session opens; `Session::ask`
+has neither argument, and a later write to `std/config::default-sandbox` or
+`std/env::setenv` never reaches an already-open session. `fork` carries the
+parent's `sandbox` and `env` to the child unchanged.
 
 Source cannot invoke the `Session` constructor. A `Session`, or a nominal or
 container value that transitively contains one, is opaque non-data: it cannot
@@ -610,11 +641,16 @@ record Issue
   description: text
 ```
 
-All fields are required. `var` is valid on records and enum-member records,
-not exceptions. It affects assignment only, not construction or the field's
-type. A fieldless record omits the body (`record R1`), which is the same as an
-empty parenthesized field list (`record R1()`). Its constructor reference in
-value position constructs an `R1` value; see [Expressions](expressions.md#fieldless-constructor-references).
+A field without a `=` default is required. A field with `= <constant expr>`
+is optional: a call that omits it uses the default. `var` is valid on
+records and enum-member records, not exceptions. It affects assignment
+only, not construction or the field's type. A fieldless record omits the body
+(`record R1`) or uses an empty parenthesized field list (`record R1()`). Its constructor reference in
+value position constructs an `R1` value; a record whose every field has a
+default behaves the same way — its bare reference constructs it with every
+default, exactly like `R1()` or `R1`; see
+[Expressions](expressions.md#fieldless-and-all-defaulted-constructor-references).
+
 By default, record fields are **standard**: they may be supplied positionally
 or as `field = value`:
 
@@ -673,7 +709,7 @@ follows the same zones — see
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
 they have the same name and the same fields — see
-[Module- and scope-qualified type identity](#module--and-scope-qualified-type-identity).
+[Module- and scope-qualified type identity](#module-and-scope-qualified-type-identity).
 A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
@@ -696,6 +732,24 @@ enum FixResult
   | Complete(output: text)
   | Changed(output: text)
   | Blocked(reason: text, recoverable: bool)
+```
+
+A member's fields may instead be written in an indented block under the
+member, one per line without parentheses or commas, exactly as in a `record`
+declaration. An attribute may then sit on the line above its field. Both
+forms are legal within one enum, which by convention uses one throughout:
+
+```agl
+enum VerifyResult
+  | Verified
+  | Completed
+      @doc("absolute file path of the next unblocked task")
+      next-task-file: path
+  | Rejected
+      reason: text
+  | Blocked
+      reason: text
+      recoverable: bool = false
 ```
 
 A qualified member spelling instead references an existing record. The
@@ -771,8 +825,8 @@ enum Triple
 
 Construction, qualification, and ambiguity rules are covered in
 [Expressions](expressions.md); destructuring in
-[Pattern matching](pattern-matching.md); the JSON wire shape (the `"$case"`
-tag) in [Agent calls](agent-calls.md).
+[Pattern matching](pattern-matching.md); the JSON wire shape (a member tag
+string, or a `"$case"`-tagged object) in [Agent calls](agent-calls.md).
 
 `builtin enum` similarly declares a host-recognized nominal enum type. Its
 member names and fields must match the built-in shape exactly.
@@ -1216,7 +1270,7 @@ Typing is exact nominal matching with these implicit coercions:
    applies only against a known base-exception slot and preserves the value's
    concrete identity; the same widening is available explicitly as `as` to a
    named ancestor type. It does not propagate through containers. See
-   [`try`/`catch`](exceptions.md#try--catch) for how a `catch` clause matches
+   [`try`/`catch`](exceptions.md#try-catch) for how a `catch` clause matches
    this hierarchy.
 6. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
@@ -1224,7 +1278,11 @@ Typing is exact nominal matching with these implicit coercions:
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
 7. Equality (`==`, `!=`) and ordering comparisons require both operands to
-   have the *same* type after rule 1. Operands whose type is, or transitively
+   have the *same* type after rule 1. Equality also accepts operands where
+   either one's type widens to the other's by rules 3–5, so
+   `opt == None`, `Some(1) == opt`, and a derived exception against an
+   ancestor-typed value all check; two distinct members (`Some(1) == None`)
+   do not. Operands whose type is, or transitively
    contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
 8. All branches of a `case` expression must have the same type after rule 1.
@@ -1310,7 +1368,7 @@ may raise `CastError`.
 | exception type `T` | `T` itself, or any descendant of `T` in its `extends` chain | total identity upcast (no-op) — includes casting to the root `Exception` |
 | exception type `T` | any ancestor of `T` in its `extends` chain | fallible identity downcast — checks that the runtime type is `T` or a descendant of `T` |
 | exception type | `text`, `json` | **static cast error** — an exception cannot be decoded from text or JSON |
-| `Agent` | `text` | fallible — shorthand, a JSON object, or an `Agent` member constructor call; no verbatim command fallback |
+| `Agent` | `text` | fallible — a JSON object, an `Agent` member constructor call, or shorthand; no verbatim command fallback |
 | `Agent` | `json` | fallible — validates a tagged `Agent` member object |
 | any type | `unit`, function type | **static cast error** |
 | `unit`, function type | any type | **static cast error** |
@@ -1422,11 +1480,12 @@ exactly one well-formed JSON value, or exactly one value-syntax literal, with
 no surrounding prose, no Markdown fences, and no recovery either way — and
 the result is then validated the same way. This contrasts with agent-output
 parsing, which uses lenient recovery by default. A cast to `Agent` from
-`text` accepts the same shorthand, JSON object, or member constructor call a
+`text` accepts the same JSON object, member constructor call, or shorthand a
 host `Agent` parameter reads, but never falls back to a verbatim command; a
 cast to `Agent` from `json` validates a tagged member object the same way any
-other enum does. `parse`/`try-parse` apply the same rule under a different
-exception — see [Parsing values](#parsing-values) above.
+other enum with a fielded member does. `parse`/`try-parse` apply the same
+rule under a different exception — see [Parsing values](#parsing-values)
+above.
 
 ### `decimal as int` integrality
 
@@ -1445,10 +1504,17 @@ conversion:
 - **record** → a JSON object with one key per field, in declaration order,
   keyed by each field's effective JSON name (declared name unless overridden
   by [`@name`/`@json-name`](attributes.md#name-and-json-name)).
-- **enum** → a JSON object with a `"$case"` key holding the member's
-  effective JSON tag, plus one key per member-record field, each by its
-  effective JSON name. The same record in a record-typed slot has no
-  `"$case"` key.
+- **plain enum** (every member fieldless) → the JSON string of the member's
+  effective JSON tag: `"Pass"`.
+- **any other enum** → a JSON object with a `"$case"` key holding the
+  member's effective JSON tag, plus one key per member-record field, each by
+  its effective JSON name. A fieldless member of such an enum is the object
+  with only its `"$case"` key.
+
+  The shape follows the slot's enum type, not the value: a record that is a
+  member of both a plain and a non-plain enum is a string in the first slot
+  and a tagged object in the second, and in a record-typed slot it is the
+  record's own object, with no `"$case"` key.
 - **exception** → a JSON object with every field of the value's runtime
   exception type, in declaration order, each keyed by its effective JSON name.
 - **`array[E]`/`dict[K, V]`** → the JSON array, or the dict's key-directed
@@ -1512,7 +1578,8 @@ Every **data** type has full value equality (`==` / `!=`):
 - Arrays compare element-wise; dictionaries compare by key set and per-key
   values.
 - Records compare by nominal type and field values; enum values compare by
-  their member-record nominal type and field values.
+  their member-record nominal type and field values, so an enum-typed value
+  compares with a member-typed one by value.
 - `json` values compare structurally.
 
 Equality is cycle-safe: cyclic values, including cycles closed through `var`

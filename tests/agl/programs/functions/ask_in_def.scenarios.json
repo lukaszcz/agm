@@ -44,6 +44,7 @@
     },
     {
       "name": "first_call_aborts_on_bad_response",
+      "runtime": {"parse_error_retries": 0},
       "params": {
         "topic": "chapter"
       },

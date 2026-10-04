@@ -118,7 +118,6 @@ def drive(
     *,
     session: ReplSession | None = None,
     echo: bool = True,
-    check_only: bool = False,
 ) -> str:
     """Feed *keystrokes* to a headless REPL and return everything it printed."""
     repl_session = session if session is not None else ReplSession()
@@ -132,7 +131,6 @@ def drive(
             run_console(
                 repl_session,
                 echo=echo,
-                check_only=check_only,
                 history_path=None,  # InMemoryHistory — never touch real $HOME
                 input=pipe,
                 output=DummyOutput(),
@@ -953,37 +951,7 @@ class TestEvalOutput:
         assert ": error:" in output.lower()
 
 
-class TestDryRun:
-    def test_check_only_binding_shows_type_no_value(self) -> None:
-        session = ReplSession()
-        output = drive("let x = 5\r\x04", session=session, check_only=True)
-        assert "x : int" in output
-        assert "= 5" not in output  # no value in dry-run
-        assert session.bindings() == []  # nothing persisted
-
-    def test_check_only_expression_shows_type(self) -> None:
-        output = drive("1 + 2\r\x04", check_only=True)
-        assert ": int" in output
-        assert "3" not in output  # the value is never computed
-
-    def test_check_only_agent_call_typechecks_without_firing(self) -> None:
-        # An entry with an agent call type-checks and echoes its type, but the fake agent
-        # is never invoked and no binding is persisted.
-        agent = _CountingAgent("should-not-be-used")
-        session = ReplSession(agent_dispatcher=agent, default_stdlib=True)
-        output = drive(
-            'let g: text = ask """say something"""\r\x04',
-            session=session,
-            check_only=True,
-        )
-        assert "g : text" in output
-        assert agent.calls == 0  # no agent fired in dry-run
-        assert session.bindings() == []  # no binding persisted
-
-    def test_check_only_error_still_reports_diagnostic(self) -> None:
-        output = drive("let = 5\r\x04", check_only=True)
-        assert ": error:" in output.lower()
-
+class TestMeta:
     def test_help_meta_prints_commands(self) -> None:
         output = drive(":help\r\x04")
         assert ":help" in output

@@ -9,13 +9,15 @@ source.
 | `agm pkg init [DIR] [--name NAME] [--version VERSION]` | Scaffold a new package |
 | `agm pkg check [DIR]` | Validate a package directory |
 | `agm pkg create [DIR] [-o FILE]` | Validate and write a `<name>-<version>.agmpkg` archive |
-| `agm pkg install SRC [--editable] [--shadow]` | Install and activate a directory or archive |
-| `agm pkg uninstall NAME` | Remove an active package |
+| `agm pkg install SRC [--editable] [--reinstall] [--shadow]` | Install and activate a directory or archive |
+| `agm pkg switch NAME@VERSION` | Switch the globally active version |
+| `agm pkg uninstall NAME[@VERSION]` | Remove the active package or an exact stored version |
 | `agm pkg list` | List installed versions and active editable packages |
 | `agm pkg info NAME` | Show an active package's metadata and dependency status |
 | `agm pkg sync` | Install the active packages' unsatisfied Python requirements |
 
-`DIR` defaults to the current directory. Every command honors the global `--dry-run` flag.
+`DIR` defaults to the current directory. `--dry-run` is available on commands that report
+planned operations; read-only `check`, `list`, and `info` do not accept it.
 
 ## Quick start: a package with a command
 
@@ -56,13 +58,16 @@ review-tools/
   prompts/            # resources: anything outside the module tree
 ```
 
-The package name is one AgL identifier segment and not a reserved keyword. Package modules may
+The package name is one AgL identifier segment and not a reserved keyword. `pkg check`,
+`pkg create`, and `pkg install` also reject a name AGM reserves: a built-in command or root alias
+(`wsp`, `wt`), or one of AGM's own config sections (`agent`, `deps`, `modules`, `packages`,
+`params`). Package modules may
 import only their own tree, packages declared in `[dependencies]`, and `std`.
 
 ## Manifest
 
-`package.toml` supports `[package]` (required), `[dependencies]`, `[python]`, `[commands]`, and
-`[aliases]`.
+`package.toml` supports `[package]` (required), `[dependencies]`, `[python]`, `[commands]`,
+`[aliases]`, and `[config]`.
 `pkg check`, `pkg create`, and `pkg install` reject a key the schema does not define, so a
 misspelled field is an error rather than silently ignored.
 
@@ -70,7 +75,7 @@ misspelled field is an error rather than silently ignored.
 
 ```toml
 [package]
-name = "review-tools"          # required: one AgL identifier segment, not a keyword
+name = "review-tools"          # required: one AgL identifier segment, not a keyword or reserved name
 version = "1.0.0"              # required: complete semantic version
 description = "Review workflows"
 license = "MIT"
@@ -116,7 +121,7 @@ values incomparably (such as `os_name ~= "posix"`) — are manifest errors. A di
 listed more than once, for example with markers selecting per-environment variants.
 Requirements are stored verbatim, as declared, and are part of the package's content hash.
 [`install`](#commands) and [`sync`](#commands) install unsatisfied requirements into that
-environment (`just install` ends with `agm pkg sync`); [`check`](#commands) and
+environment; [`check`](#commands) and
 [`info`](#commands) only report them. The activation index is the source of truth: `sync` installs
 only the requirements of active packages. A program whose run imports one of the package's
 companions while a requirement is unsatisfied fails before running, with an error naming the
@@ -136,7 +141,11 @@ program = "review-tools/main::batch"
 
 - Nested table components become command words: `[commands.devel.review]` registers `devel
   review`. The equivalent quoted flat form, `[commands."devel review"]`, is also accepted. A path
-  cannot start with a built-in command or root alias (`wsp`, `wt`).
+  cannot start with a built-in command or root alias (`wsp`, `wt`). `pkg check`/`create`/`install`
+  also reject a path (including an `@command` path) starting with one of AGM's config sections,
+  like a package name; an already-installed registration still loads, dispatches, and uninstalls,
+  but one starting with a schema section (`agent`, `deps`, `modules`, `packages`, `params`) gets
+  no command-path config table, exact or inherited.
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its signature arguments and closure module
@@ -146,8 +155,9 @@ program = "review-tools/main::batch"
   signature options followed by one section for each closure module with visible module
   parameters. Parameter `@doc` attributes describe their options.
 - Omit `program` for a command group (must have descendant commands), whose only prose is its own
-  `doc` (TOML multiline strings work). Undeclared parent groups work automatically, with generated
-  help listing their descendants. A listing shows the opening paragraph of each command's `doc`,
+  `doc` (TOML multiline strings work; a paragraph holding an indented line keeps its layout in
+  help). Undeclared parent groups work automatically, with generated help listing their
+  descendants. A listing shows the opening paragraph of each command's `doc`,
   falling back to a generated summary when there is none.
 
 ```toml
@@ -164,7 +174,8 @@ rev = "devel review"
 
 `agm devel`, `agm devel --help`, and `agm help devel` show the group's guidance and a generated
 subcommand listing. Leaf commands generate usage and option help from their program signatures and
-closure module parameters, so authored help is optional.
+closure module parameters, so authored help is optional. Invalid or missing program arguments show
+that command's usage.
 
 A program may register its own command instead, via
 [`@command`](../agl/reference/attributes.md#command) on the `program def`
@@ -194,7 +205,48 @@ address the same program route (signature arguments, engine settings, and resolv
 parameters, bare or dotted-qualified), even via `agm exec`. Different keys in these tables
 combine; setting the same key
 through multiple spellings in one layer is an ambiguity error, and a later config layer overrides
-an earlier one. CLI flags still take precedence. Group tables do not supply inherited defaults.
+an earlier one. CLI flags still take precedence.
+
+A group table also supplies defaults to every command beneath it: `[devel]` and, through the
+`dev = "devel"` alias, `[dev]` both feed `devel review`, however it is invoked. Its own command's
+exact table always wins over an inherited group table, regardless of which config layer set either
+one; among group tables, a deeper one wins, and a same-depth pair (an alias and its canonical, or
+two sibling group tables) setting one key in one config layer is an ambiguity error, just like two
+spellings of an exact table. A command's own table also feeds every registered command beneath
+it — `[devel.sub]` feeds `devel sub review` when `devel sub` is itself a command — and a key it
+sets is never reported as an unconsumed argument on that ancestor command, since the descendant
+command may be the one that consumes it.
+
+### `[config]`
+
+```toml
+[config]                          # root leaves: defaults for every program the package owns
+trace = true
+"std.http.http-timeout" = "30s"   # module parameter, bare or dotted spelling
+
+[config.devel]                    # a registered command, group, or alias path: `devel`
+timeout = "1h"
+
+[config.devel.review]             # command `devel review`
+default-agent = "claude/opus"
+```
+
+Package-author defaults: root leaves apply to every program the package owns, and each nested
+table names one of the package's own registered command, group, or alias paths
+(`@command`-registered paths included). A leaf is an engine setting or a `@param` binding's bare
+or dotted spelling — never a program signature argument — and must be reachable from the
+package's own import graph: a dependency or `std` module the package never imports contributes no
+spelling. `pkg check`/`create`/`install` reject an unregistered nested table, an unknown leaf, an
+engine value that fails to decode, and a word that is ambiguously both a registered subcommand and
+a setting spelling. At run time, whenever the selected program is owned by the package (run as a
+registered command, an installed reference, or a file path), its command table beats an inherited
+group table beats the root, ranking below config-file program, command, and group tables and
+`@config`, and above `[exec]` and a module's own module route (see the Configuration bullet
+below); a relative path-valued engine key such as `trace-file` resolves against the current
+working directory, like a CLI flag value, never against the package root. Validation checks
+spellings against the whole closure; a leaf in a command's own table that the selected program
+does not consume (a parameter outside its import graph, or a bare name its signature shadows)
+is ignored with a run-time warning, like an unused config-file key.
 
 ## Registered commands
 
@@ -210,26 +262,28 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   Help groups visible module parameters by declaring module, and completion offers their resolving
   spellings. See [Program arguments](agl.md#program-arguments) and
   [Module parameters](agl.md#module-parameters). A registered command reserves its run-time
-  options, `--dry-run`, and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
+  options and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
   reserves, such as `--module-path` or `-p`, which `agm exec` still rejects.
 - **Run-time options.** `agm exec`'s engine-setting flags (`--strict-json`/`--no-strict-json`,
-  `--default-agent`, `--timeout`/`--no-timeout`, `--trace`/`--no-trace`,
-  `--trace-file`/`--no-trace-file`) and `--max-call-depth` work as for
-  [`agm exec`](agl.md#agm-exec), anywhere after the command path.
+  `--default-agent`, `--default-sandbox`, `--timeout`/`--no-timeout`, `--trace`/`--no-trace`,
+  `--trace-file`, `--debug`/`--no-debug`, `--parse-error-retries`) and `--max-call-depth` work
+  as for [`agm exec`](agl.md#agm-exec), anywhere after the command path.
 - **Configuration.** Omitted signature arguments and engine settings use the program route:
   the program's qualified table (e.g. `[review-tools.main.review]` for
   `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`
   for command `dev review`). Both name the same program regardless of how it runs, so setting
-  one key through both in one config layer is an error. The program's own
+  one key through both in one config layer is an error. Below either, an inherited group table —
+  a proper prefix of a command path, such as `[dev]` for `dev review` (see
+  [Aliases](#aliases)) — supplies further defaults. The program's own
   [`@config`](../agl/reference/attributes.md#config) entries rank below the program route: an
   engine setting falls through to `@config` before `[exec]`, and a module parameter falls
-  through to `@config` before its declaring module's module route. A resolving program-route
-  leaf — its bare external name, or a dotted qualified spelling as a quoted key — still overrides
-  both. CLI values win over all of them; `@opt-env` reaches a module parameter the same way, but
-  not an engine setting, which only a source `std/config` write outranks. See
-  [Configuration](agl.md#configuration).
-- **`--dry-run`**, before or after the command path, runs the static pipeline and host-input
-  validation without executing.
+  through to `@config` before its declaring module's module route. Below `@config`, the owning
+  package's manifest [`[config]`](#config) supplies further defaults — its own command table,
+  then an inherited group table, then the root — still above `[exec]` and a module's own module
+  route. A resolving program-route leaf — its bare external name, or a dotted qualified spelling
+  as a quoted key — still overrides both. CLI values win over all of them; `@opt-env` reaches a
+  module parameter the same way, but not an engine setting, which only a source `std/config`
+  write outranks. See [Configuration](agl.md#configuration).
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
   `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation
   index preserves it.
@@ -268,9 +322,12 @@ every path-only dependency needs a stored version or `url` first.
 the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. From a
 directory source it first merges the module tree's `@command` registrations into the manifest, so
 the stored package carries one complete command table. Activation is published atomically only
-after the resulting selection validates; a failed install leaves nothing active. Dependencies
-resolve from the store first, then a declared `path` (installed alongside), then a `url` (fetched
-and hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
+after the resulting selection validates; a failed install leaves nothing active. If a package with
+the same name and version already exists with different contents, install reports that identity and
+suggests `--reinstall`. That flag completely replaces the immutable store tree, restoring the
+previous tree if activation fails. It cannot be combined with `--editable`. Dependencies resolve
+from the store first, then a declared `path` (installed alongside), then a `url` (fetched and
+hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
 metadata included, as above). `--editable` activates the source directory in place: no copy, no
 `RECORD`, edits visible immediately, and its command table is re-derived from source on each
 dispatch. Before activation is published, if AGM's interpreter environment does not satisfy some
@@ -281,9 +338,14 @@ already satisfied distributions are left alone, and conflicting requirements acr
 the install rather than downgrading one. An installer failure or interruption fails the install and
 leaves the store as it was. `--dry-run` prints the installer command instead of running it.
 
+**`switch NAME@VERSION`** selects an exact stored version as globally active. The previous version
+remains installed. Activation validates package dependencies and registered commands.
+
 **`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command
-ownership displaced by the removed package is restored. Python distributions are never removed.
+ownership displaced by the removed package is restored. `uninstall NAME@VERSION` removes that exact
+stored version; when another version is active, activation stays unchanged. A matching active
+editable package is deactivated. Python distributions are never removed.
 
 **`list`** shows every stored version as `active` or `installed`, and every active editable
 package.
@@ -299,7 +361,7 @@ when some `[python]` requirement of an active package (store or editable) is uns
 union of every active package's requirements is installed exactly as `install` does, and each
 previously unsatisfied requirement is listed; otherwise it reports that all are satisfied and runs
 no installer. An installer failure exits non-zero. `--dry-run` prints the installer command
-instead of running it. `just install` ends by running the freshly installed `agm pkg sync`.
+instead of running it.
 
 ## Version pins
 
@@ -314,14 +376,14 @@ platform-tools = "1.0.0+linux"
 Pins live in any layered `config.toml` (install prefix, AGM home, project `config/config.toml`,
 then `.agm/config.toml`), merge by name with later layers winning, and select an exact identity that
 must already be a valid stored version. A pin affects module roots, command dispatch, help, and
-completion for the invocation only; it never installs or fetches, and `list`/`info` ignore it. A
-development checkout of the same name discovered from the execution root still takes precedence.
+completion for the invocation only; it never installs or fetches. The `list` and `info` commands
+report the active package set. A development checkout of the same name discovered from the
+execution root still takes precedence.
 
 ## The `std` package
 
-The standard library is a managed package at the running AGM's version, refreshed only by
-`just install`; it cannot be installed or uninstalled. A refresh across a release line deactivates
-packages requiring the old line and their dependents, keeping their store trees.
+The standard library is a managed package at the running AGM's version. Installation accepts
+only the shipped source at that version, and the package cannot be uninstalled.
 
 ## Limits
 

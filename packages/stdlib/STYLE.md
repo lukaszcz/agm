@@ -47,6 +47,14 @@ bind an argument.
 
 ## Declarations
 
+- Separate extern and builtin function declarations with a blank line before the next
+  declaration's attributes.
+
+- Document functions with `@doc` on a separate line before the declaration.
+  Start with one concise sentence describing the function. Put exception
+  conditions and other notes in separate paragraphs; use a block string for
+  multiline documentation.
+
 - Declare a record's fields in the indented block form, one field per line,
   rather than in a parenthesized list:
 
@@ -70,6 +78,25 @@ bind an argument.
   ```agl
   record Token
   exception AuthError extends ApiError
+  ```
+
+- Write an enum's member fields in one form throughout. Use the indented block
+  form, one field per line under the member, for every member once any member
+  has more than three fields or an attributed field. Otherwise keep the
+  parenthesized lists:
+
+  ```agl
+  enum FixResult
+    | Complete(output: text)
+    | Blocked(reason: text, recoverable: bool)
+
+  enum VerifyResult
+    | Verified
+    | Rejected
+        reason: text
+    | Completed
+        @doc("absolute file path of the next unblocked task")
+        next-task-file: path
   ```
 
 ## Companion Python

@@ -34,7 +34,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.repl as repl_command
-from agm.agent.spec import AgentPi, AgentSpec
+from agm.agent.spec import AgentPi, AgentSpec, PermissionMode
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
@@ -42,6 +42,7 @@ from agm.agl.runtime.types import ParamBindingInfo
 from agm.cli_support.args import ReplArgs
 from agm.config.general import GeneralConfig
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.request import SandboxLimits
 
 
 class RecordedArgs(Protocol):
@@ -90,6 +91,15 @@ class TestReplArgsParsing:
         result = invoke(runner, ["repl", "--input", "a=1"])
         assert result.exit_code != 0  # unknown option
 
+    def test_dry_run_option_removed(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["repl", "--dry-run"])
+        assert result.exit_code != 0
+
+    def test_help_omits_dry_run_option(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["repl", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" not in result.output
+
     def test_strict_json_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is True
@@ -108,6 +118,13 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--quiet"]).exit_code == 0
         assert getattr(recorded_runs[0], "quiet") is True
 
+    @pytest.mark.parametrize(("flag", "expected"), [("--echo", True), ("--no-echo", False)])
+    def test_agent_output_echo_flags(
+        self, runner: CliRunner, recorded_runs: list[object], flag: str, expected: bool
+    ) -> None:
+        assert invoke(runner, ["repl", flag]).exit_code == 0
+        assert getattr(recorded_runs[0], "echo") is expected
+
     def test_trace_file_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--trace-file", "/tmp/r.log"]).exit_code == 0
         assert getattr(recorded_runs[0], "trace_file") == "/tmp/r.log"
@@ -120,14 +137,51 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--plain"]).exit_code == 0
         assert getattr(recorded_runs[0], "plain") is True
 
+    @pytest.mark.parametrize(
+        ("argv", "field", "expected"),
+        [
+            (["--timeout", "5s"], "timeout", "5s"),
+            (["--no-timeout"], "no_timeout", True),
+        ],
+    )
+    def test_accepts_every_exec_execution_option(
+        self,
+        runner: CliRunner,
+        recorded_runs: list[object],
+        argv: list[str],
+        field: str,
+        expected: object,
+    ) -> None:
+        assert invoke(runner, ["repl", *argv]).exit_code == 0
+        assert getattr(recorded_runs[0], field) == expected
+
 
 class TestReplMutualExclusion:
+    def test_rejects_removed_no_trace_file_flag(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        assert invoke(runner, ["repl", "--no-trace-file"]).exit_code != 0
+        assert recorded_runs == []
+
     def test_no_trace_and_trace_file_conflict(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
         result = invoke(runner, ["repl", "--no-trace", "--trace-file", "/tmp/x.log"])
         assert result.exit_code == 1
         assert recorded_runs == []  # never dispatched
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--timeout", "5s", "--no-timeout"],
+            ["--trace-file", "x.jsonl", "--trace"],
+        ],
+    )
+    def test_exclusive_execution_options_conflict(
+        self, runner: CliRunner, recorded_runs: list[object], argv: list[str]
+    ) -> None:
+        assert invoke(runner, ["repl", *argv]).exit_code == 1
+        assert recorded_runs == []
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +209,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
         *,
         echo: bool = True,
         echo_unit: bool = False,
-        check_only: bool = False,
         theme: str = "auto",
         on_setting_save: object = None,
         stdin: object = None,
@@ -166,7 +219,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
                 "session": session,
                 "echo": echo,
                 "echo_unit": echo_unit,
-                "check_only": check_only,
                 "theme": theme,
                 "on_setting_save": on_setting_save,
             }
@@ -197,7 +249,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         *,
         echo: bool = True,
         echo_unit: bool = False,
-        check_only: bool = False,
         history_path: Path | None = None,
         theme: str = "auto",
         on_setting_save: object = None,
@@ -209,7 +260,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
                 "session": session,
                 "echo": echo,
                 "echo_unit": echo_unit,
-                "check_only": check_only,
                 "history_path": history_path,
                 "theme": theme,
                 "on_setting_save": on_setting_save,
@@ -238,8 +288,12 @@ def _args(
     no_trace: bool = False,
     trace: bool = False,
     trace_file: str | None = None,
+    timeout: str | None = None,
+    no_timeout: bool = False,
     default_agent: str | None = None,
+    default_sandbox: str | None = None,
     no_stdlib: bool = False,
+    parse_error_retries: int | None = None,
     plain: bool = True,
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields.
@@ -255,8 +309,12 @@ def _args(
         no_trace=no_trace,
         trace=trace,
         trace_file=trace_file,
+        timeout=timeout,
+        no_timeout=no_timeout,
         default_agent=default_agent,
+        default_sandbox=default_sandbox,
         no_stdlib=no_stdlib,
+        parse_error_retries=parse_error_retries,
         plain=plain,
     )
 
@@ -297,23 +355,52 @@ class TestReplRun:
         class SessionHost:
             def __init__(self) -> None:
                 self._sessions: dict[str, tuple[AgentSpec, str]] = {}
+                self._sandboxing: dict[str, tuple[PermissionMode, SandboxLimits | None]] = {}
+                self._envs: dict[str, dict[str, str]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
                 self.prompts: list[tuple[str, str]] = []
                 self.close_calls = 0
                 self.closed_handles: set[str] = set()
 
-            def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+            def open(
+                self,
+                agent: AgentSpec,
+                transport: str,
+                *,
+                name: str = "",
+                permission_mode: PermissionMode = PermissionMode.NONE,
+                sandbox: SandboxLimits | None = None,
+                env: dict[str, str] | None = None,
+            ) -> str:
                 del name
                 assert isinstance(agent, AgentPi)
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
+                self._sandboxing[handle] = (permission_mode, sandbox)
+                self._envs[handle] = env or {}
                 self.opened.append(agent.provider)
                 return handle
 
-            def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+            def default(
+                self,
+                agent: AgentSpec,
+                transport: str,
+                *,
+                name: str = "",
+                permission_mode: PermissionMode = PermissionMode.NONE,
+                sandbox: SandboxLimits | None = None,
+                env: dict[str, str] | None = None,
+            ) -> str:
                 if self._default_handle is None:
-                    self._default_handle = self.open(agent, transport, name=name)
+                    self._default_handle = self.open(
+                        agent,
+                        transport,
+                        name=name,
+                        permission_mode=permission_mode,
+                        sandbox=sandbox,
+                        env=env,
+                    )
                 return self._default_handle
 
             def ask(self, handle: str, prompt: str) -> str:
@@ -322,7 +409,15 @@ class TestReplRun:
 
             def snapshot(self, handle: str) -> SessionSnapshot:
                 agent, transport = self._sessions[handle]
-                return SessionSnapshot(agent, transport)
+                permission_mode, sandbox = self._sandboxing[handle]
+                return SessionSnapshot(
+                    agent,
+                    transport,
+                    permission_mode,
+                    sandbox,
+                    env=self._envs[handle],
+                    continues_conversation=True,
+                )
 
             def close_all(self) -> None:
                 self.close_calls += 1
@@ -400,7 +495,6 @@ class TestReplRun:
         call = fake_console[0]
         assert isinstance(call["session"], ReplSession)
         assert call["echo"] is True
-        assert call["check_only"] is False  # not a dry-run by default
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
@@ -417,7 +511,6 @@ class TestReplRun:
         call = fake_plain_console[0]
         assert isinstance(call["session"], ReplSession)
         assert call["echo"] is True
-        assert call["check_only"] is False  # not a dry-run by default
         assert (home / ".agm").is_dir()
 
     def test_on_setting_save_persists_the_theme_to_config(
@@ -618,6 +711,47 @@ class TestReplRun:
         assert "AgentClaude(" in render_value(result.value, session.descriptors())
         assert result.value.fields["model"] == TextValue("haiku")
 
+    def test_cli_sandbox_seed_is_readable_from_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import RecordValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(default_sandbox='Sandbox(memory = Some("8G"))'))
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        assert session.eval_entry("import std/config").ok
+        seeded = session.eval_entry("std/config::default-sandbox")
+        assert seeded.ok
+        assert isinstance(seeded.value, RecordValue)
+        rendered = render_value(seeded.value, session.descriptors())
+        assert "Sandbox(" in rendered
+        assert "8G" in rendered
+
+    def test_repl_run_wires_a_real_sandbox_context_into_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        """``repl.run`` -- the real production path -- threads a working
+        ``get_sandbox_context`` into the session's runtime, exactly like
+        ``exec_command.run`` does. A host that forgot to wire one would make a
+        sandboxed ``exec`` raise ``ExecError`` instead of running it."""
+        from agm.sandbox.prepare import SandboxContext
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        get_sandbox_context = session._runtime._get_sandbox_context
+        assert get_sandbox_context is not None
+        assert isinstance(get_sandbox_context(), SandboxContext)
+
     def test_cli_agent_override_still_applies_after_reset(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -665,6 +799,51 @@ class TestReplRun:
         assert result.ok
         assert isinstance(result.value, RecordValue)
         assert result.value.fields["value"] == TextValue("30s")
+
+    @pytest.mark.parametrize(
+        ("args", "expected_seed", "expected_seconds"),
+        [
+            (_args(), "30s", 30.0),
+            (_args(timeout="5s"), "5s", 5.0),
+            (_args(no_timeout=True), None, None),
+        ],
+    )
+    def test_cli_timeout_flags_override_the_configured_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        args: ReplArgs,
+        expected_seed: str | None,
+        expected_seconds: float | None,
+    ) -> None:
+        """``--timeout``/``--no-timeout`` set the readable setting and every consumer's timeout."""
+        from agm.agl.semantics.values import RecordValue, TextValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
+        idle_timeouts: list[float | None] = []
+        real_factory = repl_command.value_driven_agent_factory
+
+        def recording_factory(*, idle_timeout: float | None, **kwargs: object) -> object:
+            idle_timeouts.append(idle_timeout)
+            return real_factory(idle_timeout=idle_timeout, **kwargs)
+
+        monkeypatch.setattr(repl_command, "value_driven_agent_factory", recording_factory)
+
+        repl_command.run(args)
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        result = session.eval_entry("import std/config\nstd/config::timeout")
+        assert result.ok
+        assert isinstance(result.value, RecordValue)
+        if expected_seed is None:
+            assert result.value.fields == {}
+        else:
+            assert result.value.fields["value"] == TextValue(expected_seed)
+        assert idle_timeouts == [expected_seconds]
+        assert session._shell_exec_timeout == expected_seconds
 
     def test_exec_config_seeds_each_configured_engine_setting(
         self,
@@ -768,20 +947,18 @@ class TestReplRun:
             assert isinstance(trace_file, RecordValue)
             assert trace_file.fields["value"] == TextValue(expected_file)
 
-    def test_dry_run_runs_console_in_check_only_mode(
+    def test_shared_dry_run_state_does_not_affect_repl(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        # ``--dry-run`` sets the shared global flag; the REPL honours it by
-        # driving the console in type-check-only mode.
         from agm.core import dry_run
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         repl_command.run(_args())
-        assert fake_plain_console[0]["check_only"] is True
+        assert len(fake_plain_console) == 1
 
     def test_quiet_disables_echo(
         self,
@@ -792,6 +969,34 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(quiet=True))
         assert fake_plain_console[0]["echo"] is False
+
+    def test_cli_parse_error_retries_seeds_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(parse_error_retries=5))
+        session: ReplSession = fake_plain_console[0]["session"]
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry("config::parse-error-retries").value == IntValue(5)
+
+    def test_negative_parse_error_retries_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(parse_error_retries=-1))
+
+        assert exc_info.value.code == 1
+        assert fake_plain_console == []
 
     def test_blank_agent_literal_exits_1(
         self,
@@ -1355,7 +1560,7 @@ class TestReplTrace:
         # Nothing under .agent-files was created for a --no-trace session.
         assert not (tmp_path / ".agent-files").exists()
 
-    def test_dry_run_writes_no_trace(
+    def test_shared_dry_run_state_does_not_suppress_trace_setup(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -1366,9 +1571,16 @@ class TestReplTrace:
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         trace_file = tmp_path / "trace.log"
+
+        prepared: list[bool] = []
+
+        def prepare_trace(*args: object, **kwargs: object) -> Path:
+            prepared.append(True)
+            return trace_file
+
+        monkeypatch.setattr(repl_command, "prepare_trace_log_from_decision", prepare_trace)
         repl_command.run(_args(trace_file=str(trace_file)))
-        # Dry-run is side-effect-free: the trace path is never touched.
-        assert not trace_file.exists()
+        assert prepared == [True]
 
     def test_unwritable_trace_file_exits_1(
         self,

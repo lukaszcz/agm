@@ -30,9 +30,11 @@ from agm.agl.ir.contracts import (
     RecordDecode,
     RefDecode,
     TextContractRequest,
+    is_plain_enum,
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
+    DefaultResolver,
     StrictJsonParseError,
     _clean_validation_message,
     agl_validator_class,
@@ -324,6 +326,17 @@ def _scan_bare_scalar(text: str) -> str | None | object:
     return matches[0]
 
 
+def _scan_member_tags(text: str, member_tags: tuple[str, ...]) -> set[str]:
+    """Return the distinct plain-enum member tags *text* names as whole words.
+
+    ``-`` counts as a word character (identifiers are kebab-case) and the
+    longest tag wins at a position, so a tag is never read out of a longer one.
+    """
+    longest_first = sorted(member_tags, key=len, reverse=True)
+    pattern = rf"(?<![\w-])(?:{'|'.join(re.escape(tag) for tag in longest_first)})(?![\w-])"
+    return {m.group(0) for m in re.finditer(pattern, text)}
+
+
 def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
@@ -338,7 +351,8 @@ def _extract_json_text(raw: str) -> str | None | object:
        try ``repair_json`` on the fenced content.
     2. Fall back to ``repair_json`` on the whole raw string (handles
        prose-wrapped JSON such as "Here you go:\\n{...}").
-    3. Return ``None`` if no JSON value could be extracted, or the
+    3. Scan the prose for a single bare scalar.
+    4. Return ``None`` if no JSON value could be extracted, or the
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
        top-level values into an array.
 
@@ -459,6 +473,14 @@ def _find_enum_decode_at_path(
     return decode if isinstance(decode, EnumDecode) else None
 
 
+def _plain_enum_tags(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> tuple[str, ...]:
+    """Return *decode*'s member tags when it is a plain enum, else none."""
+    resolved = _resolve_ref(decode, defs)
+    if isinstance(resolved, EnumDecode) and is_plain_enum(resolved):
+        return tuple(variant.json_name for variant in resolved.variants)
+    return ()
+
+
 def _make_validation_error(
     error: object, decode_schema: DecodeSchema, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
 ) -> ValidationError:
@@ -487,7 +509,7 @@ def _make_validation_error(
         field_elem = error.path[-1] if error.path else None
         fname: str | None = field_elem if isinstance(field_elem, str) else None
         return ValidationError(category="wrong_type", message=message, path=path, field=fname)
-    if error.validator == "oneOf":
+    if error.validator in ("oneOf", "enum"):
         return _classify_enum_failure(error, path, decode_schema, defs)
     return ValidationError(category="wrong_type", message=message, path=path, field=None)
 
@@ -498,8 +520,21 @@ def _classify_enum_failure(
     decode_schema: DecodeSchema,
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ValidationError:
-    """Classify a oneOf enum validation failure using the typeless ``DecodeSchema``."""
+    """Classify an enum validation failure using the typeless ``DecodeSchema``.
+
+    Covers a tagged enum's ``oneOf`` and a plain enum's ``oneOf``/``enum``.
+    """
     instance = error.instance
+    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
+    if enum_decode is not None and is_plain_enum(enum_decode):
+        valid = ", ".join(v.json_name for v in enum_decode.variants)
+        return ValidationError(
+            category="bad_case",
+            message=f"Value does not name a member of enum {enum_decode.display_name!r}. "
+            f"Valid members: {valid}.",
+            path=path,
+            field=None,
+        )
     if not isinstance(instance, dict):
         return ValidationError(
             category="bad_case",
@@ -517,7 +552,6 @@ def _classify_enum_failure(
             field="$case",
         )
 
-    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
     if enum_decode is None:
         return ValidationError(
             category="bad_case",
@@ -572,6 +606,7 @@ def _parse_json_core(
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
     *,
     strict: bool,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Shared JSON parse core used by ``JsonCodec`` and the IR evaluator.
 
@@ -579,15 +614,47 @@ def _parse_json_core(
     (a typeless ``DecodeSchema``) so the IR evaluator can call it with values
     already embedded in the ``ContractRequest`` without holding checker types.
     *defs* is *decode_schema*'s ``$defs`` table for a recursive target type
-    (empty for a non-recursive one).
+    (empty for a non-recursive one). *default_resolver*, when given, fills an
+    omitted defaulted field (see ``runtime.convert.decode_value``).
+
+    A lenient plain-enum target whose recovered JSON is not a member falls back
+    to the one member the response names anywhere in its text.
     """
     if strict:
         try:
             parsed_obj = parse_json_strict(raw)
         except StrictJsonParseError as exc:
             return ParseResult.failure(f"Strict JSON parse failed: {exc.message}")
-        return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema, defs)
+        return _validate_and_decode_core(
+            raw.strip(), parsed_obj, schema_dict, decode_schema, defs, default_resolver
+        )
 
+    result = _parse_recovered_json(raw, schema_dict, decode_schema, defs, default_resolver)
+    member_tags = _plain_enum_tags(decode_schema, defs)
+    if result.ok or not member_tags:
+        return result
+    named = _scan_member_tags(raw, member_tags)
+    if not named:
+        return result
+    if len(named) >= 2:
+        return ParseResult.failure(
+            "Ambiguous agent response: more than one enum member is named, but "
+            "exactly one is required."
+        )
+    (tag,) = named
+    return _validate_and_decode_core(
+        json.dumps(tag, ensure_ascii=False), tag, schema_dict, decode_schema, defs
+    )
+
+
+def _parse_recovered_json(
+    raw: str,
+    schema_dict: dict[str, object],
+    decode_schema: DecodeSchema,
+    defs: Mapping[str, DecodeSchema],
+    default_resolver: DefaultResolver | None,
+) -> ParseResult:
+    """Leniently recover one JSON value from *raw*, then validate and decode it."""
     json_text = _extract_json_text(raw)
     if json_text is _AMBIGUOUS_MULTI_VALUE:
         return ParseResult.failure(
@@ -602,7 +669,9 @@ def _parse_json_core(
         parsed_obj = parse_json_strict(json_text)
     except StrictJsonParseError as exc:
         return ParseResult.failure(f"JSON parse failed after repair attempt: {exc.message}")
-    return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema, defs)
+    return _validate_and_decode_core(
+        json_text, parsed_obj, schema_dict, decode_schema, defs, default_resolver
+    )
 
 
 def _validate_and_decode_core(
@@ -611,6 +680,7 @@ def _validate_and_decode_core(
     schema_dict: dict[str, object],
     decode_schema: DecodeSchema,
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
     validator = agl_validator_class()(schema_dict)
@@ -625,7 +695,7 @@ def _validate_and_decode_core(
             normalized_raw=json_text,
         )
     try:
-        value = decode_value(decode_schema, parsed_obj, defs)
+        value = decode_value(decode_schema, parsed_obj, defs, default_resolver=default_resolver)
     except ValueError as exc:
         return ParseResult.failure(f"Value conversion failed: {exc}", normalized_raw=json_text)
     return ParseResult.success(value, normalized_raw=json_text)
@@ -636,19 +706,26 @@ def _parse_contract_output(
     contract: "TextContractRequest | JsonContractRequest",
     *,
     effective_strict: bool,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Parse a raw agent/exec response per a built-in-codec ``ContractRequest``.
 
     Handles the ``text`` passthrough and the ``json`` parse path. Called by
     ``IrInterpreter._parse_host_output`` for the built-in codecs; a
     ``JsonContractRequest`` always carries its ``json_schema``/``decode``.
+    *default_resolver*, when given, fills an omitted defaulted field.
     """
     if isinstance(contract, TextContractRequest):
         return ParseResult.success(TextValue(raw))
     # The lowerer only ever writes a serialized JSON Schema object here.
     schema_raw = cast("dict[str, object]", json.loads(contract.json_schema))
     return _parse_json_core(
-        raw, schema_raw, contract.decode, dict(contract.defs), strict=effective_strict
+        raw,
+        schema_raw,
+        contract.decode,
+        dict(contract.defs),
+        strict=effective_strict,
+        default_resolver=default_resolver,
     )
 
 
@@ -766,6 +843,11 @@ class JsonCodec:
         JSON *string* (not Python objects), which is then re-parsed
         strictly.  Decimal values are never
         routed through Python ``float``.
+
+        This method takes no ``default_resolver`` (the ``OutputCodec.parse``
+        protocol has none): a defaulted-but-omitted field always reports the
+        ordinary missing-field error here, even though the IR evaluator's own
+        built-in-codec path fills one (see ``_parse_contract_output``).
         """
         return _parse_json_core(
             raw,

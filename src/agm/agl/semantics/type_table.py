@@ -77,6 +77,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.constraints import ConstraintBounds, ConstraintKind, close_constraints
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
     require_reserved_enum_member_id,
@@ -117,9 +118,11 @@ from agm.agl.semantics.types import (
     match_type_template,
     spells_bare,
     standard_option_type,
+    standard_optional_type,
     substitute,
     type_children,
 )
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
@@ -356,6 +359,24 @@ class TypeDef:
                    for an exception, its OWN kinds only (see
                    :meth:`TypeTable.field_kinds` for the flattened base
                    chain).
+    ``field_has_default`` — whether each field has a declared default,
+                   strictly paired with ``fields`` like ``field_kinds``.
+                   Construction may leave it ``None``, which
+                   ``__post_init__`` normalizes to an all-``False`` tuple the
+                   length of ``fields`` — the common case for a declaration
+                   with no defaulted fields, sparing every such call site an
+                   explicit all-``False`` literal; a *typedef* is therefore
+                   never actually seen holding ``None`` once built. The
+                   default EXPRESSION itself is never stored here — presence
+                   is a fact about the type's shape, but the expression is
+                   ordinary code, so it reaches later passes the same route a
+                   function parameter default does: lowered with the
+                   declaration into the constructor descriptor's own
+                   ``IrFunctionParam.default``-shaped slot, independent of
+                   ``syntax``/``ir``. For an exception, its OWN presence
+                   flags only (see :meth:`TypeTable.field_has_default` for
+                   the flattened base chain, which inherits a base field's
+                   default unchanged).
     ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
                    declaration, at whatever path it was written. It is
                    metadata about the declaration, not part of its shape, so
@@ -377,7 +398,7 @@ class TypeDef:
                    created by an inline enum member, as opposed to a
                    separately declared record an enum references.
     ``external_name`` — a record's own ``@name``/``@json-name`` spellings
-                   (its value-syntax name and its ``$case`` tag as an enum
+                   (its value-syntax name and its JSON tag as an enum
                    member); unused for enums and exceptions.
     ``field_external_names`` — ``(field_name, ExternalName)`` pairs for the
                    OWN fields carrying ``@name``/``@json-name``, in
@@ -401,6 +422,7 @@ class TypeDef:
     abstract: bool = False
     base: DeclId | None = None
     field_kinds: tuple[ParamZone, ...] = ()
+    field_has_default: tuple[bool, ...] | None = None
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
     is_inline_enum_member: bool = field(default=False, compare=False)
@@ -408,6 +430,20 @@ class TypeDef:
     field_external_names: tuple[tuple[str, ExternalName], ...] = ()
     doc: str | None = field(default=None, compare=False)
     field_docs: tuple[tuple[str, str], ...] = field(default=(), compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize an omitted ``field_has_default`` into all-``False``.
+
+        Every construction site that declares no defaulted field may simply
+        leave ``field_has_default`` unset; this fills the length ``fields``
+        requires so a *typedef* is never actually seen holding ``None``.
+        Normalizing here (not lazily in an accessor) is also what keeps
+        equality meaningful: a seeded canonical literal that omits the
+        argument and a source declaration whose builder computed an explicit
+        all-``False`` tuple end up holding the identical value.
+        """
+        if self.field_has_default is None:
+            object.__setattr__(self, "field_has_default", (False,) * len(self.fields))
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -559,6 +595,8 @@ class TypeTable:
         # Memo for field_kinds's exception branch — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, ParamZone], ...]] = {}
+        # Memo for field_has_default's exception branch — same keying convention.
+        self._exception_field_has_default_cache: dict[DeclId, tuple[tuple[str, bool], ...]] = {}
         # Bare name -> the handle of a standard-library ``builtin exception``,
         # published by its shell registration (see
         # :meth:`declare_standard_builtin_exception`). Not a cache of ``_defs``
@@ -637,10 +675,25 @@ class TypeTable:
         declaration itself. Registering an already-registered identity
         reclaims its name path the same way, which is how a caller restores
         a name to a declaration that a since-discarded one took over.
+
+        When self-validation is enabled, also rejects a *typedef* whose
+        ``field_has_default`` does not have one entry per ``fields`` entry —
+        the same positional-pairing invariant :meth:`field_kinds` relies on,
+        but caught immediately here rather than as a distant ``zip(...,
+        strict=True)`` failure the first time some unrelated caller reads
+        :meth:`field_has_default` for it.
         """
         if self_validation_enabled() and typedef.decl_node_id == NO_DECL_ID:
             raise AssertionError(
                 f"cannot register a TypeDef with no declaration identity: {typedef!r}"
+            )
+        if self_validation_enabled() and len(self._own_field_has_default(typedef)) != len(
+            typedef.fields
+        ):
+            raise AssertionError(
+                f"TypeDef {typedef.name!r} declares {len(typedef.fields)} field(s) but "
+                f"field_has_default has {len(typedef.field_has_default or ())} entries: "
+                f"{typedef!r}"
             )
         decl_id = typedef.decl_node_id
         existing = self._defs.get(decl_id)
@@ -922,6 +975,18 @@ class TypeTable:
         chain.reverse()
         return chain
 
+    def exception_chain_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return *decl_id*'s exception base chain, base first, own def last.
+
+        The shared walk every flattened exception accessor
+        (:meth:`exception_fields`, :meth:`field_kinds`, :meth:`field_has_default`,
+        :meth:`field_external_names`) builds on, exposed for a caller outside
+        this module that needs the same base-first order over its own
+        per-declaration data (e.g. a lowered field default keyed by
+        declaration identity) instead of reimplementing the chain walk.
+        """
+        return tuple(typedef for _decl_id, typedef in self._exception_chain(decl_id))
+
     def ancestor_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return *decl_id*'s exception ancestors, nearest first.
 
@@ -999,6 +1064,7 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
+        self._exception_field_has_default_cache.clear()
         # The declaration-flags and finiteness fixpoints are whole-table (any
         # declaration's flag can in principle depend on any other's), so a
         # single changed identity invalidates the whole cached result rather
@@ -1328,6 +1394,58 @@ class TypeTable:
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
         )
 
+    @staticmethod
+    def _own_field_has_default(typedef: TypeDef) -> tuple[bool, ...]:
+        """Return *typedef*'s own per-field default-presence tuple.
+
+        Always a concrete tuple: :meth:`TypeDef.__post_init__` normalizes an
+        omitted (``None``) construction argument into all-``False`` of
+        ``fields``' length before any ``TypeDef`` instance is observable.
+        """
+        assert typedef.field_has_default is not None
+        return typedef.field_has_default
+
+    def field_has_default(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, bool], ...]:
+        """Return *handle*'s ``(field_name, has_default)`` pairs, in field order.
+
+        Whether each field carries a declared default (see
+        :attr:`TypeDef.field_has_default`) — the default EXPRESSION itself is
+        not carried here; it reaches lowering the same route a function
+        parameter default does (see :attr:`TypeDef.field_has_default`'s
+        docstring). Mirrors :meth:`field_kinds` exactly: a record reads
+        straight off its own ``TypeDef`` (declaration-level, so every
+        instantiation of a generic record shares the same defaults); an
+        exception flattens the ``extends`` base chain, base fields first, so
+        an inherited field keeps its base's default presence.
+
+        Consumes declarations already checked for acyclic inheritance.
+        """
+        if isinstance(handle, ExceptionType):
+            decl_id = handle.decl_id
+            cached = self._exception_field_has_default_cache.get(decl_id)
+            if cached is not None:
+                return cached
+            result = self._flatten_exception_field_has_default(decl_id)
+            self._exception_field_has_default_cache[decl_id] = result
+            return result
+        typedef = self._defs[handle.decl_id]
+        return tuple(
+            zip(
+                (fname for fname, _ftype in typedef.fields),
+                self._own_field_has_default(typedef),
+                strict=True,
+            )
+        )
+
+    def _flatten_exception_field_has_default(self, decl_id: DeclId) -> tuple[tuple[str, bool], ...]:
+        return tuple(
+            (fname, has_default)
+            for _chain_id, typedef in self._exception_chain(decl_id)
+            for (fname, _ftype), has_default in zip(
+                typedef.fields, self._own_field_has_default(typedef), strict=True
+            )
+        )
+
     def field_external_names(
         self, handle: RecordType | ExceptionType
     ) -> Mapping[str, ExternalName]:
@@ -1561,8 +1679,8 @@ class TypeTable:
         """Return ``True`` if *handle* has a JSON representation.
 
         A record and an exception convert to a JSON object of their fields, an
-        enum to ``{"$case": variant, …fields}``, so the obstacles are a
-        non-data leaf or a non-``Hashable``-keyed ``dict`` somewhere inside
+        enum to its member's tag (with the member's fields, if any has one), so
+        the obstacles are a non-data leaf or a non-``Hashable``-keyed ``dict`` somewhere inside
         (:attr:`DataProperty.JSON_CONVERTIBLE`), checked structurally via
         :func:`is_json_convertible` rather than through :func:`satisfies`.
         """
@@ -2269,11 +2387,13 @@ def comparable_types(left: Type, right: Type, table: TypeTable, bounds: Constrai
     """Return ``True`` if ``left`` and ``right`` may be compared.
 
     Equality (``=``, ``!=``) and ordering comparisons require both operands to
-    have the **same** type after the single ``int → decimal`` widening.  Unlike
+    have the **same** type after the single ``int → decimal`` widening, or one
+    operand's type to widen nominally to the other's (:func:`_nominal_widens`,
+    either direction): an enum compares with its members and with a wider
+    enum, an exception with its ancestors. Unlike
     :func:`~agm.agl.semantics.types.is_assignable`, ``json`` does **not** absorb
     JSON-shaped scalars here: ``json = json`` is allowed but ``json`` vs any
-    non-``json`` type is a static error.  Records/enums/exceptions compare only
-    with their own exact type.
+    non-``json`` type is a static error.
 
     Thin wrapper over :func:`satisfies` (``Eq``) plus the identity/numeric-pair
     rule. A type variable — top-level or nested — is comparable only when its
@@ -2285,7 +2405,11 @@ def comparable_types(left: Type, right: Type, table: TypeTable, bounds: Constrai
     return (
         satisfies(left, ConstraintKind.EQ, table, bounds)
         and satisfies(right, ConstraintKind.EQ, table, bounds)
-        and same_comparison_type(left, right)
+        and (
+            same_comparison_type(left, right)
+            or _nominal_widens(table, left, right)
+            or _nominal_widens(table, right, left)
+        )
     )
 
 
@@ -2308,8 +2432,8 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
     converts iff its key is ``Hashable`` and its value type converts; a
     record or exception
     converts to a JSON object of its fields and an enum
-    to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
-    type is reachable from its declaration
+    to its member's tag (with the member's fields, if any has one), so a
+    nominal converts iff no non-data type is reachable from its declaration
     (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
     ``unit`` and function types — have no representation at all.
 
@@ -2391,8 +2515,11 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
     directed relation: containers remain invariant. An enum is assignable to
     another enum exactly when its constructor set is a subset of the target's.
     """
-    if is_assignable(value_type, target_type):
-        return True
+    return is_assignable(value_type, target_type) or _nominal_widens(table, value_type, target_type)
+
+
+def _nominal_widens(table: TypeTable, value_type: Type, target_type: Type) -> bool:
+    """Return whether *value_type* widens to *target_type* as a member, sub-enum, or subtype."""
     if (
         isinstance(value_type, RecordType)
         and isinstance(target_type, EnumType)
@@ -2550,10 +2677,10 @@ def parse_classification(target: Type, table: TypeTable) -> CastKind:
 # Prelude type shapes — the single source of truth for built-in nominal types
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
-# prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
+# prelude types (``ExecResult``, ``Agent``, ``OutputContract``,
 # ``OutputContractOption``, ``AgentRequest``, ``SessionTransport``, ``Session``,
-# ``SessionStats``, ``SessionError``) and the generic ``Option``
-# template.  ``create_seeded_type_table``, the scope resolver's builtin
+# ``SessionStats``, ``SessionError``, ``Sandbox``, ``AgentSandbox``) and the
+# generic ``Option`` template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
 # shape validation in the type builder all read these same literals — there
 # is exactly one definition of each prelude shape.
@@ -2565,14 +2692,24 @@ def _standard(fields: tuple[tuple[str, Type], ...]) -> tuple[ParamZone, ...]:
     return (ParamZone.STANDARD,) * len(fields)
 
 
+#: A reserved field's host-side default: a scalar, or a nullary enum member by identity.
+type ReservedFieldDefault = BoolValue | TextValue | NominalId
+
+
 def _builtin_enum_defs(
     name: str,
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
     *,
     type_params: tuple[str, ...] = (),
     module_id: ModuleId = RESERVED_ID,
+    field_defaults: Mapping[str, ReservedFieldDefault] = MappingProxyType({}),
 ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
-    """Build canonical enum and scoped record-member definitions for the prelude."""
+    """Build canonical enum and scoped record-member definitions for the prelude.
+
+    A member field named in *field_defaults* has that declared default; pass
+    the same mapping to :func:`_member_field_default_values` for
+    :data:`RESERVED_FIELD_DEFAULT_VALUES`.
+    """
     scope_path = (name,)
     member_defs = tuple(
         TypeDef(
@@ -2587,6 +2724,7 @@ def _builtin_enum_defs(
             ),
             fields=fields,
             field_kinds=_standard(fields),
+            field_has_default=tuple(field in field_defaults for field, _type in fields),
             decl_node_id=require_reserved_enum_member_id(name, member_name),
         )
         for member_name, fields in variants
@@ -2607,24 +2745,64 @@ def _builtin_enum_defs(
     )
 
 
-_PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
-    "ParsePolicy",
-    (("Abort", ()), ("Retry", (("n", IntType()),))),
+_AGENT_NATIVE_MEMBERS: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = (
+    ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
+    ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
+    ("AgentPi", (("provider", TextType()), ("model", TextType()), ("thinking", TextType()))),
 )
+# Every native member field defaults to ``""``; ``AgentCommand``'s command has none.
+_AGENT_FIELD_DEFAULTS: Mapping[str, ReservedFieldDefault] = {
+    field: TextValue("") for _member, fields in _AGENT_NATIVE_MEMBERS for field, _type in fields
+}
 _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
     "Agent",
-    (
-        ("AgentCommand", (("command", TextType()),)),
-        ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
-        ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
-        (
-            "AgentPi",
-            (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
-        ),
-    ),
+    (("AgentCommand", (("command", TextType()),)), *_AGENT_NATIVE_MEMBERS),
+    field_defaults=_AGENT_FIELD_DEFAULTS,
 )
 _SESSION_TRANSPORT_DEF, _SESSION_TRANSPORT_MEMBER_DEFS = _builtin_enum_defs(
     "SessionTransport", (("Cli", ()), ("Rpc", ()))
+)
+
+# ``AgentSandbox``'s ``Disabled``/``Native`` members are inline, fresh
+# records scoped under it, like every other builtin enum's members. Its third
+# member instead reuses the standalone ``Sandbox`` record's own identity
+# (mirroring how ``Optional`` reuses ``Option``'s ``Some``/``None``): the
+# value IS a ``Sandbox`` record, so a ``Sandbox`` constructed on its own
+# widens into an ``AgentSandbox`` slot with no rewrapping.
+_AGENT_SANDBOX_DISABLED_DEF = TypeDef(
+    kind="record",
+    name="Disabled",
+    module_id=RESERVED_ID,
+    scope_path=("AgentSandbox",),
+    decl_node_id=require_reserved_enum_member_id("AgentSandbox", "Disabled"),
+)
+_AGENT_SANDBOX_NATIVE_DEF = TypeDef(
+    kind="record",
+    name="Native",
+    module_id=RESERVED_ID,
+    scope_path=("AgentSandbox",),
+    decl_node_id=require_reserved_enum_member_id("AgentSandbox", "Native"),
+)
+_AGENT_SANDBOX_MEMBER_DEFS = (_AGENT_SANDBOX_DISABLED_DEF, _AGENT_SANDBOX_NATIVE_DEF)
+_AGENT_SANDBOX_DEF = TypeDef(
+    kind="enum",
+    name="AgentSandbox",
+    module_id=RESERVED_ID,
+    members=(
+        RecordType(
+            name="Disabled",
+            module_id=RESERVED_ID,
+            scope_path=("AgentSandbox",),
+            decl_id=require_reserved_enum_member_id("AgentSandbox", "Disabled"),
+        ),
+        RecordType(
+            name="Native",
+            module_id=RESERVED_ID,
+            scope_path=("AgentSandbox",),
+            decl_id=require_reserved_enum_member_id("AgentSandbox", "Native"),
+        ),
+        RecordType(name="Sandbox", module_id=RESERVED_ID, decl_id=_reserved_id("Sandbox")),
+    ),
 )
 
 _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum_defs(
@@ -2721,7 +2899,6 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         ),
         field_kinds=_standard(_fields),
     ),
-    "ParsePolicy": _PARSE_POLICY_DEF,
     "Agent": _AGENT_DEF,
     "OutputContract": TypeDef(
         kind="record",
@@ -2769,6 +2946,14 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                     standard_option_type(TextType()),
                 ),
                 ("metadata", JsonType()),
+                (
+                    "sandbox",
+                    EnumType(
+                        name="AgentSandbox",
+                        module_id=RESERVED_ID,
+                        decl_id=_reserved_id("AgentSandbox"),
+                    ),
+                ),
             )
         ),
         field_kinds=_standard(_fields),
@@ -2791,6 +2976,14 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                         name="SessionTransport",
                         module_id=RESERVED_ID,
                         decl_id=_reserved_id("SessionTransport"),
+                    ),
+                ),
+                (
+                    "sandbox",
+                    EnumType(
+                        name="AgentSandbox",
+                        module_id=RESERVED_ID,
+                        decl_id=_reserved_id("AgentSandbox"),
                     ),
                 ),
             )
@@ -2819,6 +3012,22 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         base=_reserved_id("Exception"),
         field_kinds=_standard(_fields),
     ),
+    "Sandbox": TypeDef(
+        kind="record",
+        name="Sandbox",
+        module_id=RESERVED_ID,
+        fields=(
+            _fields := (
+                ("memory", standard_optional_type(TextType())),
+                ("swap", standard_optional_type(TextType())),
+                ("settings", standard_option_type(TextType())),
+                ("patch", BoolType()),
+            )
+        ),
+        field_kinds=_standard(_fields),
+        field_has_default=(True, True, True, True),
+    ),
+    "AgentSandbox": _AGENT_SANDBOX_DEF,
 }
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
@@ -2833,14 +3042,80 @@ OPTIONAL_TYPE_DEF = replace(_OPTIONAL_DEF, decl_node_id=_reserved_id("Optional")
 BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
     member.decl_node_id: member
     for member in (
-        *_PARSE_POLICY_MEMBER_DEFS,
         *_AGENT_MEMBER_DEFS,
         *_OUTPUT_CONTRACT_OPTION_MEMBER_DEFS,
         *_SESSION_TRANSPORT_MEMBER_DEFS,
         *_OPTION_MEMBER_DEFS,
         _OPTIONAL_DEFAULT_DEF,
+        *_AGENT_SANDBOX_MEMBER_DEFS,
+        # ``AgentSandbox``'s ``Sandbox`` member reuses the standalone ``Sandbox``
+        # record's own identity (see above), so its member-lookup entry is that
+        # same record's own canonical ``TypeDef`` rather than a fresh one.
+        BUILTIN_PRELUDE_TYPE_DEFS["Sandbox"],
     )
 }
+
+# ---------------------------------------------------------------------------
+# Reserved-record field defaults, as host-side constants
+#
+# An ordinary program's own constructor field default is an ``IrExpr``,
+# evaluated once the program is fully linked
+# (``IrInterpreter.default_for_field`` against ``NominalDescriptor.field_defaults``
+# — see ``runtime.convert.decode_value``'s ``default_resolver``). A host
+# engine setting decodes from a CLI flag or config entry *before* any program
+# exists, so no evaluator is reachable there; the defaults of ``Sandbox`` and
+# of the ``Agent`` members are nevertheless plain constants (``Default``,
+# ``None``, ``true``, ``""``). The seeded ``TypeDef`` carries only
+# ``field_has_default``; this table holds each default as a constant (a
+# nullary enum member by its identity). The lowerer gives the reserved
+# descriptors the same constants as IR (``lower.lowerer.reserved_field_defaults``),
+# so a program loaded without the standard library constructs these types
+# with them too; a standard declaration supersedes the reserved one, so its
+# own source defaults win.
+# ---------------------------------------------------------------------------
+
+
+def _member_field_default_values(
+    member_defs: tuple[TypeDef, ...], field_defaults: Mapping[str, ReservedFieldDefault]
+) -> dict[DeclId, Mapping[int, ReservedFieldDefault]]:
+    """Index *field_defaults* by field position for each member declaring one of them."""
+    return {
+        member.decl_node_id: {
+            index: field_defaults[field]
+            for index, (field, _type) in enumerate(member.fields)
+            if field in field_defaults
+        }
+        for member in member_defs
+        if any(field in field_defaults for field, _type in member.fields)
+    }
+
+
+RESERVED_FIELD_DEFAULT_VALUES: Mapping[DeclId, Mapping[int, ReservedFieldDefault]] = {
+    _reserved_id("Sandbox"): {
+        0: NominalId(require_reserved_enum_member_id("Optional", "Default")),
+        1: NominalId(require_reserved_enum_member_id("Optional", "Default")),
+        2: NominalId(require_reserved_enum_member_id("Option", "None")),
+        3: BoolValue(True),
+    },
+    **_member_field_default_values(_AGENT_MEMBER_DEFS, _AGENT_FIELD_DEFAULTS),
+}
+
+
+def reserved_field_default(decl_id: DeclId, field_index: int) -> Value:
+    """Return one reserved record's *field_index*'th field's host-side constant default.
+
+    The decode-time default-fill seam for a host engine setting
+    (``runtime.engine_config.convert_host_value``'s ``default_resolver``);
+    see :data:`RESERVED_FIELD_DEFAULT_VALUES`. *decl_id* names a reserved
+    record with defaulted fields (``Sandbox`` or an ``Agent`` member). Keyed
+    sparsely by field index, so a field with no default is simply absent
+    rather than representable as ``None``.
+    """
+    match RESERVED_FIELD_DEFAULT_VALUES[decl_id][field_index]:
+        case NominalId() as member:
+            return RecordValue(nominal=member, fields={})
+        case scalar:
+            return scalar
 
 
 def source_nominal_decl_id(
@@ -3102,7 +3377,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_EXCEPTI
 def create_seeded_type_table() -> TypeTable:
     """Return a fresh ``TypeTable`` pre-populated with built-in defs.
 
-    Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
+    Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``,
     ``Agent``, ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
     generic ``OPTION_TYPE_DEF`` and ``OPTIONAL_TYPE_DEF``, and
     ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every

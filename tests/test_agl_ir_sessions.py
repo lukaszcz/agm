@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from agm.agl.ir.builtin_vars import builtin_var_key
 from agm.agl.ir.contracts import (
     ContractRequest,
     JsonContractRequest,
@@ -17,6 +18,8 @@ from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
     IrBlock,
+    IrBuiltinLoad,
+    IrConstInt,
     IrConstText,
     IrExpr,
     IrLoad,
@@ -36,7 +39,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.lowerer import _Lowerer
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID
 from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -73,29 +76,33 @@ def _program(
     )
 
 
-def _main_let_values(source: str) -> dict[str, object]:
-    program = lower_inline_ir(source)
+def _bound_values(program: ExecutableProgram) -> dict[str, object]:
     values: dict[str, object] = {}
     for initializer in inline_main_items(program):
-        if initializer.__class__.__name__ != "IrBind":
-            continue
-        symbol = program.symbols[initializer.symbol]
-        if symbol.public_name is not None:
-            values[symbol.public_name] = initializer.value
+        if isinstance(initializer, IrBind):
+            symbol = program.symbols[initializer.symbol]
+            if symbol.public_name is not None:
+                values[symbol.public_name] = initializer.value
     return values
 
 
+def _main_let_values(source: str) -> dict[str, object]:
+    return _bound_values(lower_inline_ir(source))
+
+
 def test_session_open_lowers_omitted_and_explicit_options() -> None:
-    values = _main_let_values(
+    program = lower_inline_ir(
         'let agent = AgentCommand("worker")\n'
         "let omitted = Session::open(agent)\n"
         "let explicit = Session::open(\n"
         "  agent,\n"
         "  transport = Option[SessionTransport]::Some(SessionTransport::Rpc),\n"
         '  name = "review",\n'
+        "  sandbox = AgentSandbox::Native,\n"
         ")\n"
         "()"
     )
+    values = _bound_values(program)
 
     omitted = values["omitted"]
     explicit = values["explicit"]
@@ -104,10 +111,23 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
     assert omitted.transport is None
     assert isinstance(omitted.name, IrConstText)
     assert omitted.name.value == ""
+    # An omitted sandbox operand falls through to the current
+    # ``default-sandbox`` engine setting, read afresh at open, exactly like
+    # ``ask``'s own omitted sandbox operand.
+    assert isinstance(omitted.sandbox, IrBuiltinLoad)
+    assert omitted.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
     assert isinstance(explicit, IrSessionOpen)
     assert isinstance(explicit.transport, IrMakeRecord)
     assert isinstance(explicit.name, IrConstText)
     assert explicit.name.value == "review"
+    assert isinstance(explicit.sandbox, IrMakeRecord)
+    # Pin the sandbox operand's own identity (the ``AgentSandbox::Native``
+    # member record), distinct from ``explicit.transport``'s (an
+    # ``Option::Some`` record) -- both are ``IrMakeRecord``, so only the
+    # nominal tells them apart; a transport/sandbox operand swap in the
+    # lowerer must fail this.
+    assert program.nominals[explicit.sandbox.nominal].declared_name == "Native"
+    assert program.nominals[explicit.transport.nominal].declared_name != "Native"
 
 
 def test_session_default_lowers_to_its_dedicated_node() -> None:
@@ -203,7 +223,7 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
     program = lower_inline_ir(
         "let session = Session::default()\n"
         'let answer: int = session.ask("How many?", format = "json", strict-json = true, '
-        "on-parse-error = Retry(n = 2))\n"
+        "parse-error-retries = 2)\n"
         "()"
     )
     answer = next(
@@ -215,7 +235,9 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
 
     assert isinstance(answer, IrSessionAsk)
     assert answer.contract_id in program.contracts
-    assert answer.max_attempts == 3
+    retries = answer.parse_error_retries
+    assert isinstance(retries, IrConstInt)
+    assert retries.value == 2
     assert program.contracts == {
         answer.contract_id: JsonContractRequest(
             codec_name="json",
@@ -236,8 +258,8 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
 def test_session_methods_lower_to_session_nodes() -> None:
     values = _main_let_values(
         "let session = Session::default()\n"
-        'let retried: text = session.ask("retry", on-parse-error = Retry(n = 2))\n'
-        'let aborted: text = session.ask("abort", on-parse-error = Abort)\n'
+        'let retried: text = session.ask("retry", parse-error-retries = 2)\n'
+        'let aborted: text = session.ask("abort", parse-error-retries = 0)\n'
         'let defaulted: text = session.ask("default")\n'
         "session.compact()\n"
         'session.compact("retain decisions")\n'
@@ -251,7 +273,16 @@ def test_session_methods_lower_to_session_nodes() -> None:
 
     asks = [values[name] for name in ("retried", "aborted", "defaulted")]
     assert all(isinstance(ask, IrSessionAsk) for ask in asks)
-    assert [ask.max_attempts for ask in asks if isinstance(ask, IrSessionAsk)] == [3, 1, 1]
+    retried, aborted, defaulted = (ask for ask in asks if isinstance(ask, IrSessionAsk))
+    retried_count = retried.parse_error_retries
+    assert isinstance(retried_count, IrConstInt)
+    assert retried_count.value == 2
+    aborted_count = aborted.parse_error_retries
+    assert isinstance(aborted_count, IrConstInt)
+    assert aborted_count.value == 0
+    default_count = defaulted.parse_error_retries
+    assert isinstance(default_count, IrBuiltinLoad)
+    assert default_count.key == builtin_var_key(STD_CONFIG_ID, (), "parse-error-retries")
     assert all(isinstance(ask.session, IrLoad) for ask in asks if isinstance(ask, IrSessionAsk))
 
     program = lower_inline_ir(
@@ -328,14 +359,16 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
             agent=IrConstText(location=_LOC, value="agent"),
             transport=IrConstText(location=_LOC, value="transport"),
             name=IrConstText(location=_LOC, value="name"),
+            sandbox=IrConstText(location=_LOC, value="sandbox"),
+            env=IrConstText(location=_LOC, value="env"),
         ),
-        IrSessionDefault(location=_LOC),
+        IrSessionDefault(location=_LOC, env=IrConstText(location=_LOC, value="env")),
         IrSessionAsk(
             location=_LOC,
             session=session,
             prompt=IrConstText(location=_LOC, value="prompt"),
             contract_id=contract_id,
-            max_attempts=1,
+            parse_error_retries=IrConstInt(location=_LOC, value=0),
         ),
         *(
             IrSessionOp(location=_LOC, session=session, op=op, arg=arg)
@@ -356,26 +389,16 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
     validate_ir(program)
 
 
-def test_session_ask_rejects_unknown_contract_and_bad_max_attempts() -> None:
+def test_session_ask_rejects_unknown_contract() -> None:
     missing_contract = IrSessionAsk(
         location=_LOC,
         session=IrConstText(location=_LOC, value="session"),
         prompt=IrConstText(location=_LOC, value="prompt"),
         contract_id=ContractId(99),
-        max_attempts=1,
+        parse_error_retries=IrConstInt(location=_LOC, value=0),
     )
     with pytest.raises(InvalidIrError, match="contract_id"):
         validate_ir(_program(missing_contract))
-
-    bad_attempts = IrSessionAsk(
-        location=_LOC,
-        session=IrConstText(location=_LOC, value="session"),
-        prompt=IrConstText(location=_LOC, value="prompt"),
-        contract_id=ContractId(0),
-        max_attempts=0,
-    )
-    with pytest.raises(InvalidIrError, match="max_attempts"):
-        validate_ir(_program(bad_attempts, contracts={ContractId(0): _contract()}))
 
 
 def test_session_op_rejects_unknown_tag_and_bad_argument_pairings() -> None:

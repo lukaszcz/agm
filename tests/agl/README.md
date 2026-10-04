@@ -22,7 +22,7 @@ Layout:
 |-----------|-------------------|
 | `attributes/` | Declaration attributes: `@arg-*` zones on functions, lambdas, records, exceptions, enum members, and `program def` |
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
-| `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
+| `calls/` | `ask` parse-error retries, format options |
 | `canonical/` | Multi-agent review/fix workflows |
 | `casts/` | `as`/`as?` casts and `CastError`/`JsonParseError` handling |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |
@@ -66,7 +66,12 @@ Layout:
           }
         }
       },
-      "shell": [{"command": "printf done", "stdout": "done"}],
+      "shell": [{"command": "printf done", "stdout": "done"},
+                {"command": "make test",
+                 "sandbox_wrapped": {"profile": "make", "memory": "1G"}},
+                {"command": "echo hi"}],
+      "sandbox_home": {"extra_settings_files": ["make"],
+                        "run_toml": "[run.make]\nmemory = \"1G\"\n"},
       "http": [{"expect": {"method": "GET", "url": "https://x/y"},
                 "status": 200, "body": "ok"}],
       "jev": [{"expect": {"body": {"state": "text", "model": "jev-latest",
@@ -149,7 +154,25 @@ Field notes:
   output a JSON fixture cannot hold as text (e.g. invalid UTF-8); they take
   precedence over `stdout`/`stderr` when both are set.
   The harness rejects an unexpected command and verifies the full script was used,
-  so acceptance tests never execute a real shell command.
+  so acceptance tests never execute a real shell command. `sandbox_wrapped` asserts
+  the recorded argv carries the real `systemd-run`/`srt` sandbox wrap, by `profile`
+  (its `<profile>.json` settings candidate, or `null` for the `default.json`
+  fallback an unknown/unsplittable first word takes) or an exact `settings_suffix`
+  (exactly one of the two is required), plus optional `memory`/`swap` resource-limit
+  values; omitting `sandbox_wrapped` asserts the call carries no wrap at all
+  (`["sh", "-c", <command>]`) -- the blanket invariant every scenario's `shell`
+  entries satisfy unless they opt into `sandbox_wrapped`.
+- `sandbox_home` — when present, materializes a real `[home]/.agm/sandbox` settings
+  tree (`run_toml`, `extra_settings_files`) and PATH-reachable, never-invoked
+  `systemd-run`/`srt` shims (`tests/_agl_helpers.py::write_transparent_sandbox_shims`),
+  and threads a real `get_sandbox_context` into the runtime, so a `sandbox = Some(...)`
+  `exec` call resolves backend availability and settings through the real sandbox
+  library. `unavailable: true` points `PATH` at an empty directory instead, for a
+  preparation-failure scenario. A `params` value of the literal string
+  `"$SANDBOX_SETTINGS_FILE"` is replaced with a real settings file's path, for an
+  explicit `Sandbox(settings = Some(...))` scenario. `proj_dir: true` gives the
+  context a real project directory, needed for a scenario to observe `patch`
+  (`SrtBackend` only consults it when a project directory is present).
 - `http` — ordered scripted HTTP exchanges, in `tests/_http_helpers.py`'s `FakeHttp`
   outcome shape: each object may assert an `expect` (method, url, a header subset where
   a `null` value asserts the header's absence, body, `timeout` as a `[connect, read]`
@@ -172,7 +195,8 @@ Field notes:
   the full script was used. Seed `"sysone/jev::max-retries": 0` through `module_params` when
   a retryable failure is scripted, so the SDK never backs off.
 - `runtime` — optional `PipelineDriver` constructor overrides
-  (`default_call_depth_limit`, `default_strict_json`).
+  (`default_call_depth_limit`, `default_strict_json`) and the `parse_error_retries` engine
+  seed (`std/config::parse-error-retries`, default 4).
 - `filesystem` — optional fixture in a test-created temporary root. It may declare
   `directories`, UTF-8 `text_files`, hexadecimal `hex_files`, and
   `directory_symlinks`; a `"$TEMP_ROOT"` parameter value is replaced with that root.
@@ -220,10 +244,13 @@ Field notes:
   An optional `source_contains` asserts a substring of the raise's source file
   display name (e.g. an imported module's path), for a multi-module program.
 - `expect.exit_code` — the program must terminate through `SystemExit` with this
-  status; it is used for host-termination workflows such as `std/process::exit`.
+  status; it is used for host-termination workflows such as `std/os::exit`.
 - `expect.host_error` — the run must fail pre-execution (program argument
   binding or decode failure): no agent is called, no AgL exception is
   raised, and the diagnostics mention the fragments.
+- `expect.shell_sandbox_units_distinct` — every scripted shell call's
+  `systemd-run --unit` scope name is distinct, proving a sandboxed retry
+  re-prepares rather than reuses the first attempt's prepared command.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`
   verbatim, scalars as scalar text). Pretty-JSON console rendering and
   boundary-marked prompt rendering are asserted with `contains` fragments to avoid

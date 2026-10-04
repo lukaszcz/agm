@@ -46,15 +46,24 @@ supply one but don't assert on its content.
 
 ``program_config_engine_seeds`` partitions a preflighted entry's evaluated
 ``@config`` into its engine-setting seeds, mirroring the production split
-``agm.commands.exec_program`` makes; ``run_inline_command`` uses it so an
+``agm.commands.exec_program`` makes; ``run_inline_code`` uses it so an
 inline scenario's ``@config`` engine settings reach the interpreter the same
 way the real host applies them.
+
+``run_program``/``shapes_match``/``assert_shape`` and the REPL helpers
+``eval_ok``/``read_config_result``/``repl_session``/``unopened_repl_session``/
+``record_variant`` are shared by the engine-setting test suites
+(``default-agent``, ``default-sandbox``, the generic restamp tests, the REPL
+builtin-settings tests): running inline source or a REPL entry, and comparing
+or reading back a resulting ``std/config`` engine-setting value structurally
+regardless of which nominal table stamped it.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import itertools
+import os
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,16 +73,16 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.ir.contracts import DecodePlan, ExceptionFieldEncode
-from agm.agl.ir.ids import NominalId
-from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.ids import Location, NominalId
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrExpr, IrSequence
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscovery, RunResult
-from agm.agl.repl import ReplSession
+from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
@@ -93,7 +102,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     transform_type,
 )
-from agm.agl.semantics.values import RecordValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -118,6 +127,8 @@ from agm.agl.type_schema import derive_schema_and_decode
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
+from agm.config.context import ConfigContext
+from agm.sandbox.prepare import SandboxContext, lazy_sandbox_context
 
 if TYPE_CHECKING:
     from agm.packages.model import PackageInfo
@@ -259,7 +270,7 @@ def write_file_program(path: Path, source: str, **kwargs: str) -> None:
     path.write_text(file_program(source), **kwargs)
 
 
-def prepare_inline_command(
+def prepare_inline_code(
     source: str,
     *,
     entry_path: Path | None = None,
@@ -271,7 +282,7 @@ def prepare_inline_command(
     ``entry_path`` is ``None`` for real inline sources; the corpus passes a path
     for programs whose builtins need a file-backed anchor (``resource``).
     """
-    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path, inline_command=True)
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path, inline_code=True)
     return PipelineDriver.prepare_parsed_entry(
         parsed,
         roots=roots,
@@ -305,7 +316,7 @@ def program_config_engine_seeds(
     }
 
 
-def run_inline_command(
+def run_inline_code(
     runtime: PipelineDriver,
     source: str,
     *,
@@ -320,7 +331,7 @@ def run_inline_command(
     value arguments or its scenario module parameters, and otherwise through
     plain default-program selection.
     """
-    prepared = prepare_inline_command(
+    prepared = prepare_inline_code(
         source,
         entry_path=entry_path,
         roots=roots,
@@ -547,6 +558,7 @@ def record_type(
     module_id: ModuleId = ENTRY_ID,
     type_params: tuple[str, ...] = (),
     decl_id: int | None = None,
+    field_has_default: tuple[bool, ...] | None = None,
 ) -> tuple[RecordType, TypeDef]:
     """Build an ad-hoc ``RecordType`` handle and its matching ``TypeDef`` together.
 
@@ -558,6 +570,13 @@ def record_type(
     (from :func:`next_decl_id`) for a SELF-referential or mutually-recursive
     ad-hoc type, whose own *fields* must embed a reference carrying this same
     identity before the ``TypeDef``/handle pair exists to read it off of.
+
+    *field_has_default*, one flag per *fields* entry in order, marks which
+    fields declare a constant default (omitted: none do) -- the presence
+    flag a schema/decode-plan derivation reads (``TypeTable.field_has_default``).
+    A default's own VALUE is never carried here; it is resolved only at
+    decode time, against a real ``NominalDescriptor`` (see
+    ``runtime.convert.decode_value``'s ``default_resolver``).
     """
     typedef = TypeDef(
         kind="record",
@@ -567,6 +586,7 @@ def record_type(
         fields=tuple(fields.items()),
         field_kinds=(ParamZone.STANDARD,) * len(fields),
         decl_node_id=next_decl_id() if decl_id is None else decl_id,
+        field_has_default=field_has_default,
     )
     return typedef.handle(type_args), typedef
 
@@ -588,6 +608,14 @@ def enum_type(
         name, variants, module_id=module_id, type_params=type_params, decl_id=decl_id
     )
     return typedef.handle(type_args), typedef
+
+
+NONE_FIELD: dict[str, object] = {"$case": "None"}
+
+
+def some_field(value: object) -> dict[str, object]:
+    """A raised exception's ``Option`` field holding *value*, as ``RunError.fields`` shows it."""
+    return {"$case": "Some", "value": value}
 
 
 def option_nominal_descriptors(
@@ -645,6 +673,117 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
         nominal=member_nominal,
         fields={name: TextValue(value) for name, value in fields.items()},
     )
+
+
+def hermetic_config_context() -> ConfigContext:
+    """A ``ConfigContext`` scoped to this test's isolated, empty home.
+
+    Reads ``HOME`` from the environment: the autouse ``isolate_host_environment``
+    fixture (``conftest.py``) points it at a fresh per-test directory before every
+    test runs, so a ``value_driven_agent_factory`` built from this context resolves
+    no ``[run.*]`` config and no project directory, regardless of the machine or
+    which other tests ran.
+    """
+    home = Path(os.environ["HOME"])
+    return ConfigContext(home=home, proj_dir=None, cwd=home)
+
+
+def hermetic_get_sandbox_context() -> Callable[[], SandboxContext]:
+    """A `get_sandbox_context` built from `hermetic_config_context()`.
+
+    For `value_driven_agent_factory`/`create_agl_session_host`, which take the
+    callable directly rather than a `ConfigContext`.
+    """
+    return lazy_sandbox_context(hermetic_config_context())
+
+
+def unavailable_sandbox_context() -> SandboxContext:
+    """A ``get_sandbox_context`` stand-in for a session backend test that never
+    dispatches a sandboxed call.
+
+    Every session test that leaves ``permission_mode``/``sandbox`` at their
+    ``SessionOpenRequest``/``SessionAskRequest`` defaults never reaches this
+    (``sandbox_run_for`` only calls its ``get_context`` argument when a real
+    ``SandboxLimits`` is present), so raising here catches a test that
+    silently started exercising sandboxing without a real context.
+    """
+    raise AssertionError("sandbox context requested unexpectedly")
+
+
+def session_sandbox_context(
+    home: Path, *, proj_dir: Path | None = None
+) -> Callable[[], SandboxContext]:
+    """A real, lazily-built ``get_sandbox_context`` scoped to *home*.
+
+    For a session backend test that does exercise sandboxing: pair with
+    ``write_sandbox_home(home, ...)`` for a resolvable default settings file.
+    *proj_dir* is ``None`` by default, matching most tests; pass a real path
+    for one that needs project-scoped behavior (e.g. ``patch``) to actually
+    engage.
+    """
+    return lazy_sandbox_context(ConfigContext(home=home, proj_dir=proj_dir, cwd=home))
+
+
+def write_sandbox_home(
+    home: Path, *, run_toml: str = "", extra_settings_files: tuple[str, ...] = ()
+) -> None:
+    """Set up *home* as an AGM home with a default sandbox settings candidate.
+
+    Writes ``[home]/.agm/sandbox/default.json`` so sandbox preparation
+    succeeds, *run_toml* as ``[home]/.agm/config.toml`` when given, and an
+    empty-object settings file named after each entry in
+    *extra_settings_files* (e.g. ``"not-claude"`` for a profile-name probe
+    that must never be reached).
+    """
+    sandbox_dir = home / ".agm" / "sandbox"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    (sandbox_dir / "default.json").write_text("{}", encoding="utf-8")
+    for name in extra_settings_files:
+        (sandbox_dir / f"{name}.json").write_text("{}", encoding="utf-8")
+    if run_toml:
+        (home / ".agm" / "config.toml").write_text(run_toml, encoding="utf-8")
+
+
+def write_transparent_sandbox_shims(directory: Path, *, log_dir: Path) -> None:
+    """Write silent, flag-skipping ``systemd-run``/``srt`` fakes into *directory*.
+
+    Each exec's onward to the command it wraps after touching a marker file
+    under *log_dir* first, so a test can confirm the wrap chain actually ran,
+    not merely that the wrapped command happened to start anyway. Unlike
+    ``TestSandbox``'s diagnostic fakes (which print captured settings/command
+    for ``agm run`` assertions), these run silently, so a sandboxed call's
+    real stdout stays exactly what the wrapped command printed. The caller
+    adds *directory* to the front of ``PATH`` itself.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    systemd_run = directory / "systemd-run"
+    systemd_run.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/systemd-run"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --user|--scope|-q) shift ;;\n"
+        "    -p|--unit) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    systemd_run.chmod(0o755)
+    srt = directory / "srt"
+    srt.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/srt"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --settings) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    srt.chmod(0o755)
 
 
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
@@ -725,12 +864,124 @@ def discover_program_declarations_from_source(
 
     *inline_source* applies ``agm exec -c``'s synthetic-main wrapper.
     """
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None)
     if inline_source:
-        parsed = runtime.parse_entry(source, inline_command=True)
+        parsed = runtime.parse_entry(source, inline_code=True)
         prepared = runtime.prepare_parsed_entry(parsed, roots=roots, default_stdlib=default_stdlib)
     else:
         prepared = runtime.prepare_program(
             source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
         )
     return runtime.discover_programs(prepared).programs
+
+
+def run_program(
+    source: str,
+    *,
+    seed: "dict[str, Value] | None" = None,
+    host_settings_policy: object | None = None,
+) -> RunResult:
+    """Run inline *source* through the shared inline-entry transform.
+
+    Asserts the result is a full :class:`RunResult` (not an argument-preflight
+    failure). Shared by the engine-setting test suites (``default-agent``,
+    ``default-sandbox``, the generic restamp tests).
+    """
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        source,
+        roots=agl_roots(),
+        builtin_host_settings=seed,
+        host_settings_policy=host_settings_policy,
+    )
+    assert isinstance(result, RunResult)
+    return result
+
+
+def shapes_match(actual: Value, expected: Value) -> bool:
+    """Compare two values structurally, ignoring ``RecordValue`` nominal identity.
+
+    A running program's own nominal identity for a builtin/reserved type
+    differs from the reserved-fallback identity a host-built expected value
+    carries (see :func:`assert_shape`); a nested field (e.g. ``Sandbox``'s
+    ``Optional``/``Option``-valued fields) carries its own such identity too.
+    Recurses through ``RecordValue`` fields; every other value kind compares
+    by its own ``==``.
+    """
+    if isinstance(expected, RecordValue):
+        return (
+            isinstance(actual, RecordValue)
+            and actual.fields.keys() == expected.fields.keys()
+            and all(shapes_match(actual.fields[k], v) for k, v in expected.fields.items())
+        )
+    return actual == expected
+
+
+def assert_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
+    """Verify *actual* is the expected enum member/record with the expected payload.
+
+    *is_variant* is an ``is`` member test run inside the program's own
+    source (bound alongside *actual*): the running program loads real stdlib,
+    so its own nominal enum/record carries that program's own nominal
+    identity, distinct from the reserved-fallback identity *expected* (built
+    by a test helper such as ``agent_value``) carries. Only a cast evaluated
+    inside that same program can compare identity correctly; fields compare
+    structurally instead, via :func:`shapes_match`, since a nested field may
+    itself carry a host-known identity (e.g. ``Sandbox``'s ``Optional``/
+    ``Option``-valued fields).
+    """
+    assert is_variant == BoolValue(True)
+    assert shapes_match(actual, expected)
+
+
+def unopened_repl_session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library, left unopened.
+
+    For a test that must observe the initial ``std/config`` load from the
+    entry that triggers it.
+    """
+    kwargs.setdefault("stdlib_root", REPO_STDLIB_ROOT)
+    return ReplSession(**kwargs)
+
+
+def repl_session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library and open it.
+
+    ``agm.commands.repl`` opens a session before accepting an entry, which
+    loads and type-checks the initial library image; going through
+    :meth:`ReplSession.open` here exercises that same startup and lets the
+    session reuse the process-wide bootstrap image instead of re-checking the
+    standard library once per test.
+    """
+    session = unopened_repl_session(**kwargs)
+    session.open()
+    return session
+
+
+def eval_ok(session: ReplSession, text: str) -> EntryResult:
+    """Evaluate *text* as a REPL entry, asserting it succeeded."""
+    result = session.eval_entry(text)
+    assert result.ok, f"entry {text!r} failed: {result.diagnostics} {result.error}"
+    return result
+
+
+def read_config_result(session: ReplSession, key: str) -> EntryResult:
+    """Import-and-read ``std/config::key``, returning the full result (value + descriptors)."""
+    result = eval_ok(session, f"std/config::{key}")
+    assert result.value is not None
+    return result
+
+
+def record_variant(value: Value, descriptors: ValueDescriptors) -> str:
+    """Return the terminal member name a ``RecordValue``'s nominal resolves to.
+
+    A ``RecordValue`` carries only its opaque ``NominalId``; its scoped
+    display spelling comes from the entry's own descriptor table.
+    """
+    assert isinstance(value, RecordValue)
+    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
+
+
+def retries_ir(max_attempts: int, location: Location) -> IrExpr:
+    """Build the ``parse-error-retries`` operand IR allowing *max_attempts* attempts."""
+    return IrConstInt(location, max_attempts - 1)

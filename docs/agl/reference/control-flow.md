@@ -201,7 +201,7 @@ program def main() -> unit =
 (elements, in order), `dict[K, V]` (keys, in insertion order), or `text`
 (each character as a length-1 `text`). The loop variable `x` takes the
 element/key/char type respectively; a dict key is bound as originally inserted
-(see [Destructive assignment](bindings-and-scope.md#--destructive-assignment)).
+(see [Destructive assignment](bindings-and-scope.md#destructive-assignment)).
 `COLLECTION` is evaluated once, at loop entry. For an `array`, the loop
 observes that same mutable value for its whole run and captures its length as
 an upper bound at entry. Each iteration reads the element at the cursor's

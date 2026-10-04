@@ -36,8 +36,9 @@ from agm.util.unicode import require_scalar_text, surrogate_index, visible_text
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from agm.agl.ir.contracts import ParamDecoder
+    from agm.agl.ir.contracts import DecodeSchema, ParamDecoder
     from agm.agl.ir.program import ExecutableProgram, IrProgramParam
+    from agm.agl.runtime.convert import DefaultResolver
     from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -187,19 +188,30 @@ class OptionSome:
     value: object
 
 
-def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
+def decode_param_value(
+    decoder: "ParamDecoder", raw: object, *, default_resolver: "DefaultResolver | None" = None
+) -> "Value":
     """Decode a raw host param value against *decoder* into a typed ``Value``.
 
     The single decode path shared by program-argument binding
     (:func:`bind_program_arguments`) and the host engine-config decode path
     (``runtime.engine_config.convert_host_value``). A textual value is read
-    through the shared host-text dispatch (``runtime.value_decode.host_text_to_json``):
-    ``text`` params verbatim, the standard ``Agent`` enum through its own text
-    conventions, everything else as strict JSON falling back to AgL value
-    syntax. An :class:`OptionSome` payload decodes its own ``value`` the same
-    way (when textual) before being wrapped back into the optional enum's
-    JSON shape. Every other value crosses the canonical JSON boundary (strict
-    parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
+    through the shared host-text dispatch
+    (``runtime.value_decode.host_param_text_to_json``): ``text`` params
+    verbatim, the standard ``Agent`` enum through its own text conventions, a
+    plain enum member's bare JSON name as itself, everything else as strict
+    JSON falling back to AgL value syntax. An :class:`OptionSome` payload
+    decodes its own ``value`` the same way (when textual) before being wrapped
+    back into the optional enum's JSON shape. A native value's nested strings
+    are read the same way for their own slots. Every value then crosses the
+    canonical JSON boundary (JSON-Schema validation, then the typeless
+    ``decode_value`` walk).
+    *default_resolver*, when given, fills an omitted defaulted field nested in
+    *raw* (see ``runtime.convert.decode_value``); omitted, such a field is an
+    ordinary missing-field error. The host engine-config decode path supplies
+    its own resolver, reading a reserved record's field defaults as host-side
+    constants rather than evaluating IR (no program exists yet there) — see
+    ``runtime.engine_config.convert_host_value``.
 
     :raises ValueError: on a type/shape mismatch, schema-validation failure, or a raw
         string that is not valid Unicode (:class:`~agm.util.unicode.LoneSurrogateError`).
@@ -212,48 +224,49 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     )
     from agm.agl.runtime.serialize import JsonShaped, dumps_exact
     from agm.agl.runtime.value_decode import (
-        host_text_to_json,
+        host_data_to_json,
+        host_param_text_to_json,
         option_some_field_schema,
         option_some_json_name,
     )
 
-    def native_to_json(value: object) -> object:
+    defs = dict(decoder.defs)
+
+    def native_to_json(value: object, schema: "DecodeSchema") -> object:
         """Cross an already-native (non-string) host value into JSON-native form.
 
         Round-trips through the same strict-parse boundary a textual value's
         JSON branch uses, so a native ``float`` becomes an exact ``Decimal``,
         and a value with no JSON shape (a TOML datetime, say) or a non-finite
         number reports a clean error instead of reaching JSON-Schema
-        validation as a foreign type. Shared by the top-level native branch
-        and an ``OptionSome`` payload's non-string inner value, so neither can
-        drift from the other.
+        validation as a foreign type. A string nested in it is then read as
+        *schema*'s slot reads host text, so a string means the same at every
+        depth. Shared by the top-level native branch and an ``OptionSome``
+        payload's non-string inner value, so neither can drift from the other.
         """
         if not _is_json_shaped(value):
             raise ValueError(f"expected a JSON-compatible value, got {type(value).__name__}")
-        return parse_json_strict(dumps_exact(cast(JsonShaped, value), indent=None))
+        return host_data_to_json(
+            parse_json_strict(dumps_exact(cast(JsonShaped, value), indent=None)), schema, defs
+        )
 
-    defs = dict(decoder.defs)
     if isinstance(raw, OptionSome):
         inner = raw.value
         field_schema = option_some_field_schema(decoder.decode, defs)
         inner_obj = (
-            host_text_to_json(
-                require_scalar_text(inner), field_schema, defs, agent_command_fallback=True
-            )
+            host_param_text_to_json(require_scalar_text(inner), field_schema, defs)
             if isinstance(inner, str)
-            else native_to_json(inner)
+            else native_to_json(inner, field_schema)
         )
         obj: object = {"$case": option_some_json_name(decoder.decode, defs), "value": inner_obj}
     elif isinstance(raw, str):
-        obj = host_text_to_json(
-            require_scalar_text(raw), decoder.decode, defs, agent_command_fallback=True
-        )
+        obj = host_param_text_to_json(require_scalar_text(raw), decoder.decode, defs)
     else:
-        obj = native_to_json(raw)
+        obj = native_to_json(raw, decoder.decode)
     validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(obj))
     if validation_errors:
         raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, obj, defs)
+    return decode_value(decoder.decode, obj, defs, default_resolver=default_resolver)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +285,10 @@ class _Supplied:
 
 
 def bind_program_arguments(
-    signature: ProgramSignature, arguments: ProgramArguments
+    signature: ProgramSignature,
+    arguments: ProgramArguments,
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
     """Bind and decode *arguments* against *signature*.
 
@@ -294,6 +310,8 @@ def bind_program_arguments(
     decode failure — one diagnostic for a structural violation, or one per
     parameter that is missing-and-required or failed to decode (both keep
     checking every parameter rather than stopping at the first).
+    *default_resolver*, when given, fills an omitted defaulted field nested in
+    a supplied argument's value (see :func:`decode_param_value`).
     """
     from agm.agl.runtime.convert import StrictJsonParseError
 
@@ -319,7 +337,9 @@ def bind_program_arguments(
                 )
             continue
         try:
-            values.append(decode_param_value(param.decoder, box.value))
+            values.append(
+                decode_param_value(param.decoder, box.value, default_resolver=default_resolver)
+            )
         except (StrictJsonParseError, ValueError) as exc:
             diagnostics.append(
                 diagnostic_from_span(
@@ -334,7 +354,11 @@ def bind_program_arguments(
 
 
 def bind_program_arguments_for(
-    executable: "ExecutableProgram", program: "ProgramDeclInfo", arguments: ProgramArguments
+    executable: "ExecutableProgram",
+    program: "ProgramDeclInfo",
+    arguments: ProgramArguments,
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
     """Fuse *program*'s declaration info with *executable*'s signature, then bind *arguments*.
 
@@ -344,22 +368,29 @@ def bind_program_arguments_for(
     program, and both need a :class:`ProgramSignature` fused from them before
     calling :func:`bind_program_arguments` — this is the one place that
     fusing happens, so the two hosts can never pair the two descriptions
-    differently.
+    differently. *default_resolver*, when given, fills a defaulted field an
+    argument's value omits (built by the caller over *executable*'s own real
+    nominal table — this package never constructs an evaluator itself).
     """
     program_symbol = executable.program_symbols[program.node_id]
     signature = ProgramSignature.fuse(
         executable.program_signatures[program_symbol], program.parameters, program.span
     )
-    return bind_program_arguments(signature, arguments)
+    return bind_program_arguments(signature, arguments, default_resolver=default_resolver)
 
 
 def bind_param_values(
-    executable: "ExecutableProgram", raw: "Mapping[StaticBindingKey, object]"
+    executable: "ExecutableProgram",
+    raw: "Mapping[StaticBindingKey, object]",
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[Mapping[StaticBindingKey, Value], tuple[Diagnostic, ...]]":
     """Decode supplied module-parameter values against *executable*'s tables.
 
     Every supplied key is checked independently so an unknown parameter and
     all malformed values are returned together before the interpreter starts.
+    *default_resolver*, when given, fills a defaulted field a value omits
+    (built by the caller over *executable*'s own real nominal table).
     """
     from agm.agl.runtime.convert import StrictJsonParseError
 
@@ -380,7 +411,7 @@ def bind_param_values(
             )
             continue
         try:
-            values[key] = decode_param_value(decoder, value)
+            values[key] = decode_param_value(decoder, value, default_resolver=default_resolver)
         except (StrictJsonParseError, ValueError) as exc:
             module_id, scope_path, name = key
             declaration_path = "::".join((*scope_path, name))

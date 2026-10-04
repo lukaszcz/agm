@@ -1,0 +1,13 @@
+# ask honours constructor field defaults at the agent-output JSON boundary:
+# the agent may omit a defaulted field (it fills from the declared default)
+# or supply it explicitly (the supplied value wins), both against the same
+# target-type schema; a genuinely required field omitted still fails to parse.
+record Profile
+  name: text
+  role: text = "member"
+
+program def main() -> unit =
+  let source: Agent = AgentCommand("profile_source")
+  let p: Profile = ask("Fetch the profile.", agent = source)
+  print p.name
+  print p.role

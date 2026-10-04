@@ -33,7 +33,15 @@ from agm.agl.ir.contracts import (
     TextContractRequest,
     UnitContractRequest,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import (
+    HOST_SOURCE_ID,
+    ContractId,
+    FunctionId,
+    Location,
+    NominalId,
+    SourceId,
+    SymbolId,
+)
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -172,7 +180,13 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     builtin_type_static_kind,
 )
-from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
+from agm.agl.semantics.type_table import (
+    RESERVED_FIELD_DEFAULT_VALUES,
+    MethodDef,
+    ReservedFieldDefault,
+    TypeDef,
+    TypeTable,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -192,6 +206,7 @@ from agm.agl.semantics.types import (
     Type,
     UnitType,
 )
+from agm.agl.semantics.values import BoolValue
 from agm.agl.syntax.nodes import (
     ArrayLit,
     AssignStmt,
@@ -232,7 +247,6 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     Loop,
-    NamedArg,
     NameTarget,
     NullLit,
     OperatorRef,
@@ -255,6 +269,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantDef,
     VarRef,
     is_complete_call,
     pattern_binder_candidates,
@@ -281,16 +296,6 @@ from agm.util.text import normalize_newlines
 __all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
 
 
-def _contract_has_schema(
-    spec: OutputContractSpec | None,
-    payload: ContractPayload | None,
-) -> bool:
-    """Return whether a call-site contract carries a materialized schema."""
-    return spec is not None and (
-        spec.codec_name == "json" or (payload is not None and payload.json_schema is not None)
-    )
-
-
 def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
     """Return whether a loaded standard declaration owns the built-in *name*.
 
@@ -301,14 +306,55 @@ def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
     return type_table.standard_builtin_declaration(name) is not None
 
 
+#: Location of host-constant IR, which has no source text and never raises.
+_HOST_CONSTANT_LOCATION = Location(
+    source_id=HOST_SOURCE_ID, start_offset=0, end_offset=0, start_line=1, start_col=0
+)
+
+
+def _host_constant_ir(value: ReservedFieldDefault) -> IrExpr:
+    """Lower one host-side reserved field default to the IR that rebuilds it."""
+    match value:
+        case NominalId() as member:
+            return IrMakeRecord(location=_HOST_CONSTANT_LOCATION, nominal=member, fields=())
+        case BoolValue(value=flag):
+            return IrConstBool(location=_HOST_CONSTANT_LOCATION, value=flag)
+        case text:
+            return IrConstText(location=_HOST_CONSTANT_LOCATION, value=text.value)
+
+
+def reserved_field_defaults(typedef: TypeDef) -> tuple[IrExpr | None, ...] | None:
+    """Lower a reserved record's host-side field defaults into its descriptor defaults.
+
+    A reserved fallback has no source default expression; its descriptor
+    instead gets the constants of
+    :data:`~agm.agl.semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES`, the
+    same values host engine-setting decode fills. ``None`` when *typedef*
+    has none.
+    """
+    defaults = RESERVED_FIELD_DEFAULT_VALUES.get(typedef.decl_node_id)
+    if defaults is None:
+        return None
+    return tuple(
+        None if (value := defaults.get(index)) is None else _host_constant_ir(value)
+        for index in range(len(typedef.fields))
+    )
+
+
 def _add_builtin_nominals(
-    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+    nominals: dict[NominalId, NominalDescriptor],
+    type_table: TypeTable,
+    field_defaults: "Mapping[NominalId, tuple[IrExpr | None, ...]]",
 ) -> None:
     """Register the host's reserved prelude and exception nominal descriptors.
 
     Record/enum field and variant names, and exception field names, are all
     resolved through *type_table* (every built-in prelude and exception type
-    is seeded into every table by ``create_seeded_type_table``).
+    is seeded into every table by ``create_seeded_type_table``). *field_defaults*
+    is the same accumulated link-state table every other nominal descriptor
+    reads (see ``_LinkState.field_defaults``), holding a reserved identity's
+    host-constant defaults (:func:`reserved_field_defaults`) once
+    ``lower_program`` has registered them.
 
     A reserved identity a standard-library declaration supersedes is left out:
     the source declaration bears that name path, and nothing can reach the
@@ -320,7 +366,11 @@ def _add_builtin_nominals(
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
             nominals[nominal] = record_descriptor(
-                type_table.typedef_of(typ.decl_id), typ, type_table, bears_name_path=True
+                type_table.typedef_of(typ.decl_id),
+                typ,
+                type_table,
+                bears_name_path=True,
+                field_defaults=field_defaults,
             )
             continue
         if isinstance(typ, ExceptionType):
@@ -333,7 +383,11 @@ def _add_builtin_nominals(
         if reserved_fallback_superseded(exc_name, type_table):
             continue
         descriptor = exception_descriptor(
-            type_table.exception_def(exc_type), exc_type, type_table, bears_name_path=True
+            type_table.exception_def(exc_type),
+            exc_type,
+            type_table,
+            bears_name_path=True,
+            field_defaults=field_defaults,
         )
         nominals[descriptor.nominal] = descriptor
 
@@ -421,6 +475,17 @@ class _LinkState:
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
+    # Lowered constructor field defaults, keyed by the declaring record/
+    # exception/enum-variant's own identity, one entry per field in
+    # declaration order (``None`` for a required field). Populated while a
+    # declaring module's own items are lowered (``_Lowerer._lower_field_defaults``)
+    # and read back once every module has been processed, building nominal
+    # descriptors (``_record_descriptor``/``exception_descriptor`` in
+    # ``lower/program.py``) — the constructor counterpart of
+    # ``IrFunctionParam.default``, persisted across REPL entries like
+    # ``functions``/``symbols`` so an already-linked module's descriptors keep
+    # their defaults without being lowered again.
+    field_defaults: dict[NominalId, tuple[IrExpr | None, ...]] = field(default_factory=dict)
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
@@ -433,6 +498,41 @@ class _LinkState:
     # re-classifying source items; the entry mapping is overwritten before
     # promotion consumes it on each REPL entry.
     initializer_origins: dict[ModuleId, tuple[InitializerOrigin, ...]] = field(default_factory=dict)
+
+    def snapshot(self) -> "_LinkState":
+        """Return an independent shallow copy, for the REPL's rollback snapshot.
+
+        Every ``dict``-valued field is re-keyed into a fresh ``dict`` so later
+        mutation of the live state cannot reach the snapshot; every other
+        field is shared as-is (a counter, or the immutable
+        ``BuiltinNominals``). Reflective (``dataclasses.fields``/``getattr``)
+        copying is not an option under this repository's
+        ``disallow_any_expr`` mypy setting -- every dynamic-attribute
+        expression is typed ``Any``. Defined here, directly beside the field
+        list, so a newly added field is copied by the same edit that adds it
+        rather than in a distant caller that can silently forget it (the
+        ``field_defaults`` bug this method's addition fixed: a caller that
+        enumerated fields by hand, at a distance, missed one).
+        """
+        return _LinkState(
+            next_sym=self.next_sym,
+            next_fn=self.next_fn,
+            next_source=self.next_source,
+            next_contract=self.next_contract,
+            decl_to_sym=dict(self.decl_to_sym),
+            fn_node_to_sym=dict(self.fn_node_to_sym),
+            fn_node_to_id=dict(self.fn_node_to_id),
+            symbols=dict(self.symbols),
+            functions=dict(self.functions),
+            nominals=dict(self.nominals),
+            field_defaults=dict(self.field_defaults),
+            builtin_nominals=self.builtin_nominals,
+            sources=dict(self.sources),
+            contracts=dict(self.contracts),
+            target_contracts=dict(self.target_contracts),
+            exception_field_encodes=dict(self.exception_field_encodes),
+            initializer_origins=dict(self.initializer_origins),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,9 +589,10 @@ class _BuiltinOperands:
     env: IrExpr | None = None
     cwd: IrExpr | None = None
     timeout: IrExpr | None = None
+    sandbox: IrExpr | None = None
     target_type: Type | None = None
     path: str | None = None
-    max_attempts: int = 1
+    parse_error_retries: IrExpr | None = None
 
     @property
     def subject(self) -> IrExpr:
@@ -563,6 +664,11 @@ class _Lowerer:
         seed = checked.resolved.program.node_id << 32
         self._allocation = _ModuleAllocation(seed, seed, seed) if stable_ids else link
         self.resources: list[tuple[Path | None, str | None, Path]] = []
+        # This module's own contribution to ``link.field_defaults``, kept
+        # alongside it so the module cache can capture exactly what this
+        # lowering pass added (mirrors how ``lowerer.resources`` feeds
+        # ``module_cache.capture``).
+        self.field_defaults: dict[NominalId, tuple[IrExpr | None, ...]] = {}
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
@@ -2392,10 +2498,14 @@ class _Lowerer:
         elif op is BuiltinStaticKind.SESSION_OPEN:
             transport = call_node.args[1] if len(call_node.args) > 1 else named.get("transport")
             session_name = call_node.args[2] if len(call_node.args) > 2 else named.get("name")
+            sandbox = call_node.args[3] if len(call_node.args) > 3 else named.get("sandbox")
+            env = call_node.args[4] if len(call_node.args) > 4 else named.get("env")
             operands = _BuiltinOperands(
                 value=self.lower_expr(call_node.args[0] if call_node.args else named["agent"]),
                 transport=None if transport is None else self.lower_expr(transport),
                 name=None if session_name is None else self.lower_expr(session_name),
+                sandbox=self._lower_optional(sandbox),
+                env=self._lower_optional(env),
             )
         elif op is BuiltinKind.RESOURCE or op is BuiltinKind.RESOURCE_DIR:
             operands = _BuiltinOperands(
@@ -2411,8 +2521,9 @@ class _Lowerer:
                 env=self._lower_optional(named.get("env")),
                 cwd=self._lower_optional(named.get("cwd")),
                 timeout=self._lower_optional(named.get("timeout")),
+                sandbox=self._lower_optional(named.get("sandbox")),
                 target_type=self._node_type(call_node.node_id),
-                max_attempts=self._extract_max_attempts(call_node),
+                parse_error_retries=self._lower_optional(named.get("parse-error-retries")),
             )
         if receiver is None:
             return operands
@@ -2484,7 +2595,7 @@ class _Lowerer:
                 # ambient default session.
                 session = operands.session
                 if session is None and operands.agent is None:
-                    session = IrSessionDefault(location=loc)
+                    session = IrSessionDefault(location=loc, env=self._default_environ_operand(loc))
                 return self._lower_ask_operands(
                     node_id=node_id,
                     span=span,
@@ -2493,7 +2604,9 @@ class _Lowerer:
                     is_request=False,
                     agent=operands.agent,
                     session=session,
-                    max_attempts=operands.max_attempts,
+                    sandbox=operands.sandbox,
+                    env=operands.env,
+                    parse_error_retries=operands.parse_error_retries,
                 )
 
             case BuiltinKind.ASK_REQUEST:
@@ -2507,13 +2620,15 @@ class _Lowerer:
                     is_request=True,
                     agent=operands.agent,
                     session=None,
-                    max_attempts=operands.max_attempts,
+                    sandbox=operands.sandbox,
+                    env=None,
+                    parse_error_retries=operands.parse_error_retries,
                 )
 
             case BuiltinKind.EXEC:
                 # The host-backed defaults are ordinary IR operands, so each
                 # call reads the current module binding.
-                env, cwd, timeout = self._default_exec_operands(loc)
+                env, cwd, timeout, sandbox = self._default_exec_operands(loc)
                 return self._lower_exec_operands(
                     node_id=node_id,
                     span=span,
@@ -2521,7 +2636,12 @@ class _Lowerer:
                     env=env if operands.env is None else operands.env,
                     cwd=cwd if operands.cwd is None else operands.cwd,
                     timeout=timeout if operands.timeout is None else operands.timeout,
-                    max_attempts=operands.max_attempts,
+                    sandbox=sandbox if operands.sandbox is None else operands.sandbox,
+                    parse_error_retries=(
+                        IrConstInt(location=loc, value=0)
+                        if operands.parse_error_retries is None
+                        else operands.parse_error_retries
+                    ),
                 )
 
             case BuiltinStaticKind.SESSION_OPEN:
@@ -2534,10 +2654,12 @@ class _Lowerer:
                         if operands.name is None
                         else operands.name
                     ),
+                    sandbox=operands.sandbox or self._default_sandbox_operand(loc),
+                    env=operands.env or self._default_environ_operand(loc),
                 )
 
             case BuiltinStaticKind.SESSION_DEFAULT:
-                return IrSessionDefault(location=loc)
+                return IrSessionDefault(location=loc, env=self._default_environ_operand(loc))
 
             case IrSessionOpKind():
                 return IrSessionOp(
@@ -2883,6 +3005,7 @@ class _Lowerer:
         arg_slots = {
             fname: self.lower_coerced(arg_exprs[fname], field_type)
             for fname, field_type in self._constructor_field_types(typ).items()
+            if fname in arg_exprs
         }
         return self._lower_constructor_from_slots(typ, arg_slots, span)
 
@@ -2897,7 +3020,15 @@ class _Lowerer:
         arg_slots: "dict[str, IrExpr]",
         span: "SourceSpan",
     ) -> IrExpr:
-        """Build the IrMake* node for a constructor from already-lowered slots."""
+        """Build the IrMake* node for a constructor from already-lowered slots.
+
+        An omitted field (absent from *arg_slots* because the checker allowed
+        the call to skip a defaulted field) lowers to ``UseDefault(index)`` —
+        the same sentinel an omitted call argument uses — so the evaluator
+        fills it from the constructed nominal's own ``NominalDescriptor
+        .field_defaults`` the way ``IrDirectCall`` fills an omitted argument
+        from its callee's ``FunctionDescriptor.params``.
+        """
         loc = self._loc(span)
 
         if isinstance(typ, RecordType):
@@ -2905,12 +3036,14 @@ class _Lowerer:
             # Build fields in declaration order via the shared TypeTable (its
             # TypeDef stores fields as a declaration-ordered tuple).
             ir_fields = tuple(
-                (fname, arg_slots[fname]) for fname in self._type_table.record_fields(typ)
+                (fname, arg_slots.get(fname, UseDefault(index)))
+                for index, fname in enumerate(self._type_table.record_fields(typ))
             )
             return IrMakeRecord(location=loc, nominal=nominal, fields=ir_fields)
 
         exc_fields = tuple(
-            (fname, arg_slots[fname]) for fname in self._type_table.exception_fields(typ)
+            (fname, arg_slots.get(fname, UseDefault(index)))
+            for index, fname in enumerate(self._type_table.exception_fields(typ))
         )
         return IrMakeException(location=loc, nominal=NominalId(typ.decl_id), fields=exc_fields)
 
@@ -3488,6 +3621,27 @@ class _Lowerer:
     # Ask/ask-request lowering
     # ------------------------------------------------------------------
 
+    def _default_sandbox_operand(self, loc: Location) -> IrExpr:
+        """Read the current default agent sandbox mode."""
+        return IrBuiltinLoad(
+            location=loc,
+            key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
+        )
+
+    def _default_parse_error_retries_operand(self, loc: Location) -> IrExpr:
+        """Read ``std/config::parse-error-retries`` per call."""
+        return IrBuiltinLoad(
+            location=loc, key=builtin_var_key(STD_CONFIG_ID, (), "parse-error-retries")
+        )
+
+    def _default_environ_operand(self, loc: Location) -> IrExpr:
+        """Read the ambient environment, or empty when ``std/env`` isn't loaded."""
+        return (
+            IrBuiltinLoad(location=loc, key=builtin_var_key(STD_ENV_ID, (), "environ"))
+            if self._has_std_env
+            else IrMakeDict(location=loc, entries=())
+        )
+
     def _lower_ask_operands(
         self,
         *,
@@ -3498,7 +3652,9 @@ class _Lowerer:
         is_request: bool,
         agent: IrExpr | None,
         session: IrExpr | None,
-        max_attempts: int,
+        sandbox: IrExpr | None,
+        env: IrExpr | None,
+        parse_error_retries: IrExpr | None,
     ) -> IrExpr:
         """Build an ask operation from already-lowered direct or closure operands."""
         loc = self._loc(span)
@@ -3508,6 +3664,14 @@ class _Lowerer:
             else self._contract_request_for_spec(node_id, structured_exec=False)
         )
         contract_id = self._alloc_contract(contract_req)
+
+        def selected_sandbox() -> IrExpr:
+            return sandbox or self._default_sandbox_operand(loc)
+
+        def selected_env() -> IrExpr:
+            return env or self._default_environ_operand(loc)
+
+        retries = parse_error_retries or self._default_parse_error_retries_operand(loc)
 
         if is_request:
             selected_agent = agent or IrBuiltinLoad(
@@ -3519,42 +3683,44 @@ class _Lowerer:
                 agent=selected_agent,
                 prompt=prompt,
                 contract_id=contract_id,
-                max_attempts=max_attempts,
+                parse_error_retries=retries,
+                sandbox=selected_sandbox(),
             )
         if session is not None:
+            # Session asks carry no per-call sandbox operand: the session's
+            # mode is fixed at open, not chosen per ask.
             return IrSessionAsk(
                 location=loc,
                 session=session,
                 prompt=prompt,
                 contract_id=contract_id,
-                max_attempts=max_attempts,
+                parse_error_retries=retries,
             )
         return IrAsk(
             location=loc,
             agent=cast(IrExpr, agent),
             prompt=prompt,
             contract_id=contract_id,
-            max_attempts=max_attempts,
+            parse_error_retries=retries,
+            sandbox=selected_sandbox(),
+            env=selected_env(),
         )
 
     # ------------------------------------------------------------------
     # Exec lowering
     # ------------------------------------------------------------------
 
-    def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr]:
-        """Build exec's ambient environment, cwd, and timeout defaults."""
-        env: IrExpr = (
-            IrBuiltinLoad(location=loc, key=builtin_var_key(STD_ENV_ID, (), "environ"))
-            if self._has_std_env
-            else IrMakeDict(location=loc, entries=())
-        )
+    def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr, IrExpr]:
+        """Build exec's ambient environment, cwd, timeout, and sandbox defaults."""
+        env = self._default_environ_operand(loc)
         option_none = self._link.builtin_nominals.resolve_standard_member("Option", "None")
         cwd = IrMakeRecord(location=loc, nominal=option_none.nominal, fields=())
         timeout = IrBuiltinLoad(
             location=loc,
             key=builtin_var_key(STD_CONFIG_ID, (), "timeout"),
         )
-        return env, cwd, timeout
+        sandbox = IrMakeRecord(location=loc, nominal=option_none.nominal, fields=())
+        return env, cwd, timeout, sandbox
 
     def _lower_exec_operands(
         self,
@@ -3565,7 +3731,8 @@ class _Lowerer:
         env: IrExpr,
         cwd: IrExpr,
         timeout: IrExpr,
-        max_attempts: int,
+        sandbox: IrExpr,
+        parse_error_retries: IrExpr,
     ) -> IrExec:
         """Build an exec operation from already-lowered direct or closure operands."""
         contract_req = self._contract_request_for_spec(
@@ -3578,35 +3745,49 @@ class _Lowerer:
             cwd=cwd,
             timeout=timeout,
             contract_id=self._alloc_contract(contract_req),
-            max_attempts=max_attempts,
+            parse_error_retries=parse_error_retries,
+            sandbox=sandbox,
         )
 
-    def _extract_max_attempts(self, call_node: CompleteCall) -> int:
-        """Extract max_attempts from the on_parse_error named arg at lowering time."""
-        named_map: dict[str, NamedArg[Expr]] = {na.name: na for na in call_node.named_args}
-        if "on-parse-error" not in named_map:
-            return 1
-        policy_expr = named_map["on-parse-error"].value
-        if isinstance(policy_expr, Call):
-            callee = policy_expr.callee
-            if isinstance(callee, VarRef):
-                callee_name: str | None = callee.name
-            elif isinstance(callee, FieldAccess):
-                callee_name = callee.field
-            else:
-                callee_name = None
-            if callee_name == "Retry":
-                n_val = next(
-                    (
-                        arg.value.value
-                        for arg in policy_expr.named_args
-                        if arg.name == "n" and isinstance(arg.value, IntLit)
-                    ),
-                    0,
-                )
-                return 1 + n_val
-        # Absent or Abort → single attempt
-        return 1
+    # ------------------------------------------------------------------
+    # Constructor field defaults
+    # ------------------------------------------------------------------
+
+    def _lower_field_defaults(self, decl_node_id: int, fields: "tuple[Param, ...]") -> None:
+        """Lower and publish one record/exception/variant's field defaults.
+
+        Mirrors ``_lower_declared_params``'s per-parameter default lowering:
+        each default is coerced to its own field's declared type (read off
+        the shared ``TypeTable``, so a generic declaration's template field
+        type carries its own type variables unresolved, exactly as the
+        checker rigidified them for its assignability check). A default may
+        reference this module's own constants, so it lowers under
+        ``substituted_constants`` too — not for ``builtin var``'s reason
+        (evaluated before any initializer has run), since a field default
+        instead runs at construction time, after the module is fully
+        initialized. It substitutes so each omitted-field construction gets a
+        fresh evaluation of a referenced constant's own initializer rather
+        than a frame load of its one already-computed value: a default
+        naming a constant that holds a mutable container would otherwise
+        share that single container's identity across every construction
+        that omits the field. Skipped when no field of *fields* declares a
+        default.
+        """
+        if not any(fd.default is not None for fd in fields):
+            return
+        typedef = self._type_table.get_by_id(decl_node_id)
+        assert typedef is not None, f"compiler bug: no TypeDef for declaration {decl_node_id!r}"
+        field_types = dict(typedef.fields)
+        with self.substituted_constants():
+            defaults = tuple(
+                self.lower_coerced(fd.default, field_types[fd.name])
+                if fd.default is not None
+                else None
+                for fd in fields
+            )
+        nominal = NominalId(decl_node_id)
+        self._link.field_defaults[nominal] = defaults
+        self.field_defaults[nominal] = defaults
 
     # ------------------------------------------------------------------
     # Item lowering
@@ -3691,11 +3872,22 @@ class _Lowerer:
                     return self._lower_extern_funcdef(funcdef)
                 return self._lower_funcdef(funcdef)
 
+            case RecordDef(fields=fields, node_id=nid):
+                self._lower_field_defaults(nid, fields)
+                return None
+
+            case ExceptionDef(fields=fields, node_id=nid):
+                self._lower_field_defaults(nid, fields)
+                return None
+
+            case EnumDef(members=members):
+                for member in members:
+                    if isinstance(member, VariantDef):
+                        self._lower_field_defaults(member.node_id, member.fields)
+                return None
+
             case (
-                RecordDef()
-                | EnumDef()
-                | ExceptionDef()
-                | TypeAlias()
+                TypeAlias()
                 | ImportDecl()
                 | ExportDecl()
                 | UseDecl()

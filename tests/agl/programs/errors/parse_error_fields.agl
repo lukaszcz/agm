@@ -8,7 +8,7 @@ program def main() -> unit =
   let builder: Agent = AgentCommand("builder")
   let critic: Agent = AgentCommand("critic")
   try
-    let s: Spec = builder.ask("Build the spec.", on-parse-error = Retry(n = 1))
+    let s: Spec = builder.ask("Build the spec.", parse-error-retries = 1)
     print s.name
   catch AgentParseError as e =>
     let advice = critic.ask("""

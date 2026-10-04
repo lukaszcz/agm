@@ -21,17 +21,17 @@ from tests._package_helpers import write_installed_package
 class TestIsInstalledReference:
     """The single classification rule shared by execution, help, and completion."""
 
-    def test_inline_command_is_never_a_reference(self) -> None:
-        assert is_installed_reference("pkg/mod::main", command="print 1") is False
+    def test_inline_code_is_never_a_reference(self) -> None:
+        assert is_installed_reference("pkg/mod::main", code="print 1") is False
 
     def test_missing_file_argument_is_not_a_reference(self) -> None:
-        assert is_installed_reference(None, command=None) is False
+        assert is_installed_reference(None, code=None) is False
 
     def test_no_separator_is_not_a_reference(self, tmp_path: Path) -> None:
-        assert is_installed_reference(str(tmp_path / "missing.agl"), command=None) is False
+        assert is_installed_reference(str(tmp_path / "missing.agl"), code=None) is False
 
     def test_missing_file_with_separator_is_a_reference(self, tmp_path: Path) -> None:
-        assert is_installed_reference(str(tmp_path / "pkg/mod::main"), command=None) is True
+        assert is_installed_reference(str(tmp_path / "pkg/mod::main"), code=None) is True
 
     def test_an_existing_on_disk_file_wins_even_with_a_separator_in_its_name(
         self, tmp_path: Path
@@ -42,19 +42,19 @@ class TestIsInstalledReference:
         colliding = tmp_path / "pkg::mod.agl"
         colliding.write_text("program def main() -> unit = ()\n", encoding="utf-8")
 
-        assert is_installed_reference(str(colliding), command=None) is False
+        assert is_installed_reference(str(colliding), code=None) is False
 
 
 class TestResolveExecTarget:
-    def test_inline_command_resolves_to_inline_source(self, tmp_path: Path) -> None:
+    def test_inline_code_resolves_to_inline_source(self, tmp_path: Path) -> None:
         target = resolve_exec_target(
-            file=None, command="print 1", home=tmp_path, proj_dir=None, cwd=tmp_path
+            file=None, code="print 1", home=tmp_path, proj_dir=None, cwd=tmp_path
         )
         assert target == InlineSource("print 1")
 
     def test_neither_file_nor_command_is_an_error(self, tmp_path: Path) -> None:
         target = resolve_exec_target(
-            file=None, command=None, home=tmp_path, proj_dir=None, cwd=tmp_path
+            file=None, code=None, home=tmp_path, proj_dir=None, cwd=tmp_path
         )
         assert isinstance(target, ExecTargetError)
 
@@ -63,7 +63,7 @@ class TestResolveExecTarget:
         agl_file.write_text("program def main() -> unit = ()\n", encoding="utf-8")
 
         target = resolve_exec_target(
-            file=str(agl_file), command=None, home=tmp_path, proj_dir=None, cwd=tmp_path
+            file=str(agl_file), code=None, home=tmp_path, proj_dir=None, cwd=tmp_path
         )
 
         assert target == FileEntry(agl_file)
@@ -74,7 +74,7 @@ class TestResolveExecTarget:
 
         target = resolve_exec_target(
             file="tools/main::main",
-            command=None,
+            code=None,
             home=home,
             proj_dir=None,
             cwd=tmp_path,

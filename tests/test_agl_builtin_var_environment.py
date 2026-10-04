@@ -9,13 +9,18 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import BoolValue, DictValue, IntValue, RecordValue, TextValue
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
 
 _STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _run(source: str, **kwargs: object):
-    return run_inline_command(PipelineDriver(), source, roots=agl_roots(), **kwargs)
+    return run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        source,
+        roots=agl_roots(),
+        **kwargs,
+    )
 
 
 def _environment_value(result: object, binding: str) -> RecordValue:
@@ -28,8 +33,8 @@ def test_stdlib_builtin_vars_are_keyed_by_module_and_name(tmp_path: Path) -> Non
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "state.agl").write_text("builtin var value: int = 1\n", encoding="utf-8")
 
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "import std/state\nstd/state::value := 2\nlet seen = std/state::value\nseen",
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
@@ -46,8 +51,8 @@ def test_module_keyed_host_seeds_keep_same_named_builtin_vars_independent(
     (tmp_path / "std" / "first.agl").write_text("builtin var value: int\n", encoding="utf-8")
     (tmp_path / "std" / "second.agl").write_text("builtin var value: int\n", encoding="utf-8")
 
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "import std/first\nimport std/second\n"
         "let first = std/first::value\nlet second = std/second::value\nsecond",
         roots=RootSet(roots=frozenset({tmp_path})),
@@ -67,7 +72,7 @@ def test_pipeline_run_accepts_module_keyed_host_seeds(tmp_path: Path) -> None:
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "state.agl").write_text("builtin var value: int\n", encoding="utf-8")
 
-    result = PipelineDriver().run(
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
         "import std/state\n"
         "program def main() -> unit =\n"
         "  std/state::value := std/state::value + 1\n",
@@ -127,8 +132,8 @@ def test_unseeded_non_engine_builtin_var_is_a_diagnostic_not_a_key_error(tmp_pat
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "state.agl").write_text("builtin var value: int\n", encoding="utf-8")
 
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "import std/state\nstd/state::value",
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
@@ -226,8 +231,8 @@ def test_repl_environment_hole_needs_no_import() -> None:
 def test_non_stdlib_library_builtin_var_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "library.agl").write_text("builtin var value: int = 1\n", encoding="utf-8")
 
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "import library\n()",
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,

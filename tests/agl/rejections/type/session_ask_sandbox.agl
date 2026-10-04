@@ -1,0 +1,5 @@
+program def main() -> unit =
+
+  let session = Session::open(AgentCommand("impl"))
+  let response = session.ask("question", sandbox = AgentSandbox::Native)
+  print response

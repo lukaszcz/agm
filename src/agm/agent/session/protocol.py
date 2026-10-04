@@ -8,8 +8,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from agm.agent.spec import AgentSpec, SessionTransport
-from agm.agent.transport import AgentCallInfo, AgentTransportError
+from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
+from agm.agent.transport import AgentCallInfo, AgentOutputCallback, AgentTransportError
+from agm.sandbox.request import SandboxLimits
 
 
 class SessionOperation(StrEnum):
@@ -28,20 +29,40 @@ class SessionOpenRequest:
 
     ``single_prompt`` states that this session serves exactly one prompt, so a
     backend need not establish a conversation it will never continue. Handle
-    lifetime is owned separately by the session service.
+    lifetime is owned separately by the session service. ``ephemeral`` marks a
+    session that lives for one ask's retry loop, so a backend that cannot
+    continue a conversation may serve each prompt as an independent invocation
+    instead of rejecting the open. ``permission_mode``/
+    ``sandbox``/``env`` fix the sandboxing and environment every process this
+    session spawns runs under, for the session's whole lifetime; the
+    ``permission_mode``/``sandbox`` defaults keep a caller that does not
+    decode either unaffected. ``env`` is required: every session resolves an
+    environment at open (the ambient one by default), so no backend ever
+    falls back to the host process environment silently. An empty dict is an
+    explicit empty environment, not "unspecified".
     """
 
     agent: AgentSpec
     transport: SessionTransport
     name: str = ""
     single_prompt: bool = False
+    ephemeral: bool = False
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: SandboxLimits | None = None
+    env: dict[str, str] = field(repr=False, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
 class SessionAskRequest:
-    """A rendered prompt to send within an existing backend session."""
+    """A rendered prompt to send within an existing backend session.
+
+    Carries no sandboxing of its own: a session's ``permission_mode``/
+    ``sandbox`` are fixed once, at open (see ``SessionOpenRequest``), for its
+    whole lifetime -- there is no per-ask override.
+    """
 
     prompt: str
+    output_callback: AgentOutputCallback | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +119,9 @@ class SessionOperations:
 class SessionBackend(Protocol):
     """One open native session implementation selected for an agent transport."""
 
+    continues_conversation: bool
+    """Whether a later prompt continues the earlier ones; fixed by ``open``."""
+
     @property
     def operations(self) -> SessionOperations:
         """The optional operations this session supports."""
@@ -110,3 +134,21 @@ class SessionBackend(Protocol):
 
     def close(self) -> None:
         """Release the backend's resources."""
+
+
+class SandboxFixture:
+    """Sandboxing and environment fixed once, at ``open``, for a backend's whole lifetime.
+
+    Every process a session spawns -- its first prompt and every later native
+    call (fork's replacement, compaction, ...) -- reuses the same
+    ``permission_mode``/``sandbox``/``env``; there is no per-call override.
+    Shared by every session backend family (CLI, RPC) so "fix at open" and
+    "carry into a freshly spawned sibling" are each written once.
+    """
+
+    def __init__(
+        self, *, permission_mode: PermissionMode, sandbox: SandboxLimits | None, env: dict[str, str]
+    ) -> None:
+        self._permission_mode = permission_mode
+        self._sandbox = sandbox
+        self._env = env

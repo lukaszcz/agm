@@ -79,10 +79,7 @@ def format_typed_value(
 def _is_unit_entry(result: "EntryResult") -> bool:
     """Whether *result*'s checked type is ``unit`` — an entry that echoes nothing.
 
-    The single place the "unit-typed entry echoes nothing" decision is made,
-    for both the live value echo and the ``check_only`` (dry-run) type echo, so
-    the two never drift.  Decided from the entry's checked static type, never
-    from a value-carried flag.
+    Decided from the entry's checked static type, never from a value-carried flag.
     """
     from agm.agl.semantics.types import UnitType
 
@@ -94,15 +91,12 @@ def render_entry_result(
     *,
     echo: bool,
     echo_unit: bool = False,
-    check_only: bool = False,
 ) -> str | None:
     """Return the text to print for *result*, or ``None`` when nothing to print.
 
     *echo* mirrors the session echo setting: when off, successful entries
     produce no echo line (errors and warnings are always reported regardless).
-    *check_only* selects the dry-run echo: a check-only result has a type but no
-    value, so the echo shows the inferred type instead of a value. A
-    ``unit``-typed expression or binding never echoes, in either mode (see
+    A ``unit``-typed expression or binding never echoes (see
     :func:`_is_unit_entry`), unless *echo_unit* is set — the single place that
     decision is gated.
     """
@@ -120,7 +114,7 @@ def render_entry_result(
         return "\n".join(lines) if lines else None
 
     if echo and (echo_unit or not _is_unit_entry(result)):
-        echo_line = _render_check_only(result) if check_only else _render_echo(result)
+        echo_line = _render_echo(result)
         if echo_line is not None:
             lines.append(echo_line)
 
@@ -137,39 +131,6 @@ def _render_failure(result: "EntryResult") -> list[str]:
     if result.error is not None:
         return [result.error.to_message()]
     return [format_diagnostic(diag, source_name=None) for diag in result.diagnostics]
-
-
-def _render_check_only(result: "EntryResult") -> str | None:
-    """Render the dry-run (type-only) echo for *result*, or ``None``.
-
-    A ``check_only`` run never evaluates, so there is no value — the echo shows
-    the inferred static type: ``name : Type`` for a binding, ``: Type`` for a
-    bare expression.  Declarations confirm the declared name; statements have no
-    type to show and echo nothing.  A REPL bare-type entry (``kind == "type"``)
-    echoes ``<type: T>`` just as in the live echo.
-    """
-    from agm.agl.repl.type_display import (
-        format_type_echo_for_repl,
-        format_type_for_repl,
-        format_type_text_echo_for_repl,
-    )
-
-    if result.kind == "type":
-        if result.type_display is not None:
-            return format_type_text_echo_for_repl(result.type_display)
-        # A type entry without a display text carries its checked type.
-        return format_type_echo_for_repl(cast("Type", result.value_type), result.type_table)
-    if result.kind == "expression":
-        # An expression entry carries its checked type.
-        return f": {format_type_for_repl(cast('Type', result.value_type), result.type_table)}"
-    if result.kind == "binding":
-        # A binding entry carries its checked type.
-        typ = format_type_for_repl(cast("Type", result.value_type), result.type_table)
-        return f"{result.name} : {typ}" if result.name is not None else f": {typ}"
-    if result.kind == "declaration":
-        return f"{result.name} declared"
-    # ``statement`` — nothing to show.
-    return None
 
 
 def _render_echo(result: "EntryResult") -> str | None:

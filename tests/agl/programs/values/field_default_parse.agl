@@ -1,0 +1,40 @@
+# Constructor field defaults at the parse/value-syntax boundary: an omitted
+# defaulted field fills from its declared default whether the source text is
+# AgL value syntax or JSON, an all-defaulted record may be spelled bare, and
+# a genuinely required field omitted from either source still fails.
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+
+record Pair
+  x: int
+  y: int = 9
+
+program def main(mode: text, input: text) -> unit =
+  if
+    | mode == "value_syntax_omit" =>
+        let c: Config = parse(input)
+        print c.retry.count
+        print c.verbose
+    | mode == "value_syntax_bare" =>
+        let r: Retry = parse(input)
+        print r.count
+    | mode == "json_omit" =>
+        let c: Config = parse(input)
+        print c.retry.count
+        print c.verbose
+    | mode == "missing_required" =>
+        let p: Pair = parse(input)
+        print p.x
+    | mode == "json_round_trip" =>
+        # Encoding always carries every field (unaffected by defaults); the
+        # JSON produced from a defaults-filled value round-trips exactly.
+        let original: Config = parse(input)
+        let round: Config = parse::[Config](render(original))
+        print "%{round == original}"
+        print "%{original as json}"
+    | else =>
+        print "unknown mode"

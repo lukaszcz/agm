@@ -1,0 +1,9 @@
+record P
+  x: int
+  y: text = ""
+  @arg-named z: text
+
+program def main() -> unit =
+  let z = "hi"
+  let p = P(1, z)
+  p

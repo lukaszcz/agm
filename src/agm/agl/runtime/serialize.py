@@ -19,17 +19,20 @@ Entry points:
 - :func:`report_exception_fields` — an uncaught exception's own fields, selected
   by its runtime nominal like ``encode_value``'s, degrading unconvertible fields
   to markers for the error report.
-- :func:`dumps_exact` — render a JSON-shaped object as JSON text, emitting ``Decimal``
+- :func:`value_to_trace_json_obj` — best-effort trace data, retaining enum tags
+  and degrading cycles and non-data values.
+- :func:`dumps_exact` — render such an object as JSON text, emitting ``Decimal``
   as exact unquoted numeric text.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import assert_never, cast
+from math import isfinite
+from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl.ir.contracts import (
     ArrayEncode,
@@ -49,6 +52,7 @@ from agm.agl.ir.contracts import (
     VariantEncode,
     dict_key_form,
     forwarded_encode_key,
+    is_plain_enum,
     resolve_schema_ref,
 )
 from agm.agl.ir.ids import NominalId
@@ -69,6 +73,7 @@ from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
     IrClosureValue,
+    IteratorValue,
     JsonValue,
     ObservableValue,
     RecordValue,
@@ -77,6 +82,11 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.util.decimal import strip_trailing_zeros
+from agm.util.unicode import surrogate_index
+
+if TYPE_CHECKING:
+    from agm.agl.ir.builtin_nominals import BuiltinNominals
+    from agm.agl.ir.program import ValueDescriptors
 
 #: The closed JSON-shape domain ``dumps_exact``/``_emit`` serialize: every
 #: scalar a JSON document may hold, plus recursively JSON-shaped
@@ -125,8 +135,9 @@ def encode_value(
 ) -> object:
     """Encode *value* through its lowering-derived JSON plan.
 
-    Plans select enum ``$case`` tags from the slot type rather than the runtime
-    value. A finite source's definitions take no parameters; a growing
+    Plans select an enum's shape (a plain enum's tag string, else a ``$case``
+    object) and its tags from the slot type rather than the runtime value. A
+    finite source's definitions take no parameters; a growing
     polymorphic-recursive source's definitions are generic templates whose
     parameters each reference binds (see :class:`RefEncode`).
 
@@ -282,6 +293,8 @@ def _encode_resolved(
         case EnumEncode():
             value = cast(RecordValue, value)
             variant, member_fields = _variant_for_encode(schema, value)
+            if is_plain_enum(schema):
+                return variant.json_name
             active = enter_value(id(value), active)
             try:
                 result: dict[str, object] = {"$case": variant.json_name}
@@ -635,6 +648,136 @@ def value_to_json_obj(
     if isinstance(value, ContractValue):
         raise AglNonDataValue("contract")
     assert_never(value)  # pragma: no cover
+
+
+def value_to_trace_json_obj(
+    value: Value,
+    descriptors: "ValueDescriptors",
+    builtin_nominals: "BuiltinNominals",
+) -> object:
+    """Convert a runtime value to a best-effort JSON shape for a trace record.
+
+    Unlike :func:`value_to_json_obj`, this walk degrades cycles and non-data
+    values instead of raising. Enum members retain their ``$case`` tag, while
+    decimal values use their exact text form because JSONL trace records use
+    the standard JSON encoder.
+    """
+    enum_members = {
+        variant.member: variant.name
+        for descriptor in descriptors.nominals.values()
+        for variant in descriptor.variants
+    }
+    return _trace_value(value, enum_members, builtin_nominals, None)
+
+
+def _trace_value(
+    value: Value,
+    enum_members: "Mapping[NominalId, str]",
+    builtin_nominals: "BuiltinNominals",
+    active: set[int] | None,
+) -> object:
+    if isinstance(value, TextValue):
+        return value.value if surrogate_index(value.value) is None else non_data_marker("text")
+    if isinstance(value, IntValue):
+        return value.value
+    if isinstance(value, DecimalValue):
+        return dumps_exact(value.value, indent=None)
+    if isinstance(value, BoolValue):
+        return value.value
+    if isinstance(value, JsonValue):
+        return _trace_json_data(value.raw, active)
+    if isinstance(value, ArrayValue):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return [
+                _trace_value(item, enum_members, builtin_nominals, active)
+                for item in value.elements
+            ]
+        finally:
+            active.discard(id(value))
+    if isinstance(value, DictValue):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            if value.is_text_keyed() or len(value) == 0:
+                return {
+                    key: _trace_value(item, enum_members, builtin_nominals, active)
+                    for key, item in value.text_items()
+                }
+            return [
+                {
+                    "key": _trace_value(key, enum_members, builtin_nominals, active),
+                    "value": _trace_value(item, enum_members, builtin_nominals, active),
+                }
+                for key, item in value.items()
+            ]
+        finally:
+            active.discard(id(value))
+    if isinstance(value, (RecordValue, ExceptionValue)):
+        active = _trace_enter(value, active)
+        if active is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            fields = {
+                key: _trace_value(item, enum_members, builtin_nominals, active)
+                for key, item in value.fields.items()
+            }
+            variant = enum_members.get(value.nominal)
+            if variant is None:
+                builtin_member = builtin_nominals.reverse(value.nominal)
+                variant = None if builtin_member is None else builtin_member[1]
+            return {"$case": variant, **fields} if variant is not None else fields
+        finally:
+            active.discard(id(value))
+    if isinstance(value, UnitValue):
+        return non_data_marker("unit")
+    if isinstance(value, ConstructorValue):
+        return non_data_marker("constructor")
+    if isinstance(value, IrClosureValue):
+        return non_data_marker("function")
+    if isinstance(value, IteratorValue):
+        return non_data_marker("iterator")
+    if isinstance(value, ContractValue):
+        return non_data_marker("contract")
+    assert_never(value)  # pragma: no cover
+
+
+def _trace_enter(value: object, active: set[int] | None) -> set[int] | None:
+    try:
+        return enter_value(id(value), active)
+    except AglCyclicValue:
+        return None
+
+
+def _trace_json_data(value: object, active: set[int] | None) -> object:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        return value if surrogate_index(value) is None else non_data_marker("text")
+    if isinstance(value, float):
+        return value if isfinite(value) else non_data_marker("float")
+    if isinstance(value, Decimal):
+        return dumps_exact(value, indent=None)
+    if isinstance(value, Mapping):
+        nested = _trace_enter(value, active)
+        if nested is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return {str(key): _trace_json_data(item, nested) for key, item in value.items()}
+        finally:
+            nested.discard(id(value))
+    if isinstance(value, Sequence) and not isinstance(value, bytes):
+        nested = _trace_enter(value, active)
+        if nested is None:
+            return CYCLIC_VALUE_MARKER
+        try:
+            return [_trace_json_data(item, nested) for item in value]
+        finally:
+            nested.discard(id(value))
+    return non_data_marker(type(value).__name__)
 
 
 def dumps_exact(obj: JsonShaped, *, indent: int | None = 2) -> str:

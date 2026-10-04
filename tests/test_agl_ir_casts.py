@@ -195,7 +195,7 @@ let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as array[Foo]
 def test_text_to_enum_agrees() -> None:
     source = """\
 enum Color | Red | Blue
-let x = "{\\"$case\\": \\"Red\\"}" as Color
+let x = "\\"Red\\"" as Color
 ()
 """
     evaluate_ir(source)
@@ -740,7 +740,7 @@ def test_decode_scalar_success_branches() -> None:
                 host_agent=False,
             ),
             5,
-            "Expected object for enum, got int",
+            "Expected string for enum, got int",
         ),
         (
             EnumDecode(
@@ -750,8 +750,8 @@ def test_decode_scalar_success_branches() -> None:
                 "Color",
                 host_agent=False,
             ),
-            {},
-            "Enum object must have a string '$case' field",
+            {"$case": "Red"},
+            "Expected string for enum, got dict",
         ),
         (
             EnumDecode(
@@ -761,7 +761,7 @@ def test_decode_scalar_success_branches() -> None:
                 "Color",
                 host_agent=False,
             ),
-            {"$case": "Purple"},
+            "Purple",
             "Unknown enum variant 'Purple' for 'Color'. Valid variants: ['Red']",
         ),
         (
@@ -823,7 +823,7 @@ def test_decode_nested_record_and_enum_success() -> None:
             "Color",
             host_agent=False,
         ),
-        {"$case": "Red"},
+        "Red",
     )
     assert enum_val == RecordValue(nominal=NominalId(999), fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
@@ -1055,9 +1055,16 @@ def test_validate_rejects_malformed_encode_nominal_shapes() -> None:
             "Record",
             NominalKind.RECORD,
             ("field",),
+            field_json_names=("field",),
         ),
         exception: NominalDescriptor(
-            exception, ENTRY_ID, (), "Exception", NominalKind.EXCEPTION, ("field",)
+            exception,
+            ENTRY_ID,
+            (),
+            "Exception",
+            NominalKind.EXCEPTION,
+            ("field",),
+            field_json_names=("field",),
         ),
         enum: NominalDescriptor(
             enum,
@@ -1161,7 +1168,13 @@ def test_validate_rejects_exception_encode_for_non_exception_nominal() -> None:
     recipe = ToJsonRecipe(source_label="Bad", target_label="json", encode=ExceptionEncode(nominal))
     program = _convert_program(recipe)
     program.nominals[nominal] = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Bad", NominalKind.RECORD, (), ()
+        nominal,
+        ENTRY_ID,
+        (),
+        "Bad",
+        NominalKind.RECORD,
+        (),
+        (),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(program, deep=True)
@@ -1175,7 +1188,13 @@ def test_validate_rejects_enum_encode_for_non_enum_nominal() -> None:
     recipe = ToJsonRecipe(source_label="Bad", target_label="json", encode=EnumEncode(nominal, ()))
     program = _convert_program(recipe)
     program.nominals[nominal] = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Bad", NominalKind.RECORD, (), ()
+        nominal,
+        ENTRY_ID,
+        (),
+        "Bad",
+        NominalKind.RECORD,
+        (),
+        (),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(program, deep=True)
@@ -1209,7 +1228,13 @@ def test_validate_rejects_record_descriptor_field_json_names_length_mismatch() -
         SimpleConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
     )
     program.nominals[nominal] = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Pair", NominalKind.RECORD, ("a", "b"), ("a",)
+        nominal,
+        ENTRY_ID,
+        (),
+        "Pair",
+        NominalKind.RECORD,
+        ("a", "b"),
+        ("a",),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(program, deep=True)
@@ -1229,7 +1254,13 @@ def test_validate_rejects_exception_descriptor_field_json_names_length_mismatch(
         SimpleConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
     )
     program.nominals[nominal] = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Pair", NominalKind.EXCEPTION, ("a", "b"), ("a",)
+        nominal,
+        ENTRY_ID,
+        (),
+        "Pair",
+        NominalKind.EXCEPTION,
+        ("a", "b"),
+        ("a",),
     )
     program.exception_field_encodes[nominal] = (
         ExceptionFieldEncode("a", "a", EncodePlan(ScalarEncode(ScalarKind.JSON))),
@@ -1280,7 +1311,13 @@ def test_validate_rejects_enum_variant_field_json_names_disagreeing_with_member_
                 variants=(VariantDescriptor("Red", ("value",), member, "Red", ("wrong",)),),
             ),
             member: NominalDescriptor(
-                member, ENTRY_ID, ("Color",), "Red", NominalKind.RECORD, ("value",), ("value",)
+                member,
+                ENTRY_ID,
+                ("Color",),
+                "Red",
+                NominalKind.RECORD,
+                ("value",),
+                ("value",),
             ),
         }
     )
@@ -1300,7 +1337,13 @@ def test_validate_rejects_record_encode_field_whose_json_name_disagrees_with_des
     )
     program = _convert_program(recipe)
     program.nominals[record] = NominalDescriptor(
-        record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",), ("value",)
+        record,
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        ("value",),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(program, deep=True)
@@ -1334,7 +1377,13 @@ def test_validate_rejects_record_decode_field_whose_json_name_disagrees_with_des
     )
     program = _convert_program(recipe)
     program.nominals[record] = NominalDescriptor(
-        record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",), ("value",)
+        record,
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        ("value",),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(program, deep=True)
@@ -1373,7 +1422,13 @@ def test_validate_rejects_enum_encode_variant_field_whose_json_name_disagrees_wi
                 variants=(VariantDescriptor("Red", ("value",), member, "Red", ("value",)),),
             ),
             member: NominalDescriptor(
-                member, ENTRY_ID, ("Color",), "Red", NominalKind.RECORD, ("value",), ("value",)
+                member,
+                ENTRY_ID,
+                ("Color",),
+                "Red",
+                NominalKind.RECORD,
+                ("value",),
+                ("value",),
             ),
         }
     )
@@ -1418,7 +1473,13 @@ def test_validate_rejects_enum_decode_variant_field_whose_json_name_disagrees_wi
                 variants=(VariantDescriptor("Red", ("value",), member, "Red", ("value",)),),
             ),
             member: NominalDescriptor(
-                member, ENTRY_ID, ("Color",), "Red", NominalKind.RECORD, ("value",), ("value",)
+                member,
+                ENTRY_ID,
+                ("Color",),
+                "Red",
+                NominalKind.RECORD,
+                ("value",),
+                ("value",),
             ),
         }
     )
@@ -1437,7 +1498,13 @@ def test_validate_rejects_exception_field_encode_whose_json_name_disagrees_with_
         SimpleConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
     )
     program.nominals[exception] = NominalDescriptor(
-        exception, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("field",), ("field",)
+        exception,
+        ENTRY_ID,
+        (),
+        "Problem",
+        NominalKind.EXCEPTION,
+        ("field",),
+        ("field",),
     )
     program.exception_field_encodes[exception] = (
         ExceptionFieldEncode("field", "wrong", EncodePlan(ScalarEncode(ScalarKind.JSON))),
@@ -1454,7 +1521,13 @@ def test_validate_accepts_exception_encode_with_field_encodes() -> None:
         ToJsonRecipe(source_label="Problem", target_label="json", encode=ExceptionEncode(exception))
     )
     program.nominals[exception] = NominalDescriptor(
-        exception, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("field",), ("field",)
+        exception,
+        ENTRY_ID,
+        (),
+        "Problem",
+        NominalKind.EXCEPTION,
+        ("field",),
+        ("field",),
     )
     program.exception_field_encodes[exception] = (
         ExceptionFieldEncode("field", "field", EncodePlan(ScalarEncode(ScalarKind.JSON))),
@@ -1476,7 +1549,13 @@ def test_validate_rejects_exception_nominal_without_field_encodes() -> None:
         SimpleConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
     )
     program.nominals[exception] = NominalDescriptor(
-        exception, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("field",), ("field",)
+        exception,
+        ENTRY_ID,
+        (),
+        "Problem",
+        NominalKind.EXCEPTION,
+        ("field",),
+        ("field",),
     )
 
     with pytest.raises(InvalidIrError):
@@ -1760,12 +1839,24 @@ def test_validate_rejects_invalid_exception_field_encode_metadata() -> None:
     nominal = NominalId(1)
     fields = ("message", "choice")
     descriptor = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, fields, fields
+        nominal,
+        ENTRY_ID,
+        (),
+        "Problem",
+        NominalKind.EXCEPTION,
+        fields,
+        fields,
     )
     # Both fields share one descriptor-declared JSON name, isolating the
     # duplicate-JSON-name check from the "agrees with descriptor" check above it.
     collapsed_descriptor = NominalDescriptor(
-        nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, fields, ("same", "same")
+        nominal,
+        ENTRY_ID,
+        (),
+        "Problem",
+        NominalKind.EXCEPTION,
+        fields,
+        ("same", "same"),
     )
     json_scalar = EncodePlan(ScalarEncode(ScalarKind.JSON))
     text_scalar = EncodePlan(ScalarEncode(ScalarKind.TEXT))
@@ -2053,6 +2144,197 @@ def test_validate_rejects_decode_variant_whose_json_name_disagrees_with_enum_nom
     )
 
     with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
+
+
+def _default_expr():
+    from agm.agl.ir.ids import Location, SourceId
+    from agm.agl.ir.nodes import IrConstInt
+
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    return IrConstInt(loc, 0)
+
+
+def test_validate_accepts_record_decode_field_default_index_matching_declared_default() -> None:
+    """A FieldDecode.default_index matching the nominal's own defaulted position passes."""
+    from agm.agl.ir.validate import validate_ir
+
+    recipe = DecodeConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=0,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(_default_expr(),),
+        field_json_names=("value",),
+    )
+    validate_ir(program, deep=True)  # no exception
+
+
+def test_validate_rejects_record_decode_field_default_index_out_of_position() -> None:
+    """A FieldDecode.default_index that disagrees with the field's own position is rejected."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = DecodeConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=99,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(_default_expr(),),
+        field_json_names=("value",),
+    )
+    with pytest.raises(InvalidIrError, match="default_index"):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_record_decode_default_index_for_field_with_no_declared_default() -> None:
+    """A FieldDecode.default_index set where the nominal declares no default is rejected."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = DecodeConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=0,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(None,),
+        field_json_names=("value",),
+    )
+    with pytest.raises(InvalidIrError, match="no default"):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_enum_variant_decode_default_index_for_field_with_no_default() -> None:
+    """The same ``default_index`` invariant holds for an enum-variant field."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(10)
+    member = NominalId(11)
+    variant = VariantDecode(
+        "Leaf",
+        "Leaf",
+        member,
+        "Tree::Leaf",
+        (
+            FieldDecode(
+                "value",
+                "value",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+                default_index=0,
+            ),
+        ),
+        alias=None,
+    )
+    recipe = DecodeConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=EnumDecode(enum, "Tree", (variant,), "Tree", host_agent=False),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            enum: NominalDescriptor(
+                enum,
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(
+                    VariantDescriptor(
+                        "Leaf", ("value",), member, json_name="Leaf", field_json_names=("value",)
+                    ),
+                ),
+            ),
+            member: NominalDescriptor(
+                member,
+                ENTRY_ID,
+                ("Tree",),
+                "Leaf",
+                NominalKind.RECORD,
+                ("value",),
+                field_defaults=(None,),
+                field_json_names=("value",),
+            ),
+        }
+    )
+    with pytest.raises(InvalidIrError, match="no default"):
         validate_ir(program, deep=True)
 
 

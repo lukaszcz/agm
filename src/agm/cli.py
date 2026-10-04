@@ -33,6 +33,7 @@ from agm.cli_support.args import (
     PkgInitArgs,
     PkgInstallArgs,
     PkgListArgs,
+    PkgSwitchArgs,
     PkgSyncArgs,
     PkgUninstallArgs,
     RefineArgs,
@@ -46,7 +47,8 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
-from agm.cli_support.run_options import exec_option_conflict, trace_option_conflict
+from agm.cli_support.execution_options import execution_option_spec
+from agm.cli_support.run_options import execution_option_conflict
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.parser import (
@@ -111,6 +113,20 @@ def _print_context_help(ctx: typer.Context, param: object, value: bool) -> None:
     raise typer.Exit()
 
 
+def _print_versions(ctx: typer.Context, param: object, value: bool) -> None:
+    del param
+    if not value or ctx.resilient_parsing:
+        return
+    from agm.packages.manifest import load_manifest
+    from agm.stdlib_locator import shipped_stdlib_root
+    from agm.version import AGM_VERSION
+
+    stdlib_manifest = load_manifest(shipped_stdlib_root() / "package.toml")
+    print(f"AGM version: {AGM_VERSION}")
+    print(f"AgL stdlib version: {stdlib_manifest.version}")
+    raise typer.Exit()
+
+
 def _group_help(ctx: typer.Context, *command_path: str) -> None:
     """Print a command group's own help when it is invoked with no subcommand.
 
@@ -132,6 +148,17 @@ def _help_option() -> bool:
     )
 
 
+def _version_option() -> bool:
+    return typer.Option(
+        False,
+        "--version",
+        callback=_print_versions,
+        expose_value=False,
+        is_eager=True,
+        help="Show the AGM and AgL standard-library versions.",
+    )
+
+
 def _dry_run_option() -> bool:
     return typer.Option(
         False,
@@ -139,50 +166,126 @@ def _dry_run_option() -> bool:
         callback=set_dry_run,
         expose_value=False,
         is_eager=True,
-        help="Print commands and AGM operations without executing them.",
+        help="Print planned actions instead of performing them.",
     )
 
 
 def _strict_json_option() -> bool | None:
+    option = execution_option_spec("strict_json")
     return typer.Option(
         None,
-        "--strict-json/--no-strict-json",
-        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+        *option.declarations,
+        metavar=option.metavar,
+        help="Strict or lenient agent JSON parsing.",
+    )
+
+
+def _echo_option() -> bool | None:
+    option = execution_option_spec("echo")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Echo agent turn output to stderr.",
+    )
+
+
+def _debug_option() -> bool | None:
+    option = execution_option_spec("debug")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Debug mode.",
+    )
+
+
+def _parse_error_retries_option() -> int | None:
+    option = execution_option_spec("parse_error_retries")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Default parse-error-retries for ask.",
     )
 
 
 def _max_call_depth_option() -> int | None:
+    option = execution_option_spec("max_call_depth")
     return typer.Option(
         None,
-        "--max-call-depth",
-        help="Override the maximum recursion call depth (CLI > config).",
+        *option.declarations,
+        metavar=option.metavar,
+        help="Maximum call depth.",
     )
 
 
 def _default_agent_option() -> str | None:
+    option = execution_option_spec("default_agent")
     return typer.Option(
         None,
-        "--default-agent",
-        metavar="AGENT",
-        help="Seed the free-ask default session from an Agent value or command.",
+        *option.declarations,
+        metavar=option.metavar,
+        help="Default agent (Agent value or command).",
+    )
+
+
+def _default_sandbox_option() -> str | None:
+    option = execution_option_spec("default_sandbox")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Default agent sandbox (AgentSandbox).",
     )
 
 
 def _trace_file_option() -> str | None:
+    option = execution_option_spec("trace_file")
     return typer.Option(
         None,
-        "--trace-file",
-        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
+        *option.declarations,
+        metavar=option.metavar,
+        help="Write the JSONL trace to PATH.",
         autocompletion=completion.complete_path_argument,
     )
 
 
-def _no_trace_option(help_text: str) -> bool:
-    return typer.Option(False, "--no-trace", help=help_text)
+def _no_trace_option() -> bool:
+    option = execution_option_spec("no_trace")
+    return typer.Option(
+        False, *option.declarations, metavar=option.metavar, help="Disable trace logging."
+    )
 
 
-def _trace_option(help_text: str) -> bool:
-    return typer.Option(False, "--trace", help=help_text)
+def _trace_option() -> bool:
+    option = execution_option_spec("trace")
+    return typer.Option(
+        False,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Enable trace logging to an auto-named file.",
+    )
+
+
+def _timeout_option() -> str | None:
+    option = execution_option_spec("timeout")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Shell-exec and agent idle timeout.",
+    )
+
+
+def _no_timeout_option() -> bool:
+    option = execution_option_spec("no_timeout")
+    return typer.Option(
+        False,
+        *option.declarations,
+        metavar=option.metavar,
+        help="No shell-exec or agent idle timeout.",
+    )
 
 
 def _module_path_option() -> list[str]:
@@ -191,17 +294,13 @@ def _module_path_option() -> list[str]:
         "-I",
         "--module-path",
         metavar="DIR",
-        help=(
-            "Add DIR as an additional module search root (repeatable). "
-            "Resolved relative to the invocation working directory. "
-            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
-        ),
+        help="Add a module search root (repeatable).",
         autocompletion=completion.complete_dir_argument,
     )
 
 
-def _no_stdlib_option(help_text: str) -> bool:
-    return typer.Option(False, "--no-stdlib", help=help_text)
+def _no_stdlib_option() -> bool:
+    return typer.Option(False, "--no-stdlib", help="Disable the automatic import std/prelude::*.")
 
 
 def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> NoReturn:
@@ -504,25 +603,24 @@ tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_c
 def main_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
+    _version: bool = _version_option(),
 ) -> None:
     del _help
-    del _dry_run
+    del _version
     _group_help(ctx)
 
 
 @app.command()
 def help(
+    ctx: typer.Context,
     help_command: list[str] | None = typer.Argument(
         None,
         metavar="command",
         autocompletion=completion.complete_help_path,
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     if not help_command:
         print_overview()
         raise typer.Exit()
@@ -531,7 +629,7 @@ def help(
     except ValueError:
         from agm.cli_dispatch import print_registered_command_help
 
-        if not print_registered_command_help(help_command):
+        if not print_registered_command_help(help_command, ctx):
             print_command_help(" ".join(help_command))
     raise typer.Exit()
 
@@ -543,6 +641,7 @@ def _run_workspace_open(
     detached: bool,
     pane_count: str | None,
     parent: str | None,
+    no_fetch: bool,
 ) -> None:
     import agm.commands.workspace.open as workspace_open_command
 
@@ -552,6 +651,7 @@ def _run_workspace_open(
             pane_count=pane_count,
             parent=parent,
             branch=_require_value(target, command_path=command_path, name="target"),
+            no_fetch=no_fetch,
         )
     )
 
@@ -606,6 +706,7 @@ def open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -617,6 +718,7 @@ def open(
         detached=detached,
         pane_count=pane_count,
         parent=parent,
+        no_fetch=no_fetch,
     )
 
 
@@ -670,10 +772,8 @@ def close(
 def config_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "config")
 
 
@@ -722,12 +822,10 @@ def config_copy(
 @config_app.command(name="env")
 def config_env(
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.config.env as config_env_command
 
     del _help
-    del _dry_run
     config_env_command.run(ConfigEnvArgs())
 
 
@@ -747,10 +845,8 @@ def config_update(
 def workspace_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, ctx.info_name or "workspace")
 
 
@@ -778,6 +874,7 @@ def workspace_open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -789,6 +886,7 @@ def workspace_open(
         detached=detached,
         pane_count=pane_count,
         parent=parent,
+        no_fetch=no_fetch,
     )
 
 
@@ -854,12 +952,10 @@ def workspace_setup(
 def workspace_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show workspace directories."),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.workspace.list as workspace_list_command
 
     del _help
-    del _dry_run
     workspace_list_command.run(verbose=verbose)
 
 
@@ -886,10 +982,8 @@ def workspace_shell_regen(
 def worktree_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, ctx.info_name or "worktree")
 
 
@@ -907,6 +1001,7 @@ def new(
         help="Create the worktree under DIR.",
         autocompletion=completion.complete_path_argument,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -918,6 +1013,7 @@ def new(
         WorktreeNewArgs(
             worktrees_dir=str(worktrees_dir) if worktrees_dir is not None else None,
             branch=_require_value(branch, command_path=["worktree", "new"], name="branch"),
+            no_fetch=no_fetch,
         )
     )
 
@@ -942,7 +1038,7 @@ def _exec_print_help(
     *,
     tokens: "Sequence[str]",
     file: str | None,
-    command: str | None,
+    code: str | None,
     program: str | None = None,
 ) -> bool:
     """Print the help *tokens* request, if they request any; report whether they did.
@@ -967,7 +1063,7 @@ def _exec_print_help(
 
     if not contains_help_flag(tokens):
         return False
-    if file is None and command is None:
+    if file is None and code is None:
         print_help_for_command_path(["exec"])
         return True
     selection = discovery.selection(file)
@@ -1002,64 +1098,34 @@ def exec_cmd(
         metavar="FILE",
         autocompletion=completion.complete_exec_tail,
     ),
-    command: str | None = typer.Option(
+    code: str | None = typer.Option(
         None,
         "-c",
-        "--command",
-        help="Execute the AgL program given as COMMAND instead of reading from FILE.",
+        "--code",
+        metavar="SOURCE",
+        help="AgL program source.",
     ),
     program: str | None = typer.Option(
         None,
         "-p",
         "--program",
         metavar="PATH",
-        help="Select a program def by its declaration path.",
+        help="Select a program def by declaration path.",
     ),
+    echo: bool | None = _echo_option(),
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
+    default_sandbox: str | None = _default_sandbox_option(),
     trace_file: str | None = _trace_file_option(),
-    no_trace: bool = _no_trace_option(
-        "Disable trace logging (overrides [exec] trace = true in config.toml)."
-    ),
-    trace: bool = _trace_option(
-        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-        "config.toml opt in."
-    ),
+    no_trace: bool = _no_trace_option(),
+    trace: bool = _trace_option(),
     module_paths: list[str] = _module_path_option(),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable the automatic import std/prelude::* prelude throughout the loaded program "
-        "(entry and library modules)."
-    ),
-    timeout: str | None = typer.Option(
-        None,
-        "--timeout",
-        help=(
-            "Override initial shell-exec and agent idle timeouts (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std/config::timeout' setting to Some(VALUE).  "
-            "Mutually exclusive with --no-timeout."
-        ),
-    ),
-    no_timeout: bool = typer.Option(
-        False,
-        "--no-timeout",
-        help=(
-            "Remove any configured initial shell-exec and agent timeout.  "
-            "Seeds the in-program 'std/config::timeout' setting to None.  "
-            "Mutually exclusive with --timeout."
-        ),
-    ),
-    no_trace_file: bool = typer.Option(
-        False,
-        "--no-trace-file",
-        help=(
-            "Clears only the in-program trace-file binding; a trace-file path set in "
-            "config or auto-assigned by --trace still applies.  Use --no-trace to disable "
-            "tracing entirely.  Mutually exclusive with --trace-file."
-        ),
-    ),
-    _dry_run: bool = _dry_run_option(),
+    no_stdlib: bool = _no_stdlib_option(),
+    timeout: str | None = _timeout_option(),
+    no_timeout: bool = _no_timeout_option(),
+    debug: bool | None = _debug_option(),
+    parse_error_retries: int | None = _parse_error_retries_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole
@@ -1078,7 +1144,7 @@ def exec_cmd(
         cached_discovery
         if isinstance(cached_discovery, ExecProgramDiscovery)
         else ExecProgramDiscovery(
-            command=command,
+            code=code,
             requested_program=program,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
@@ -1086,7 +1152,7 @@ def exec_cmd(
     )
     selected = split_exec_tail(
         tail or (),
-        program_command_for_file=None if command is not None else discovery.command_for_file,
+        program_command_for_file=None if code is not None else discovery.command_for_file,
     )
     file = selected.file
     argument_tokens = list(selected.tokens)
@@ -1094,23 +1160,24 @@ def exec_cmd(
         discovery,
         tokens=argument_tokens,
         file=file,
-        command=command,
+        code=code,
         program=program,
     ):
         raise SystemExit(0)
-    del _dry_run
-    if command is not None and file is not None:
-        exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
-    if command is None and file is None:
-        exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
+    if code is not None and file is not None:
+        exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--code")
+    if code is None and file is None:
+        exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--code is required")
     exec_args = ExecArgs(
         file=file,
-        command=command,
+        code=code,
         program=program,
         argument_tokens=argument_tokens,
+        echo=echo,
         strict_json=strict_json,
         max_call_depth=max_call_depth,
         default_agent=default_agent,
+        default_sandbox=default_sandbox,
         no_trace=no_trace,
         trace_file=trace_file,
         trace=trace,
@@ -1118,10 +1185,11 @@ def exec_cmd(
         no_stdlib=no_stdlib,
         timeout=timeout,
         no_timeout=no_timeout,
-        no_trace_file=no_trace_file,
+        debug=debug,
+        parse_error_retries=parse_error_retries,
         pipeline_cache=discovery.cached_artifacts(file),
     )
-    _reject_run_option_conflict("exec", exec_option_conflict(exec_args))
+    _reject_run_option_conflict("exec", execution_option_conflict(exec_args))
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1131,58 +1199,55 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
+    echo: bool | None = _echo_option(),
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
+    default_sandbox: str | None = _default_sandbox_option(),
     quiet: bool = typer.Option(
         False,
         "--quiet",
-        help="Suppress automatic echoing of entry results.",
+        help="Do not echo entry results.",
     ),
     trace_file: str | None = _trace_file_option(),
-    no_trace: bool = _no_trace_option("Disable trace logging."),
-    trace: bool = _trace_option(
-        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-        "config.toml opt in. A std/config::trace write takes effect in the REPL too."
-    ),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable the automatic import std/prelude::* prelude for each loaded REPL program "
-        "(entries and library modules)."
-    ),
+    no_trace: bool = _no_trace_option(),
+    trace: bool = _trace_option(),
+    no_stdlib: bool = _no_stdlib_option(),
+    timeout: str | None = _timeout_option(),
+    no_timeout: bool = _no_timeout_option(),
+    debug: bool | None = _debug_option(),
+    parse_error_retries: int | None = _parse_error_retries_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
-        help=(
-            "Force the plain, non-interactive line front end. Auto-detected "
-            "otherwise: engaged when stdin/stdout is not a terminal or TERM=dumb."
-        ),
+        help="Use the plain line front end even on a terminal.",
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
-    _reject_run_option_conflict(
-        "repl", trace_option_conflict(no_trace=no_trace, trace=trace, trace_file=trace_file)
+    repl_args = ReplArgs(
+        echo=echo,
+        strict_json=strict_json,
+        max_call_depth=max_call_depth,
+        default_agent=default_agent,
+        default_sandbox=default_sandbox,
+        quiet=quiet,
+        no_trace=no_trace,
+        trace_file=trace_file,
+        trace=trace,
+        timeout=timeout,
+        no_timeout=no_timeout,
+        debug=debug,
+        parse_error_retries=parse_error_retries,
+        no_stdlib=no_stdlib,
+        plain=plain,
     )
+    _reject_run_option_conflict("repl", execution_option_conflict(repl_args))
     # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
     # otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.repl as repl_command
 
-    repl_command.run(
-        ReplArgs(
-            strict_json=strict_json,
-            max_call_depth=max_call_depth,
-            default_agent=default_agent,
-            quiet=quiet,
-            no_trace=no_trace,
-            trace_file=trace_file,
-            trace=trace,
-            no_stdlib=no_stdlib,
-            plain=plain,
-        )
-    )
+    repl_command.run(repl_args)
 
 
 @app.command(name="check")
@@ -1193,16 +1258,10 @@ def check_cmd(
         autocompletion=completion.complete_agl_file,
     ),
     module_paths: list[str] = _module_path_option(),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable automatic std/prelude opening throughout each checked file "
-        "(entry and library modules)."
-    ),
+    no_stdlib: bool = _no_stdlib_option(),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    # ``--dry-run`` is meaningless here: ``check`` is already side-effect free.
-    del _dry_run
     if not file:
         _missing_arguments(["check"], ["FILE"])
     # Imported lazily: pulls in the AgL DSL (runtime, jsonschema), which would
@@ -1272,10 +1331,8 @@ def worktree_remove(
 def dep_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "dep")
 
 
@@ -1284,12 +1341,10 @@ def dep_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show checkout paths."),
     list_all: bool = typer.Option(False, "--all", help="List all dependency checkouts on disk."),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.dep.list as dep_list_command
 
     del _help
-    del _dry_run
     dep_list_command.run(verbose=verbose, all_checkouts=list_all)
 
 
@@ -1336,6 +1391,7 @@ def dep_switch(
         "--branch",
         help="Create DEP's BRANCH from the dependency's default branch before adding it.",
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1345,7 +1401,14 @@ def dep_switch(
     del _dry_run
     if dep is None or branch is None:
         _missing_arguments(["dep", "switch"], ["dep", "branch"])
-    dep_switch_command.run(DepSwitchArgs(dep=dep, branch=branch, create_branch=create_branch))
+    dep_switch_command.run(
+        DepSwitchArgs(
+            dep=dep,
+            branch=branch,
+            create_branch=create_branch,
+            no_fetch=no_fetch,
+        )
+    )
 
 
 @dep_app.command(name="rm")
@@ -1399,10 +1462,8 @@ def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -
 def pkg_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "pkg")
 
 
@@ -1414,10 +1475,8 @@ def pkg_check(
         autocompletion=completion.complete_dir_argument,
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     import agm.commands.pkg.check as pkg_check_command
 
     pkg_check_command.run(PkgCheckArgs(directory=directory))
@@ -1467,6 +1526,9 @@ def pkg_install(
     ),
     editable: bool = typer.Option(False, "--editable", help="Activate a live package directory."),
     shadow: bool = typer.Option(False, "--shadow", help="Replace conflicting package commands."),
+    reinstall: bool = typer.Option(
+        False, "--reinstall", help="Replace the installed package with this name and version."
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1479,6 +1541,7 @@ def pkg_install(
             source=_require_value(source, command_path=["pkg", "install"], name="source"),
             editable=editable,
             shadow=shadow,
+            reinstall=reinstall,
         )
     )
 
@@ -1498,13 +1561,26 @@ def pkg_uninstall(
     )
 
 
-@pkg_app.command(name="list")
-def pkg_list(
+@pkg_app.command(name="switch")
+def pkg_switch(
+    target: str | None = typer.Argument(None, metavar="NAME@VERSION"),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
+    import agm.commands.pkg.switch as pkg_switch_command
+
+    pkg_switch_command.run(
+        PkgSwitchArgs(target=_require_value(target, command_path=["pkg", "switch"], name="target"))
+    )
+
+
+@pkg_app.command(name="list")
+def pkg_list(
+    _help: bool = _help_option(),
+) -> None:
+    del _help
     import agm.commands.pkg.list as pkg_list_command
 
     pkg_list_command.run(PkgListArgs())
@@ -1514,10 +1590,8 @@ def pkg_list(
 def pkg_info(
     name: str | None = typer.Argument(None, metavar="NAME"),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     import agm.commands.pkg.info as pkg_info_command
 
     pkg_info_command.run(
@@ -1541,10 +1615,8 @@ def pkg_sync(
 def sync_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "sync")
 
 
@@ -2022,10 +2094,8 @@ def run(
 def tmux_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "tmux")
 
 

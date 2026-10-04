@@ -7,9 +7,11 @@ import pytest
 from click.testing import CliRunner
 from typer.main import get_command
 
+import agm.cli_dispatch as dispatch
 from agm.cli import app
+from agm.packages.activation import ActivationIndex
 from agm.packages.manifest import ManifestError, load_manifest_text
-from tests._package_helpers import install_directory
+from tests._package_helpers import install_directory, write_installed_package
 
 MANIFEST = """[package]
 name = "tools"
@@ -19,6 +21,7 @@ version = "1.0.0"
 "devel nested inspect" = { program = "tools/main::main" }
 "devel releases" = {}
 "devel releases inspect" = { program = "tools/main::main" }
+"devel refine" = { program = "tools/main::main" }
 [commands.devel]
 doc = "Choose a development workflow."
 [commands.devel.review]
@@ -71,10 +74,82 @@ def test_leaf_help_documents_the_program_behind_the_command(
 ) -> None:
     result = CliRunner().invoke(get_command(app), [*path.split(), "--help"])
     assert result.exit_code == 0
-    assert "--subject" in result.output
+    assert "<subject>" in result.output
     assert "Review the selected subject." in result.output
     assert "Subject to inspect." in result.output
     assert path in result.output
+
+
+@pytest.mark.parametrize("arguments", [[], ["against main", "extra"]])
+def test_registered_command_reports_parameter_errors_as_cli_usage(
+    command_package: Path, arguments: list[str]
+) -> None:
+    result = CliRunner().invoke(
+        get_command(app), ["devel", "review", *arguments], catch_exceptions=False
+    )
+    assert result.exit_code == 1
+    assert "Usage:" in result.output
+    assert "agm devel review" in result.output
+    assert "<subject>" in result.output
+    assert "main.agl:" not in result.output
+
+
+def test_registered_command_defaults_required_scope_to_positional_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    write_installed_package(
+        home,
+        "tools",
+        source='program def main(@opt-env("REVIEW_SCOPE") scope: text) -> unit = print scope\n',
+        commands={"devel review": "tools/main::main"},
+    )
+    runner = CliRunner()
+    result = runner.invoke(get_command(app), ["devel", "review", "against main"])
+    assert result.exit_code == 0, result.output
+    assert result.output == "against main\n"
+
+    result = runner.invoke(get_command(app), ["devel", "review", "--scope", "against main"])
+    assert result.exit_code == 1
+    assert "Usage:" in result.output
+
+    result = runner.invoke(get_command(app), ["devel", "review", "--scope", "--no-trace"])
+    assert result.exit_code == 1
+    assert "Usage:" in result.output
+
+    monkeypatch.setenv("REVIEW_SCOPE", "from environment")
+    result = runner.invoke(get_command(app), ["devel", "review", "from CLI"])
+    assert result.exit_code == 0, result.output
+    assert result.output == "from CLI\n"
+
+    result = runner.invoke(get_command(app), ["devel", "review"])
+    assert result.exit_code == 0, result.output
+    assert result.output == "from environment\n"
+
+
+def test_help_command_uses_its_context_for_registered_programs(
+    command_package: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    load_command_index = dispatch.load_command_index
+
+    def fail_current_context() -> click.Context:
+        raise RuntimeError("no global Click context")
+
+    def disable_global_context(*, home: Path, proj_dir: Path | None, cwd: Path) -> ActivationIndex:
+        monkeypatch.setattr(dispatch.click, "get_current_context", fail_current_context)
+        return load_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
+
+    monkeypatch.setattr(dispatch, "load_command_index", disable_global_context)
+
+    result = CliRunner().invoke(
+        get_command(app), ["help", "devel", "refine"], catch_exceptions=False
+    )
+
+    assert result.exit_code == 0
+    assert "agm devel refine" in result.output
+    assert "Review the selected subject." in result.output
 
 
 @pytest.mark.parametrize("section", ["rev", "dev.review", "devel.review"])

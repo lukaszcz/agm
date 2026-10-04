@@ -19,7 +19,8 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import resolve_program
-from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
+from agm.agl.semantics.types import RecordType
+from tests._agl_helpers import agl_roots, prepare_inline_code, run_inline_code
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
@@ -33,7 +34,9 @@ def _make_runtime(
     from agm.agl import PipelineDriver
 
     return PipelineDriver(
+        resolve_agent_spec=None,
         agent_dispatcher=default_agent,
+        get_sandbox_context=None,
     )
 
 
@@ -53,7 +56,7 @@ def _run_program(
     prepared = (
         PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
         if entry_path is not None
-        else prepare_inline_command(entry_source, roots=roots)
+        else prepare_inline_code(entry_source, roots=roots)
     )
     if agents:
         from agm.agent.spec import AgentCommand
@@ -63,11 +66,13 @@ def _run_program(
             assert isinstance(spec, AgentCommand)
             return agents[spec.command](request)
 
-        rt = PipelineDriver(agent_dispatcher=dispatch)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=dispatch, get_sandbox_context=None
+        )
     else:
         rt = _make_runtime(default_agent=default_agent)
     if entry_path is None:
-        return run_inline_command(rt, entry_source, roots=roots, param_values=param_values)
+        return run_inline_code(rt, entry_source, roots=roots, param_values=param_values)
     discovery = rt.discover_programs(prepared)
     entry_program = next(program for program in discovery.programs if program.module.is_entry)
     if not entry_program.parameters:
@@ -92,37 +97,31 @@ def _run_program(
     )
 
 
-def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Path) -> None:
+def test_constructor_field_default_omitted_across_module_boundary(tmp_path: Path) -> None:
+    # A record's default lives with its declaration; an importing module may
+    # omit the defaulted field when constructing it, the same as within the
+    # declaring module itself. Typecheck-only (via check_program), since
+    # lowering an omitted default is exercised at the unit level, not here.
+    from agm.agl import PipelineDriver
+    from agm.agl.typecheck.program import check_program
+    from tests.agl.ir_harness import base_caps
+
     library_root = tmp_path / "library"
     library_root.mkdir()
-    (library_root / "a.agl").write_text('program def run() -> unit = ask("selected")\n')
-    (library_root / "b.agl").write_text('def dormant() -> text = exec("unreachable")\n')
-
-    from agm.agl import PipelineDriver
-    from agm.agl.runtime.arguments import ProgramArguments
+    (library_root / "shapes.agl").write_text("record Point\n  x: int\n  y: int = 0\n")
 
     prepared = PipelineDriver.prepare_program(
-        "import a\nimport b\nprogram def main() -> unit = ()\n",
+        "import shapes\nlet p = shapes::Point(x = 1)\nprogram def main() -> unit = ()\n",
         roots=agl_roots(library_root),
     )
-    runtime = PipelineDriver()
-    discovery = runtime.discover_programs(prepared)
-    assert discovery.compiled is not None, discovery.diagnostics
-    selected = next(
-        program
-        for program in discovery.programs
-        if program.module.path_str() == "a" and program.name == "run"
-    )
+    assert prepared.resolved is not None, prepared.diagnostics
 
-    preflight = runtime.preflight_arguments(
-        prepared,
-        selected,
-        ProgramArguments(positional=(), named={}),
-        compiled=discovery.compiled,
-    )
-
-    assert preflight.result.ok, preflight.result.diagnostics
-    assert [site.callee for site in preflight.result.call_sites] == ["ask"]
+    checked = check_program(prepared.resolved, base_caps())
+    entry_checked = checked.modules[prepared.resolved.entry_id]
+    let_decl = entry_checked.resolved.program.body.items[2]
+    point_type = entry_checked.node_types[let_decl.value.node_id]
+    assert isinstance(point_type, RecordType)
+    assert point_type.name == "Point"
 
 
 def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> None:
@@ -139,7 +138,7 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=agl_roots(library_root),
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
     selected = next(
         program
@@ -1501,14 +1500,14 @@ class TestScopedExecutionFixtures:
             (
                 (
                     '{"name": "root", "children": [{"name": "ready", "children": []}]}',
-                    '{"$case": "completed"}',
+                    '"completed"',
                 ),
                 "true\ncompleted\ntrue\n",
             ),
             (
                 (
                     '{"name": "root", "children": [{"name": "later", "children": []}]}',
-                    '{"$case": "waiting"}',
+                    '"waiting"',
                 ),
                 "false\nwaiting\nfalse\n",
             ),

@@ -88,8 +88,11 @@ enum Question
 enum Answer
   | NoulAnswer(noul: decimal)
   | ChoiceAnswer(choice: text, confidence: decimal, probabilities: dict[text, decimal])
-  | ScoreAnswer(score: decimal, confidence: decimal, probabilities: array[decimal],
-                legend: array[json])
+  | ScoreAnswer
+      score: decimal
+      confidence: decimal
+      probabilities: array[decimal]
+      legend: array[json]
 
 record Usage
   input-tokens: Option[int]

@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "base_zero",
+      "params": {
+        "base": 0
+      },
+      "expect": {
+        "stdout": "0\n1\ncomputed\n0\n2\n0\nwhy\n"
+      }
+    },
+    {
+      "name": "base_five",
+      "params": {
+        "base": 5
+      },
+      "expect": {
+        "stdout": "5\n6\ncomputed\n5\n7\n5\nwhy\n"
+      }
+    },
+    {
+      "name": "base_negative",
+      "params": {
+        "base": -3
+      },
+      "expect": {
+        "stdout": "-3\n-2\ncomputed\n-3\n-1\n-3\nwhy\n"
+      }
+    }
+  ]
+}

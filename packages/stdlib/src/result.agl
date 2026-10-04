@@ -4,62 +4,79 @@ enum Result[T, E] =
   | Ok(value: T)
   | Err(error: E)
 
+@doc("Apply the function to an `Ok` value, preserving an `Err`.")
 def Result::map[T, E, U](self, f: (T) -> U) -> Result[U, E] =
   case self of
     | Ok(value) => Ok(f(value))
     | Err(error) => Err(error)
 
+@doc("Apply the function to an `Err` value, preserving an `Ok`.")
 def Result::map-err[T, E, F](self, f: (E) -> F) -> Result[T, F] =
   case self of
     | Ok(value) => Ok(value)
     | Err(error) => Err(f(error))
 
+@doc("Apply the function to an `Ok` value and return its result, preserving an `Err`.")
 def Result::and-then[T, E, U](self, f: (T) -> Result[U, E]) -> Result[U, E] =
   case self of
     | Ok(value) => f(value)
     | Err(error) => Err(error)
 
+@doc("Return this result when it is `Ok`, otherwise return `other`.")
 def Result::or[T, E, F](self, other: Result[T, F]) -> Result[T, F] =
   case self of
     | Ok(value) => Ok(value)
     | Err(_) => other
 
+@doc("Return this result when it is `Ok`, otherwise call the function on its error.")
 def Result::or-else[T, E, F](self, f: (E) -> Result[T, F]) -> Result[T, F] =
   case self of
     | Ok(value) => Ok(value)
     | Err(error) => f(error)
 
+@doc("Return the `Ok` value, or `x` when this result is `Err`.")
 def Result::unwrap-or[T, E](self, x: T) -> T =
   case self of
     | Ok(value) => value
     | Err(_) => x
 
+@doc("Return the `Ok` value, or call the function on the error.")
 def Result::unwrap-or-else[T, E](self, f: (E) -> T) -> T =
   case self of
     | Ok(value) => value
     | Err(error) => f(error)
 
+@doc("""
+  Return the `Ok` value.
+
+  Raises `UnwrapError` when this result is `Err`.
+""")
 def Result::unwrap[T, E](self) -> T =
   case self of
     | Ok(value) => value
     | Err(_) => raise UnwrapError(message = "Result has no value")
 
+@doc("Check if this result is `Ok`.")
 def Result::is-ok[T, E](self) -> bool =
   case self of
     | Ok(_) => true
     | Err(_) => false
 
+@doc("Check if this result is `Err`.")
 def Result::is-err[T, E](self) -> bool = not self.is-ok()
 
+@doc("Return the `Ok` value as an option, or `None` for an `Err`.")
 def Result::ok[T, E](self) -> Option[T] =
   case self of
     | Ok(value) => Some(value)
     | Err(_) => None
 
+@doc("Return the `Err` value as an option, or `None` for an `Ok`.")
 def Result::err[T, E](self) -> Option[E] =
   case self of
     | Ok(_) => None
     | Err(error) => Some(error)
 
+@doc("Call the function and return `Ok`, catching any `Exception` as `Err`.")
 def attempt[T](f: () -> T) -> Result[T, Exception] =
   try Ok(f()) catch Exception as e => Err(e)

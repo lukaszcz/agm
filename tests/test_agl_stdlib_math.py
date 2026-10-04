@@ -47,6 +47,7 @@ def _math_companion() -> _MathCompanion:
                 declared_name="ArithmeticError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "operation"),
+                field_json_names=("message", "operation"),
             ),
         },
     )

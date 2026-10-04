@@ -141,7 +141,7 @@ the declared AgL name ([Python FFI](ffi.md#declarations-and-companions)).
 
 Placement: a field of a record, exception, or enum member; an inline enum
 member; or a record declaration (a record's own `@name`/`@json-name` doubles
-as its `$case` tag wherever it is an enum member). Not legal on an enum or
+as its JSON tag wherever it is an enum member). Not legal on an enum or
 exception declaration, a parameter, a binding, a function, or a `type` alias.
 
 `@name("…")` takes an AgL identifier that is not a hard keyword; a soft
@@ -154,7 +154,7 @@ declared name and any `@name` untouched everywhere else.
 
 Effective JSON name: `@json-name` if present, else `@name`, else the
 declared name. This is the object key a record or exception field encodes
-and decodes under, and the `$case` tag a record uses wherever it inhabits an
+and decodes under, and the JSON tag naming a record wherever it inhabits an
 enum, wherever a value crosses JSON: agent structured output, `as`/`as?`
 casts, program parameters, and [uncaught-exception
 reports](host-environment.md#results-and-termination). A dict key of an enum whose members have no
@@ -174,8 +174,11 @@ a constructor call the same way it would bind a declared name.
 
 ```agl
 enum Shape
-  | @name("sq") Square(side: int)
-  | Rect(@json-name("w") width: int, @json-name("h") height: int)
+  | @name("sq") Square
+      side: int
+  | Rect
+      @json-name("w") width: int
+      @json-name("h") height: int
   | Circle
 
 record Job
@@ -190,8 +193,10 @@ module ([Packages](packages.md#programs-and-commands)). Its argument is a
 command path: space-separated words naming the command a reader invokes, so
 `@command("devel review")` is invoked as `devel review`. A path whose first
 word is one of the host's own commands, or any word of which looks like an
-option, is a static error. It appears at most once, and on a `program def`
-alone.
+option, is a static error; validating the package also rejects a first word
+naming one of AGM's config sections
+([`agm pkg`](../../commands/pkg.md#commands)). It appears at most once, and on
+a `program def` alone.
 
 A command is a way to refer to a program, so the registration carries no prose
 of its own: the program's `@doc` describes it wherever it runs, the listing of

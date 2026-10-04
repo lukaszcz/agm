@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import queue
@@ -12,10 +13,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import IO, Literal, Self, TypeVar, cast
+from pathlib import Path
+from typing import IO, Literal, Protocol, Self, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent.session.protocol import (
+    SandboxFixture,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -25,9 +28,18 @@ from agm.agent.session.protocol import (
     SessionOperations,
     SessionStats,
 )
-from agm.agent.spec import AgentPi
-from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
-from agm.core.process import CapturedOutput, kill_process_group
+from agm.agent.spec import AgentPi, PermissionMode
+from agm.agent.transport import (
+    AgentCallInfo,
+    AgentOutputCallback,
+    AgentTransportFailureCause,
+    stderr_tail,
+)
+from agm.core.process import CapturedOutput, stop_process
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
+from agm.sandbox.prepare import SandboxContext, sandbox_run_for
+from agm.sandbox.profile import profile_name
+from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
 from agm.util.decimal import decimal_in_range, parse_json_decimal, reject_json_constant
 from agm.util.unicode import loads_json
 
@@ -73,19 +85,33 @@ class _BoundedText:
         return CapturedOutput(data=self.data, truncated=False, head_truncated=self.truncated)
 
 
+class _Lock(Protocol):
+    """The lock interface used to synchronize stderr delivery."""
+
+    def acquire(self) -> bool: ...
+
+    def release(self) -> None: ...
+
+
 @dataclass(slots=True)
 class _RpcChild:
     """The process and bounded asynchronously drained streams for one Pi session."""
 
     process: subprocess.Popen[bytes]
-    process_group: int
     agent: AgentPi
     command: list[str]
+    prepared: PreparedSandboxCommand | None = None
     stdout_buffer: bytearray = field(default_factory=bytearray)
     stdout: queue.Queue[bytes | None] = field(
         default_factory=lambda: queue.Queue(maxsize=_MAX_STDOUT_CHUNKS)
     )
     stderr: _BoundedText = field(default_factory=_BoundedText)
+    stderr_decoder: codecs.IncrementalDecoder = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")("replace")
+    )
+    stderr_lock: _Lock = field(default_factory=threading.Lock)
+    stderr_reader_done: threading.Event = field(default_factory=threading.Event)
+    output_callback: AgentOutputCallback | None = None
     readers: list[threading.Thread] = field(default_factory=list)
     stopped: threading.Event = field(default_factory=threading.Event)
 
@@ -95,21 +121,59 @@ class _RpcChild:
         return cast(IO[bytes], self.process.stdin)
 
 
-class PiRpcSessionBackend:
+class PiRpcSessionBackend(SandboxFixture):
     """Keep one Pi RPC process alive for the lifetime of a session backend.
 
     ``_child`` is ``None`` once the process was terminated: by ``close`` or
     after a transport failure.
     """
 
-    def __init__(self, child: _RpcChild, *, idle_timeout: float | None) -> None:
+    def __init__(
+        self,
+        child: _RpcChild,
+        *,
+        idle_timeout: float | None,
+        get_sandbox_context: Callable[[], SandboxContext],
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
+    ) -> None:
+        super().__init__(permission_mode=permission_mode, sandbox=sandbox, env=env)
+        self._get_sandbox_context = get_sandbox_context
         self._idle_timeout = idle_timeout
         self._child: _RpcChild | None = child
 
     @classmethod
-    def open(cls, agent: AgentPi, *, name: str = "", idle_timeout: float | None = None) -> Self:
+    def open(
+        cls,
+        agent: AgentPi,
+        *,
+        name: str = "",
+        idle_timeout: float | None = None,
+        get_sandbox_context: Callable[[], SandboxContext],
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
+    ) -> Self:
         """Start Pi in RPC mode using *agent*'s settings."""
-        return cls(_spawn(agent, agent.rpc_argv(name=name), "open"), idle_timeout=idle_timeout)
+        child = _spawn(
+            agent,
+            agent.rpc_argv(name=name, permission_mode=permission_mode),
+            "open",
+            get_sandbox_context=get_sandbox_context,
+            sandbox=sandbox,
+            env=env,
+        )
+        return cls(
+            child,
+            idle_timeout=idle_timeout,
+            get_sandbox_context=get_sandbox_context,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
+
+    continues_conversation = True
 
     @property
     def operations(self) -> SessionOperations:
@@ -125,7 +189,15 @@ class PiRpcSessionBackend:
         # settled must not discard that answer, so report its state without requiring
         # it to still be alive here.
         child = self._live_child("prompt")
-        _, text = self._send("prompt", {"message": request.prompt}, wait_for_settled=True)
+        try:
+            _, text = self._send(
+                "prompt",
+                {"message": request.prompt},
+                wait_for_settled=True,
+                output_callback=request.output_callback,
+            )
+        finally:
+            _finish_stderr_delivery(child, drain=False)
         elapsed = time.monotonic() - started
         return SessionAskResponse(
             content="".join(text),
@@ -135,6 +207,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
+                sandboxed=child.prepared is not None,
+                permission_mode=self._permission_mode.value,
             ),
         )
 
@@ -160,9 +234,25 @@ class PiRpcSessionBackend:
         parent_state, _ = self._send("get_state", {})
         parent_id = self._parse_operation_response(parent_state, "get_state", _required_session_id)
         source = self._live_child("clone")
-        parent_command = source.agent.rpc_argv(session_id=parent_id)
-        replacement = _spawn(source.agent, parent_command, SessionOperation.FORK.value)
-        replacement_backend = PiRpcSessionBackend(replacement, idle_timeout=self._idle_timeout)
+        parent_command = source.agent.rpc_argv(
+            session_id=parent_id, permission_mode=self._permission_mode
+        )
+        replacement = _spawn(
+            source.agent,
+            parent_command,
+            SessionOperation.FORK.value,
+            get_sandbox_context=self._get_sandbox_context,
+            sandbox=self._sandbox,
+            env=self._env,
+        )
+        replacement_backend = PiRpcSessionBackend(
+            replacement,
+            idle_timeout=self._idle_timeout,
+            get_sandbox_context=self._get_sandbox_context,
+            permission_mode=self._permission_mode,
+            sandbox=self._sandbox,
+            env=self._env,
+        )
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
             replacement_backend._parse_operation_response(
@@ -196,7 +286,14 @@ class PiRpcSessionBackend:
             raise
 
         self._child = replacement
-        return PiRpcSessionBackend(source, idle_timeout=self._idle_timeout)
+        return PiRpcSessionBackend(
+            source,
+            idle_timeout=self._idle_timeout,
+            get_sandbox_context=self._get_sandbox_context,
+            permission_mode=self._permission_mode,
+            sandbox=self._sandbox,
+            env=self._env,
+        )
 
     def set_name(self, name: str) -> None:
         """Set Pi's display name for the active session."""
@@ -244,15 +341,20 @@ class PiRpcSessionBackend:
         payload: dict[str, object],
         *,
         wait_for_settled: bool = False,
+        output_callback: AgentOutputCallback | None = None,
     ) -> tuple[dict[str, object], list[str]]:
         child = self._live_child(operation)
         request_id = str(uuid4())
         command = {"id": request_id, "type": operation, **payload}
         started = time.monotonic()
+        child.output_callback = output_callback
         self._write(child, command, operation, started)
 
         text: list[str] = []
         text_length = 0
+        assistant_progress: list[str] = []
+        tool_output_lengths: dict[str, str] = {}
+        tool_names: dict[str, str] = {}
         response: dict[str, object] | None = None
         state_request_id: str | None = None
         streaming: bool | None = None
@@ -269,6 +371,15 @@ class PiRpcSessionBackend:
                     _write_command(child, ui_cancellation, self._idle_timeout)
                 delta = _event_text_delta(event)
                 authoritative_text = _event_assistant_text(event)
+                if output_callback is not None:
+                    _emit_pi_progress(
+                        event,
+                        delta=delta,
+                        assistant_progress=assistant_progress,
+                        tool_output_lengths=tool_output_lengths,
+                        tool_names=tool_names,
+                        callback=output_callback,
+                    )
                 if event["type"] == "response":
                     _validate_response(event)
                     if event.get("id") == state_request_id and event.get("command") == "get_state":
@@ -327,6 +438,9 @@ class PiRpcSessionBackend:
                     text.clear()
                     text_length = 0
                     terminal_error = None
+                    assistant_progress.clear()
+                    tool_output_lengths.clear()
+                    tool_names.clear()
                 else:
                     if authoritative_text is not None:
                         text = [authoritative_text]
@@ -346,6 +460,7 @@ class PiRpcSessionBackend:
                     if failure is not None:
                         terminal_error = failure
                 settled = settled or event_type == "agent_settled"
+        _finish_stderr_delivery(child)
         if terminal_error is not None:
             self._raise_ask_error("nonzero_exit", terminal_error, started, child)
         return response, text
@@ -468,6 +583,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
+                sandboxed=child.prepared is not None,
+                permission_mode=self._permission_mode.value,
             ),
         )
 
@@ -497,6 +614,48 @@ def _start_reader(
         finally:
             stream.close()
             finish()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    return reader
+
+
+def _start_stderr_reader(child: _RpcChild, stream: IO[bytes]) -> threading.Thread:
+    """Drain stderr while holding the delivery lock through each read and callback."""
+    descriptor = stream.fileno()
+    os.set_blocking(descriptor, False)
+
+    def read() -> None:
+        try:
+            while not child.stopped.is_set():
+                try:
+                    readable = select.select([descriptor], [], [], 0.05)[0]
+                except (OSError, ValueError):
+                    break
+                if not readable:
+                    continue
+                lock = child.stderr_lock
+                lock.acquire()
+                try:
+                    if child.stopped.is_set():
+                        break
+                    try:
+                        chunk = os.read(descriptor, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    _capture_stderr(child, chunk)
+                finally:
+                    lock.release()
+        finally:
+            lock = child.stderr_lock
+            lock.acquire()
+            try:
+                stream.close()
+                child.stderr_reader_done.set()
+            finally:
+                lock.release()
 
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
@@ -541,20 +700,42 @@ def _write_command(
         os.set_blocking(descriptor, True)
 
 
-def _spawn(agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
+def _spawn(
+    agent: AgentPi,
+    command: list[str],
+    operation: str,
+    *,
+    get_sandbox_context: Callable[[], SandboxContext],
+    sandbox: SandboxLimits | None,
+    env: dict[str, str],
+) -> _RpcChild:
+    sandbox_run = sandbox_run_for(sandbox, get_sandbox_context)
+    prepared: PreparedSandboxCommand | None = None
+    argv = command
+    if sandbox_run is not None:
+        spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
+        try:
+            prepared = sandbox_run.context.prepare(command, spec, env=env, cwd=Path.cwd())
+        except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
+            raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
+        argv = prepared.argv
     try:
         process: subprocess.Popen[bytes] = subprocess.Popen(
-            command,
+            argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=False,
             bufsize=0,
             start_new_session=True,
+            env=prepared.env if prepared is not None else env,
+            cwd=prepared.cwd if prepared is not None else None,
         )
     except (OSError, ValueError) as exc:
+        if prepared is not None:
+            prepared.close()
         raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
-    child = _RpcChild(process, process.pid, agent, command)
+    child = _RpcChild(process, agent, argv, prepared=prepared)
     child.readers.extend(
         (
             _start_reader(
@@ -563,12 +744,7 @@ def _spawn(agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
                 lambda: _queue_stdout(child, None),
                 child.stopped,
             ),
-            _start_reader(
-                cast(IO[bytes], process.stderr),
-                child.stderr.append,
-                lambda: None,
-                child.stopped,
-            ),
+            _start_stderr_reader(child, cast(IO[bytes], process.stderr)),
         )
     )
     return child
@@ -580,12 +756,26 @@ def _terminate(child: _RpcChild) -> None:
         child.stdin.close()
     except OSError:
         pass
-    kill_process_group(child.process, pgid=child.process_group)
-    for reader in child.readers:
-        reader.join(timeout=1)
-    # The reader callbacks close over ``child``; dropping them breaks that
-    # cycle so the process, queued stdout, and stderr tail are freed at once.
-    child.readers.clear()
+    prepared = child.prepared
+    try:
+        stop_process(
+            child.process,
+            isolate_process_group=True,
+            interrupt_cleanup_cmd=prepared.interrupt_cleanup_cmd if prepared is not None else None,
+            cwd=prepared.cwd if prepared is not None else None,
+            env=prepared.env if prepared is not None else None,
+        )
+    finally:
+        # ``stop_process`` can itself raise (e.g. a cleanup command whose
+        # binary is missing); the sandbox's tracked artifacts and reader
+        # threads must still be released rather than leaked.
+        if prepared is not None:
+            prepared.close()
+        for reader in child.readers:
+            reader.join(timeout=1)
+        # The reader callbacks close over ``child``; dropping them breaks that
+        # cycle so the process, queued stdout, and stderr tail are freed at once.
+        child.readers.clear()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -660,6 +850,120 @@ def _event_text_delta(event: dict[str, object]) -> str | None:
     if not isinstance(delta, str):
         raise _RpcProtocolError("Pi RPC text delta was not text")
     return delta
+
+
+def _capture_stderr(child: _RpcChild, chunk: bytes) -> None:
+    """Retain Pi diagnostics and echo decoded stderr while an ask is active."""
+    child.stderr.append(chunk)
+    text = child.stderr_decoder.decode(chunk)
+    callback = child.output_callback
+    if callback is not None and text:
+        try:
+            callback("stderr", text)
+        except OSError:
+            pass
+
+
+def _finish_stderr_delivery(child: _RpcChild, *, drain: bool = True) -> None:
+    """Deliver pending diagnostics before disabling the active ask callback."""
+    lock = child.stderr_lock
+    lock.acquire()
+    try:
+        if drain and not child.stderr_reader_done.is_set():
+            stream = child.process.stderr
+            if stream is not None:
+                try:
+                    descriptor = stream.fileno()
+                    while select.select([descriptor], [], [], 0)[0]:
+                        chunk = os.read(descriptor, 4096)
+                        if not chunk:
+                            break
+                        _capture_stderr(child, chunk)
+                except (OSError, ValueError):
+                    pass
+        child.output_callback = None
+    finally:
+        lock.release()
+
+
+def _emit_pi_progress(
+    event: dict[str, object],
+    *,
+    delta: str | None,
+    assistant_progress: list[str],
+    tool_output_lengths: dict[str, str],
+    tool_names: dict[str, str] | None = None,
+    callback: AgentOutputCallback,
+) -> None:
+    """Echo Pi tool activity and assistant messages that invoke a tool."""
+    event_type = event["type"]
+    if event_type == "message_update" and delta is not None:
+        assistant_progress.append(delta)
+        return
+    if event_type == "message_end":
+        message = event.get("message")
+        if isinstance(message, dict):
+            typed_message = cast(dict[str, object], message)
+        else:
+            typed_message = None
+        if typed_message is not None and typed_message.get("role") == "assistant":
+            stop_reason = typed_message.get("stopReason")
+            if stop_reason not in ("stop", "length", "error"):
+                text = "".join(assistant_progress)
+                if text:
+                    callback("progress", text, event_type="message")
+        assistant_progress.clear()
+        return
+    if event_type == "tool_execution_start":
+        name = event.get("toolName")
+        call_id = event.get("toolCallId")
+        if tool_names is not None and isinstance(call_id, str) and isinstance(name, str):
+            tool_names[call_id] = name
+        if isinstance(name, str) and name:
+            callback(
+                "progress",
+                f"[{name}]\n",
+                event_type="tool_call",
+                tool_name=name,
+                tool_call_id=call_id if isinstance(call_id, str) else None,
+            )
+        return
+    if event_type not in {"tool_execution_update", "tool_execution_end"}:
+        return
+    call_id = event.get("toolCallId")
+    if not isinstance(call_id, str):
+        return
+    result = (
+        event.get("partialResult") if event_type == "tool_execution_update" else event.get("result")
+    )
+    current = _rpc_result_text(result)
+    previous = tool_output_lengths.get(call_id, "")
+    added = current[len(previous) :] if current.startswith(previous) else current
+    tool_output_lengths[call_id] = current
+    if added:
+        callback(
+            "progress",
+            added,
+            event_type="tool_result",
+            tool_name=None if tool_names is None else tool_names.get(call_id),
+            tool_call_id=call_id,
+        )
+
+
+def _rpc_result_text(value: object) -> str:
+    """Extract readable text blocks from one Pi tool result."""
+    if not isinstance(value, dict):
+        return ""
+    content = value.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        cast(str, item_value["text"])
+        for item in content
+        if isinstance(item, dict)
+        for item_value in (cast(dict[str, object], item),)
+        if item_value.get("type") == "text" and isinstance(item_value.get("text"), str)
+    )
 
 
 def _extension_ui_cancellation(event: dict[str, object]) -> dict[str, object] | None:

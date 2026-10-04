@@ -66,6 +66,7 @@ def _dict_companion() -> _DictCompanion:
                 declared_name="KeyError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "key"),
+                field_json_names=("message", "key"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
             _PAIR: NominalDescriptor(
@@ -75,6 +76,7 @@ def _dict_companion() -> _DictCompanion:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("first", "second"),
+                field_json_names=("first", "second"),
             ),
         },
     )

@@ -20,7 +20,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **Commands orchestrate; primitives do.** Command modules wire config, project layout, git, and agents together. Reusable behavior lives in `util/`, `core/`, `project/`, `vcs/`, `config/`, and `agent/`, never copied into individual commands.
 - **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source writes and CLI flags override the file layers for the relevant commands.
 - **The filesystem is the project model.** A project is a directory layout (embedded or split) plus git worktrees and dependency checkouts. AGM detects state from disk rather than maintaining a separate database.
-- **Real agents are never run in tests, and never assumed.** Agent invocation is a subprocess boundary with timeout and output capture; runners are resolved from config and always have a default floor.
+- **Real agents are never run in tests, and never assumed.** Agent invocation is a subprocess boundary with output capture or interactive terminal handoff; runners are resolved from config and always have a default floor.
 - **AgL is firewalled, not isolated.** Its static passes depend only on a stable AST, never on the parser, and its execution façade is lazily imported by its CLI and package-domain callers. It still reuses the shared layers below it rather than reimplementing them.
 
 ## What To Read Next
@@ -30,7 +30,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - [config.md](config.md) — configuration loading, layering precedence, the AGM home, and standard-library location.
 - [workspaces.md](workspaces.md) — project layout, git worktrees, dependencies, sync, and tmux: the project-management half of AGM.
 - [packages.md](packages.md) — package manifests, identity, dependencies, validation, and registered commands; [package-store.md](package-store.md) — the store, activation, installation, and the managed `std` package.
-- [sandbox.md](sandbox.md) — `agm run`, the SRT sandbox, and resource limits.
+- [sandbox.md](sandbox.md) — the sandbox preparation library, `agm run`, the SRT backend, and resource limits.
 - [agents.md](agents.md) — the agent runner, sessions, and the loop/review/revise/refine workflows.
 - [agl/index.md](agl/index.md) — start here for any AgL language task; it links to the frontend, execution, module, hosting, and REPL documents.
 - [testing.md](testing.md) — tests, coverage, and the repository quality gates.
@@ -45,7 +45,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/agent/` implements agent runner invocation and session backends.
 - `src/agm/project/`, `src/agm/vcs/`, `src/agm/tmux/` implement project layout, git integration, and tmux sessions.
 - `src/agm/packages/` implements package manifests, identity, the store, and discipline validation.
-- `src/agm/sandbox/` implements the SRT sandbox runtime.
-- `src/agm/agl/` is the AgL language implementation and host runtime; `packages/stdlib/src/` is the AgL standard library with its Python companions; `packages/sysone/` is an unshipped, ungated repository package (`sysone/jev`: typed TypeSafe System One questions over type-directed externs).
+- `src/agm/sandbox/` implements the sandbox preparation library, with SRT as its shipped backend.
+- `src/agm/agl/` is the AgL language implementation and host runtime; `packages/stdlib/src/` is the AgL standard library with its Python companions; `packages/sysone/` is the repository's `sysone/jev` package.
 - `src/agm/version.py` defines AGM's release version; package and project metadata keep it in lockstep.
 - `tests/` holds the test suite, `docs/` the documentation, `config/` the config templates and editor modes, `stubs/` local typing stubs, and `tools/` repository tooling.

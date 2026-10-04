@@ -1,10 +1,10 @@
 {
   "scenarios": [
     {
-      "name": "agent_method_open_failure_is_a_session_error",
-      "runtime": {"session_host": true, "enforce_command_sessions": true},
+      "name": "agent_method_invalid_command_fails_open",
+      "runtime": {"session_host": true},
       "agents": {"writer": []},
-      "expect": {"stdout": "session error\n", "calls": {"writer": 0}, "sessions": []}
+      "expect": {"stdout": "open failed\n", "calls": {"writer": 0}, "sessions": []}
     }
   ]
 }

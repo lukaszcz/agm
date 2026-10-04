@@ -45,7 +45,7 @@ from agm.agl.ir.contracts import (
     JsonContractRequest,
     TextContractRequest,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -132,6 +132,7 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
+    NominalDescriptor,
     ValueDescriptors,
     nominal_conforms,
 )
@@ -139,7 +140,13 @@ from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
-from agm.agl.runtime.engine_config import engine_default_settings, restamp_engine_setting
+from agm.agl.runtime.convert import DefaultResolver
+from agm.agl.runtime.engine_config import (
+    EngineRangeError,
+    engine_default_settings,
+    restamp_engine_setting,
+    validate_engine_value,
+)
 from agm.agl.runtime.externs import (
     AglCallableProxy,
     ExternCallWindow,
@@ -195,14 +202,19 @@ from agm.util.decimal import AGL_DECIMAL_CONTEXT, integral_to_int
 from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
+    from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
     from agm.agl.runtime.sessions import SessionHost
+    from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
     "HostConfigurationError",
     "MissingBuiltinVarSeedError",
     "IrInterpreter",
+    "default_field_resolver",
+    "lazy_interpreter",
+    "resolver_over_interpreter",
     "_apply_coercion",
     "_make_exc_value",
 ]
@@ -245,7 +257,13 @@ def _call_custom_codec_parse(
     effective_strict: bool,
     schema: dict[str, object] | None,
 ) -> ParseResult:
-    """Call a custom codec parse hook, accepting legacy signatures."""
+    """Call a custom codec parse hook, accepting legacy signatures.
+
+    Never passes a ``default_resolver``: the ``OutputCodec.parse`` protocol
+    has no such parameter, so a third-party codec registered under a
+    non-builtin name cannot fill a defaulted-but-omitted field. Nothing
+    shipped registers one.
+    """
     kwargs: dict[str, object] = {
         "strict_json": effective_strict,
         "schema": schema,
@@ -430,8 +448,11 @@ class IrInterpreter:
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         agent_dispatcher: AgentFn | None = None,
         session_host: "SessionHost | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        resolve_agent_spec: "AgentSpecResolver | None" = None,
         close_sessions: bool = True,
         strict_json: bool = False,
+        echo_agent_output: bool = False,
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
@@ -440,6 +461,7 @@ class IrInterpreter:
         builtin_host_settings: Mapping[str | BuiltinVarKey, Value] | None = None,
         param_seeds: Mapping[StaticBindingKey, Value] | None = None,
         process_environment: Mapping[str, str] | None = None,
+        extern_runtime_state: ExternRuntimeState | None = None,
     ) -> None:
         self._program = program
         self._descriptors = ValueDescriptors.from_program(program)
@@ -457,6 +479,7 @@ class IrInterpreter:
         self._current_module: ModuleId = program.entry_module
         self._call_sites: list[tuple[ModuleId, Location | None]] = []
         self._trace: TraceStore = trace if trace is not None else noop_trace()
+        self._echo_agent_output = echo_agent_output
         self._max_call_depth: int = max_call_depth
         self._agent_dispatcher = agent_dispatcher
         self._session_host: SessionHost = (
@@ -464,7 +487,13 @@ class IrInterpreter:
             if session_host is not None
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
+        self._get_sandbox_context = get_sandbox_context
+        self._resolve_agent_spec = resolve_agent_spec
         self._close_sessions = close_sessions
+        # Once the free-ask default session exists, its environment is fixed
+        # forever: skip evaluating and decoding ``environ`` on every later
+        # free ask in this run, only doing so while creating it.
+        self._default_session_opened = False
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
         # setting or invoke a host operation, so this temporary state is never
@@ -581,11 +610,23 @@ class IrInterpreter:
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )
+        default_sandbox = self._builtin_host_settings.get("default-sandbox")
+        if isinstance(default_sandbox, RecordValue):
+            self._builtin_host_settings["default-sandbox"] = restamp_engine_setting(
+                "default-sandbox",
+                default_sandbox,
+                from_table=NO_BUILTIN_DECLARATIONS,
+                to_table=self._program.builtin_nominals,
+            )
         self._extern_registry: ExternRegistry = (
             extern_registry if extern_registry is not None else ExternRegistry()
         )
         self._extern_call_window_guard = ExternCallWindow()
-        self._extern_runtime_state = ExternRuntimeState()
+        # A host-supplied state bag outlives this interpreter; its host closes it.
+        self._owns_extern_runtime_state = extern_runtime_state is None
+        self._extern_runtime_state = (
+            extern_runtime_state if extern_runtime_state is not None else ExternRuntimeState()
+        )
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(
@@ -609,7 +650,12 @@ class IrInterpreter:
                 effective_strict=effective_strict,
                 schema=schema,
             )
-        return _parse_contract_output(raw, contract, effective_strict=effective_strict)
+        return _parse_contract_output(
+            raw,
+            contract,
+            effective_strict=effective_strict,
+            default_resolver=self.default_for_field,
+        )
 
     @property
     def _frame(self) -> Frame:
@@ -649,6 +695,11 @@ class IrInterpreter:
         return self._shell_exec_timeout
 
     @property
+    def debug(self) -> bool:
+        """Current ``debug`` setting (may have been updated by a ``builtin var`` write)."""
+        return cast(BoolValue, self._builtin_host_settings["debug"]).value
+
+    @property
     def builtin_vars(self) -> dict[BuiltinVarKey, Value]:
         """Current non-engine host-backed bindings for incremental hosts."""
         return dict(self._builtin_vars)
@@ -661,7 +712,7 @@ class IrInterpreter:
         engine settings, reflecting any writes made during the run.  A key
         with neither a host seed nor a declared default is absent.  Hosts that
         persist settings across runs (the REPL) read this back after a run to
-        seed the next one; an enum-backed value (``Option``/``Agent``) is
+        seed the next one; an enum-backed value (``Option``/``Agent``/``AgentSandbox``) is
         already restamped onto the reserved fallback identity, so such a host
         needs no program-specific nominal table of its own -- see
         :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`.
@@ -919,13 +970,18 @@ class IrInterpreter:
         if self._call_depth >= self._max_call_depth:
             raise self._recursion_error()
 
-    def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
-        """Evaluate an omitted argument's default expression in *frame*."""
+    def _eval_expr_in_frame(self, expr: IrExpr, frame: Frame) -> Value:
+        """Evaluate *expr* with *frame* pushed as the active frame."""
         self._frames.append(frame)
         try:
-            return self._eval(cast(IrExpr, param.default))
+            return self._eval(expr)
         finally:
             self._frames.pop()
+
+    def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
+        """Evaluate an omitted argument's default expression in *frame*."""
+        assert param.default is not None, "arg omitted but param has no default (lowerer bug)"
+        return self._eval_expr_in_frame(param.default, frame)
 
     def _eval_extern_default(self, param: "IrFunctionParam") -> Value:
         """Evaluate an omitted extern argument's default expression.
@@ -936,6 +992,64 @@ class IrInterpreter:
         module scope for its own defaults.
         """
         return self._eval_default_in_frame(param, {})
+
+    def _eval_constructor_default(
+        self, descriptor: "NominalDescriptor", field_index: int, location: Location | None
+    ) -> Value:
+        """Evaluate an omitted constructor field's default expression.
+
+        Mirrors :meth:`_eval_extern_default`: a field default never captures
+        anything (it is a constant expression checked at the declaring
+        type's own scope), so it evaluates in a fresh empty frame. It runs in
+        the declaring module's call context, entered like any other callee's
+        (:meth:`_enter_call`), so trace spans attribute it correctly.
+        """
+        default = descriptor.field_defaults[field_index]
+        assert default is not None, "omitted constructor field has no default (lowerer bug)"
+        previous_module = self._enter_call(descriptor.module_id, location)
+        try:
+            return self._eval_expr_in_frame(default, {})
+        finally:
+            self._exit_call(previous_module)
+
+    def default_for_field(self, nominal: NominalId, field_index: int) -> Value:
+        """Evaluate one constructor field's default via its declaring nominal's own descriptor.
+
+        The decode-time default-fill seam: ``runtime.convert.decode_value``'s
+        ``default_resolver`` calls this to fill a record/enum-variant field a
+        JSON or value-syntax decode source omitted, through the same per-field
+        default evaluation an omitted constructor slot uses
+        (:meth:`_eval_constructor_default`) against this program's real,
+        fully-linked ``NominalDescriptor`` table.
+        """
+        return self._eval_constructor_default(self._program.nominals[nominal], field_index, None)
+
+    def _eval_constructor_fields(
+        self,
+        nominal: NominalId,
+        fields: "tuple[tuple[str, IrExpr | UseDefault], ...]",
+        location: Location | None,
+    ) -> dict[str, Value]:
+        """Evaluate one record/exception construction's field slots.
+
+        Shared by ``IrMakeRecord`` and ``IrMakeException``: a supplied slot
+        evaluates in the current frame, an omitted (``UseDefault``) one
+        through :meth:`_eval_constructor_default` against the constructed
+        nominal's own descriptor. The descriptor is looked up only when a
+        slot actually needs it, so a construction with every field supplied
+        never requires its nominal to be registered in ``program.nominals``
+        (some hand-built/reserved constructions are not).
+        """
+        return {
+            fname: (
+                self._eval_constructor_default(
+                    self._program.nominals[nominal], fexpr.param_index, location
+                )
+                if isinstance(fexpr, UseDefault)
+                else self._eval(fexpr)
+            )
+            for fname, fexpr in fields
+        }
 
     def _extern_call_window(self) -> ContextManager[None]:
         """Open this interpreter's callback window for one extern invocation."""
@@ -1264,18 +1378,20 @@ class IrInterpreter:
         ``RecursionError`` that still escapes (its limit is capped) is converted
         to a catchable AgL ``RecursionError`` rather than crashing the host.
 
-        Companion state is closed on every exit; session cleanup stays gated by
+        Companion state this interpreter owns is closed on every exit, honoring
+        the final ``debug`` setting; session cleanup stays gated by
         ``close_sessions``.
         """
         needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
         target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
         session_cleanup = self._session_host.close_all if self._close_sessions else _noop
+        state_cleanup = (
+            self._close_extern_runtime_state if self._owns_extern_runtime_state else _noop
+        )
 
         with raised_recursion_limit(target):
             try:
-                with preserve_primary_error(
-                    self._extern_runtime_state.close_all, label="companion state cleanup"
-                ):
+                with preserve_primary_error(state_cleanup, label="companion state cleanup"):
                     with preserve_primary_error(session_cleanup, label="agent session cleanup"):
                         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
                             self._install_function_closures()
@@ -1301,6 +1417,9 @@ class IrInterpreter:
                 return self._collect_results()
             except RecursionError:
                 raise self._recursion_error() from None
+
+    def _close_extern_runtime_state(self) -> None:
+        self._extern_runtime_state.close_all(debug=self.debug)
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
         """Evaluate one initializer, retaining its result for result collection.
@@ -1347,9 +1466,15 @@ class IrInterpreter:
         if isinstance(node, IrSessionOpen):
             return self._effects.eval_ir_session_open(node)
         if isinstance(node, IrSessionDefault):
-            return self._effects.eval_ir_session_default(
-                node, self._load_builtin_setting("default-agent")
+            default_env = None if self._default_session_opened else self._eval(node.env)
+            result = self._effects.eval_ir_session_default(
+                node,
+                self._load_builtin_setting("default-agent"),
+                self._load_builtin_setting("default-sandbox"),
+                default_env,
             )
+            self._default_session_opened = True
+            return result
         if isinstance(node, IrSessionAsk):
             return self._effects.eval_ir_session_ask(node)
         return self._effects.eval_ir_session_op(node)
@@ -1580,16 +1705,12 @@ class IrInterpreter:
                                 assert_never(unreachable_seg)
                     return TextValue("".join(parts))
 
-                case IrMakeRecord(nominal=nominal, fields=fields):
-                    record_fields: dict[str, Value] = {
-                        fname: self._eval(fexpr) for fname, fexpr in fields
-                    }
+                case IrMakeRecord(location=location, nominal=nominal, fields=fields):
+                    record_fields = self._eval_constructor_fields(nominal, fields, location)
                     return RecordValue(nominal=nominal, fields=record_fields)
 
-                case IrMakeException(nominal=nominal, fields=fields):
-                    exc_fields: dict[str, Value] = {
-                        fname: self._eval(field_expr) for fname, field_expr in fields
-                    }
+                case IrMakeException(location=location, nominal=nominal, fields=fields):
+                    exc_fields = self._eval_constructor_fields(nominal, fields, location)
                     return ExceptionValue(nominal=nominal, fields=exc_fields)
 
                 case IrMakeConstructor(nominal=nominal):
@@ -1635,7 +1756,12 @@ class IrInterpreter:
                 case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                     source_value = self._eval(val_expr)
                     try:
-                        converted = run_recipe(recipe, source_value, self._descriptors)
+                        converted = run_recipe(
+                            recipe,
+                            source_value,
+                            self._descriptors,
+                            default_resolver=self.default_for_field,
+                        )
                     except AglCastConversion as exc:
                         return self._on_cast_failure(failure_mode, exc)
                     except AglCyclicValue:
@@ -1847,13 +1973,21 @@ class IrInterpreter:
                     return shallow_copy_value(value)
 
                 case IrAsk(
+                    env=env_expr,
                     agent=agent_expr,
                     prompt=prompt_expr,
                     contract_id=contract_id,
-                    max_attempts=max_attempts,
+                    parse_error_retries=retries_expr,
+                    sandbox=sandbox_expr,
                 ):
                     return self._effects.eval_ir_ask(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                        node,
+                        agent_expr,
+                        prompt_expr,
+                        contract_id,
+                        retries_expr,
+                        sandbox_expr,
+                        env_expr,
                     )
 
                 case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
@@ -1863,10 +1997,11 @@ class IrInterpreter:
                     agent=agent_expr,
                     prompt=prompt_expr,
                     contract_id=contract_id,
-                    max_attempts=max_attempts,
+                    parse_error_retries=retries_expr,
+                    sandbox=sandbox_expr,
                 ):
                     return self._effects.eval_ir_ask_request(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                        node, agent_expr, prompt_expr, contract_id, retries_expr, sandbox_expr
                     )
 
                 case IrExec(
@@ -1875,7 +2010,8 @@ class IrInterpreter:
                     cwd=cwd_expr,
                     timeout=timeout_expr,
                     contract_id=contract_id,
-                    max_attempts=max_attempts,
+                    parse_error_retries=retries_expr,
+                    sandbox=sandbox_expr,
                 ):
                     return self._effects.eval_ir_exec(
                         node,
@@ -1883,8 +2019,9 @@ class IrInterpreter:
                         env_expr,
                         cwd_expr,
                         timeout_expr,
+                        sandbox_expr,
                         contract_id,
-                        max_attempts,
+                        retries_expr,
                     )
 
                 case IrBuiltinLoad(key=key):
@@ -1984,13 +2121,19 @@ class IrInterpreter:
         the write onward; the host-consumed keys update their register.
         Writes to the ``trace``/``trace-file`` register pair additionally
         reconfigure the live trace service when a host reconfigurer is present;
-        ``default-agent`` remains a register-only value.
+        ``default-agent`` remains a register-only value. A value outside the
+        key's range raises the catchable ``RangeError``, an otherwise invalid one
+        (blank path, bad duration) ``TypeError``; either leaves it unchanged.
         """
         key = self._builtin_var_key(key)
         _, _, name = key
         if not is_engine_builtin_var_key(key):
             self._builtin_vars[key] = value
             return
+        try:
+            validate_engine_value(name, value, nominals=self._program.builtin_nominals)
+        except ValueError as exc:
+            raise self._engine_setting_raise(exc) from exc
         if name in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(name, value)
             if name == "timeout":
@@ -2030,6 +2173,16 @@ class IrInterpreter:
     # Engine-setting effect
     # ------------------------------------------------------------------
 
+    def _engine_setting_raise(self, exc: ValueError) -> AglRaise:
+        """Map an engine-value validation failure to its catchable AgL exception."""
+        return AglRaise(
+            _make_exc_value(
+                "RangeError" if isinstance(exc, EngineRangeError) else "TypeError",
+                str(exc),
+                nominals=self._program.builtin_nominals,
+            )
+        )
+
     def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
         """Apply the live engine-setting effect for a runtime-live engine key.
 
@@ -2041,19 +2194,10 @@ class IrInterpreter:
         else:
             config_value = cast(RecordValue, config_value)
             raw = option_text(config_value, nominals=self._program.builtin_nominals)
-            if raw is None:
-                self._shell_exec_timeout = None
-            else:
-                try:
-                    self._shell_exec_timeout = _parse_timeout(raw)
-                except ValueError as exc:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "TypeError",
-                            f"invalid timeout: {exc}",
-                            nominals=self._program.builtin_nominals,
-                        )
-                    ) from exc
+            try:
+                self._shell_exec_timeout = None if raw is None else _parse_timeout(raw)
+            except ValueError as exc:
+                raise self._engine_setting_raise(exc) from exc
 
     # ------------------------------------------------------------------
     # Result collection
@@ -2088,3 +2232,58 @@ class IrInterpreter:
         if self._synthetic_main_frame is not None:
             collect(self._synthetic_main_frame, module_only=False)
         return results
+
+
+def lazy_interpreter(executable: ExecutableProgram) -> Callable[[], "IrInterpreter"]:
+    """Return a callable that lazily builds, once, an ``IrInterpreter`` over *executable*.
+
+    Shared by every pre-execution throwaway-interpreter site: two callers
+    holding the SAME returned callable build at most one interpreter between
+    them (see :func:`resolver_over_interpreter` and
+    ``PipelineDriver._evaluate_program_config``, which share one over one
+    preflight).
+    """
+    interp: IrInterpreter | None = None
+
+    def get() -> IrInterpreter:
+        nonlocal interp
+        if interp is None:
+            interp = IrInterpreter(executable)
+        return interp
+
+    return get
+
+
+def resolver_over_interpreter(get_interp: Callable[[], "IrInterpreter"]) -> DefaultResolver:
+    """Build a field-default resolver that calls *get_interp* only on first actual use.
+
+    The throwaway ``IrInterpreter`` *get_interp* builds carries no
+    engine-setting seeds, no ``@param`` seeds, no process environment, the
+    default call depth, and a no-op trace — safe only because a field
+    default is a constant expression that cannot observe any of those.
+    Widening what a field default may contain must revisit this resolver,
+    since it would silently diverge from a real run's interpreter otherwise.
+    """
+
+    def resolve(nominal: NominalId, field_index: int) -> Value:
+        return get_interp().default_for_field(nominal, field_index)
+
+    return resolve
+
+
+def default_field_resolver(executable: ExecutableProgram) -> DefaultResolver:
+    """Build a field-default resolver over *executable*'s real, fully-linked nominal table.
+
+    Shared by every pre-execution binding site (program arguments, module
+    parameters) that must fill an omitted defaulted field before this run's
+    own ``IrInterpreter`` exists. A throwaway interpreter is constructed only
+    on first actual use (most binds touch no defaulted field at all) — the
+    same throwaway-interpreter-over-a-real-program pattern
+    ``PipelineDriver._evaluate_program_config`` uses for ``@config`` constant
+    expressions, applied here to per-field constructor defaults instead. A
+    caller that also needs that same throwaway interpreter for another
+    purpose within the same preflight should build its own
+    :func:`lazy_interpreter` and pass it to :func:`resolver_over_interpreter`
+    instead, so only one interpreter is ever built between them.
+    """
+    return resolver_over_interpreter(lazy_interpreter(executable))

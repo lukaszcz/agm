@@ -14,9 +14,12 @@ result flows through the SAME normalize + JSON-Schema-validate +
 
 :func:`host_text_to_json` is the single host-text dispatch built on top of
 it: a ``text`` target is taken verbatim, the standard ``Agent`` enum reads
-its own text conventions (shorthand, a tagged JSON object, an ``Agent``
-member constructor call, or -- optionally -- a verbatim command), and every
-other target reads strict JSON, falling back to value syntax.
+its own text conventions (a tagged JSON object, an ``Agent`` member
+constructor call, shorthand, or -- optionally -- a verbatim command), and
+every other target reads strict JSON, falling back to value syntax.
+:func:`host_param_text_to_json` is its host parameter/config form, and
+:func:`host_data_to_json` reads native config data by applying that form to
+every string nested in it.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from types import MappingProxyType
 from typing import Literal, assert_never, cast
 
 from agm.agent.spec import AgentCommand
-from agm.agent.values import agent_spec_shape, parse_agent_shorthand
+from agm.agent.values import AgentShorthandError, agent_spec_shape, parse_agent_shorthand
 from agm.agl.ir.contracts import (
     ArrayDecode,
     DecodeSchema,
@@ -38,6 +41,7 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarKind,
     VariantDecode,
+    is_plain_enum,
 )
 from agm.agl.runtime.convert import (
     ResolvedDecode,
@@ -68,6 +72,8 @@ from agm.agl.value_syntax.reader import read_ctor_head, read_value
 
 __all__ = [
     "ValueDecodeError",
+    "host_data_to_json",
+    "host_param_text_to_json",
     "host_text_to_json",
     "option_some_field_schema",
     "option_some_json_name",
@@ -255,7 +261,7 @@ def _match_variant(node: CtorNode, schema: EnumDecode) -> VariantDecode | None:
     return variant
 
 
-def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> dict[str, object]:
+def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> object:
     if not isinstance(node, CtorNode):
         raise ValueDecodeError(
             f"expected {schema.display_name}, got {_node_kind(node)}", node.start
@@ -266,16 +272,27 @@ def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> dict[st
             f"{node.name!r} does not name a member of {schema.display_name!r}", node.start
         )
     payload = _convert_ctor_args(node, variant.fields, variant.display_name, defs)
+    if is_plain_enum(schema):
+        return variant.json_name
     return {"$case": variant.json_name, **payload}
 
 
 def _convert_ctor_args(
     node: CtorNode, fields: "tuple[FieldDecode, ...]", type_label: str, defs: DefsMap
 ) -> dict[str, object]:
-    """Bind and convert one constructor call's arguments against *fields*."""
+    """Bind and convert one constructor call's arguments against *fields*.
+
+    A bare constructor (``node.args is None``) is legal when every field
+    carries a declared default: it reads exactly like an empty argument list.
+    An omitted argument for a defaulted field is simply left out of the
+    returned dict -- the same shape a JSON source that omits the key produces
+    -- so it fills through ``runtime.convert.decode_value``'s own
+    ``default_resolver`` at the value boundary.
+    """
     if node.args is None:
-        if fields:
-            names = ", ".join(f.name for f in fields)
+        missing = [f.name for f in fields if f.default_index is None]
+        if missing:
+            names = ", ".join(missing)
             raise ValueDecodeError(f"{type_label} requires arguments: {names}", node.start)
         return {}
     alias_map: dict[str, str] = {}
@@ -283,7 +300,9 @@ def _convert_ctor_args(
         alias_map[field.name] = field.name
         if field.alias is not None:
             alias_map[field.alias] = field.name
-    bind_params = [BindParam(name=f.name, kind=f.zone, has_default=False) for f in fields]
+    bind_params = [
+        BindParam(name=f.name, kind=f.zone, has_default=f.default_index is not None) for f in fields
+    ]
     positional = [arg for arg in node.args if arg.name is None]
     named: list[tuple[str, ValueArg]] = []
     for arg in node.args:
@@ -299,10 +318,9 @@ def _convert_ctor_args(
         raise _binding_error(exc, node, positional, named, type_label) from exc
     result: dict[str, object] = {}
     for field, bound_arg in zip(fields, bound, strict=True):
-        # has_default=False on every field: bind_arguments never defers one.
-        result[field.json_name] = value_node_to_json(
-            cast(ValueArg, bound_arg).value, field.schema, defs
-        )
+        if bound_arg is None:
+            continue
+        result[field.json_name] = value_node_to_json(bound_arg.value, field.schema, defs)
     return result
 
 
@@ -382,12 +400,14 @@ def host_text_to_json(
     """Decode one host-supplied text token into a JSON-native object per *schema*.
 
     A ``text`` target is taken verbatim. The standard ``Agent`` enum reads
-    compact shorthand, a tagged JSON object, or an ``Agent`` member
-    constructor call, falling back -- when *agent_command_fallback* -- to a
+    a tagged JSON object, an ``Agent`` member constructor call, or compact
+    shorthand, falling back -- when *agent_command_fallback* -- to a
     verbatim command; without the fallback, text matching none of those is a
-    :class:`ValueDecodeError`. Every other target reads strict JSON, falling
-    back to AgL value syntax; a failure of both reports both reasons, JSON
-    and value syntax alike, since either could be what the writer intended.
+    :class:`ValueDecodeError`. Malformed native shorthand (see
+    :func:`parse_agent_shorthand`) is an error even with the fallback.
+    Every other target reads strict JSON, falling back to AgL value syntax;
+    a failure of both reports both reasons, JSON and value syntax alike,
+    since either could be what the writer intended.
     """
     resolved = _resolve(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.TEXT:
@@ -407,8 +427,65 @@ def host_text_to_json(
     return value_node_to_json(node, resolved, defs)
 
 
+def host_param_text_to_json(text: str, schema: DecodeSchema, defs: DefsMap = _EMPTY_DEFS) -> object:
+    """Decode one host parameter or config string into a JSON-native object per *schema*.
+
+    :func:`host_text_to_json` with the ``Agent`` command fallback, plus one
+    reading of its own: a plain enum also takes a member's bare JSON name.
+    """
+    resolved = _resolve(schema, defs)
+    if (
+        isinstance(resolved, EnumDecode)
+        and is_plain_enum(resolved)
+        and any(text == variant.json_name for variant in resolved.variants)
+    ):
+        return text
+    return host_text_to_json(text, resolved, defs, agent_command_fallback=True)
+
+
+def host_data_to_json(value: object, schema: DecodeSchema, defs: DefsMap = _EMPTY_DEFS) -> object:
+    """Read every string nested in JSON-native host config data as its slot's host text.
+
+    A native config array or table is JSON data, except that a string inside
+    it reads exactly as a top-level config string of that slot's type does
+    (:func:`host_param_text_to_json`). A ``json`` slot keeps its data as is,
+    and data matching no slot is returned unchanged for validation to reject.
+    """
+    resolved = _resolve(schema, defs)
+    if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.JSON:
+        return value
+    if isinstance(value, str):
+        return host_param_text_to_json(value, resolved, defs)
+    if isinstance(value, list) and isinstance(resolved, ArrayDecode):
+        return [host_data_to_json(item, resolved.elem, defs) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return _host_entries_to_json(value, resolved, defs)
+
+
+def _host_entries_to_json(
+    data: Mapping[str, object], schema: DecodeSchema, defs: DefsMap
+) -> Mapping[str, object]:
+    """Read each entry of the table *data* as host data for the slot *schema* gives its key."""
+    match schema:
+        case DictDecode(value=item_schema):
+            return {key: host_data_to_json(item, item_schema, defs) for key, item in data.items()}
+        case RecordDecode(fields=record_fields):
+            fields = record_fields
+        case EnumDecode(variants=variants):
+            tag = data.get("$case")
+            fields = next((v.fields for v in variants if v.json_name == tag), ())
+        case _:
+            return data
+    slots = {field.json_name: field.schema for field in fields}
+    return {
+        key: host_data_to_json(item, slots[key], defs) if key in slots else item
+        for key, item in data.items()
+    }
+
+
 def _agent_ctor_probe(text: str, schema: EnumDecode) -> bool:
-    """Return whether *text* lexically opens an Agent member constructor call.
+    """Return whether *text* lexically is an Agent member constructor call or bare name.
 
     Delegates the qualifier/name/``(`` lexing to
     :func:`~agm.agl.value_syntax.reader.read_ctor_head`, so this can never
@@ -428,22 +505,22 @@ def _agent_ctor_probe(text: str, schema: EnumDecode) -> bool:
 def _decode_agent_text(
     text: str, schema: EnumDecode, defs: DefsMap, *, agent_command_fallback: bool
 ) -> object:
-    """Decode one host Agent text token: shorthand, JSON, a member call, or a command.
+    """Decode one host Agent text token: JSON, a member call, shorthand, or a command.
 
     Text that lexically opens a member call (:func:`_agent_ctor_probe`)
     commits to that reading: a read or bind failure inside the call --
     including a wrong qualifier, which ``_convert_enum`` already rejects --
     propagates as a :class:`ValueDecodeError` rather than silently falling
-    back to a verbatim command.
+    back to a verbatim command. Shorthand is tried after both, so a ``/``
+    inside a JSON object or a call is never read as a provider/model split;
+    malformed native shorthand (see :func:`parse_agent_shorthand`) likewise
+    commits and errors.
 
     Whitespace-only text is always an error, before any other reading is
     tried: an empty command is never a meaningful ``AgentCommand`` fallback.
     """
     if not text.strip():
         raise ValueDecodeError(f"expected a non-empty Agent value, got {text!r}")
-    shorthand = parse_agent_shorthand(text)
-    if shorthand is not None:
-        return agent_spec_shape(shorthand)
     try:
         parsed = parse_json_strict(text)
     except StrictJsonParseError:
@@ -456,6 +533,12 @@ def _decode_agent_text(
         except ValueSyntaxError as exc:
             raise ValueDecodeError(exc.message, exc.start) from exc
         return _convert_enum(node, schema, defs)
+    try:
+        shorthand = parse_agent_shorthand(text)
+    except AgentShorthandError as exc:
+        raise ValueDecodeError(str(exc)) from exc
+    if shorthand is not None:
+        return agent_spec_shape(shorthand)
     if agent_command_fallback:
         return agent_spec_shape(AgentCommand(text))
     raise ValueDecodeError(f"cannot read {text!r} as an Agent value")

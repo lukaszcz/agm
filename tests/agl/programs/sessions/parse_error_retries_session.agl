@@ -1,0 +1,16 @@
+program def main() -> unit =
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  try
+    let defaulted: int = session.ask("default retries")
+  catch AgentParseError =>
+    print "default"
+  try
+    let aborted: int = session.ask("zero retries", parse-error-retries = 0)
+  catch AgentParseError =>
+    print "zero"
+  try
+    let exhausted: int = session.ask("two retries", parse-error-retries = 2)
+  catch AgentParseError =>
+    print "exhausted"
+  let context: text = session.ask("conversation continues")
+  print context

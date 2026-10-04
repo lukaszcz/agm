@@ -235,6 +235,7 @@ class ConstructorCheckCtx(Protocol):
         span: SourceSpan,
         expected: Type | None,
         subject: str,
+        all_defaulted: bool = False,
     ) -> Type: ...
 
     def _zonk_constructor_owner[N: RecordType | EnumType | ExceptionType](self, owner: N) -> N: ...
@@ -271,6 +272,27 @@ class ConstructorChecker:
     def __init__(self, ctx: ConstructorCheckCtx) -> None:
         self._ctx = ctx
 
+    def _constructor_has_default(
+        self,
+        handle: RecordType | ExceptionType,
+        field_kinds: tuple[tuple[str, ParamZone], ...],
+    ) -> tuple[bool, ...]:
+        """Whether each field in *field_kinds* order has a declared default.
+
+        Positional against ``TypeTable.field_has_default``: both tuples walk
+        the declaration's own ``fields`` in the same order (``builder.py``'s
+        ``_field_zones``/``_field_has_default`` compute them from the same
+        walk, and ``TypeTable.field_kinds``/``field_has_default`` both zip
+        against ``TypeDef.fields``), so a strict positional zip catches an
+        ordering bug immediately instead of an unlabelled ``KeyError``.
+        """
+        return tuple(
+            has_default
+            for (_fname, has_default), (_kind_name, _fkind) in zip(
+                self._ctx._env.type_table.field_has_default(handle), field_kinds, strict=True
+            )
+        )
+
     # --- Generic constructor as value ---
 
     def check_generic_constructor_as_value(
@@ -283,8 +305,10 @@ class ConstructorChecker:
     ) -> Type:
         """Handle a generic constructor used as a bare value (not in direct call position).
 
-        For nullary variants (no fields): instantiate from the expected nominal type.
-        For payload constructors: instantiate to a FunctionType from expected FunctionType.
+        For nullary variants (no fields) and for a payload constructor whose
+        fields all have declared defaults: instantiate from the expected
+        nominal type. For a constructor with a required field: instantiate to
+        a FunctionType from expected FunctionType.
         """
         result = self._ctx._instantiate_generic_constructor_value(
             type_params=ctor_ref.type_params,
@@ -293,6 +317,7 @@ class ConstructorChecker:
             span=span,
             expected=expected,
             subject=ctor_ref.owner_name,
+            all_defaulted=self._all_fields_have_default_for_sig(sig),
         )
         return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
 
@@ -339,13 +364,15 @@ class ConstructorChecker:
         type_args: tuple[TypeExpr, ...],
         sig: ConstructorSignature,
         span: SourceSpan,
+        all_defaulted: bool = False,
     ) -> Type:
         """Instantiate a generic constructor value from explicit type arguments.
 
         Shared core of the bare and qualified type-apply-as-value paths. A
-        field-bearing constructor yields a ``FunctionType`` from its field
-        types to its concrete member record; a fieldless one constructs that
-        record immediately.
+        constructor with a required field yields a ``FunctionType`` from its
+        field types to its concrete member record; a fieldless one, or one
+        whose fields all have declared defaults (*all_defaulted*), constructs
+        that record immediately.
         """
         subst = {
             p: self._ctx._env.resolve_type_expr(
@@ -355,7 +382,7 @@ class ConstructorChecker:
         }
         concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
         concrete_result = substitute(sig.result_template, subst)
-        if not concrete_params:
+        if not concrete_params or all_defaulted:
             return concrete_result
         return FunctionType(params=concrete_params, result=concrete_result)
 
@@ -437,6 +464,7 @@ class ConstructorChecker:
             type_args=type_args,
             sig=sig,
             span=span,
+            all_defaulted=self._all_fields_have_default_for_sig(sig),
         )
         return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
 
@@ -457,10 +485,15 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         type_params = ctor_ref.type_params
         field_kinds = self._ctx._env.type_table.field_kinds(sig.result_template)
+        default_handle = sig.result_template
+        assert isinstance(default_handle, (RecordType, ExceptionType)), (
+            f"unexpected constructor owner type {default_handle!r}"
+        )
         bound_exprs = bind_constructor_args(
             field_kinds,
             node.args,
             node.named_args,
+            has_default=self._constructor_has_default(default_handle, field_kinds),
             call_span=span,
             context_desc=f"constructor '{owner_name}'",
         )
@@ -499,8 +532,8 @@ class ConstructorChecker:
         )
         try:
             for field_name, _field_kind in field_kinds:
-                bound_expr = bound_exprs[field_name]
-                if isinstance(bound_expr, Placeholder):
+                bound_expr = bound_exprs.get(field_name)
+                if bound_expr is None or isinstance(bound_expr, Placeholder):
                     continue
                 self._ctx._constrain_argument(
                     fields_by_name[field_name],
@@ -527,7 +560,7 @@ class ConstructorChecker:
                     expected,
                     engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
                 )
-        self._record_call_binding(node, bound_exprs, hole_indices)
+        self._record_call_binding(node, bound_exprs, hole_indices, field_kinds)
         if not node_type_args:
             self._ctx._set_generic_constructor_result_provenance(
                 node.node_id,
@@ -544,7 +577,11 @@ class ConstructorChecker:
     # --- Constructor call helpers ---
 
     def _record_call_binding(
-        self, node: Call, bound_exprs: Mapping[str, CallArg], hole_indices: Mapping[int, int]
+        self,
+        node: Call,
+        bound_exprs: Mapping[str, CallArg],
+        hole_indices: Mapping[int, int],
+        field_kinds: tuple[tuple[str, ParamZone], ...],
     ) -> None:
         """Record a complete call's field binding, or a partial call's."""
         supplied = {
@@ -554,7 +591,10 @@ class ConstructorChecker:
             self._ctx._record_constructor_call_binding(node.node_id, supplied)
         else:
             self._ctx._record_partial_call(
-                node, tuple(bound_exprs.values()), hole_indices, callee_kind="constructor"
+                node,
+                tuple(bound_exprs.get(name) for name, _kind in field_kinds),
+                hole_indices,
+                callee_kind="constructor",
             )
 
     def _constructor_fields_and_context(
@@ -578,7 +618,7 @@ class ConstructorChecker:
         hole_types = {
             hole_indices[bound_expr.node_id]: field_types[fname]
             for fname, _fkind in field_kinds
-            if isinstance(bound_expr := bound_exprs[fname], Placeholder)
+            if isinstance(bound_expr := bound_exprs.get(fname), Placeholder)
         }
         return FunctionType(
             params=tuple(hole_types[index] for index in range(len(hole_indices))),
@@ -598,14 +638,14 @@ class ConstructorChecker:
         fields, _context_desc = self._constructor_fields_and_context(owner)
 
         if node is not None:
-            self._record_call_binding(node, bound_exprs, hole_indices)
+            self._record_call_binding(node, bound_exprs, hole_indices, field_kinds)
 
         # Type-check each supplied field. Placeholder fields are checked when
         # the produced function is invoked.
         for fname, _fkind in field_kinds:
             expected_field_type = fields[fname]
-            arg_expr = bound_exprs[fname]
-            if isinstance(arg_expr, Placeholder):
+            arg_expr = bound_exprs.get(fname)
+            if arg_expr is None or isinstance(arg_expr, Placeholder):
                 continue
             arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
             self._ctx._assert_assignable_from(
@@ -642,12 +682,13 @@ class ConstructorChecker:
     ) -> Type:
         """Type a non-generic constructor used in value position (not directly called).
 
-        A constructor with fields becomes a ``FunctionType`` (field types →
-        owner type) so it can be passed around and called positionally.  A
-        zero-field record or nullary variant keeps its bare nominal value (a
-        zero-arg construction).  An exception constructor is rejected — its
-        construction has special trace-id semantics and is out of scope as a
-        first-class value.
+        A constructor with a required field becomes a ``FunctionType`` (field
+        types → owner type) so it can be passed around and called
+        positionally.  A zero-field record, a nullary variant, or a record
+        whose every field has a default keeps its bare nominal value (a
+        zero-arg construction using each field's default).  An exception
+        constructor is rejected — its construction has special trace-id
+        semantics and is out of scope as a first-class value.
         """
         owner = self._ctx._zonk_constructor_owner(owner)
         if isinstance(owner, ExceptionType):
@@ -658,12 +699,37 @@ class ConstructorChecker:
             )
         self._reject_session_constructor(owner, span)
         fields = self._ctx._env.type_table.record_fields(owner)
-        if fields:
+        if fields and not self._all_fields_have_default(owner):
             params = tuple(fields.values())
             return self._contextualize_member_result(
                 FunctionType(params=params, result=owner), expected, span, owner.name
             )
         return self._check_constructor_call(owner=owner, positional=(), named=(), span=span)
+
+    def _all_fields_have_default(self, owner: RecordType) -> bool:
+        """True when every one of *owner*'s fields carries a declared default."""
+        return all(
+            has_default
+            for _fname, has_default in self._ctx._env.type_table.field_has_default(owner)
+        )
+
+    def _all_fields_have_default_for_sig(self, sig: ConstructorSignature) -> bool:
+        """True when every field of *sig*'s target record has a declared default.
+
+        Declaration-level (``TypeDef.field_has_default``), read off
+        ``result_template``'s own declaration identity rather than
+        ``ConstructorRef.owner_decl_node_id`` — a transparent alias's
+        ``ConstructorRef`` still names the alias itself, but its resolved
+        signature's ``result_template`` always names the real target record
+        (or enum member), so this applies uniformly to a generic record's
+        template too — every instantiation shares the same defaulted fields.
+        """
+        target = sig.result_template
+        assert isinstance(target, RecordType)
+        typedef = self._ctx._env.type_table.get_by_id(target.decl_id)
+        assert typedef is not None, f"compiler bug: no TypeDef for declaration {target.decl_id!r}"
+        assert typedef.field_has_default is not None
+        return all(typedef.field_has_default)
 
     # --- Constructor callee calls (public entry points) ---
 
@@ -759,10 +825,15 @@ class ConstructorChecker:
         field_kinds = self._ctx._env.type_table.field_kinds(owner)
 
         # Bind positional and named args to field names via the shared helper.
-        # All fields are required (no defaults on constructors), so every slot is
-        # non-None after binding — the helper asserts this internally.
+        # A field with a declared default may be omitted, exactly like a
+        # function parameter default.
         bound_exprs = bind_constructor_args(
-            field_kinds, positional, named, call_span=span, context_desc=context_desc
+            field_kinds,
+            positional,
+            named,
+            has_default=self._constructor_has_default(owner, field_kinds),
+            call_span=span,
+            context_desc=context_desc,
         )
         return self._finish_constructor_call(
             owner=owner,

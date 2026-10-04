@@ -297,11 +297,12 @@ let q = Option[int]::Some(value = 2) # qualification disambiguates the owner
 
 ### Field-bearing constructors as values
 
-A constructor with fields is an **ordinary function value**: it can be stored,
-passed to a function, and called like any other function value. When a
-constructor is reached **through a variable** rather than written directly, it
-is a positional callable — its arguments are supplied positionally in
-**declaration order**, since a function value has no named parameters
+A constructor with at least one required field (no `=` default) is an
+**ordinary function value**: it can be stored, passed to a function, and
+called like any other function value. When a constructor is reached
+**through a variable** rather than written directly, it is a positional
+callable — its arguments are supplied positionally in **declaration order**,
+since a function value has no named parameters
 ([Functions](functions.md)):
 
 <!-- agl-check: fragment -->
@@ -327,7 +328,7 @@ annotation supplies that evidence, and a surrounding higher-order call may
 supply it through another argument or its result. A bare `let f = Some` is a
 static error because the binding has no such evidence.
 
-### Fieldless constructor references
+### Fieldless and all-defaulted constructor references
 
 A fieldless constructor reference constructs its value immediately in value
 position. This applies uniformly to a standalone record and an enum member,
@@ -344,8 +345,24 @@ let ready = Ready
 let qualified-ready = Status::Ready
 ```
 
-Calls remain direct constructor calls, so `Marker()` and `Status::Ready()`
-construct the same values as the bare references above. A fieldless constructor reference is not a `() -> T` function
+A constructor whose every field has a `= <constant expr>` default behaves the
+same way: its bare reference constructs the value immediately, filling every
+field with its default:
+
+```agl
+record Config
+  retries: int = 3
+  verbose: bool = false
+
+program def main() -> unit =
+  let config = Config
+  print(config.retries)   # 3
+  print(config == Config())   # true — same value either spelling
+```
+
+Calls remain direct constructor calls, so `Marker()`, `Status::Ready()`, and
+`Config()` construct the same values as the bare references above. A
+fieldless or all-defaulted constructor reference is not a `() -> T` function
 value. Supply an explicit function when one is required:
 
 ```agl
@@ -427,7 +444,7 @@ so aliases of `receiver` observe the new value. A `let` receiver is valid: it
 prevents rebinding the name, not updating a `var` field. An enum-typed receiver
 has no fields; narrow it with a `case` pattern or cast it to a member record
 before assignment. Exceptions and fields without `var` cannot be assigned.
-See [Bindings and scope](bindings-and-scope.md#--destructive-assignment) for
+See [Bindings and scope](bindings-and-scope.md#destructive-assignment) for
 assignment targets, evaluation order, and cycle behavior.
 
 ## Record update
@@ -674,8 +691,10 @@ see [Parsing values](types.md#parsing-values).
 
 `==` is **equality** (a single `=` is never a comparison — it is a
 binder/named-argument separator). Both operands must have the same type, or
-one `int` and the other `decimal`. Equality is full value equality
-([Types](types.md)); an `int` and a `decimal` compare exactly, without
+one `int` and the other `decimal`, or one operand's type must widen nominally to the
+other's (an enum member or narrower enum against an enum, a derived exception
+against an ancestor), so `opt == None` checks. Equality is full value equality
+([Types](types.md#assignability-and-coercion)); an `int` and a `decimal` compare exactly, without
 widening, so the comparison never raises
 ([Numbers](types.md#numbers-int-and-decimal)).
 

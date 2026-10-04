@@ -9,11 +9,15 @@
 from __future__ import annotations
 
 import json
+import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import ContextManager, NoReturn, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, ContextManager, Literal, NoReturn, Protocol, assert_never, cast
 
-from agm.agent.spec import AgentSpec, SessionTransport
+from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
+from agm.agent.transport import AgentOutputCallback, AgentOutputType
+from agm.agent.values import agent_spec_shape
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name, standard_member_name
 from agm.agl.ir.contracts import (
     ContractRequest,
@@ -58,8 +62,15 @@ from agm.agl.runtime.request import (
 from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
+from agm.agl.runtime.sandbox_values import (
+    AgentSandboxMode,
+    agent_sandbox_value,
+    decode_agent_sandbox,
+    decode_exec_sandbox,
+    permission_mode_and_limits,
+    sandbox_mode_from_permission,
+)
 from agm.agl.runtime.sessions import (
-    AgentDispatcherSessionHost,
     SessionAgentError,
     SessionAskError,
     SessionHost,
@@ -87,6 +98,17 @@ from agm.agl.semantics.values import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.process import CapturedOutput
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
+from agm.sandbox.profile import profile_name_for_shell
+from agm.sandbox.request import (
+    PreparedSandboxCommand,
+    SandboxLimits,
+    SandboxSpec,
+)
+
+if TYPE_CHECKING:
+    from agm.agent.spec_defaults import AgentSpecResolver
+    from agm.sandbox.prepare import SandboxContext
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -100,7 +122,10 @@ class EffectCtx(Protocol):
     _descriptors: ValueDescriptors
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
+    _echo_agent_output: bool
     _session_host: SessionHost
+    _get_sandbox_context: "Callable[[], SandboxContext] | None"
+    _resolve_agent_spec: "AgentSpecResolver | None"
     _strict_json: bool
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
@@ -162,6 +187,7 @@ class EffectHandlers:
 
     def __init__(self, ctx: EffectCtx) -> None:
         self._ctx = ctx
+        self._output_lock = threading.Lock()
 
     def _descriptors(self) -> ValueDescriptors:
         return self._ctx._descriptors
@@ -214,7 +240,18 @@ class EffectHandlers:
         outer call's span), never unconditionally by this call.
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.companion_name)
-        with self._ctx._extern_call_window():
+        from agm.agl.runtime.host_agents import HostAgentServices, active_agent_services
+
+        with (
+            self._ctx._extern_call_window(),
+            active_agent_services(
+                HostAgentServices(
+                    self._ctx._program.builtin_nominals,
+                    self._ctx._resolve_agent_spec,
+                    self._ctx._get_sandbox_context,
+                )
+            ),
+        ):
             return self._ctx._extern_registry.invoke(
                 extern.name,
                 fn,
@@ -249,6 +286,40 @@ class EffectHandlers:
             },
         }
 
+    def _agent_output_callback(
+        self, span: Location, intermediate_output: list[dict[str, str]]
+    ) -> "AgentOutputCallback | None":
+        """Build a stream sink for echoing or collecting output for the trace."""
+        echo = self._ctx._echo_agent_output
+        trace = self._ctx._trace.path is not None
+        if not echo and not trace:
+            return None
+
+        def emit(
+            phase: Literal["progress", "final", "stderr"],
+            text: str,
+            *,
+            event_type: AgentOutputType | None = None,
+            tool_name: str | None = None,
+            tool_call_id: str | None = None,
+        ) -> None:
+            if not text:
+                return
+            with self._output_lock:
+                if trace and phase != "final":
+                    output_type = "stderr" if phase == "stderr" else event_type or "progress"
+                    item = {"type": output_type, "text": text}
+                    if tool_name is not None:
+                        item["tool_name"] = tool_name
+                    if tool_call_id is not None:
+                        item["tool_call_id"] = tool_call_id
+                    intermediate_output.append(item)
+                if echo:
+                    sys.stderr.write(text)
+                    sys.stderr.flush()
+
+        return emit
+
     def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
         declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
@@ -261,6 +332,7 @@ class EffectHandlers:
                         f"Agent {agent_label!r} failed: {error.cause}"
                         + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
                         + (f": {error.detail}" if error.detail else "")
+                        + (f"\n{error.stderr_tail}" if error.stderr_tail else "")
                     ),
                     "agent": agent,
                     "cause": TextValue(error.cause),
@@ -332,11 +404,16 @@ class EffectHandlers:
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        retries_expr: IrExpr,
+        sandbox_expr: IrExpr,
+        env_expr: IrExpr,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = cast(RecordValue, self._ctx._eval(agent_expr))
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
+        permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
+        env = self._decode_environ(self._ctx._eval(env_expr))
 
         output_contract, json_schema = self._contract_carriers(contract_id)
         return self._eval_agent_method_ask(
@@ -347,6 +424,59 @@ class EffectHandlers:
             node=_node,
             output_contract=output_contract,
             json_schema=json_schema,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
+
+    def _decode_environ(self, value: Value) -> dict[str, str]:
+        """Decode an ``Environ`` (or a bare ``dict[text, text]``) into a plain dict.
+
+        Shared by ``exec`` and every agent-call/session env operand, which all
+        evaluate the same ``std/env::Environ``-shaped default or override.
+        """
+        vars_value: Value = (
+            value if isinstance(value, DictValue) else cast(RecordValue, value).fields["vars"]
+        )
+        return {
+            name: cast(TextValue, entry).value
+            for name, entry in cast(DictValue, vars_value).text_items()
+        }
+
+    def _eval_max_attempts(self, retries_expr: IrExpr, contract_id: ContractId) -> int:
+        """Evaluate a ``parse-error-retries`` operand once into the attempt budget.
+
+        That is ``1 + retries``, or 1 when the contract's output can never fail
+        parsing. A negative count raises the catchable ``RangeError``.
+        """
+        retries = cast(IntValue, self._ctx._eval(retries_expr)).value
+        if retries < 0:
+            raise AglRaise(
+                _make_exc_value(
+                    "RangeError",
+                    f"parse-error-retries must not be negative, got {retries}",
+                    nominals=self._ctx._program.builtin_nominals,
+                )
+            )
+        can_retry = isinstance(
+            self._ctx._program.contracts[contract_id], (JsonContractRequest, CustomContractRequest)
+        )
+        return 1 + retries if can_retry else 1
+
+    def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
+        """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
+        return self._decode_sandbox_setting(self._ctx._eval(sandbox_expr))
+
+    def _decode_sandbox_setting(
+        self, sandbox_val: Value
+    ) -> tuple[PermissionMode, SandboxLimits | None]:
+        """Decode an already-evaluated ``AgentSandbox`` value, e.g. a builtin setting."""
+        return permission_mode_and_limits(self._decode_sandbox_mode(sandbox_val))
+
+    def _decode_sandbox_mode(self, sandbox_val: Value) -> AgentSandboxMode:
+        """Decode a checked ``AgentSandbox`` operand or validated builtin setting."""
+        return decode_agent_sandbox(
+            cast(RecordValue, sandbox_val), self._ctx._program.builtin_nominals
         )
 
     def _session_error(self, error: SessionHostError) -> NoReturn:
@@ -396,7 +526,9 @@ class EffectHandlers:
             self._ctx._program.builtin_nominals,
         )
 
-    def _session_value(self, handle: str, agent: RecordValue, transport: str) -> RecordValue:
+    def _session_value(
+        self, handle: str, agent: RecordValue, transport: str, sandbox: Value
+    ) -> RecordValue:
         nominals = self._ctx._program.builtin_nominals
         declared = nominals.resolve("Session")
         return RecordValue(
@@ -408,21 +540,25 @@ class EffectHandlers:
                     nominal=nominals.resolve_standard_member("SessionTransport", transport).nominal,
                     fields={},
                 ),
+                "sandbox": sandbox,
             },
         )
 
-    def _session_parts(self, value: Value) -> tuple[str, RecordValue, str]:
+    def _session_parts(self, value: Value) -> tuple[str, RecordValue, str, Value]:
         """Extract the statically guaranteed fields from a ``Session`` record."""
         session = cast(RecordValue, value)
         return (
             cast(TextValue, session.fields["id"]).value,
             cast(RecordValue, session.fields["agent"]),
             self._transport_name(cast(RecordValue, session.fields["transport"])),
+            session.fields["sandbox"],
         )
 
     def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
         """Decode *agent* into its host specification, once, before any session host sees it."""
-        return decode_agent_value(agent, self._ctx._program.builtin_nominals)
+        spec = decode_agent_value(agent, self._ctx._program.builtin_nominals)
+        resolve = self._ctx._resolve_agent_spec
+        return spec if resolve is None else resolve(spec)
 
     def _resolve_session_transport(self, spec: AgentSpec, transport: Value | None) -> str:
         """Resolve the transport for an already-decoded *spec*.
@@ -441,32 +577,76 @@ class EffectHandlers:
         return self._transport_name(cast(RecordValue, selected.fields["value"]))
 
     def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
-        """Open a host-backed session and mint its opaque AgL record."""
+        """Open a host-backed session and mint its opaque AgL record.
+
+        The session's sandboxing and environment are fixed here, at open, to
+        ``node.sandbox``/``node.env`` (the call's own operands, or the
+        ``default-sandbox``/``environ`` defaults when omitted) -- for its
+        whole lifetime. The evaluated sandbox operand is reused verbatim as
+        the returned record's own ``sandbox`` field, so it reports exactly
+        what the call was opened with; the environment is never exposed on
+        the record.
+        """
         agent = cast(RecordValue, self._ctx._eval(node.agent))
         transport_value = None if node.transport is None else self._ctx._eval(node.transport)
         name = self._text_of(self._ctx._eval(node.name))
+        sandbox_value = self._ctx._eval(node.sandbox)
+        permission_mode, sandbox = self._decode_sandbox_setting(sandbox_value)
+        env = self._decode_environ(self._ctx._eval(node.env))
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, transport_value)
-            handle = self._ctx._session_host.open(spec, transport, name=name)
+            handle = self._ctx._session_host.open(
+                spec,
+                transport,
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
+            )
         except SessionHostError as error:
             self._session_error(error)
-        return self._session_value(handle, agent, transport)
+        return self._session_value(handle, agent, transport, sandbox_value)
 
-    def eval_ir_session_default(self, _node: IrSessionDefault, default_agent: Value) -> Value:
-        """Lazily obtain the session whose agent is current at first use."""
+    def eval_ir_session_default(
+        self,
+        _node: IrSessionDefault,
+        default_agent: Value,
+        default_sandbox: Value,
+        default_env: Value | None,
+    ) -> Value:
+        """Lazily obtain the session whose agent is current at first use.
+
+        Its sandboxing and environment are likewise fixed at this first use,
+        to the ``default-sandbox``/``environ`` settings current then -- never
+        per ask. A later call reads the mode fixed at that first open back
+        from the host's own snapshot, so the returned record's ``sandbox``
+        field stays stable even after a later write to ``default-sandbox``
+        (and the session keeps using the environment fixed then, even after a
+        later ``setenv``). *default_env* is ``None`` once the caller already
+        knows the default session exists: the host ignores ``env`` in that
+        case, so its decode is skipped rather than wastefully repeated on
+        every free ``ask``.
+        """
         agent = cast(RecordValue, default_agent)
+        permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
+        env = {} if default_env is None else self._decode_environ(default_env)
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, None)
             host = self._ctx._session_host
-            handle = host.default(spec, transport)
+            handle = host.default(
+                spec, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+            )
             snapshot = host.snapshot(handle)
         except SessionHostError as error:
             self._session_error(error)
         nominals = self._ctx._program.builtin_nominals
+        sandbox_value = agent_sandbox_value(
+            sandbox_mode_from_permission(snapshot.permission_mode, snapshot.sandbox), nominals
+        )
         return self._session_value(
-            handle, encode_agent_value(snapshot.agent, nominals), snapshot.transport
+            handle, encode_agent_value(snapshot.agent, nominals), snapshot.transport, sandbox_value
         )
 
     def _dispatch_session_agent(
@@ -485,6 +665,7 @@ class EffectHandlers:
         """Trace, dispatch, and map one request sent through a session."""
         self._ctx._trace.agent_request(
             agent=self._agent_trace_value(agent_value),
+            effective_agent=agent_spec_shape(request.agent),
             attempt=request.attempt,
             max_attempts=max_attempts,
             prompt=request.prompt,
@@ -513,7 +694,11 @@ class EffectHandlers:
                 call_info = {"exit_code": error.exit_code, "elapsed": error.elapsed}
             call_info["stderr_tail"] = error.stderr_tail
             self._ctx._trace.agent_response(
-                ok=False, cause=error.cause, call_info=call_info, span=node.location
+                ok=False,
+                cause=error.cause,
+                intermediate_output=request.intermediate_output,
+                call_info=call_info,
+                span=node.location,
             )
             self._raise_agent_call_error(
                 agent_value,
@@ -533,11 +718,20 @@ class EffectHandlers:
                 render_value(agent_value, self._descriptors()), "interrupted", span=node.location
             )
             self._ctx._trace.agent_response(
-                ok=False, cancelled=True, reason=cancelled.reason, span=node.location
+                ok=False,
+                cancelled=True,
+                reason=cancelled.reason,
+                intermediate_output=request.intermediate_output,
+                span=node.location,
             )
             raise cancelled from error
         self._ctx._trace.agent_response(
-            ok=True, content=raw, metadata=metadata, call_info=call_info, span=node.location
+            ok=True,
+            content=raw,
+            intermediate_output=request.intermediate_output,
+            metadata=metadata,
+            call_info=call_info,
+            span=node.location,
         )
         return raw
 
@@ -551,12 +745,16 @@ class EffectHandlers:
         node: IrAsk,
         output_contract: OutputContract | None,
         json_schema: object | None,
+        permission_mode: PermissionMode,
+        sandbox: SandboxLimits | None,
+        env: dict[str, str],
     ) -> Value:
         """Run one ``Agent::ask`` call in a short-lived conversation.
 
-        The handle lives for the complete retry loop, so a corrective retry is
-        a follow-up rather than a fresh one-shot prompt. It is always released
-        once the call completes or fails.
+        The handle lives for the complete retry loop, so on a handle that
+        continues a conversation a corrective retry is a follow-up rather than
+        a fresh one-shot prompt. It is always released once the call completes
+        or fails. A target that can never fail parsing opens single-prompt.
         """
         contract = self._ctx._program.contracts[contract_id]
         spec = self._decode_agent_spec(agent)
@@ -564,6 +762,7 @@ class EffectHandlers:
 
         def ask_in_session(handle: str) -> Value:
             return self._eval_session_ask_attempts(
+                handle=handle,
                 agent=agent,
                 spec=spec,
                 prompt=prompt,
@@ -571,6 +770,9 @@ class EffectHandlers:
                 max_attempts=max_attempts,
                 node=node,
                 output_contract=output_contract,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
                 dispatch=lambda request: self._dispatch_session_agent(
                     handle,
                     request,
@@ -591,6 +793,9 @@ class EffectHandlers:
                 transport,
                 ask_in_session,
                 single_prompt=max_attempts == 1,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         except SessionAgentError as error:
             self._invalid_agent_error(agent, error)
@@ -599,25 +804,40 @@ class EffectHandlers:
 
     def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
         """Send a prompt through a session and run its shared retry engine."""
-        handle, agent, _transport = self._session_parts(self._ctx._eval(node.session))
+        # An explicit receiver is an operand and evaluates first; the implicit
+        # default session is obtained only after the count is validated.
+        session = (
+            None if isinstance(node.session, IrSessionDefault) else self._ctx._eval(node.session)
+        )
         prompt = self._text_of(self._ctx._eval(node.prompt))
+        max_attempts = self._eval_max_attempts(node.parse_error_retries, node.contract_id)
+        handle, agent, _transport, _sandbox = self._session_parts(
+            self._ctx._eval(node.session) if session is None else session
+        )
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
         spec = self._decode_agent_spec(agent)
+        env = self._ctx._session_host.snapshot(handle).env
         return self._eval_session_ask_attempts(
+            handle=handle,
             agent=agent,
             spec=spec,
             prompt=prompt,
             contract_id=node.contract_id,
-            max_attempts=node.max_attempts,
+            max_attempts=max_attempts,
             node=node,
             output_contract=output_contract,
+            # A session's sandbox mode, fixed at open, is never per-ask; the
+            # request carries the environment the session was opened under.
+            permission_mode=PermissionMode.NONE,
+            sandbox=None,
+            env=env,
             dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,
                 node,
                 agent_value=agent,
-                max_attempts=node.max_attempts,
+                max_attempts=max_attempts,
                 target_type=contract.target_type_label,
                 codec=contract.codec_name,
                 strict_json=contract.strict_json,
@@ -625,8 +845,9 @@ class EffectHandlers:
             ),
         )
 
-    def _compose_session_prompt(self, request: AgentRequest) -> str:
-        if isinstance(self._ctx._session_host, AgentDispatcherSessionHost):
+    def _compose_session_prompt(self, handle: str, request: AgentRequest) -> str:
+        """Compose *request*'s prompt; a short follow-up only on a continuing *handle*."""
+        if not self._ctx._session_host.snapshot(handle).continues_conversation:
             return compose_agent_prompt(request)
         if request.attempt == 0:
             return compose_initial_agent_prompt(request)
@@ -635,6 +856,7 @@ class EffectHandlers:
     def _eval_session_ask_attempts(
         self,
         *,
+        handle: str,
         agent: RecordValue,
         spec: AgentSpec,
         prompt: str,
@@ -643,6 +865,9 @@ class EffectHandlers:
         node: IrAsk | IrSessionAsk,
         output_contract: OutputContract | None,
         dispatch: Callable[[AgentRequest], str],
+        permission_mode: PermissionMode,
+        sandbox: SandboxLimits | None,
+        env: dict[str, str],
     ) -> Value:
         """Run the session ask retry loop."""
         contract = self._ctx._program.contracts[contract_id]
@@ -654,16 +879,24 @@ class EffectHandlers:
         last_errors: tuple[ReqValidationError, ...] = ()
 
         for attempt in range(max_attempts):
+            intermediate_output: list[dict[str, str]] = []
             request = AgentRequest(
                 agent=spec,
                 prompt=prompt,
+                env=env,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                output_callback=self._agent_output_callback(node.location, intermediate_output),
+                intermediate_output=intermediate_output,
             )
-            request.prompt = self._compose_session_prompt(request)
+            request.prompt = self._compose_session_prompt(handle, request)
             raw = dispatch(request)
+            if request.output_callback is not None:
+                request.output_callback("final", raw)
             if isinstance(contract, UnitContractRequest):
                 return UNIT_VALUE
             result = self._ctx._parse_host_output(
@@ -700,7 +933,7 @@ class EffectHandlers:
 
     def eval_ir_session_op(self, node: IrSessionOp) -> Value:
         """Dispatch one lifecycle operation through the session host."""
-        handle, agent, transport = self._session_parts(self._ctx._eval(node.session))
+        handle, agent, transport, sandbox = self._session_parts(self._ctx._eval(node.session))
         argument = self._text_of(self._ctx._eval(node.arg)) if node.arg is not None else ""
         host = self._ctx._session_host
         try:
@@ -714,7 +947,9 @@ class EffectHandlers:
                 case IrSessionOpKind.CLOSE:
                     host.close(handle)
                 case IrSessionOpKind.FORK:
-                    return self._session_value(host.fork(handle), agent, transport)
+                    # Fork inherits the parent's already-embedded sandbox
+                    # value verbatim: no decode/re-encode round trip needed.
+                    return self._session_value(host.fork(handle), agent, transport, sandbox)
                 case IrSessionOpKind.STATS:
                     stats = host.stats(handle)
                     declared = self._ctx._program.builtin_nominals.resolve("SessionStats")
@@ -739,11 +974,17 @@ class EffectHandlers:
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        retries_expr: IrExpr,
+        sandbox_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         agent_value = cast(RecordValue, self._ctx._eval(agent_expr))
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
+        # The AgL-visible request carries the raw evaluated AgentSandbox value
+        # verbatim, exactly as it carries the raw agent value: ask-request
+        # never dispatches, so nothing decodes it.
+        sandbox_value = self._ctx._eval(sandbox_expr)
 
         contract = self._ctx._program.contracts[contract_id]
         nominals = self._ctx._program.builtin_nominals
@@ -774,6 +1015,7 @@ class EffectHandlers:
                         "max_attempts": max_attempts,
                     }
                 ),
+                "sandbox": sandbox_value,
             },
         )
 
@@ -839,7 +1081,7 @@ class EffectHandlers:
     def _decode_exec_stdout(self, cmd: str, exit_code: int, stdout: CapturedOutput) -> str:
         """Decode stdout strictly; raise ``ExecError`` immediately on failure.
 
-        Never retried by ``on-parse-error``: invalid bytes are not a content
+        Never retried by ``parse-error-retries``: invalid bytes are not a content
         mismatch, and re-running a side-effecting command repeats the same
         deterministic failure.
         """
@@ -862,31 +1104,82 @@ class EffectHandlers:
             stderr=stderr_text,
         )
 
+    def _raise_sandbox_preparation_error(
+        self, message: str, cmd: str, location: Location
+    ) -> NoReturn:
+        """Raise ``ExecError`` for a sandbox preparation failure, in the spawn-failure shape.
+
+        Records the same ``exit_code=-1``/``duration=0.0`` trace event a spawn
+        failure would, before raising.
+        """
+        prefixed = f"Failed to prepare sandbox: {message}"
+        self._ctx._trace.exec_command(
+            command=cmd,
+            exit_code=-1,
+            duration=0.0,
+            stdout="",
+            stderr=prefixed,
+            timed_out=False,
+            span=location,
+        )
+        self._raise_exec_error(prefixed, command=cmd, exit_code=-1, stdout="", stderr=prefixed)
+
     def _run_exec_shell(
         self,
         cmd: str,
         env: dict[str, str],
         cwd: Path | None,
         timeout: float | None,
+        spec: SandboxSpec | None,
         location: Location,
     ) -> tuple[CapturedOutput, CapturedOutput, int | None]:
-        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
+        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure, sandbox
+        preparation failure, or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
         raised here so that the structured-exec path can treat it as data.
         Streams are returned undecoded: each caller decodes exactly the streams
-        it turns into an AgL value. Mirrors legacy ``_run_shell_capture``
-        (without the trace event).
+        it turns into an AgL value. When *spec* is given, the command runs
+        under the sandbox library: its prepared argv/env/cwd replace the plain
+        ``sh -c`` invocation, and the prepared command is closed in
+        ``finally``. A preparation failure is reported exactly like a spawn
+        failure — exit code -1, no process ever started.
         """
         from agm.core.process import run_capture_result
 
-        result = run_capture_result(
-            ["sh", "-c", cmd],
-            idle_timeout=timeout,
-            cwd=cwd,
-            env=env,
-            isolate_process_group=True,
-        )
+        argv = ["sh", "-c", cmd]
+        run_env = env
+        run_cwd = cwd
+        interrupt_cleanup_cmd: list[str] | None = None
+        prepared: PreparedSandboxCommand | None = None
+        if spec is not None:
+            get_context = self._ctx._get_sandbox_context
+            if get_context is None:
+                self._raise_sandbox_preparation_error(
+                    "exec sandbox requires a host-provided sandbox context", cmd, location
+                )
+            context = get_context()
+            try:
+                prepared = context.prepare(argv, spec, env=env, cwd=cwd or Path.cwd())
+            except (SandboxUnavailableError, SandboxSettingsError) as exc:
+                self._raise_sandbox_preparation_error(str(exc), cmd, location)
+            argv = prepared.argv
+            run_env = prepared.env
+            run_cwd = prepared.cwd
+            interrupt_cleanup_cmd = prepared.interrupt_cleanup_cmd
+
+        try:
+            result = run_capture_result(
+                argv,
+                idle_timeout=timeout,
+                cwd=run_cwd,
+                env=run_env,
+                isolate_process_group=True,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            )
+        finally:
+            if prepared is not None:
+                prepared.close()
         if result.spawn_error is not None:
             spawn_error = str(result.spawn_error)
             self._ctx._trace.exec_command(
@@ -944,22 +1237,15 @@ class EffectHandlers:
         env_expr: IrExpr,
         cwd_expr: IrExpr,
         timeout_expr: IrExpr,
+        sandbox_expr: IrExpr,
         contract_id: ContractId,
-        max_attempts: int,
+        retries_expr: IrExpr,
     ) -> Value:
         """Handle IrExec: run shell command and parse output."""
         # Evaluate every call operand once. Retried parsing reruns the shell,
         # not the argument expressions, just as an ordinary call would.
         cmd = self._text_of(self._ctx._eval(command_expr))
-        environ = self._ctx._eval(env_expr)
-        vars_value: DictValue
-        if isinstance(environ, DictValue):
-            vars_value = environ
-        else:
-            vars_value = cast(DictValue, cast(RecordValue, environ).fields["vars"])
-        env: dict[str, str] = {}
-        for key, value in vars_value.text_items():
-            env[key] = cast(TextValue, value).value
+        env = self._decode_environ(self._ctx._eval(env_expr))
         nominals = self._ctx._program.builtin_nominals
         cwd_value = cast(RecordValue, self._ctx._eval(cwd_expr))
         cwd_text = option_text(cwd_value, nominals=nominals)
@@ -976,10 +1262,18 @@ class EffectHandlers:
                 ) from exc
         cwd = None if cwd_text is None else Path(cwd_text)
 
+        sandbox_value = self._ctx._eval(sandbox_expr)
+        assert isinstance(sandbox_value, RecordValue)
+        limits = decode_exec_sandbox(sandbox_value, nominals)
+        max_attempts = self._eval_max_attempts(retries_expr, contract_id)
+        spec = None if limits is None else limits.for_command(profile_name_for_shell(cmd))
+
         contract = self._ctx._program.contracts[contract_id]
 
         # Run shell once (raises on spawn error or timeout).
-        stdout, stderr, returncode = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
+        stdout, stderr, returncode = self._run_exec_shell(
+            cmd, env, cwd, timeout, spec, _node.location
+        )
 
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
@@ -1028,8 +1322,13 @@ class EffectHandlers:
 
         for attempt in range(max_attempts):
             if attempt > 0:
-                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
-                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
+                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit).
+                # A sandboxed command re-prepares per attempt: a fresh
+                # ``PreparedSandboxCommand`` (temp settings, scope name) for
+                # each spawn, never reused across attempts.
+                stdout2, stderr2, rc2 = self._run_exec_shell(
+                    cmd, env, cwd, timeout, spec, _node.location
+                )
                 if rc2 is not None and rc2 != 0:
                     self._raise_nonzero_exit_error(cmd, rc2, stdout2, stderr2)
                 last_raw = self._decode_exec_stdout(cmd, rc2 if rc2 is not None else 0, stdout2)

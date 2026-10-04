@@ -4,9 +4,9 @@
       "name": "two_steps_then_done",
       "agents": {
         "stepper": [
-          "{\"$case\": \"More\"}",
-          "{\"$case\": \"Done\"}",
-          "{\"$case\": \"Done\"}"
+          "\"More\"",
+          "\"Done\"",
+          "\"Done\""
         ]
       },
       "expect": {
@@ -38,8 +38,8 @@
       "name": "done_immediately",
       "agents": {
         "stepper": [
-          "{\"$case\": \"Done\"}",
-          "{\"$case\": \"Done\"}"
+          "\"Done\"",
+          "\"Done\""
         ]
       },
       "expect": {
@@ -51,9 +51,10 @@
     },
     {
       "name": "final_check_parse_failure_caught_inline",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "stepper": [
-          "{\"$case\": \"Done\"}",
+          "\"Done\"",
           "BROKEN"
         ]
       },
@@ -69,7 +70,7 @@
       "agents": {
         "stepper": {
           "responses": [
-            "{\"$case\": \"More\"}"
+            "\"More\""
           ],
           "repeat_last": true
         }

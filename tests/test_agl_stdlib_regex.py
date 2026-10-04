@@ -59,6 +59,7 @@ def _regex_companion() -> tuple[_RegexCompanion, ModuleType]:
                 declared_name="Match",
                 kind=NominalKind.RECORD,
                 fields=("matched", "start", "end", "groups", "named-groups"),
+                field_json_names=("matched", "start", "end", "groups", "named-groups"),
             ),
             _REGEX_ERROR: NominalDescriptor(
                 nominal=_REGEX_ERROR,
@@ -67,6 +68,7 @@ def _regex_companion() -> tuple[_RegexCompanion, ModuleType]:
                 declared_name="RegexError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "pattern"),
+                field_json_names=("message", "pattern"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },

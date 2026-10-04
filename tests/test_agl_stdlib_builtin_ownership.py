@@ -18,7 +18,7 @@ from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime.request import AgentRequest
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests._process_helpers import FakeShell
 
 _MODULES: dict[str, str] = {
@@ -31,6 +31,8 @@ _MODULES: dict[str, str] = {
         "export std/exec\n"
         "export std/agent\n"
         "export std/session\n"
+        "export std/optional\n"
+        "export std/sandbox\n"
     ),
     "errors.agl": (
         "builtin\n"
@@ -47,11 +49,21 @@ _MODULES: dict[str, str] = {
         "  length: int\n"
     ),
     "option.agl": ("builtin\nenum Option[T] =\n  | None\n  | Some(value: T)\n"),
-    "config.agl": (
-        "import std/agent::{Agent}\n"
+    "optional.agl": (
         "import std/option::{Option}\n"
         "\n"
-        'builtin var default-agent: Agent = AgentClaude("sonnet", "medium")\n'
+        "builtin\n"
+        "enum Optional[T]\n"
+        "  | Option::Some[T]\n"
+        "  | Option::None\n"
+        "  | Default\n"
+    ),
+    "config.agl": (
+        "import std/agent::{Agent, AgentSandbox}\n"
+        "import std/option::{Option}\n"
+        "\n"
+        'builtin var default-agent: Agent = AgentClaude("sonnet")\n'
+        "builtin var default-sandbox: AgentSandbox = Disabled\n"
         "builtin var strict-json: bool = false\n"
         "builtin var timeout: Option[text] = None\n"
         "builtin var trace: bool = false\n"
@@ -81,13 +93,20 @@ _MODULES: dict[str, str] = {
     "agent.agl": (
         "import std/errors::{Exception}\n"
         "import std/option::{Option}\n"
+        "import std/sandbox::Sandbox\n"
         "\n"
         "builtin\n"
         "enum Agent\n"
         "  | AgentCommand(command: text)\n"
-        "  | AgentClaude(model: text, thinking: text)\n"
-        "  | AgentCodex(model: text, thinking: text)\n"
-        "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        '  | AgentClaude(model: text = "", thinking: text = "")\n'
+        '  | AgentCodex(model: text = "", thinking: text = "")\n'
+        '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
+        "\n"
+        "builtin\n"
+        "enum AgentSandbox\n"
+        "  | Disabled\n"
+        "  | Native\n"
+        "  | std/sandbox::Sandbox\n"
         "\n"
         "builtin\n"
         "record AgentRequest\n"
@@ -99,6 +118,7 @@ _MODULES: dict[str, str] = {
         "  attempt: int\n"
         "  previous-error: Option[text]\n"
         "  metadata: json\n"
+        "  sandbox: AgentSandbox\n"
         "\n"
         "builtin\n"
         "exception AgentCallError extends Exception\n"
@@ -119,8 +139,20 @@ _MODULES: dict[str, str] = {
         "\n"
         "builtin def ask(prompt: text) -> text\n"
     ),
+    "sandbox.agl": (
+        "import std/option::{Option}\n"
+        "import std/optional::{Optional}\n"
+        "\n"
+        "builtin record Sandbox\n"
+        "  memory: Optional[text] = Default\n"
+        "  swap: Optional[text] = Default\n"
+        "  settings: Option[text] = None\n"
+        "  patch: bool = true\n"
+        ""
+    ),
     "session.agl": (
-        "import std/agent::{Agent}\n"
+        "import std/agent::{Agent, AgentSandbox}\n"
+        "import std/config\n"
         "import std/errors::{Exception}\n"
         "import std/option::{Option}\n"
         "\n"
@@ -133,6 +165,7 @@ _MODULES: dict[str, str] = {
         "  id: text\n"
         "  agent: Agent\n"
         "  transport: SessionTransport\n"
+        "  sandbox: AgentSandbox\n"
         "\n"
         "builtin record SessionStats\n"
         "  input-tokens: int\n"
@@ -148,6 +181,7 @@ _MODULES: dict[str, str] = {
         "  agent: Agent,\n"
         "  transport: Option[SessionTransport] = Option[SessionTransport]::None,\n"
         '  name: text = "",\n'
+        "  sandbox: AgentSandbox = std/config::default-sandbox,\n"
         ") -> Session\n"
         "builtin def Session::default() -> Session\n"
         "builtin def Session::close(self) -> unit\n"
@@ -167,7 +201,11 @@ def _split_stdlib(tmp_path: Path) -> RootSet:
 
 
 def _run(source: str, roots: RootSet, **options: object) -> RunResult:
-    return run_inline_command(PipelineDriver(**options), source, roots=roots)
+    return run_inline_code(
+        PipelineDriver(**options, get_sandbox_context=None, resolve_agent_spec=None),
+        source,
+        roots=roots,
+    )
 
 
 def test_exceptions_declared_outside_the_prelude_are_raisable_and_catchable(
@@ -306,8 +344,8 @@ def test_reserved_fallbacks_still_serve_a_program_with_no_standard_library(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without any standard library the host's own identities answer instead."""
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         "builtin def print[T](value: T) -> unit\n"
         'let caught = try\n  raise KeyError(key = "k", message = "boom")\n'
         "catch KeyError as e =>\n  e.key\nprint(caught)\n",
@@ -319,8 +357,8 @@ def test_reserved_fallbacks_still_serve_a_program_with_no_standard_library(
 
 
 def test_an_uncaught_reserved_exception_spells_its_bare_name() -> None:
-    result = run_inline_command(
-        PipelineDriver(),
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
         'raise KeyError(key = "k", message = "boom")\n',
         default_stdlib=False,
     )

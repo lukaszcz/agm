@@ -1,0 +1,56 @@
+# An exception field default omitted from a `raise` fills through a
+# three-level `extends` chain, each level contributing its own default: the
+# flattened base-chain field defaults must line up with the flattened field
+# order exactly, whatever else in the program derives a JSON schema/decode
+# plan before or after this declaration (see the top and bottom mirror
+# declarations below).
+#
+# `Snapshot.summary`'s own default constructs a `DeepErr` (omitting its
+# inherited `code`/`detail`) and renders it, so evaluating this RECORD
+# field's default requires resolving the EXCEPTION's own inherited field
+# defaults across the same chain, and `Snapshot` itself crosses the JSON
+# cast boundary -- the decode-time throwaway-interpreter path this feature
+# adds.
+import std/json
+
+record Before
+  n: int = 1
+
+exception BaseErr extends Exception
+  code: int = 0
+
+exception MidErr extends BaseErr
+  detail: text = "n/a"
+
+exception DeepErr extends MidErr
+  note: text
+
+record Snapshot
+  summary: text = "%{DeepErr(message = "boom", note = "n")}"
+  tag: text = "snap"
+
+record After
+  n: int = 2
+
+program def main(mode: text, input: text = "{}") -> unit =
+  if
+    | mode == "all_inherited_omitted" =>
+        try
+          raise DeepErr(message = "boom", note = "n")
+        catch DeepErr as e =>
+          print e.code
+          print e.detail
+          print e.note
+    | mode == "mid_level_overridden" =>
+        try
+          raise DeepErr(message = "boom", detail = "over", note = "n")
+        catch DeepErr as e =>
+          print e.code
+          print e.detail
+          print e.note
+    | mode == "record_default_crosses_boundary" =>
+        let j = json::parse(input)
+        let snap = j as Snapshot
+        print snap.summary
+        print snap.tag
+    | else => print "unknown mode"

@@ -20,22 +20,42 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 
-def _run(root: Path, source: str, *, dry_run: bool = False) -> subprocess.CompletedProcess[str]:
-    cli = ["--dry-run"] if dry_run else []
+def _run(root: Path, source: str) -> subprocess.CompletedProcess[str]:
     cmd = [
         sys.executable,
         "-m",
         "agm.cli",
-        *cli,
         "exec",
         "--no-stdlib",
         "-I",
         str(root),
         "-c",
         source,
+    ]
+    return subprocess.run(
+        cmd,
+        env={**os.environ, "XDG_CACHE_HOME": str(root / "cache")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _check(root: Path, source: str) -> subprocess.CompletedProcess[str]:
+    program = root / "check.agl"
+    program.write_text(source, encoding="utf-8")
+    cmd = [
+        sys.executable,
+        "-m",
+        "agm.cli",
+        "check",
+        "--no-stdlib",
+        "-I",
+        str(root),
+        str(program),
     ]
     return subprocess.run(
         cmd,
@@ -77,37 +97,34 @@ def test_dependency_interface_edits_recompile_importers(tmp_path: Path) -> None:
     assert second.stdout == "updated\n"
 
 
-def test_rehydrated_library_matches_a_fresh_compile_across_processes(tmp_path: Path) -> None:
-    """A checked module restored from disk in a fresh process behaves identically.
+def test_rehydrated_library_checks_across_fresh_processes(tmp_path: Path) -> None:
+    """A checked module restored in a fresh process remains statically valid.
 
-    The library imports ``std/agent`` and calls its ``ask`` method. Nothing
-    else in this test's own source runs before the inventory pair, so its
-    first run is a genuine fresh compile (the disk cache starts empty) and its
-    second run genuinely rehydrates -- proven directly by the persisted
-    ``checked`` entries' mtimes, not just by matching output. The ``--dry-run``
-    static call-site inventory and the executed output must each agree between
-    the compile that populates the cache and the one that only rehydrates it.
+    The library imports ``std/agent`` and calls its ``ask`` method. Its first
+    check populates the disk cache; the second check rehydrates it, proven
+    directly by the persisted ``checked`` entries' mtimes.
     """
     (tmp_path / "library.agl").write_text(
         "import std/agent::*\n"
         "def double(value: int) -> int = value * 2\n"
         'def helper(task: text) -> text = AgentCommand("impl").ask(task)\n'
     )
-    inventory_source = 'import library::*\nbuiltin def print[T](value: T) -> unit\nhelper("do it")'
-    first_inventory = _run(tmp_path, inventory_source, dry_run=True)
-    assert first_inventory.returncode == 0, first_inventory.stderr
-    assert "call-sites:" in first_inventory.stdout
+    checked_source = (
+        "import library::*\nbuiltin def print[T](value: T) -> unit\n"
+        'program def main() -> unit = print(helper("do it"))'
+    )
+    first_check = _check(tmp_path, checked_source)
+    assert first_check.returncode == 0, first_check.stderr
+    assert first_check.stdout == ""
 
     checked_entries = {
         path: path.stat().st_mtime_ns for path in (tmp_path / "cache").rglob("*.checked")
     }
-    assert checked_entries  # the fresh compile above must have persisted a "checked" entry
+    assert checked_entries
 
-    second_inventory = _run(tmp_path, inventory_source, dry_run=True)
-    assert second_inventory.returncode == 0, second_inventory.stderr
-    assert second_inventory.stdout == first_inventory.stdout
-    # A cache hit rehydrates rather than recompiling: the persisted entries this
-    # second, separate process reads are untouched by it.
+    second_check = _check(tmp_path, checked_source)
+    assert second_check.returncode == 0, second_check.stderr
+    assert second_check.stdout == first_check.stdout
     assert {
         path: path.stat().st_mtime_ns for path in (tmp_path / "cache").rglob("*.checked")
     } == checked_entries
@@ -125,8 +142,8 @@ def compile_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[
     def run(source: str) -> RunResult:
         clear_parsed_module_cache()
         clear_retained_artifacts()
-        return run_inline_command(
-            PipelineDriver(),
+        return run_inline_code(
+            PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
             source,
             roots=RootSet(roots=frozenset({tmp_path})),
             default_stdlib=False,
@@ -437,7 +454,7 @@ def test_cache_eviction_does_not_invalidate_an_inflight_compilation(
     (tmp_path / "library.agl").write_text(
         "builtin def print[T](value: T) -> unit\ndef answer() -> int = 42\n"
     )
-    driver = PipelineDriver()
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import library::*\nprogram def main() -> unit = print(answer())"
     roots = RootSet(roots=frozenset({tmp_path}))
     assert driver.run(source, roots=roots, default_stdlib=False).ok

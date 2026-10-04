@@ -68,6 +68,15 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     return PackageInfo(root, manifest)
 
 
+def _versioned_package(tmp_path: Path, version: str) -> Path:
+    """Create one alpha source at the requested version."""
+
+    source = _package(tmp_path / version)
+    manifest = source.root / "package.toml"
+    manifest.write_text(manifest.read_text().replace("1.0.0", version))
+    return source.root
+
+
 def _command_package(
     tmp_path: Path, name: str, *, version: str = "1.0.0", commands: tuple[str, ...] = ("launch",)
 ) -> Path:
@@ -222,6 +231,16 @@ def test_missing_package_is_rejected_without_activating_it(tmp_path: Path, opera
     assert raised.value.code == 1
     assert "missing" not in load_activation_index(home=_context(tmp_path).home).packages
     assert not (_context(tmp_path).home / ".agm" / "packages" / "missing").exists()
+
+
+def test_install_command_rejects_reinstall_for_editable_packages(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        install_command.run(PkgInstallArgs("source", editable=True, shadow=False, reinstall=True))
+
+    assert raised.value.code == 1
+    assert "--reinstall cannot be used with --editable" in capsys.readouterr().err
 
 
 def test_list_command_marks_only_the_exact_build_identity_active(
@@ -468,6 +487,101 @@ def test_list_reports_every_stored_version_and_each_editable_package(
 
 def _invoke(argv: list[str]) -> Result:
     return CliRunner().invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
+
+
+def test_version_targets_switch_and_remove_only_the_selected_tree(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    for version in ("1.0.1", "1.0.2", "1.0.3"):
+        install_directory(_versioned_package(tmp_path, version), home=home, env={})
+
+    assert _invoke(["pkg", "switch", "alpha@1.0.1"]).exit_code == 0
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.1"
+    assert _invoke(["pkg", "switch", "alpha@1.0.3"]).exit_code == 0
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.3"
+
+    assert _invoke(["pkg", "uninstall", "alpha@1.0.2"]).exit_code == 0
+    assert not (home / ".agm" / "packages" / "alpha" / "1.0.2").exists()
+    assert (home / ".agm" / "packages" / "alpha" / "1.0.1").exists()
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.3"
+
+
+def test_version_targeted_uninstall_of_active_package_clears_selection(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    install_directory(_package(tmp_path).root, home=home, env={})
+
+    assert _invoke(["pkg", "uninstall", "alpha@1.0.0"]).exit_code == 0
+    assert "alpha" not in load_activation_index(home=home).packages
+    assert not (home / ".agm" / "packages" / "alpha" / "1.0.0").exists()
+
+
+def test_version_targeted_uninstall_deactivates_matching_editable_package(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    source = _package(tmp_path).root
+    install_directory(source, home=home, env={}, editable=True)
+
+    assert _invoke(["pkg", "uninstall", "alpha@1.0.0"]).exit_code == 0
+    assert "alpha" not in load_activation_index(home=home).packages
+    assert source.exists()
+
+
+def test_version_targets_reject_missing_versions_without_changing_selection(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    install_directory(_package(tmp_path).root, home=home, env={})
+
+    for command in ("switch", "uninstall"):
+        assert _invoke(["pkg", command, "alpha@2.0.0"]).exit_code == 1
+        assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.0"
+
+
+def test_switch_rejects_incomplete_targets_and_keeps_activation(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    install_directory(_package(tmp_path).root, home=home, env={})
+
+    for target in ("alpha", "alpha@", "alpha@1", "@1.0.0", "alpha@1.0.0@2.0.0"):
+        assert _invoke(["pkg", "switch", target]).exit_code == 1
+        assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.0"
+
+
+def test_switch_rejects_managed_std_package(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    install_directory(_package(tmp_path).root, home=home, env={})
+
+    assert _invoke(["pkg", "switch", "std@1.0.0"]).exit_code == 1
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "1.0.0"
+
+
+def test_switch_dry_run_keeps_the_previous_version_active(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    for version in ("1.0.0", "2.0.0"):
+        install_directory(_versioned_package(tmp_path, version), home=home, env={})
+
+    assert _invoke(["pkg", "switch", "alpha@1.0.0", "--dry-run"]).exit_code == 0
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "2.0.0"
+
+
+def test_switch_rejects_a_version_required_by_an_active_dependent(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    for version in ("1.0.0", "2.0.0"):
+        install_directory(_versioned_package(tmp_path, version), home=home, env={})
+    dependent = _package(tmp_path / "dependent", name="bravo")
+    (dependent.root / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n[dependencies]\nalpha = "2.0.0"\n'
+    )
+    install_directory(dependent.root, home=home, env={})
+
+    assert _invoke(["pkg", "switch", "alpha@1.0.0"]).exit_code == 1
+    assert str(load_activation_index(home=home).packages["alpha"].version) == "2.0.0"
+
+
+def test_uninstall_inactive_version_when_no_version_is_active(tmp_path: Path) -> None:
+    home = _context(tmp_path).home
+    for version in ("1.0.0", "2.0.0"):
+        install_directory(_versioned_package(tmp_path, version), home=home, env={})
+    assert _invoke(["pkg", "uninstall", "alpha"]).exit_code == 0
+
+    assert _invoke(["pkg", "uninstall", "alpha@1.0.0"]).exit_code == 0
+    assert load_activation_index(home=home) == ActivationIndex()
+    assert not (home / ".agm" / "packages" / "alpha" / "1.0.0").exists()
 
 
 def test_sync_command_installs_unsatisfied_active_requirements(

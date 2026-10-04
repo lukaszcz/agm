@@ -309,6 +309,12 @@ def _expected_type(checked: CheckedModule, expected: Type | str) -> Type | None:
     return declared.handle() if declared is not None else checked.type_env.get_type(expected)
 
 
+def _sole_contract_node_id(checked: CheckedModule) -> int:
+    """Return the single node id carrying a contract spec, for single-call snippets."""
+    (node_id,) = checked.contract_specs.keys()
+    return node_id
+
+
 def assert_builtin_call_type_parity(
     source: str, call_source: str
 ) -> tuple[CheckedModule, CheckedModule]:
@@ -319,14 +325,12 @@ def assert_builtin_call_type_parity(
     def selected_builtin_behavior(checked: CheckedModule) -> tuple[object, ...]:
         return tuple(
             (
-                site.callee,
-                site.target_type,
-                site.codec_name,
-                site.parse_policy,
-                checked.node_types[site.node_id],
-                checked.contract_specs.get(site.node_id),
+                spec.target_type,
+                spec.codec_name,
+                checked.node_types[node_id],
+                spec,
             )
-            for site in checked.call_sites
+            for node_id, spec in checked.contract_specs.items()
         )
 
     assert selected_builtin_behavior(sugared_checked) == selected_builtin_behavior(call_checked)
@@ -1243,7 +1247,6 @@ class TestCheckedOutputClosure:
             "binding_environment",
             "direct_call_parameters",
             "contract",
-            "call_site",
             "cast",
             "signature_parameter",
             "signature",
@@ -1280,11 +1283,6 @@ class TestCheckedOutputClosure:
                     **checked.contract_specs,
                     node_id: replace(spec, target_type=flexible),
                 },
-            )
-        elif category == "call_site":
-            checked = replace(
-                checked,
-                call_sites=(replace(checked.call_sites[0], target_type=flexible),),
             )
         elif category == "cast":
             node_id, spec = next(iter(checked.cast_specs.items()))
@@ -1703,17 +1701,17 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
         r = accept_type(
-            "scope A\n  builtin\n  enum ParsePolicy =\n    | Abort\n    | Retry(n: int)\nend A\n"
+            "scope A\n  builtin\n  enum SessionTransport =\n    | Cli\n    | Rpc\nend A\n"
             "\n"
-            "def classify(value: A::ParsePolicy) -> text =\n"
+            "def classify(value: A::SessionTransport) -> text =\n"
             "  case value of\n"
-            '    | A::ParsePolicy::Abort => "abort"\n'
-            '    | A::ParsePolicy::Retry(n) => "retry"\n'
-            "classify(A::ParsePolicy::Retry(n = 3))\n",
+            '    | A::SessionTransport::Cli => "cli"\n'
+            '    | A::SessionTransport::Rpc => "rpc"\n'
+            "classify(A::SessionTransport::Rpc)\n",
             default_stdlib=False,
         )
         assert r.resolved.program is not None
-        handle = r.type_env.get_type("A::ParsePolicy")
+        handle = r.type_env.get_type("A::SessionTransport")
         assert isinstance(handle, EnumType)
         assert handle.scope_path == ("A",)
 
@@ -1746,9 +1744,9 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             "builtin enum Agent =\n"
             "  | AgentCommand(command: int)\n"
-            "  | AgentClaude(model: text, thinking: text)\n"
-            "  | AgentCodex(model: text, thinking: text)\n"
-            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            '  | AgentClaude(model: text = "", thinking: text = "")\n'
+            '  | AgentCodex(model: text = "", thinking: text = "")\n'
+            '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
             "()\n",
             default_stdlib=False,
         )
@@ -1762,10 +1760,18 @@ class TestScopedBuiltinTypes:
         this the same way a field type or name mismatch is caught."""
         err = reject_type(
             "builtin enum Agent =\n"
-            "  | AgentCommand(@arg-named command: text)\n"
-            "  | AgentClaude(model: text, thinking: text)\n"
-            "  | AgentCodex(model: text, thinking: text)\n"
-            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            "  | AgentCommand\n"
+            "      @arg-named command: text\n"
+            "  | AgentClaude\n"
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
+            "  | AgentCodex\n"
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
+            "  | AgentPi\n"
+            '      provider: text = ""\n'
+            '      model: text = ""\n'
+            '      thinking: text = ""\n'
             "()\n",
             default_stdlib=False,
         )
@@ -1874,15 +1880,15 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             "scope A\n"
             "  builtin\n"
-            "  enum ParsePolicy[T] =\n"
-            "    | Abort\n"
-            "    | Retry(n: T)\n"
+            "  enum SessionTransport[T] =\n"
+            "    | Cli\n"
+            "    | Rpc(n: T)\n"
             "end A\n"
             "\n"
             "()",
             default_stdlib=False,
         )
-        assert "ParsePolicy" in err.to_diagnostic().message
+        assert "SessionTransport" in err.to_diagnostic().message
 
     def test_builtin_shape_check_reports_a_proper_diagnostic_for_a_cross_kind_name(self) -> None:
         """``RangeError`` is a valid builtin name, but only as an exception —
@@ -2003,25 +2009,23 @@ class TestScopedBuiltinTypes:
     def test_scoped_builtin_agent_method_reroots_its_receiver_and_sibling_types(self) -> None:
         """A scoped Agent method validates after removing its enclosing scope.
 
-        The receiver belongs to ``A::Agent`` while ``ParsePolicy`` is its
-        sibling at ``A``.  Both must reroot to the canonical host signature.
+        The receiver belongs to ``A::Agent`` and must reroot to the canonical
+        host signature.
         """
         r = accept_type(
             "scope A\n"
             "  builtin enum Agent\n"
             "    | AgentCommand(command: text)\n"
-            "    | AgentClaude(model: text, thinking: text)\n"
-            "    | AgentCodex(model: text, thinking: text)\n"
-            "    | AgentPi(provider: text, model: text, thinking: text)\n"
-            "  builtin enum ParsePolicy\n"
-            "    | Abort\n"
-            "    | Retry(n: int)\n"
+            '    | AgentClaude(model: text = "", thinking: text = "")\n'
+            '    | AgentCodex(model: text = "", thinking: text = "")\n'
+            '    | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
             "  builtin def Agent::ask[T](\n"
             "    self,\n"
             "    prompt: text,\n"
             '    format: text = "",\n'
             "    strict-json: bool = false,\n"
-            "    on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "    parse-error-retries: int = 0,\n"
+            "    sandbox: AgentSandbox = Disabled,\n"
             "  ) -> T\n"
             "end A\n"
             "\n"
@@ -2033,13 +2037,11 @@ class TestScopedBuiltinTypes:
         method = next(item for item in region.items if isinstance(item, FuncDef))
         signature = r.type_env.get_binding_type(method.node_id)
         assert isinstance(signature, FunctionType)
-        receiver_type, _prompt, _format, _strict, policy_type = signature.params
-        # Receiver and sibling default both keep the scoped identity locally,
-        # even though the signature validates against the canonical contract.
+        receiver_type = signature.params[0]
+        # The receiver keeps its scoped identity locally, even though the
+        # signature validates against the canonical contract.
         assert isinstance(receiver_type, EnumType)
         assert receiver_type.scope_path == ("A",)
-        assert isinstance(policy_type, EnumType)
-        assert policy_type.scope_path == ("A",)
 
     def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
         """The re-rooted comparison must still discriminate a genuine
@@ -2343,13 +2345,12 @@ class TestBuiltinPreludeTypes:
         er = BUILTIN_PRELUDE_TYPES["ExecResult"]
         assert isinstance(er, RecordType)
 
-    def test_prelude_types_parse_policy(self) -> None:
-        assert "ParsePolicy" in BUILTIN_PRELUDE_TYPES
-        pp = BUILTIN_PRELUDE_TYPES["ParsePolicy"]
-        assert isinstance(pp, EnumType)
-        variant_names = {member.name for member in BUILTIN_PRELUDE_TYPE_DEFS["ParsePolicy"].members}
-        assert "Abort" in variant_names
-        assert "Retry" in variant_names
+    def test_prelude_types_agent(self) -> None:
+        assert "Agent" in BUILTIN_PRELUDE_TYPES
+        agent = BUILTIN_PRELUDE_TYPES["Agent"]
+        assert isinstance(agent, EnumType)
+        variant_names = {member.name for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members}
+        assert "AgentCommand" in variant_names
 
     def test_builtin_prelude_type_names_coverage(self) -> None:
         assert len(BUILTIN_PRELUDE_TYPE_NAMES) > 0
@@ -2904,36 +2905,6 @@ class TestAsk:
         err = reject_type('let n: int = ask("Q", format = "json", strict-json = "yes")\nn')
         assert "strict-json" in str(err).lower() or "bool" in str(err).lower()
 
-    def test_ask_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 3))\nn')
-        assert r.call_sites[0].parse_policy == "retry[3]"
-
-    def test_ask_on_parse_error_bare_abort_varref(self) -> None:
-        # Bare ``Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on-parse-error = Abort)\nn')
-        assert r.call_sites[0].parse_policy == "abort"
-
-    def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
-        # Bare ``ParsePolicy::Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort)\nn')
-        assert r.call_sites[0].parse_policy == "abort"
-
-    def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
-        # A qualified constructor with the wrong owner is rejected.
-        err = reject_type(
-            'enum FooBar\n  | Abort\nlet n: int = ask("Q", on-parse-error = FooBar::Abort())\nn'
-        )
-        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
-
-    def test_ask_on_parse_error_bare_wrong_qualifier_raises(self) -> None:
-        # Bare ``SomethingElse::Abort`` (no parens, non-ParsePolicy qualifier) is
-        # rejected even though the field name is "Abort".
-        err = reject_type(
-            "enum SomethingElse\n  | Abort\n"
-            'let n: int = ask("Q", on-parse-error = SomethingElse::Abort)\nn'
-        )
-        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
-
     def test_ask_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = ask("Q")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
@@ -2941,14 +2912,6 @@ class TestAsk:
     def test_ask_agent_target_rejected(self) -> None:
         err = reject_type('let a: agent = ask("Q")\na')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
-
-    def test_ask_call_site_record(self) -> None:
-        r = accept_type('ask("hello")')
-        assert len(r.call_sites) == 1
-        cs = r.call_sites[0]
-        assert cs.callee == "ask"
-        assert cs.parse_policy == "default"
-        assert cs.line == 1
 
     def test_ask_unknown_codec_raises(self) -> None:
         err = reject_type('let x = ask("Q", format = "cbor")\nx')
@@ -3043,7 +3006,7 @@ class TestAskRequest:
             'ask-request::[int]("Q")',
             'ask-request::[int]("Q", format = "json")',
             'ask-request::[int]("Q", strict-json = true)',
-            'ask-request::[int]("Q", on-parse-error = Retry(n = 1))',
+            'ask-request::[int]("Q", parse-error-retries = 1)',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q", strict-json = true)',
         ),
@@ -3067,19 +3030,16 @@ class TestAskRequest:
         assert selected is not None
         assert r.type_env.get_binding_type(decl.node_id) == selected.handle()
 
-    def test_typed_call_site_record(self) -> None:
+    def test_typed_call_site_contract(self) -> None:
         r = accept_type('ask-request::[int]("Q")')
-        assert r.call_sites[0].callee == "ask-request"
-        assert r.call_sites[0].target_type == IntType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == IntType()
 
-    def test_call_site_record(self) -> None:
+    def test_call_site_contract(self) -> None:
         r = accept_type('ask-request("Q")')
-        assert len(r.call_sites) == 1
-        cs = r.call_sites[0]
-        assert cs.callee == "ask-request"
-        assert cs.target_type == TextType()
-        assert cs.codec_name == "text"
-        assert cs.parse_policy == "default"
+        assert len(r.contract_specs) == 1
+        spec = r.contract_specs[_sole_contract_node_id(r)]
+        assert spec.target_type == TextType()
+        assert spec.codec_name == "text"
 
     def test_does_not_require_default_agent(self) -> None:
         # ask-request never dispatches, so it works without a default agent.
@@ -3224,7 +3184,7 @@ class TestExec:
         )
 
     def test_non_final_exec_rejects_parse_options(self) -> None:
-        reject_type('exec("ls", on-parse-error = Abort())\n()')
+        reject_type('exec("ls", parse-error-retries = 0)\n()')
 
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
@@ -3248,24 +3208,13 @@ class TestExec:
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
-    def test_exec_on_parse_error_text_warns(self) -> None:
-        r = accept_type('let x: text = exec("ls", on-parse-error = Abort())\nx')
+    def test_exec_parse_error_retries_text_warns(self) -> None:
+        r = accept_type('let x: text = exec("ls", parse-error-retries = 0)\nx')
         assert len(r.warnings) == 1
-        assert "on-parse-error" in r.warnings[0].message
+        assert "parse-error-retries" in r.warnings[0].message
 
-    def test_exec_call_site_record(self) -> None:
-        r = accept_type('exec("ls")')
-        assert len(r.call_sites) == 1
-        cs = r.call_sites[0]
-        assert cs.callee == "exec"
-
-    def test_exec_call_site_abort_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on-parse-error = Abort())\nn')
-        assert r.call_sites[0].parse_policy == "abort"
-
-    def test_exec_call_site_retry_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on-parse-error = Retry(n = 2))\nn')
-        assert r.call_sites[0].parse_policy == "retry[2]"
+    def test_exec_accepts_zero_retries(self) -> None:
+        accept_type('let n: int = exec("ls", parse-error-retries = 0)\nn')
 
     def test_exec_strict_json_without_json_raises(self) -> None:
         err = reject_type('let x: text = exec("ls", strict-json = true)\nx')
@@ -3326,9 +3275,8 @@ class TestVerbatimLiteralTypingParity:
         self, verbatim_source: str, call_source: str, expected_type: Type | str
     ) -> None:
         verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
-        assert verbatim_checked.call_sites[0].target_type == _expected_type(
-            verbatim_checked, expected_type
-        )
+        spec = verbatim_checked.contract_specs[_sole_contract_node_id(verbatim_checked)]
+        assert spec.target_type == _expected_type(verbatim_checked, expected_type)
 
     @pytest.mark.parametrize(
         ("verbatim_source", "call_source", "expected_type"),
@@ -3384,9 +3332,8 @@ class TestVerbatimLiteralTypingParity:
         self, verbatim_source: str, call_source: str, expected_type: Type | str
     ) -> None:
         verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
-        assert verbatim_checked.call_sites[0].target_type == _expected_type(
-            verbatim_checked, expected_type
-        )
+        spec = verbatim_checked.contract_specs[_sole_contract_node_id(verbatim_checked)]
+        assert spec.target_type == _expected_type(verbatim_checked, expected_type)
 
     @pytest.mark.parametrize(
         ("verbatim_source", "call_source", "expected_type", "structured_exec"),
@@ -3415,15 +3362,16 @@ class TestVerbatimLiteralTypingParity:
         structured_exec: bool,
     ) -> None:
         verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
-        call_site = verbatim_checked.call_sites[0]
-        assert call_site.target_type == _expected_type(verbatim_checked, expected_type)
-        assert verbatim_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
+        node_id = _sole_contract_node_id(verbatim_checked)
+        spec = verbatim_checked.contract_specs[node_id]
+        assert spec.target_type == _expected_type(verbatim_checked, expected_type)
+        assert spec.structured_exec is structured_exec
 
     def test_exec_statement_discard_matches_call_form(self) -> None:
         verbatim_checked, _ = assert_builtin_call_type_parity("exec $ true\n()", 'exec("true")\n()')
-        call_site = verbatim_checked.call_sites[0]
-        assert verbatim_checked.node_types[call_site.node_id] == UnitType()
-        assert verbatim_checked.contract_specs[call_site.node_id] == OutputContractSpec(
+        node_id = _sole_contract_node_id(verbatim_checked)
+        assert verbatim_checked.node_types[node_id] == UnitType()
+        assert verbatim_checked.contract_specs[node_id] == OutputContractSpec(
             UnitType(), "none", None, structured_exec=False
         )
 
@@ -3850,9 +3798,8 @@ class TestFuncDef:
         )
 
         # Candidate discovery visits ``ask`` too, but the authoritative pass
-        # is its sole publisher, so no temporary call/contract artifacts leak
-        # or duplicate the final call site.
-        assert len(checked.call_sites) == 1
+        # is its sole publisher, so no temporary contract artifact leaks or
+        # duplicates the final one.
         assert len(checked.contract_specs) == 1
         assert_checked_module_closed(checked)
 
@@ -7537,6 +7484,98 @@ class TestConstructors:
         assert isinstance(err, AglScopeError)
 
 
+class TestConstructorFieldDefaults:
+    """A defaulted field may be omitted from a constructor call."""
+
+    def test_record_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = 1)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Point"
+
+    def test_record_constructor_may_still_supply_the_defaulted_field(self) -> None:
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = 1, y = 2)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+
+    def test_enum_member_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type('enum Result\n  | Ok(value: int, label: text = "ok")\nOk(value = 1)')
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Ok"
+
+    def test_exception_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type('exception MyErr\n  code: int = 0\nMyErr(message = "e")')
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, ExceptionType)
+        assert constructed.name == "MyErr"
+
+    def test_exception_constructor_omits_inherited_defaulted_field(self) -> None:
+        r = accept_type(
+            "exception Base extends Exception\n  code: int = 0\n"
+            "exception Derived extends Base\n  reason: text\n"
+            'Derived(message = "e", reason = "why")'
+        )
+        constructed = r.node_types[r.resolved.program.body.items[-1].node_id]
+        assert isinstance(constructed, ExceptionType)
+        assert constructed.name == "Derived"
+
+    def test_generic_record_constructor_omits_optional_field_default(self) -> None:
+        r = accept_type("record Box[T]\n  value: T\n  label: Option[T] = None\nBox(value = 1)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Box"
+        assert constructed.type_args == (IntType(),)
+
+    def test_field_default_wrong_type_is_rejected(self) -> None:
+        err = reject_type('record Point\n  x: int = "wrong"\n1')
+        assert "type" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_field_default_non_constant_is_rejected(self) -> None:
+        err = reject_type("def make() -> int = 1\nrecord Point\n  x: int = make()\n1")
+        assert "constant" in str(err).lower()
+
+    def test_field_required_after_defaulted_is_rejected(self) -> None:
+        err = reject_type("record Point\n  x: int = 0\n  y: int\n1")
+        assert "default" in str(err).lower() or "required" in str(err).lower()
+
+    def test_partial_application_omits_a_defaulted_field_entirely(self) -> None:
+        # A `?` hole on the required field, with the defaulted field neither
+        # supplied nor given its own hole: `bound_exprs.get(fname)` (not
+        # `bound_exprs[fname]`) must treat the missing key as "use the
+        # default" the same way full application does, leaving the partial
+        # function's signature with exactly one parameter.
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = ?)")
+        point = r.type_env.get_type("Point")
+        call = r.resolved.program.body.items[1]
+        assert isinstance(call, Call)
+        assert r.node_types[call.node_id] == FunctionType(params=(IntType(),), result=point)
+
+    def test_with_update_over_a_record_with_a_defaulted_field(self) -> None:
+        # A defaulted field is an ordinary field once a value exists: `with`
+        # neither requires nor treats it specially.
+        r = accept_type(
+            "record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1, y = 2)\np with x = 9"
+        )
+        point = r.type_env.get_type("Point")
+        update = r.resolved.program.body.items[-1]
+        assert r.node_types[update.node_id] == point
+
+    def test_pattern_match_over_a_record_with_a_defaulted_field_names_only_one_field(
+        self,
+    ) -> None:
+        # A pattern may name only the field it needs; a defaulted field is not
+        # required to appear in the pattern any more than any other field is.
+        r = accept_type(
+            "record Point\n  x: int\n  y: int = 0\n"
+            "let p = Point(x = 1, y = 2)\n"
+            "case p of | Point(x = _ as n) => n"
+        )
+        case = r.resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        assert r.node_types[case.node_id] == IntType()
+
+
 # ---------------------------------------------------------------------------
 # Enum member construction
 # ---------------------------------------------------------------------------
@@ -8117,7 +8156,9 @@ class TestConstructorRefDispatch:
         assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_named_only_variant_nonbare_positional_rejected(self) -> None:
-        err = reject_type("enum E\n  | F(@arg-named x: int, @arg-named y: int)\nF(1, 2)")
+        err = reject_type(
+            "enum E\n  | F\n      @arg-named x: int\n      @arg-named y: int\nF(1, 2)"
+        )
         assert "named-only" in str(err).lower() or "positional" in str(err).lower()
 
 
@@ -8964,70 +9005,39 @@ class TestVarAssign:
 
 
 # ---------------------------------------------------------------------------
-# ParsePolicy constructors
+# parse-error-retries option
 # ---------------------------------------------------------------------------
 
 
-class TestParsePolicy:
-    def test_on_parse_error_abort(self) -> None:
-        r = accept_type('let n: int = ask("Q", on-parse-error = Abort())\nn')
-        assert r.call_sites[0].parse_policy == "abort"
+class TestParseErrorRetries:
+    def test_zero_retries(self) -> None:
+        accept_type('let n: int = ask("Q", parse-error-retries = 0)\nn')
 
-    def test_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 5))\nn')
-        assert r.call_sites[0].parse_policy == "retry[5]"
+    def test_positive_retries(self) -> None:
+        accept_type('let n: int = ask("Q", parse-error-retries = 5)\nn')
 
-    def test_on_parse_error_invalid_constructor_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on-parse-error = 42)\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
+    def test_non_int_raises(self) -> None:
+        reject_type('let n: int = ask("Q", parse-error-retries = "bad")\nn')
 
-    def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
-        # Abort is nullary, so every supplied argument is surplus.
-        err = reject_type('let n: int = ask("Q", on-parse-error = Abort(message = "x"))\nn')
-        assert "on-parse-error" in str(err).lower() or "Abort" in str(err)
-
-    def test_on_parse_error_retry_no_n_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry())\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
-
-    def test_on_parse_error_unrelated_unqualified_constructor_raises(self) -> None:
-        """An unqualified call to a real, resolvable constructor that is
-        simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
-        genuine constructor identity is required, not merely that SOME
-        constructor resolves."""
-        err = reject_type('record Foo\nlet n: int = ask("Q", on-parse-error = Foo())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
-
-    def test_on_parse_error_wrong_qualifier_raises(self) -> None:
-        # 'Other' is not a declared type name, so this fails at scope time.
-        err = reject_any('let n: int = ask("Q", on-parse-error = Other::Abort())\nn')
-        err_str = str(err).lower()
-        assert "on-parse-error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
-
-    def test_on_parse_error_text_target_warns(self) -> None:
-        r = accept_type('ask("Q", on-parse-error = Abort())')
+    def test_text_target_warns(self) -> None:
+        r = accept_type('ask("Q", parse-error-retries = 0)')
         assert len(r.warnings) == 1
-        assert "on-parse-error" in r.warnings[0].message
+        assert "parse-error-retries" in r.warnings[0].message
 
-    def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
-        """``ParsePolicy`` is not generic, so ``ParsePolicy[int]::`` is a scope error."""
-        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy[int]::Abort())\nn')
-        assert isinstance(err, AglScopeError)
+    def test_accepts_a_computed_count(self) -> None:
+        accept_type(
+            'let k = 2\nlet count = k + 1\nlet n: int = ask("Q", parse-error-retries = count)\nn'
+        )
 
-    def test_retry_with_non_int_n_raises(self) -> None:
-        # Exercises line 880->879: Retry n_arg not an IntLit
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(n = "bad"))\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
+    def test_accepts_a_count_returned_by_a_function(self) -> None:
+        accept_type(
+            "def count-for(k: int) -> int = k\n"
+            'let n: int = ask("Q", parse-error-retries = count-for(3))\n'
+            "n"
+        )
 
-    def test_retry_with_wrong_key_raises(self) -> None:
-        # Exercises line 880 -> falls through to raise
-        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(m = 3))\nn')
-        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
-
-    def test_parse_policy_unknown_variant_raises(self) -> None:
-        # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
-        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Bad())\nn')
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
+    def test_accepts_a_computed_count_on_exec(self) -> None:
+        accept_type('let n: int = exec("echo 1", parse-error-retries = 1 + 1)\nn')
 
 
 # ---------------------------------------------------------------------------
@@ -9035,7 +9045,7 @@ class TestParsePolicy:
 # ``Agent`` (the agent an ``ask``/``ask-request`` dispatches to, supplied as
 # the ``agent`` argument or as the receiver), ``AgentRequest``
 # (``ask-request``'s result), the host-raised built-in exceptions carrying an
-# ``Agent``-typed field, and ``ParsePolicy`` (``on_parse_error``). Each
+# ``Agent``-typed field. Each
 # resolves against a program's own ``builtin`` declaration of the name, and
 # each host contract whose own fields are nominal must keep the standard
 # identity in them, since that is what the host fills them with.
@@ -9043,9 +9053,9 @@ class TestParsePolicy:
 
 _AGENT_VARIANTS_TC = (
     "  | AgentCommand(command: text)\n"
-    "  | AgentClaude(model: text, thinking: text)\n"
-    "  | AgentCodex(model: text, thinking: text)\n"
-    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    '  | AgentClaude(model: text = "", thinking: text = "")\n'
+    '  | AgentCodex(model: text = "", thinking: text = "")\n'
+    '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
 )
 
 _AGENT_REQUEST_FIELDS_TC = (
@@ -9057,9 +9067,8 @@ _AGENT_REQUEST_FIELDS_TC = (
     "  attempt: int\n"
     "  previous-error: Option[text]\n"
     "  metadata: json\n"
+    "  sandbox: AgentSandbox\n"
 )
-
-_PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
 
 # ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
 # carries the same shaping options and target type parameter. The free form
@@ -9069,14 +9078,16 @@ _ASK_REQUEST_OPTIONS_TC = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS_TC = (
     "  prompt: text,\n"
     '  agent: Agent = AgentCommand(command = "x"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL_TC = (
     f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> AgentRequest\n"
@@ -9091,7 +9102,8 @@ _ASK_REQUEST_NO_STDLIB_DECL_TC = (
     '  agent: Agent = "",\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
     ") -> AgentRequest\n"
 )
 
@@ -9164,7 +9176,6 @@ class TestHostContractBuiltinIdentity:
             "  | None\n"
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            f"builtin enum ParsePolicy\n{_PARSE_POLICY_VARIANTS_TC}"
             f"{_ASK_REQUEST_NO_STDLIB_DECL_TC}"
             'ask-request("hi")\n',
             default_stdlib=False,
@@ -9192,38 +9203,6 @@ class TestHostContractBuiltinIdentity:
         )
         assert "target-type" in err.to_diagnostic().message
         assert "Option" in err.to_diagnostic().message
-
-    def test_scoped_parse_policy_constructor_accepted_by_on_parse_error(self) -> None:
-        r = accept_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Retry(n = 5))\n'
-            "end A\n()\n"
-        )
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
-        assert r.node_types[let_decl.value.node_id] == IntType()
-
-    def test_scoped_parse_policy_abort_accepted_by_on_parse_error(self) -> None:
-        r = accept_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Abort)\n'
-            "end A\n()\n"
-        )
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
-        assert r.node_types[let_decl.value.node_id] == IntType()
-
-    def test_on_parse_error_rejects_unrelated_qualifier_with_a_scoped_parse_policy_live(
-        self,
-    ) -> None:
-        err = reject_type(
-            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}end A\n"
-            "enum NotPolicy\n  | Abort\n"
-            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())\n'
-        )
-        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_scoped_builtin_ask_request_signature_mentioning_sibling_types_typechecks(
         self,
@@ -9300,6 +9279,7 @@ class TestHostContractBuiltinIdentity:
         host-minted record carrying the agent, so a scoped ``Agent`` receiver
         creates no field whose value could disagree with its static type."""
         result = accept_type(
+            "import std/env::{Environ, environ}\n"
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             "builtin def Agent::ask[T](\n"
@@ -9307,13 +9287,15 @@ class TestHostContractBuiltinIdentity:
             "  prompt: text,\n"
             '  format: text = "",\n'
             "  strict-json: bool = false,\n"
-            "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "  parse-error-retries: int = 0,\n"
+            "  sandbox: AgentSandbox = Disabled,\n"
+            "  env: Environ = environ,\n"
             ") -> T\n"
             'let g: Agent = Agent::AgentCommand("x")\n'
             'let r: text = g.ask("hi")\n'
             "end A\n()\n"
         )
-        region = result.resolved.program.body.items[0]
+        region = result.resolved.program.body.items[1]
         assert isinstance(region, ScopeRegion)
         receiver_decl, answer_decl = [item for item in region.items if isinstance(item, LetDecl)]
         receiver_type = result.type_env.get_binding_type(receiver_decl.node_id)
@@ -9571,10 +9553,6 @@ class TestCheckedModule:
     def test_contract_specs_populated_for_ask(self) -> None:
         r = accept_type('ask("hello")')
         assert len(r.contract_specs) == 1
-
-    def test_call_sites_populated(self) -> None:
-        r = accept_type('ask("hello")')
-        assert len(r.call_sites) == 1
 
     def test_warnings_empty_when_no_issues(self) -> None:
         r = accept_type("let x = 1\nx")
@@ -10352,9 +10330,131 @@ class TestAskUnknownArgs:
         # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
             'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
-            " strict-json = true, on-parse-error = Abort())\nn"
+            " strict-json = true, parse-error-retries = 0)\nn"
         )
         assert r.resolved.program is not None
+
+
+class TestAskSandboxArgument:
+    """``sandbox`` is accepted on every ask-like call except a session-routed ``ask``."""
+
+    def test_ask_accepts_disabled(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Disabled)')
+
+    def test_ask_accepts_native(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Native)')
+
+    def test_ask_accepts_bare_sandbox_all_defaults(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = Sandbox)')
+
+    def test_ask_accepts_bare_sandbox_with_fields(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = Sandbox(memory = Some("8G")))')
+
+    def test_ask_rejects_a_qualified_sandbox_member(self) -> None:
+        # ``AgentSandbox::Sandbox`` is a scope error: ``Sandbox`` is a
+        # referenced member, reachable only through its own bare spelling.
+        err = reject_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Sandbox)')
+        assert "AgentSandbox" in str(err)
+
+    def test_ask_rejects_wrong_type_sandbox(self) -> None:
+        err = reject_type('ask("Q", agent = AgentCommand("a"), sandbox = "unrestricted")')
+        assert "AgentSandbox" in str(err)
+        assert "text" in str(err)
+
+    def test_ask_request_accepts_sandbox(self) -> None:
+        # ask-request never routes through a session, so it accepts sandbox
+        # even without an explicit agent.
+        accept_type('ask-request("Q", sandbox = AgentSandbox::Native)')
+
+    def test_agent_receiver_ask_accepts_sandbox(self) -> None:
+        accept_type('let a = AgentCommand("a")\na.ask("Q", sandbox = Sandbox)')
+
+    def test_agent_receiver_ask_request_accepts_sandbox(self) -> None:
+        accept_type('let a = AgentCommand("a")\na.ask-request("Q", sandbox = AgentSandbox::Native)')
+
+    def test_bare_ask_without_agent_rejects_an_explicit_sandbox(self) -> None:
+        # No explicit ``agent`` -> dispatches through the default session at
+        # lowering, which carries no per-call sandbox operand, exactly like
+        # ``Session.ask``.
+        err = reject_type('ask("Q", sandbox = AgentSandbox::Native)')
+        assert "sandbox" in str(err).lower()
+
+    def test_bare_ask_with_explicit_agent_accepts_sandbox(self) -> None:
+        # An explicit ``agent`` routes directly to the agent, not the default
+        # session, so ``sandbox`` is meaningful here.
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Native)')
+
+
+class TestAskEnvArgument:
+    """``env`` is accepted on every ask-like call except ``ask-request`` and a
+    session-routed ``ask``."""
+
+    _IMPORT = "import std/env::Environ\n"
+
+    def test_ask_accepts_ambient_environ(self) -> None:
+        accept_type(self._IMPORT + 'ask("Q", agent = AgentCommand("a"), env = std/env::environ)')
+
+    def test_ask_accepts_extended_environ(self) -> None:
+        accept_type(
+            self._IMPORT + 'ask("Q", agent = AgentCommand("a"), '
+            'env = std/env::environ.extended({"A": "B"}))'
+        )
+
+    def test_ask_rejects_wrong_type_env(self) -> None:
+        err = reject_type('ask("Q", agent = AgentCommand("a"), env = "unrestricted")')
+        assert "Environ" in str(err)
+        assert "text" in str(err)
+
+    def test_ask_request_rejects_env_even_with_an_explicit_agent(self) -> None:
+        # ask-request never dispatches, so its built record carries no
+        # environment field to fill: 'env' is simply not a recognized argument.
+        err = reject_type(
+            self._IMPORT + 'ask-request("Q", agent = AgentCommand("a"), env = std/env::environ)'
+        )
+        assert "env" in str(err)
+
+    def test_agent_receiver_ask_accepts_env(self) -> None:
+        accept_type(self._IMPORT + 'let a = AgentCommand("a")\na.ask("Q", env = std/env::environ)')
+
+    def test_agent_receiver_ask_request_rejects_env(self) -> None:
+        err = reject_type(
+            self._IMPORT + 'let a = AgentCommand("a")\na.ask-request("Q", env = std/env::environ)'
+        )
+        assert "env" in str(err)
+
+    def test_bare_ask_without_agent_rejects_an_explicit_env(self) -> None:
+        # No explicit ``agent`` -> dispatches through the default session at
+        # lowering, which fixes its environment at open, exactly like
+        # ``Session.ask``.
+        err = reject_type(self._IMPORT + 'ask("Q", env = std/env::environ)')
+        assert "env" in str(err).lower()
+
+    def test_bare_ask_with_explicit_agent_accepts_env(self) -> None:
+        # An explicit ``agent`` routes directly to the agent, not the default
+        # session, so ``env`` is meaningful here.
+        accept_type(self._IMPORT + 'ask("Q", agent = AgentCommand("a"), env = std/env::environ)')
+
+    def test_session_ask_rejects_an_explicit_env(self) -> None:
+        # A session's environment is fixed once, at open; a per-ask override
+        # would be silently ineffective.
+        err = reject_type(
+            self._IMPORT + 'let s = Session::open(agent = AgentCommand("a"))\n'
+            's.ask("Q", env = std/env::environ)'
+        )
+        assert "env" in str(err).lower()
+
+    def test_session_open_accepts_env(self) -> None:
+        accept_type(
+            self._IMPORT
+            + 'let s = Session::open(agent = AgentCommand("a"), env = std/env::environ)\n'
+            "()"
+        )
+
+    def test_session_open_rejects_wrong_type_env(self) -> None:
+        err = reject_type(
+            'let s = Session::open(agent = AgentCommand("a"), env = "unrestricted")\n()'
+        )
+        assert "Environ" in str(err)
 
 
 class TestExecUnknownArgs:
@@ -10368,12 +10468,30 @@ class TestExecUnknownArgs:
         assert "exec" in str(err).lower() or "positional" in str(err).lower()
 
     def test_exec_valid_named_arg_combinations_still_accepted(self) -> None:
-        # format, strict_json, on_parse_error are valid for exec.
+        # format, strict_json, parse_error_retries are valid for exec.
         r = accept_type(
             'let n: int = exec("ls", format = "json", strict-json = true,'
-            " on-parse-error = Abort())\nn"
+            " parse-error-retries = 0)\nn"
         )
         assert r.resolved.program is not None
+
+
+class TestExecSandbox:
+    def test_exec_accepts_an_absent_sandbox(self) -> None:
+        accept_type('exec("ls", sandbox = None)')
+
+    def test_exec_accepts_a_sandbox_option(self) -> None:
+        accept_type('exec("ls", sandbox = Some(Sandbox()))')
+
+    def test_exec_rejects_a_bare_sandbox_record(self) -> None:
+        # ``exec``'s ``sandbox`` is ``Option[Sandbox]``, never a bare
+        # ``Sandbox`` -- unlike ``ask``'s ``AgentSandbox``, which subsumes it.
+        err = reject_type('exec("ls", sandbox = Sandbox())')
+        assert "sandbox" in str(err).lower()
+
+    def test_exec_rejects_a_non_sandbox_value(self) -> None:
+        err = reject_type('exec("ls", sandbox = 1)')
+        assert "sandbox" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -10412,9 +10530,9 @@ class TestExecStructured:
         err = reject_type('exec("ls", strict-json = true)')
         assert "ExecResult" in str(err) or "strict-json" in str(err).lower()
 
-    def test_exec_structured_on_parse_error_rejected(self) -> None:
-        err = reject_type('exec("ls", on-parse-error = Abort())')
-        assert "ExecResult" in str(err) or "on-parse-error" in str(err).lower()
+    def test_exec_structured_parse_error_retries_rejected(self) -> None:
+        err = reject_type('exec("ls", parse-error-retries = 0)')
+        assert "ExecResult" in str(err) or "parse-error-retries" in str(err).lower()
 
     def test_exec_parsed_form_has_no_structured_exec(self) -> None:
         r = accept_type('let n: int = exec("ls", format = "json")\nn')
@@ -11359,12 +11477,13 @@ class TestGenerics:
             'let value = select(ask("ask"), exec("exec"), 1)\n'
             "value"
         )
-        assert [site.callee for site in result.call_sites] == ["ask", "exec"]
-        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
-        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+        assert len(result.contract_specs) == 2
         assert all(spec.target_type == IntType() for spec in result.contract_specs.values())
+        assert all(spec.codec_name == "json" for spec in result.contract_specs.values())
 
-    def test_deferred_builtin_contracts_keep_source_order_inside_generic_constructor(self) -> None:
+    def test_deferred_builtin_contracts_inside_generic_constructor_materialize_concrete_types(
+        self,
+    ) -> None:
         result = accept_type(
             "record Bundle\n"
             "  answer: int\n"
@@ -11374,9 +11493,10 @@ class TestGenerics:
             'request = ask-request("request"))\n'
             "bundle"
         )
-        assert [site.callee for site in result.call_sites] == ["ask", "ask-request"]
-        assert [site.target_type for site in result.call_sites] == [IntType(), TextType()]
-        assert [site.codec_name for site in result.call_sites] == ["json", "text"]
+        assert {(spec.target_type, spec.codec_name) for spec in result.contract_specs.values()} == {
+            (IntType(), "json"),
+            (TextType(), "text"),
+        }
 
     def test_later_solved_builtin_target_rejects_unserializable_type(self) -> None:
         err = reject_type(
@@ -11411,7 +11531,6 @@ class TestGenerics:
                     kind=BuiltinObligationKind.ASK,
                     format_name=None,
                     strict_json=None,
-                    parse_policy="default",
                     parse_option_spans=(),
                 )
             )
@@ -14032,51 +14151,58 @@ class TestBuiltinCallInGenericSlot:
 
     def test_pipe_into_print_exec(self) -> None:
         r = accept_type('print <| exec "echo hi"')
-        assert r.call_sites[0].callee == "exec"
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
-        assert r.contract_specs[r.call_sites[0].node_id].structured_exec is True
+        node_id = _sole_contract_node_id(r)
+        assert r.contract_specs[node_id].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[node_id].structured_exec is True
 
     def test_pipe_into_print_ask(self) -> None:
         r = accept_type('print <| ask "hi"')
-        assert r.call_sites[0].callee == "ask"
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_forward_pipe_exec_into_print(self) -> None:
         r = accept_type('exec "echo hi" |> print')
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_generic_function_argument_exec(self) -> None:
         r = accept_type('def id[A](x: A) -> A = x\nid(exec "echo hi")')
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_generic_function_argument_ask(self) -> None:
         r = accept_type('def id[A](x: A) -> A = x\nid(ask "hi")')
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_constructor_argument_exec(self) -> None:
         r = accept_type('Some(exec "echo hi")')
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_annotated_binder_through_generic_still_infers_annotation(self) -> None:
         """A concrete binder annotation still wins over the builtin default (no regression)."""
         r = accept_type('def id[A](x: A) -> A = x\nlet x: text = id(exec "echo hi")\nx')
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_higher_order_apply_print_exec(self) -> None:
         src = 'def apply[A, B](f: (A) -> B, x: A) -> B = f(x)\napply(print, exec "echo hi")'
         r = accept_type(src)
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_dollar_verbatim_exec_in_generic_slot(self) -> None:
         r = accept_type("print <| exec $ echo hi")
-        assert r.call_sites[0].callee == "exec"
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_dollar_verbatim_session_ask_in_generic_slot(self) -> None:
         src = "let s = Session::default()\nprint <| s.ask $ hi"
         r = accept_type(src)
-        assert r.call_sites[0].callee == "ask"
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_conflicting_defaults_on_shared_generic_slot_is_a_type_error(self) -> None:
         """ask's text default and exec's ExecResult default can't share one variable.
@@ -14093,13 +14219,13 @@ class TestBuiltinCallInGenericSlot:
     def test_sibling_argument_overrides_default(self) -> None:
         """A sibling argument sharing the generic slot pins the type before defaults apply."""
         r = accept_type('def f[A](a: A, b: A) -> A = a\nf(exec "echo 1", 2)')
-        assert r.call_sites[0].target_type == IntType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == IntType()
 
     def test_two_defaults_agreeing_on_a_shared_generic_slot_is_not_a_conflict(self) -> None:
         """Two ``ask`` calls sharing one generic slot both default to ``text`` — no conflict."""
         r = accept_type('def f[A](a: A, b: A) -> unit = ()\nf(ask "x", ask "y")')
-        assert r.call_sites[0].target_type == TextType()
-        assert r.call_sites[1].target_type == TextType()
+        assert len(r.contract_specs) == 2
+        assert {spec.target_type for spec in r.contract_specs.values()} == {TextType()}
 
     def test_inferred_return_function_with_local_generic_defaults(self) -> None:
         """A candidate (inferred-return) body still defaults a generic-slot builtin call."""
@@ -14109,21 +14235,22 @@ class TestBuiltinCallInGenericSlot:
             "g(0)"
         )
         r = accept_type(src)
-        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == _expected_type(
+            r, "ExecResult"
+        )
 
     def test_explicit_type_argument_through_generic_slot(self) -> None:
         """An explicit ``::[T]`` on the builtin call itself overrides the generic default."""
         r = accept_type('def id[A](x: A) -> A = x\nid(exec::[int] "echo 1")')
-        assert r.call_sites[0].target_type == IntType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == IntType()
 
     def test_ask_in_lambda_passed_to_generic_defaults_to_text(self) -> None:
         r = accept_type('def apply[A](f: () -> A) -> A = f()\napply(fn () => ask "x")')
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_receiver_ask_in_generic_slot_defaults_to_text(self) -> None:
         r = accept_type('let r = AgentCommand("worker")\nprint <| r.ask("hi")')
-        assert r.call_sites[0].callee == "ask"
-        assert r.call_sites[0].target_type == TextType()
+        assert r.contract_specs[_sole_contract_node_id(r)].target_type == TextType()
 
     def test_if_branches_with_conflicting_defaults_in_generic_slot_is_a_type_error(self) -> None:
         """exec's and ask's defaults can't share the if-expression's single result slot."""

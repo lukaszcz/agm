@@ -164,7 +164,7 @@ class EntryPipeline:
 
         Builds the module graph from the already-parsed *pipeline_program*, runs
         the full scope/typecheck/match-compilation passes with the session
-        context, then returns a check-only result or lowers and evaluates.
+        context, then lowers and evaluates.
         """
         try:
             loaded = self.load_and_check_program(
@@ -353,7 +353,6 @@ class EntryPipeline:
             node_types=entry.node_types,
             contract_specs=entry.contract_specs,
             target_contract_specs=entry.target_contract_specs,
-            call_sites=entry.call_sites,
             warnings=entry.warnings,
             type_env=entry.type_env,
             function_signatures=entry.function_signatures,
@@ -531,7 +530,11 @@ class EntryPipeline:
         retired_member_scopes: "frozenset[ScopePath]",
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
-        from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
+        from agm.agl.eval.ir_interpreter import (
+            HostConfigurationError,
+            IrInterpreter,
+            default_field_resolver,
+        )
         from agm.agl.ir.program import ValueDescriptors
         from agm.agl.lower import lower_repl_program
         from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
@@ -555,10 +558,13 @@ class EntryPipeline:
         # can fail from here on rolls back against this snapshot: an entry
         # rejected before anything is promoted discards its whole link delta
         # via ``restore_state``. A partially run entry keeps its delta, caching
-        # and marking only dependency-complete library modules, and needs no
-        # nominal rollback at all -- the link image's nominal state is rebuilt
-        # from the shared type table on every lowering, so it is always current
-        # regardless of what this entry did or did not promote.
+        # and marking only dependency-complete library modules. ``link.nominals``
+        # itself needs no separate rollback handling -- it is rebuilt wholesale
+        # from the shared type table on every lowering pass -- but that rebuild
+        # reads per-field defaults back from ``link.field_defaults``, which IS
+        # part of this entry's delta and must roll back with it like every
+        # other ``_LinkState`` field (``snapshot_state``/``restore_state``
+        # cover every field of the dataclass for exactly this reason).
         link_snapshot = self._ctx._link_image.snapshot_state()
         try:
             with frontend_recursion_boundary():
@@ -591,7 +597,9 @@ class EntryPipeline:
         }
         pending_raw_param_values.update(raw_param_values)
         decoded_param_seeds, param_diagnostics = bind_param_values(
-            lowered.program, pending_raw_param_values
+            lowered.program,
+            pending_raw_param_values,
+            default_resolver=default_field_resolver(lowered.program),
         )
         if param_diagnostics:
             self._ctx._link_image.restore_state(link_snapshot)
@@ -626,8 +634,8 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        trace = TraceStore(path=self._ctx._trace_path)
-        trace.run_start()
+        trace = TraceStore(path=self._ctx._trace_path, sources=lowered.program.sources)
+        trace.run_start(command="repl", span=orig_program.span)
         if self._ctx._host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
@@ -642,6 +650,8 @@ class EntryPipeline:
                 lowered.program,
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
+                get_sandbox_context=host_env.get_sandbox_context,
+                resolve_agent_spec=host_env.resolve_agent_spec,
                 close_sessions=False,
                 strict_json=self._ctx._default_strict_json,
                 max_call_depth=self._ctx._default_call_depth_limit,
@@ -649,6 +659,7 @@ class EntryPipeline:
                     self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None
                 ),
                 trace=trace,
+                echo_agent_output=self._ctx._echo_agent_output,
                 host_contracts=host_contracts,
                 base_frame=self._ctx._ir_base_frame,
                 extern_registry=host_env.extern_registry,
@@ -661,6 +672,7 @@ class EntryPipeline:
                 builtin_host_settings=self._builtin_host_settings(),
                 param_seeds={**self._ctx._param_seed_values, **decoded_param_seeds},
                 process_environment=self._ctx._process_environment,
+                extern_runtime_state=self._ctx._extern_runtime_state,
             )
         except AglRaise as exc:
             error = exception_value_to_run_error(

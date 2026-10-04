@@ -86,39 +86,60 @@ _COMPANION_API_NAMES = frozenset(
 )
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _StateEntry:
+    """One companion state value, its optional closer, and whether debug mode keeps it."""
+
+    value: object
+    close: Callable[[object], None] | None
+    keep_in_debug: bool
+
+
 class ExternRuntimeState:
-    """Mutable companion state belonging to one interpreter instance."""
+    """Mutable companion state belonging to one host session.
+
+    An interpreter creates and closes its own unless its host supplies one
+    that outlives it (the REPL, across entries).
+    """
 
     __slots__ = ("_entries",)
 
     def __init__(self) -> None:
-        self._entries: dict[str, tuple[object, Callable[[object], None] | None]] = {}
+        self._entries: dict[str, _StateEntry] = {}
 
     def get_or_create[T](
-        self, key: str, factory: Callable[[], T], close: Callable[[T], None] | None = None
+        self,
+        key: str,
+        factory: Callable[[], T],
+        close: Callable[[T], None] | None = None,
+        *,
+        keep_in_debug: bool = False,
     ) -> T:
         """Return this state's value for *key*, creating it (with its closer) once when absent.
 
         *close*, when given, is recorded beside the value on this creating
-        call and later invoked with that same value by :meth:`close_all`.
+        call and later invoked with that same value by :meth:`close_all`,
+        except under ``debug`` when *keep_in_debug* is set.
         """
         if key not in self._entries:
-            value = factory()
-            self._entries[key] = (value, cast("Callable[[object], None] | None", close))
-        return cast("T", self._entries[key][0])
+            self._entries[key] = _StateEntry(
+                factory(), cast("Callable[[object], None] | None", close), keep_in_debug
+            )
+        return cast("T", self._entries[key].value)
 
-    def close_all(self) -> None:
+    def close_all(self, *, debug: bool = False) -> None:
         """Close every registered value once, in reverse creation order, then clear the bag.
 
         Each closer receives the value it was registered for. A second call
-        is a no-op. A value registered with no closer is simply dropped.
+        is a no-op. A value registered with no closer, or with
+        ``keep_in_debug`` while *debug* is set, is simply dropped.
         """
         entries = list(self._entries.values())
         self._entries.clear()
         steps: list[Callable[[], None]] = [
-            functools.partial(close, value)
-            for value, close in reversed(entries)
-            if close is not None
+            functools.partial(entry.close, entry.value)
+            for entry in reversed(entries)
+            if entry.close is not None and not (debug and entry.keep_in_debug)
         ]
         run_cleanup_steps(steps)
 
@@ -167,17 +188,23 @@ class _CompanionRuntime:
         return ScopedVar(self._active_call, call)
 
     def state[T](
-        self, key: str, factory: Callable[[], T], close: Callable[[T], None] | None = None
+        self,
+        key: str,
+        factory: Callable[[], T],
+        close: Callable[[T], None] | None = None,
+        *,
+        keep_in_debug: bool = False,
     ) -> T:
-        """Get companion-local state scoped to the active interpreter call.
+        """Get companion-local state scoped to the active interpreter's host session.
 
         *close*, given on the call that creates the value, runs once when the
-        owning interpreter's run ends (or, for a detached call, when
-        :func:`close_detached_state` is called).
+        host session ends (or, for a detached call, when
+        :func:`close_detached_state` is called) -- unless *keep_in_debug* is
+        set and the session ends with ``std/config::debug`` on.
         """
         active = self._active_call.get()
         state = active.state if active is not None else self._detached_state
-        return state.get_or_create(key, factory, close)
+        return state.get_or_create(key, factory, close, keep_in_debug=keep_in_debug)
 
     def tracing(self) -> bool:
         """Whether :meth:`trace` would record: an active call whose store is writing.
@@ -448,6 +475,28 @@ _NO_EXCEPTION_FIELD_ENCODES: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]
 )
 
 
+def _comparable_shape(descriptor: NominalDescriptor) -> tuple[object, tuple[bool, ...]]:
+    """*descriptor*'s shape with its lowered field defaults projected onto presence only.
+
+    A builtin nominal's identity recurs across every REPL entry's freshly
+    linked program, each with its own linker-allocated ``SourceId``
+    numbering (``ir.ids.SourceId`` is unique within one
+    ``ExecutableProgram``, not across them). A field default's lowered
+    ``IrExpr`` is rebuilt from the same declaration on every relink,
+    identical but for that renumbering. The expressions cannot otherwise
+    differ for one identity -- a redeclaration mints a new one -- so only
+    *which* fields carry a default takes part in the comparison, not the
+    expressions themselves. ``field_defaults=()`` alone would not do: the
+    replaced descriptor's own ``__post_init__`` renormalizes an empty tuple
+    back to all-``None`` (mirroring ``TypeDef.field_has_default``), so the
+    presence pattern must be captured separately, before that happens.
+    """
+    return (
+        dataclasses.replace(descriptor, field_defaults=()),
+        tuple(default is not None for default in descriptor.field_defaults),
+    )
+
+
 class ExternRegistry:
     """Imports extern companions, resolves their callables, and invokes them.
 
@@ -512,7 +561,9 @@ class ExternRegistry:
         if self_validation_enabled():
             for nominal, descriptor in descriptors.items():
                 previous = self._nominal_by_id.get(nominal)
-                if previous is not None and previous != descriptor:
+                if previous is not None and _comparable_shape(previous) != _comparable_shape(
+                    descriptor
+                ):
                     raise AssertionError(
                         f"nominal {nominal!r} re-registered with a different shape: "
                         f"{previous!r} -> {descriptor!r}"

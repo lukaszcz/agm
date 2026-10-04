@@ -27,7 +27,7 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
 )
 from agm.agl.typecheck.program import _prepare_program, check_program
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
 from tests.agl.ir_harness import (
     base_caps,
     make_file_graph_from_files,
@@ -48,9 +48,9 @@ from tests.agl.ir_harness import (
 def test_repeated_executions_produce_the_expected_output(
     source: str, expected: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     for _ in range(2):
-        result = run_inline_command(runtime, source)
+        result = run_inline_code(runtime, source)
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == expected
 
@@ -66,16 +66,45 @@ def test_edited_imports_change_the_next_execution(
     path = tmp_path / "helper.agl"
     path.write_text("def helper() -> int = 1\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import helper::*\nprint(helper())\n"
-    assert run_inline_command(runtime, source, roots=roots).ok
+    assert run_inline_code(runtime, source, roots=roots).ok
     assert capsys.readouterr().out == "1\n"
 
     path.write_text(replacement)
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
 
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == expected
+
+
+def test_field_default_survives_the_module_cache_disk_round_trip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cached library module's constructor field default round-trips
+    through ``LoweredModule.capture()``/``link_into()`` and an on-disk
+    artifact restore.
+
+    ``clear_retained_artifacts()`` drops only in-memory retention (disk
+    persists), forcing the second compile to rehydrate ``lib``'s
+    ``LoweredModule`` -- and with it, ``NominalDescriptor.field_defaults`` for
+    its defaulted record -- from ``artifact_serialization`` rather than reuse
+    the in-process object.
+    """
+    (tmp_path / "lib.agl").write_text("record Limits\n  retries: int = 3\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    source = "import lib::*\nprint(Limits().retries)\n"
+
+    artifact_cache.clear_retained_artifacts()
+    assert run_inline_code(runtime, source, roots=roots).ok
+    assert capsys.readouterr().out == "3\n"
+
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+    result = run_inline_code(runtime, source, roots=roots)
+
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "3\n"
 
 
 def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
@@ -85,10 +114,10 @@ def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
     path = tmp_path / "store.agl"
     path.write_text("var total: int = 0\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import store::*\ntotal := total + 5\nprint(total)\n"
     for _ in range(2):
-        result = run_inline_command(runtime, source, roots=roots)
+        result = run_inline_code(runtime, source, roots=roots)
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == "5\n"
 
@@ -102,10 +131,10 @@ def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_
     path = tmp_path / "store.agl"
     path.write_text("var total = 0\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import store::*\ntotal := total + 5\nprint(total)\n"
     for _ in range(2):
-        result = run_inline_command(runtime, source, roots=roots)
+        result = run_inline_code(runtime, source, roots=roots)
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == "5\n"
 
@@ -128,7 +157,7 @@ def test_exception_downcast_and_is_stay_stable_across_a_warm_artifact_cache_reus
         "  try f() catch Problem as p => p.code\n"
     )
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = """\
 import lib::*
 exception VeryDetailed extends Detailed
@@ -141,7 +170,7 @@ print(is-detailed(v))
 print(guarded(fn() => raise VeryDetailed(message = "m", code = 2, detail = "d", hint = "h")))
 """
     for _ in range(2):
-        result = run_inline_command(runtime, source, roots=roots)
+        result = run_inline_code(runtime, source, roots=roots)
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == "d\ntrue\n2\n"
 
@@ -154,14 +183,14 @@ def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache
     path = tmp_path / "store.agl"
     path.write_text("let value = 1\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import store::*\nprint(value)\n"
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "1\n"
 
     path.write_text('let value = "changed"\n')
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "changed\n"
 
@@ -176,16 +205,16 @@ def test_warm_cached_importer_reflects_a_changed_unannotated_transitive_binding(
     mid_path = tmp_path / "mid.agl"
     mid_path.write_text("import store\ndef get() = store::value\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import mid::*\nprint(get())\n"
 
     store_path.write_text("let value = 1\n")
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "1\n"
 
     store_path.write_text('let value = "changed"\n')
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "changed\n"
 
@@ -199,14 +228,14 @@ def test_editing_a_folded_constant_invalidates_the_warm_cache(
     path = tmp_path / "store.agl"
     path.write_text('let part = "one"\nlet whole = "[%{part}]"\n')
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import store::*\nprint(whole)\n"
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "[one]\n"
 
     path.write_text('let part = "two"\nlet whole = "[%{part}]"\n')
-    result = run_inline_command(runtime, source, roots=roots)
+    result = run_inline_code(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "[two]\n"
 
@@ -216,32 +245,32 @@ def test_invalid_import_edit_is_rejected_and_can_be_repaired(
 ) -> None:
     path = tmp_path / "helper.agl"
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import helper::*\nprint(helper())\n"
     path.write_text("def helper() -> int = 1\n")
-    assert run_inline_command(runtime, source, roots=roots).ok
+    assert run_inline_code(runtime, source, roots=roots).ok
     assert capsys.readouterr().out == "1\n"
 
     path.write_text('def helper() -> int = "bad"\n')
-    failed = run_inline_command(runtime, source, roots=roots)
+    failed = run_inline_code(runtime, source, roots=roots)
     assert not failed.ok
     assert failed.diagnostics
     assert capsys.readouterr().out == ""
 
     path.write_text("def helper() -> int = 9\n")
-    assert run_inline_command(runtime, source, roots=roots).ok
+    assert run_inline_code(runtime, source, roots=roots).ok
     assert capsys.readouterr().out == "9\n"
 
 
 def test_same_named_imports_are_isolated_between_roots(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     for name, value in (("first", 1), ("second", 7), ("first", 1)):
         root = tmp_path / name
         root.mkdir(exist_ok=True)
         (root / "helper.agl").write_text(f"def helper() -> int = {value}\n")
-        result = run_inline_command(
+        result = run_inline_code(
             runtime, "import helper::*\nprint(helper())\n", roots=agl_roots(root)
         )
         assert result.ok, result.diagnostics
@@ -252,13 +281,13 @@ def test_discarding_compilation_state_preserves_program_behavior(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     source = "print([1, 2, 3].map(fn(n: int) -> int => n * 2)[2])"
-    runtime = PipelineDriver()
-    assert run_inline_command(runtime, source).ok
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    assert run_inline_code(runtime, source).ok
     assert capsys.readouterr().out == "6\n"
 
     artifact_cache.clear_retained_artifacts()
 
-    assert run_inline_command(runtime, source).ok
+    assert run_inline_code(runtime, source).ok
     assert capsys.readouterr().out == "6\n"
 
 
@@ -404,7 +433,7 @@ def _persisted_checked_entry_size(
     write_module_file(root, "library", library_source)
     clear_parsed_module_cache()
     artifact_cache.clear_retained_artifacts()
-    parsed = parse_entry_module("import library::*\ngreet()", entry_path=None, inline_command=True)
+    parsed = parse_entry_module("import library::*\ngreet()", entry_path=None, inline_code=True)
     graph, _next_id, _new_modules = build_repl_graph(
         parsed.program,
         parsed.next_id,
@@ -881,21 +910,25 @@ def test_custom_response_formats_do_not_leak_between_hosts(
         def name(self) -> str:
             return "tagged"
 
-    extended = PipelineDriver(agent_dispatcher=lambda request: "answer")
+    extended = PipelineDriver(
+        resolve_agent_spec=None, agent_dispatcher=lambda request: "answer", get_sandbox_context=None
+    )
     extended.register_codec(TaggedCodec())
     source = 'let answer: text = ask("prompt", format = "tagged")\nprint(answer)'
-    assert run_inline_command(extended, source).ok
+    assert run_inline_code(extended, source).ok
     assert capsys.readouterr().out == "answer\n"
 
     ordinary = PipelineDriver(
-        agent_dispatcher=lambda _: pytest.fail("unsupported format dispatched")
+        resolve_agent_spec=None,
+        agent_dispatcher=lambda _: pytest.fail("unsupported format dispatched"),
+        get_sandbox_context=None,
     )
-    rejected = run_inline_command(ordinary, source)
+    rejected = run_inline_code(ordinary, source)
     assert not rejected.ok
     assert rejected.diagnostics or rejected.error is not None
     assert capsys.readouterr().out == ""
 
-    assert run_inline_command(extended, source).ok
+    assert run_inline_code(extended, source).ok
     assert capsys.readouterr().out == "answer\n"
 
 

@@ -73,6 +73,7 @@ def _record_class(
         kind=NominalKind.RECORD,
         fields=fields,
         mutable_fields=frozenset({fields[0]}) if mutable else frozenset(),
+        field_json_names=fields,
     )
     record_cls = cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
     descriptors = ValueDescriptors(
@@ -163,6 +164,7 @@ def _callback_box_class() -> tuple[NominalId, type[_RecordCompanion]]:
         kind=NominalKind.RECORD,
         fields=("value", "callback"),
         mutable_fields=frozenset({"callback"}),
+        field_json_names=("value", "callback"),
     )
     return nominal, cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
 
@@ -417,6 +419,7 @@ def test_two_programs_reusing_a_function_id_render_each_views_own_spelling() -> 
         kind=NominalKind.RECORD,
         fields=("fn",),
         mutable_fields=frozenset({"fn"}),
+        field_json_names=("fn",),
     )
     synthesize_nominal_classes((descriptor,))
     function_id = FunctionId(1)

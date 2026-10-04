@@ -25,7 +25,7 @@ def _point_program(tmp_path: Path) -> Path:
         "  y: int\n\n"
         "program def main(\n"
         '  @opt-env("POINT")\n'
-        "  point: Point,\n"
+        "  @arg-named point: Point,\n"
         "  tag: Option[Point] = Option::None,\n"
         "  meta: json = {},\n"
         ") -> unit =\n"
@@ -56,6 +56,18 @@ def _agent_program(tmp_path: Path) -> Path:
         "  print (case backup of\n"
         "    | Option::Some(value) => describe(value)\n"
         '    | Option::None => "no backup")\n',
+    )
+    return agl_file
+
+
+def _review_agent_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(
+        agl_file,
+        "program def main(@arg-named review-agent: Agent) -> unit =\n"
+        "  print (case review-agent of\n"
+        '    | AgentClaude(model, thinking) => "claude %{model} <%{thinking}>"\n'
+        '    | _ => "other")\n',
     )
     return agl_file
 
@@ -149,7 +161,7 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert (
             exec_command.run(
-                _exec_args_no_trace(agl_file, argument_tokens=["--backup", "claude/opus-high"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--backup", "claude/opus:high"])
             )
             is None
         )
@@ -157,10 +169,62 @@ class TestValueSyntaxOnHostSurfaces:
         out = capsys.readouterr().out
         assert out.splitlines()[-1] == "claude opus high"
 
+    def test_agent_flag_shorthand_without_effort_selects_the_native_agent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Regression: ``claude/opus`` omits the effort; it was once read as a command."""
+        agl_file = _review_agent_program(tmp_path)
+
+        assert (
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", "claude/opus"])
+            )
+            is None
+        )
+
+        assert capsys.readouterr().out == "claude opus <>\n"
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("claude", 'Agent::AgentClaude(model = "", thinking = "")'),
+            ("Codex:high", 'Agent::AgentCodex(model = "", thinking = "high")'),
+            ("pi/anthropic", 'Agent::AgentPi(provider = "anthropic", model = "", thinking = "")'),
+            ("claude -p", 'Agent::AgentCommand(command = "claude -p")'),
+        ],
+    )
+    def test_agent_flag_reads_a_bare_native_agent_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], token: str, expected: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-named review-agent: Agent) -> unit =\n  print review-agent\n",
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", token])
+            )
+            is None
+        )
+
+        assert capsys.readouterr().out == f"{expected}\n"
+
+    def test_agent_flag_malformed_native_shorthand_fails(self, tmp_path: Path) -> None:
+        agl_file = _review_agent_program(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=["--review-agent", "claude/"])
+            )
+
+        assert exc_info.value.code not in (0, None)
+
     def test_agent_typed_toml_string_reads_host_agent_shorthand(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        _config_home(tmp_path, monkeypatch, '[prog.main]\nworker = "codex/o3-high"\n')
+        _config_home(tmp_path, monkeypatch, '[prog.main]\nworker = "codex/o3:high"\n')
         agl_file = _agent_program(tmp_path)
 
         assert exec_command.run(_exec_args_no_trace(agl_file)) is None
@@ -333,3 +397,199 @@ class TestHostTextRejectsLoneSurrogates:
 
         assert exc_info.value.code == 1
         assert "meta" in capsys.readouterr().err
+
+
+def _nested_values_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(
+        agl_file,
+        "enum Level\n"
+        '  | @name("debug") Debug\n'
+        "  | Info\n"
+        '  | @json-name("n/a") Unknown\n\n'
+        "record Point\n"
+        "  x: int\n"
+        "  y: int\n\n"
+        "record Settings\n"
+        "  level: Level\n"
+        "  origin: Point\n"
+        "  label: text\n\n"
+        "program def main(\n"
+        "  level: Level = Info,\n"
+        "  levels: array[Level] = [],\n"
+        "  settings: array[Settings] = [],\n"
+        "  sandboxes: array[AgentSandbox] = [],\n"
+        "  workers: array[Agent] = [],\n"
+        "  limits: dict[text, int] = {},\n"
+        "  meta: json = [],\n"
+        ") -> unit =\n"
+        "  print level\n"
+        "  print levels\n"
+        "  print settings\n"
+        "  print sandboxes\n"
+        "  print workers\n"
+        "  print limits\n"
+        "  print meta\n",
+    )
+    return agl_file
+
+
+class TestConfigStringsReadAlikeAtEveryDepth:
+    """A string nested in a native config array or table is read exactly as a
+    top-level config string of that slot's type is."""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        config: str,
+        *argument_tokens: str,
+    ) -> list[str]:
+        _config_home(tmp_path, monkeypatch, config)
+        agl_file = _nested_values_program(tmp_path)
+        args = _exec_args_no_trace(agl_file, argument_tokens=list(argument_tokens))
+        assert exec_command.run(args) is None
+        return capsys.readouterr().out.splitlines()
+
+    @pytest.mark.parametrize(
+        ("spelling", "member"),
+        [
+            ("Debug", "Level::Debug"),
+            ("debug", "Level::Debug"),
+            ("Level::Debug", "Level::Debug"),
+            ("Info", "Level::Info"),
+            ("Unknown", "Level::Unknown"),
+            ("n/a", "Level::Unknown"),
+        ],
+        ids=("declared", "alias", "qualified", "plain", "declared-beside-json-name", "json-name"),
+    )
+    def test_fieldless_member_spellings_agree_across_surfaces(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        spelling: str,
+        member: str,
+    ) -> None:
+        nested = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            f'[prog.main]\nlevel = "{spelling}"\nlevels = ["{spelling}", "Info"]\n',
+        )
+        assert nested[:2] == [member, f"[{member}, Level::Info]"]
+
+        flag = exec_command.run(
+            _exec_args_no_trace(tmp_path / "prog.agl", argument_tokens=["--level", spelling])
+        )
+        assert flag is None
+        assert capsys.readouterr().out.splitlines()[0] == member
+
+    def test_nested_strings_read_value_syntax_for_their_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            "[prog.main]\n"
+            "settings = [\n"
+            '  { level = "Debug", origin = "Point(1, 2)", label = "Debug" },\n'
+            '  { level = "n/a", origin = { x = "3", y = 4 }, label = "3" },\n'
+            '  "Settings(level = Info, origin = Point(5, 6), label = \\"x\\")",\n'
+            "]\n"
+            'sandboxes = ["Native", { "$case" = "Disabled" }, '
+            '{ "$case" = "Sandbox", memory = \'Some("8G")\' }]\n'
+            'workers = ["claude/opus:high", "runner --flag"]\n'
+            'limits = { low = "1", high = 2 }\n',
+        )
+        assert out[2] == (
+            '[Settings(level = Level::Debug, origin = Point(x = 1, y = 2), label = "Debug"), '
+            'Settings(level = Level::Unknown, origin = Point(x = 3, y = 4), label = "3"), '
+            'Settings(level = Level::Info, origin = Point(x = 5, y = 6), label = "x")]'
+        )
+        assert out[3] == (
+            "[AgentSandbox::Native, AgentSandbox::Disabled, "
+            'Sandbox(memory = Option::Some(value = "8G"), swap = Optional::Default, '
+            "settings = Option::None, patch = true)]"
+        )
+        assert out[4] == (
+            '[Agent::AgentClaude(model = "opus", thinking = "high"), '
+            'Agent::AgentCommand(command = "runner --flag")]'
+        )
+        assert out[5] == '{"low": 1, "high": 2}'
+
+    def test_nested_json_strings_stay_literal_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(
+            tmp_path, monkeypatch, capsys, '[prog.main]\nmeta = ["Debug", "3", { a = "Info" }]\n'
+        )
+        assert out[6] == '["Debug", "3", {"a": "Info"}]'
+
+    @pytest.mark.parametrize(
+        ("config", "parameter"),
+        [
+            ('levels = ["Info", "Nope"]', "levels"),
+            ('limits = { low = "one" }', "limits"),
+            ('settings = [{ level = "Info", origin = "Point(1)", label = "x" }]', "settings"),
+            ('sandboxes = [{ "$case" = "Nope" }]', "sandboxes"),
+            ('levels = [{ "$case" = "Info" }]', "levels"),
+            ('levels = { first = "Info" }', "levels"),
+            ('level = ["Info"]', "level"),
+            (
+                'settings = [{ level = "Info", origin = "Point(1, 2)", label = "x", extra = "y" }]',
+                "settings",
+            ),
+        ],
+        ids=(
+            "unknown-member",
+            "not-an-int",
+            "malformed-constructor",
+            "unknown-tag",
+            "tag-object",
+            "table-for-an-array",
+            "array-for-a-member",
+            "unknown-field",
+        ),
+    )
+    def test_malformed_nested_value_is_a_host_error_naming_the_parameter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        config: str,
+        parameter: str,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, f"[prog.main]\n{config}\n")
+        agl_file = _nested_values_program(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file))
+
+        assert exc_info.value.code == 1
+        assert parameter in capsys.readouterr().err
+
+    def test_json_name_wins_over_another_members_declared_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, '[prog.main]\npicks = ["First", "Swap::First"]\n')
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "enum Swap\n"
+            '  | @json-name("Second") First\n'
+            '  | @json-name("First") Second\n\n'
+            "program def main(pick: Swap, picks: array[Swap]) -> unit =\n"
+            "  print pick\n"
+            "  print picks\n",
+        )
+
+        args = _exec_args_no_trace(agl_file, argument_tokens=["First"])
+        assert exec_command.run(args) is None
+
+        assert capsys.readouterr().out.splitlines() == [
+            "Swap::Second",
+            "[Swap::Second, Swap::First]",
+        ]

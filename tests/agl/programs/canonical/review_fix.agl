@@ -32,7 +32,7 @@ program def main(spec: text) -> unit =
 
       Artifact:
       %{artifact}
-      """, agent = reviewer, on-parse-error = Retry(n = 2))
+      """, agent = reviewer, parse-error-retries = 2)
 
       case review of
         | Pass() =>
@@ -47,7 +47,7 @@ program def main(spec: text) -> unit =
 
             Current artifact:
             %{artifact}
-            """, agent = impl, on-parse-error = Retry(n = 2))
+            """, agent = impl, parse-error-retries = 2)
 
             case result of
               | Complete(output) =>

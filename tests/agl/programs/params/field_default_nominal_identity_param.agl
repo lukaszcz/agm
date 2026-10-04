@@ -1,0 +1,37 @@
+# A program parameter's defaulted field whose default is itself a nominal
+# (record) value fills through the same decode-time seam the cast boundary
+# uses, with the REAL declared nominal identity: the filled-in value renders
+# and compares exactly like the same value built by direct source-level
+# construction, both for an all-defaulted record and for a record whose
+# default field sits in the positional zone.
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+
+@arg-pos
+record Point
+  x: int = 1
+  y: int = 2
+
+record Line
+  start: Point = Point
+  label: text = "line"
+
+record Tag
+  n: int = 7
+
+record Holder
+  label: text = "tag=%{Tag}"
+  keep: bool = true
+
+program def main(cfg: Config, ln: Line, holder: Holder) -> unit =
+  let source = Holder
+  print "%{cfg.retry}"
+  print "%{cfg.retry == Retry}"
+  print "%{ln.start}"
+  print "%{ln.start == Point(1, 2)}"
+  print "%{holder.label}"
+  print "%{holder.label == source.label}"

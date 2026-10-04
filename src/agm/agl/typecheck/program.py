@@ -204,9 +204,6 @@ class CheckedProgram:
     ``import_sccs``
         Loader-computed reverse-topological import components, retained for
         dependency-ordered lowering after this pass's presentation ordering.
-    ``runtime_modules``
-        Entry-reachable modules through explicit source imports and exports.
-        Loader-injected standard-library edges do not add dry-run call sites.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -215,7 +212,6 @@ class CheckedProgram:
     warnings: tuple[Diagnostic, ...]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
     resource_roots: Mapping[ModuleId, Path | None]
-    runtime_modules: frozenset[ModuleId]
     capabilities: HostCapabilities | None = None
     module_fingerprints: Mapping[ModuleId, bytes] = field(default_factory=dict)
 
@@ -1578,7 +1574,6 @@ def check_program(
     presentation_order = tuple(mid for mid in resolved.modules if mid != resolved.entry_id) + (
         resolved.entry_id,
     )
-    runtime_modules = frozenset(resolved.graph.source_reachable_modules(resolved.entry_id))
 
     checked = CheckedProgram(
         modules={mid: checked_modules[mid] for mid in presentation_order},
@@ -1590,7 +1585,6 @@ def check_program(
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
-        runtime_modules=runtime_modules,
         module_fingerprints=module_fingerprints(retainable, capabilities)
         if entry_seed_env is None
         else {},

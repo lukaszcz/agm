@@ -29,9 +29,11 @@ review-tools/
 ```
 
 The package name must be a single AgL identifier segment and not a reserved
-keyword. It is the mandatory first segment of every module the package
-provides: `review-tools/src/review.agl` has identity `review-tools/review`,
-both inside the package and from any importer. The `src/` tree is mounted
+keyword; validating a package also rejects a name AGM reserves for its own
+commands or config sections ([`agm pkg`](../../commands/pkg.md#layout)). It is
+the mandatory first segment of every module the package provides:
+`review-tools/src/review.agl` has identity `review-tools/review`, both inside
+the package and from any importer. The `src/` tree is mounted
 under the package name; the package root itself is not a search root, so a
 module file placed outside `src/` does not belong to the package and is not
 mounted.
@@ -132,7 +134,11 @@ A program the manifest registers as a command gains that command path as an
 equivalent address: with `"dev review"` registered for
 `review-tools/review::main`, `[dev.review]` configures the same program as
 `[review-tools.review.review.main]` does, whether it is run as `agm dev
-review`, by reference, or by file path.
+review`, by reference, or by file path. Every proper prefix of a command path
+is also an inherited group table: `[dev]` supplies defaults for `dev review`
+and any other command beneath it, ranking below the command's own exact
+table. See [`[aliases]`](../../commands/pkg.md#aliases) for how it layers and
+its undeclared-key warning exemption.
 
 The command's closure module parameters retain their declaring-module
 **module routes**. For example, a root parameter in `review-tools/logging`
@@ -142,8 +148,11 @@ registered command path and the selected program's own table are equivalent
 **program routes**: either can override a module parameter through any spelling
 that resolves for it — its bare external name, or a dotted qualified spelling
 (as a quoted key) when a nearer declaration claims the bare one. A program-route
-value wins over the program's own [`@config`](attributes.md#config) entries, which in turn win
-over a module-route value; CLI and `@opt-env` values win over all three. See
+value wins over the program's own [`@config`](attributes.md#config) entries,
+which in turn win over the package's own manifest
+[`[config]`](../../commands/pkg.md#config) table — its command table, then an
+inherited group table, then the manifest root — which wins over a module-route
+value; CLI and `@opt-env` values win over all of these. See
 [Module parameters](host-environment.md#module-parameters) for all spelling,
 ambiguity, and precedence rules.
 
@@ -187,7 +196,7 @@ Companions run in AGM's own interpreter, so the requirements are checked
 against its environment (see [`agm pkg`](../../commands/pkg.md#python)).
 [`agm pkg install`](../../commands/pkg.md#commands) and
 [`agm pkg sync`](../../commands/pkg.md#commands) install unsatisfied
-requirements (`just install` ends with `agm pkg sync`), and
+requirements, and
 [`agm pkg check`](../../commands/pkg.md#commands) reports them. `agm pkg sync`
 covers only active packages. A run that would import a companion of a package
 with an unsatisfied requirement fails before evaluation with an error naming

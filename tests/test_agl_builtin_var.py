@@ -21,13 +21,13 @@ from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
-from tests._agl_helpers import agent_value, agl_roots, run_inline_command
+from tests._agl_helpers import agent_value, agl_roots, run_inline_code
 
 
 def _run(source: str) -> RunResult:
     """Run a single-module *source* (no imports) through prepare + run_prepared."""
-    rt = PipelineDriver()
-    return run_inline_command(rt, source)
+    rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    return run_inline_code(rt, source)
 
 
 def _run_program(
@@ -39,8 +39,10 @@ def _run_program(
 ) -> RunResult:
     """Run *source* (with imports) through the program pipeline against the stdlib."""
     roots = agl_roots(*extra_roots)
-    rt = PipelineDriver(shell_exec_timeout=shell_exec_timeout)
-    return run_inline_command(rt, source, roots=roots, builtin_host_settings=builtin_host_settings)
+    rt = PipelineDriver(
+        resolve_agent_spec=None, shell_exec_timeout=shell_exec_timeout, get_sandbox_context=None
+    )
+    return run_inline_code(rt, source, roots=roots, builtin_host_settings=builtin_host_settings)
 
 
 def _run_with_std_config(
@@ -54,8 +56,8 @@ def _run_with_std_config(
     config_path = root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(std_config, encoding="utf-8")
-    rt = PipelineDriver()
-    return run_inline_command(
+    rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    return run_inline_code(
         rt,
         source,
         roots=RootSet(roots=frozenset({root})),
@@ -438,6 +440,42 @@ class TestStdConfigQualified:
         )
         assert caught.ok, caught.diagnostics
         assert caught.bindings["caught"] == BoolValue(True)
+
+    def test_parse_error_retries_defaults_to_four_and_accepts_zero(self) -> None:
+        result = _run_program(
+            "import std/config::*\n"
+            "let before = std/config::parse-error-retries\n"
+            "std/config::parse-error-retries := 0\n"
+            "let after = std/config::parse-error-retries\n"
+            "print after"
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["before"] == IntValue(4)
+        assert result.bindings["after"] == IntValue(0)
+
+    def test_parse_error_retries_host_seed_overrides_the_default(self) -> None:
+        result = _run_program(
+            "import std/config::*\nlet n = std/config::parse-error-retries\nprint n",
+            builtin_host_settings={"parse-error-retries": IntValue(9)},
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(9)
+
+    def test_negative_parse_error_retries_raises_catchable_range_error(self) -> None:
+        """A rejected write leaves the setting unchanged."""
+        result = _run_program(
+            "import std/config::*\n"
+            "std/config::parse-error-retries := 2\n"
+            "let caught = try\n"
+            "    std/config::parse-error-retries := -1\n"
+            "    false\n"
+            "  catch RangeError as e =>\n"
+            "    true\n"
+            "let n = std/config::parse-error-retries\n"
+        )
+        assert result.ok, result.diagnostics
+        assert result.bindings["caught"] == BoolValue(True)
+        assert result.bindings["n"] == IntValue(2)
 
     def test_trace_file_some_round_trips(self) -> None:
         result = _run_program(

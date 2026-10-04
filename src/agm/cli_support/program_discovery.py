@@ -60,7 +60,7 @@ class ProgramDiscoveryArtifacts:
 def discover_programs_for_target(
     *,
     file: str | None,
-    command: str | None,
+    code: str | None,
     module_paths: "list[str] | None",
     no_stdlib: bool,
 ) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
@@ -85,7 +85,7 @@ def discover_programs_for_target(
     """
     artifacts = discover_program_artifacts_for_target(
         file=file,
-        command=command,
+        code=code,
         module_paths=module_paths,
         no_stdlib=no_stdlib,
     )
@@ -97,7 +97,7 @@ def discover_programs_for_target(
 def discover_program_artifacts_for_target(
     *,
     file: str | None,
-    command: str | None,
+    code: str | None,
     module_paths: "list[str] | None",
     no_stdlib: bool,
     context: "ConfigContext | None" = None,
@@ -129,7 +129,7 @@ def discover_program_artifacts_for_target(
         target = (
             resolve_exec_target(
                 file=file,
-                command=command,
+                code=code,
                 home=context.home,
                 proj_dir=context.proj_dir,
                 cwd=context.cwd,
@@ -162,8 +162,12 @@ def discover_program_artifacts_for_target(
             home=context.home,
             proj_dir=context.proj_dir,
         )
-        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
-        parsed = runtime.parse_entry(source, entry_path=entry_path, inline_command=inline_source)
+        runtime = PipelineDriver(
+            agent_dispatcher=lambda request: AgentResponse(content=""),
+            get_sandbox_context=None,
+            resolve_agent_spec=None,
+        )
+        parsed = runtime.parse_entry(source, entry_path=entry_path, inline_code=inline_source)
         prepared = runtime.prepare_parsed_entry(
             parsed, roots=exec_roots.roots, default_stdlib=not no_stdlib
         )
@@ -201,12 +205,12 @@ class ExecProgramDiscovery:
     def __init__(
         self,
         *,
-        command: str | None,
+        code: str | None,
         requested_program: str | None,
         module_paths: "list[str] | None",
         no_stdlib: bool,
     ) -> None:
-        self._command = command
+        self._code = code
         self._requested_program = requested_program
         self._module_paths = module_paths
         self._no_stdlib = no_stdlib
@@ -217,7 +221,7 @@ class ExecProgramDiscovery:
         if file not in self._artifacts:
             self._artifacts[file] = discover_program_artifacts_for_target(
                 file=file,
-                command=self._command,
+                code=self._code,
                 module_paths=self._module_paths,
                 no_stdlib=self._no_stdlib,
             )

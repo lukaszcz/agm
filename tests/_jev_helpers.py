@@ -47,7 +47,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.externs import ExternRegistry
-from tests._agl_helpers import package_roots, run_inline_command
+from tests._agl_helpers import package_roots, run_inline_code
 from tests._package_helpers import package_info
 
 SYSONE_ROOT = Path(__file__).resolve().parents[1] / "packages" / "sysone"
@@ -126,7 +126,7 @@ def jev_roots() -> RootSet:
 
 def load_jev_companion(driver: PipelineDriver, registry: ExternRegistry) -> ModuleType:
     """Load the ``sysone/jev`` companion into *registry* through *driver*."""
-    result = run_inline_command(driver, "import sysone/jev", roots=jev_roots())
+    result = run_inline_code(driver, "import sysone/jev", roots=jev_roots())
     assert result.ok, result.diagnostics
     companion = registry.loaded_companion(JEV_MODULE)
     assert companion is not None
@@ -163,7 +163,9 @@ class JevMount(NamedTuple):
 def mount_jev(monkeypatch: pytest.MonkeyPatch, outcomes: Sequence[Mapping[str, Any]]) -> JevMount:
     """A fresh driver whose ``sysone/jev`` clients are answered by scripted *outcomes*."""
     registry = ExternRegistry()
-    driver = PipelineDriver(extern_registry=registry)
+    driver = PipelineDriver(
+        resolve_agent_spec=None, extern_registry=registry, get_sandbox_context=None
+    )
     transport = install_jev_transport(monkeypatch, driver, registry, outcomes)
     companion = registry.loaded_companion(JEV_MODULE)
     assert companion is not None

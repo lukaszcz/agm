@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING, assert_never, cast
@@ -44,8 +44,11 @@ from agm.agl.ir.contracts import (
     RefDecode,
     ScalarDecode,
     ScalarKind,
+    VariantDecode,
+    is_plain_enum,
     resolve_schema_ref,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.arithmetic import checked_decimal
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -221,9 +224,27 @@ def _clean_validation_message(error: JsonschemaValidationError) -> str:
 #: (no ``RefDecode`` node can occur, so no ``$defs`` table is needed).
 _EMPTY_DEFS: Mapping[str, DecodeSchema] = MappingProxyType({})
 
+#: Resolves one omitted defaulted field's value at decode time. An ordinary
+#: program's own default resolves from the declaring nominal's real,
+#: fully-linked descriptor (``IrInterpreter.default_for_field`` is the
+#: canonical implementation). A reserved record decoded before any program
+#: exists (a host engine setting from a CLI flag or config entry) instead
+#: resolves from its host-side constant in
+#: ``semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES``
+#: (``semantics.type_table.reserved_field_default``, wrapped by
+#: ``runtime.engine_config``'s own resolver) — no evaluator is reachable
+#: there. ``None`` (a compile-time contract preview, which decodes nothing):
+#: a defaulted-but-omitted field then reports the ordinary "missing field"
+#: error, same as an undefaulted one.
+DefaultResolver = Callable[[NominalId, int], Value]
+
 
 def decode_value(
-    schema: DecodeSchema, obj: object, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
+    schema: DecodeSchema,
+    obj: object,
+    defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
+    *,
+    default_resolver: DefaultResolver | None = None,
 ) -> Value:
     """Construct a typed ``Value`` from JSON-shaped *obj* per *schema*.
 
@@ -231,6 +252,10 @@ def decode_value(
     (``as`` / ``as?``), the agent/exec output codec, and host param decoding.
     Raises ``ValueError`` on any type mismatch; callers convert this into the
     appropriate domain error (``AglCastConversion``, ``ValidationError``, etc.).
+    A record/enum-variant field missing from *obj* fills from *default_resolver*
+    when its ``default_index`` is set and a resolver is given; otherwise it
+    raises the ordinary missing-field error (see *default_resolver*'s own
+    docstring).
 
     *defs* resolves ``RefDecode`` nodes for a recursive target type — the
     ``$defs`` table built alongside *schema* by ``type_schema.derive_schema_and_decode``
@@ -243,13 +268,15 @@ def decode_value(
     match schema:
         case RefDecode(key=key):
             resolved = resolve_decode_ref(key, defs)
-            return decode_value(resolved, obj, defs)
+            return decode_value(resolved, obj, defs, default_resolver=default_resolver)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
         case ArrayDecode(elem=elem):
             if not isinstance(obj, list):
                 raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ArrayValue([decode_value(elem, e, defs) for e in obj])
+            return ArrayValue(
+                [decode_value(elem, e, defs, default_resolver=default_resolver) for e in obj]
+            )
         case DictDecode(value=value_schema):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object, got {type(obj).__name__}")
@@ -257,7 +284,7 @@ def decode_value(
             for k, v in obj.items():
                 if not isinstance(k, str):
                     raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-                entries[k] = decode_value(value_schema, v, defs)
+                entries[k] = decode_value(value_schema, v, defs, default_resolver=default_resolver)
             return DictValue(entries=entries)
         case RecordDecode(nominal=nominal, fields=fields):
             if not isinstance(obj, dict):
@@ -265,33 +292,51 @@ def decode_value(
             record_fields: dict[str, Value] = {}
             for rfield in fields:
                 if rfield.json_name not in obj:
-                    raise ValueError(f"Missing field {rfield.json_name!r}")
+                    if rfield.default_index is None or default_resolver is None:
+                        raise ValueError(f"Missing field {rfield.json_name!r}")
+                    record_fields[rfield.name] = default_resolver(nominal, rfield.default_index)
+                    continue
                 record_fields[rfield.name] = decode_value(
-                    rfield.schema, obj[rfield.json_name], defs
+                    rfield.schema, obj[rfield.json_name], defs, default_resolver=default_resolver
                 )
             return RecordValue(nominal=nominal, fields=record_fields)
-        case EnumDecode(display_name=display_name, variants=variants):
+        case EnumDecode():
+            if is_plain_enum(schema):
+                if not isinstance(obj, str):
+                    raise ValueError(f"Expected string for enum, got {type(obj).__name__}")
+                return RecordValue(nominal=_enum_variant(schema, obj).nominal, fields={})
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
             case_val = obj.get("$case")
             if not isinstance(case_val, str):
                 raise ValueError("Enum object must have a string '$case' field")
-            variant = next((v for v in variants if v.json_name == case_val), None)
-            if variant is None:
-                raise ValueError(
-                    f"Unknown enum variant {case_val!r} for {display_name!r}. "
-                    f"Valid variants: {[v.json_name for v in variants]}"
-                )
+            variant = _enum_variant(schema, case_val)
             payload: dict[str, Value] = {}
             for vfield in variant.fields:
                 if vfield.json_name not in obj:
-                    raise ValueError(
-                        f"Enum variant {case_val!r} is missing field {vfield.json_name!r}"
-                    )
-                payload[vfield.name] = decode_value(vfield.schema, obj[vfield.json_name], defs)
+                    if vfield.default_index is None or default_resolver is None:
+                        raise ValueError(
+                            f"Enum variant {case_val!r} is missing field {vfield.json_name!r}"
+                        )
+                    payload[vfield.name] = default_resolver(variant.nominal, vfield.default_index)
+                    continue
+                payload[vfield.name] = decode_value(
+                    vfield.schema, obj[vfield.json_name], defs, default_resolver=default_resolver
+                )
             return RecordValue(nominal=variant.nominal, fields=payload)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _enum_variant(schema: EnumDecode, tag: str) -> VariantDecode:
+    """Return *schema*'s member whose JSON tag is *tag*."""
+    variant = next((v for v in schema.variants if v.json_name == tag), None)
+    if variant is None:
+        raise ValueError(
+            f"Unknown enum variant {tag!r} for {schema.display_name!r}. "
+            f"Valid variants: {[v.json_name for v in schema.variants]}"
+        )
+    return variant
 
 
 #: A ``DecodeSchema`` known not to be a ``RefDecode`` -- what

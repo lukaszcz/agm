@@ -113,8 +113,8 @@ class TestAcceptedConfigTargets:
     def test_enum_constructor_value(self) -> None:
         _check(
             "import std/agent\n\n"
-            "@param let policy: ParsePolicy = ParsePolicy::Abort\n\n"
-            "@config(policy = ParsePolicy::Retry(n = 3))\n"
+            "@param let mode: AgentSandbox = AgentSandbox::Disabled\n\n"
+            "@config(mode = AgentSandbox::Native)\n"
             "program def main() -> unit = ()\n"
         )
 

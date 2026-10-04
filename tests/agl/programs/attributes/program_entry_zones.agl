@@ -6,7 +6,8 @@
 @doc("The outcome of one run.")
 enum Verdict
   | Pass
-  | Fail(@arg-named reason: text)
+  | Fail
+      @arg-named reason: text
 
 @doc("Renders one verdict.")
 @arg-pos

@@ -3,8 +3,8 @@
 Covers:
 - CLI wires FILE arguments (one or more), -I/--module-path, and --no-stdlib
   into CheckArgs; missing FILE is a usage error.
-- A clean program file, a clean library module (no `program def`, the case
-  `agm exec --dry-run` rejects), and a module with no items at all check
+- A clean program file, a clean library module (no `program def`, which
+  `agm exec` cannot run), and a module with no items at all check
   successfully with no output.
 - Syntax errors, type errors, and errors inside an imported module are
   reported as GNU-style diagnostics on stderr with exit code 1.
@@ -158,15 +158,15 @@ class TestCheckCommand:
         check_command.run(CheckArgs(files=[str(agl_file)]))
 
         captured = capsys.readouterr()
-        # ``check`` never prints ``exec --dry-run``'s ``call-sites:`` inventory,
-        # even though this program has one (the ``ask`` call above).
+        # ``check`` never prints a call-site inventory, even though this
+        # program has one (the ``ask`` call above).
         assert captured.out == ""
         assert captured.err == ""
 
     def test_clean_library_module_without_program_def_succeeds(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A library module with no `program def` is the case `exec --dry-run` rejects."""
+        """A library module with no `program def` is legal to check."""
         agl_file = tmp_path / "lib.agl"
         agl_file.write_text("def double(n: int) -> int = n * 2\n")
 
@@ -398,15 +398,13 @@ class TestCheckCommand:
         captured = capsys.readouterr()
         assert captured.out == ""
 
-    def test_dry_run_flag_is_accepted_and_has_no_effect(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_dry_run_flag_is_rejected(self, runner: CliRunner, tmp_path: Path) -> None:
         agl_file = tmp_path / "hello.agl"
         agl_file.write_text('program def main() -> unit =\n  print "hi"\n')
 
-        result = invoke(runner, ["check", "--dry-run", str(agl_file)])
+        result = invoke(runner, ["check", str(agl_file), "--dry-run"])
 
-        assert result.exit_code == 0
+        assert result.exit_code != 0
 
     def test_warning_only_file_exits_0_and_prints_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -422,6 +420,24 @@ class TestCheckCommand:
         assert captured.out == ""
         assert "tabby.agl" in captured.err
         assert "warning:" in captured.err
+
+    def test_extern_call_inside_program_is_checked_without_execution(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "returned_extern.agl"
+        agl_file.write_text(
+            "extern def choose() -> (int) -> int\n"
+            "program def main() -> unit =\n"
+            "  let result = choose()(1)\n"
+            "  ()\n"
+        )
+        agl_file.with_suffix(".py").write_text("")
+
+        check_command.run(CheckArgs(files=[str(agl_file)]))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
 
     def test_invalid_module_root_configuration_reports_error_and_continues(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

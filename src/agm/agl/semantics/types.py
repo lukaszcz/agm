@@ -1010,13 +1010,6 @@ _EXEC_RESULT_TYPE = RecordType(
     name="ExecResult", module_id=RESERVED_ID, decl_id=_reserved_id("ExecResult")
 )
 
-# ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
-# ``Abort`` — abort on parse error (no fields).
-# ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(
-    name="ParsePolicy", module_id=RESERVED_ID, decl_id=_reserved_id("ParsePolicy")
-)
-
 # ``Agent`` — a plain enum data value that specifies an agent backend.
 _AGENT_TYPE = EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent"))
 
@@ -1034,6 +1027,21 @@ def standard_option_type(inner: Type) -> EnumType:
         type_args=(inner,),
         module_id=RESERVED_ID,
         decl_id=_reserved_id("Option"),
+    )
+
+
+def standard_optional_type(inner: Type) -> EnumType:
+    """Return the standard library's ``Optional[inner]`` under the host's reserved identity.
+
+    The one constructor for a host-minted ``Optional``, mirroring
+    :func:`standard_option_type`. :func:`is_standard_optional_enum` is the
+    matching predicate.
+    """
+    return EnumType(
+        name="Optional",
+        type_args=(inner,),
+        module_id=RESERVED_ID,
+        decl_id=_reserved_id("Optional"),
     )
 
 
@@ -1079,6 +1087,20 @@ def is_standard_optional_enum(type_: Type) -> TypeGuard[EnumType]:
     return _is_standard_enum(type_, "Optional")
 
 
+def is_negatable_host_type(type_: Type) -> bool:
+    """Return whether a host spells *type_* with a negative polarity.
+
+    ``bool`` and the standard optional enums: the one test shared by the
+    CLI's ``--no-x`` projection and a program parameter's positional default,
+    since a positional slot cannot spell the negative.
+    """
+    return (
+        isinstance(type_, BoolType)
+        or is_standard_option_enum(type_)
+        or is_standard_optional_enum(type_)
+    )
+
+
 _OUTPUT_CONTRACT_TYPE = RecordType(
     name="OutputContract", module_id=RESERVED_ID, decl_id=_reserved_id("OutputContract")
 )
@@ -1112,6 +1134,14 @@ _SESSION_ERROR_TYPE = ExceptionType(
     name="SessionError", module_id=RESERVED_ID, decl_id=_reserved_id("SessionError")
 )
 
+# ``Sandbox`` — the sandboxing options record; ``AgentSandbox`` widens it (enum-record
+# unification: ``AgentSandbox::Sandbox`` IS a ``Sandbox`` value).
+_SANDBOX_TYPE = RecordType(name="Sandbox", module_id=RESERVED_ID, decl_id=_reserved_id("Sandbox"))
+
+_AGENT_SANDBOX_TYPE = EnumType(
+    name="AgentSandbox", module_id=RESERVED_ID, decl_id=_reserved_id("AgentSandbox")
+)
+
 # These records represent host resources rather than source-constructible data.
 HOST_MINTED_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset({"Session"})
 HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
@@ -1120,7 +1150,6 @@ HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
 
 BUILTIN_PRELUDE_TYPES: dict[str, RecordType | EnumType | ExceptionType] = {
     "ExecResult": _EXEC_RESULT_TYPE,
-    "ParsePolicy": _PARSE_POLICY_TYPE,
     "Agent": _AGENT_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,
@@ -1129,6 +1158,8 @@ BUILTIN_PRELUDE_TYPES: dict[str, RecordType | EnumType | ExceptionType] = {
     "Session": _SESSION_TYPE,
     "SessionStats": _SESSION_STATS_TYPE,
     "SessionError": _SESSION_ERROR_TYPE,
+    "Sandbox": _SANDBOX_TYPE,
+    "AgentSandbox": _AGENT_SANDBOX_TYPE,
 }
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).

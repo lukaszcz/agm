@@ -10,6 +10,7 @@ import unittest.mock
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
@@ -37,8 +38,12 @@ from agm.agl.semantics.values import Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
+from tests._process_helpers import shell_command_from_argv
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program, load_graph
+
+if TYPE_CHECKING:
+    from agm.sandbox.prepare import SandboxContext
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
 
@@ -78,7 +83,7 @@ def _checked_inline_program(
     Raw lowering helpers intentionally do not call this: shape tests must
     supply static-root source explicitly.
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
     graph, _import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,
@@ -152,7 +157,6 @@ def single_module_program(checked: CheckedModule) -> CheckedProgram:
         warnings=(),
         import_sccs=((ENTRY_ID,),),
         resource_roots={ENTRY_ID: None},
-        runtime_modules=frozenset({ENTRY_ID}),
     )
 
 
@@ -293,6 +297,7 @@ def run_inline_ir(
     roots: RootSet | None = None,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> tuple[RunResult, str]:
     """Run *source* as ``agm exec -c`` through :class:`PipelineDriver`, capturing stdout.
 
@@ -300,11 +305,14 @@ def run_inline_ir(
     agent call fails instead of reaching a real agent.
     """
     runtime = PipelineDriver(
-        agent_dispatcher=agent_dispatcher, shell_exec_timeout=shell_exec_timeout
+        resolve_agent_spec=None,
+        agent_dispatcher=agent_dispatcher,
+        shell_exec_timeout=shell_exec_timeout,
+        get_sandbox_context=get_sandbox_context,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = run_inline_command(
+        result = run_inline_code(
             runtime,
             source,
             roots=_roots() if roots is None else roots,
@@ -461,7 +469,7 @@ def make_inline_graph_from_files(
     """
     root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
-    parsed = parse_entry_module(entry_source, entry_path=None, inline_command=True)
+    parsed = parse_entry_module(entry_source, entry_path=None, inline_code=True)
     graph, _next_id, _new_modules = build_repl_graph(
         parsed.program,
         parsed.next_id,
@@ -535,6 +543,7 @@ def _make_scripted_registry(
     *,
     default_responses: list[str] | None = None,
     call_log: list[tuple[str, str]] | None = None,
+    env_log: list[dict[str, str]] | None = None,
 ) -> AgentFn:
     def make_agent(name: str, responses: list[str]) -> AgentFn:
         remaining = iter(responses)
@@ -542,6 +551,8 @@ def _make_scripted_registry(
         def agent(request: AgentRequest) -> AgentResponse:
             if call_log is not None:
                 call_log.append((name, request.prompt))
+            if env_log is not None:
+                env_log.append(dict(request.env))
             return AgentResponse(content=next(remaining))
 
         return agent
@@ -567,9 +578,17 @@ def evaluate_ir_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
+    process_environment: dict[str, str] | None = None,
+    env_log: list[dict[str, str]] | None = None,
 ) -> dict[str, Value]:
-    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    return completed_bindings(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
+    agent_dispatcher = _make_scripted_registry(
+        scripts, default_responses=default_responses, env_log=env_log
+    )
+    return completed_bindings(
+        run_inline_ir(
+            source, agent_dispatcher=agent_dispatcher, process_environment=process_environment
+        )
+    )
 
 
 def evaluate_ir_raises_with_agents(
@@ -577,9 +596,14 @@ def evaluate_ir_raises_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
+    process_environment: dict[str, str] | None = None,
 ) -> RunError:
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    return uncaught_error(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
+    return uncaught_error(
+        run_inline_ir(
+            source, agent_dispatcher=agent_dispatcher, process_environment=process_environment
+        )
+    )
 
 
 def shell_caps() -> HostCapabilities:
@@ -587,9 +611,31 @@ def shell_caps() -> HostCapabilities:
     return HostCapabilities(supports_shell_exec=True, codec_kinds=base.codec_kinds)
 
 
+@dataclass(frozen=True, slots=True)
+class ScriptedShellCall:
+    """One recorded call into a scripted ``run_capture_result`` fake."""
+
+    args: list[str]
+    env: dict[str, str] | None
+    cwd: Path | None
+    interrupt_cleanup_cmd: list[str] | None
+
+
 def _scripted_shell(
-    commands: dict[str, ProcessCaptureResult], *, cmd_log: list[str] | None = None
+    commands: dict[str, ProcessCaptureResult],
+    *,
+    cmd_log: list[str] | None = None,
+    argv_log: list[list[str]] | None = None,
+    call_log: "list[ScriptedShellCall] | None" = None,
 ) -> Callable[..., ProcessCaptureResult]:
+    """Build a scripted ``run_capture_result`` fake.
+
+    *call_log*, when given, records every call's ``env``/``cwd``/
+    ``interrupt_cleanup_cmd`` (each fake otherwise discards them), so a test
+    can assert a prepared sandboxed command's fields actually reach the
+    process boundary.
+    """
+
     def run(
         args: list[str],
         *,
@@ -597,9 +643,18 @@ def _scripted_shell(
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
-        command = args[2]
+        del idle_timeout, isolate_process_group
+        if argv_log is not None:
+            argv_log.append(args)
+        if call_log is not None:
+            call_log.append(
+                ScriptedShellCall(
+                    args=list(args), env=env, cwd=cwd, interrupt_cleanup_cmd=interrupt_cleanup_cmd
+                )
+            )
+        command = shell_command_from_argv(args)
         if cmd_log is not None:
             cmd_log.append(command)
         return commands[command]
@@ -613,6 +668,7 @@ def run_inline_ir_with_shell(
     *,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> tuple[RunResult, str]:
     """Run *source* like :func:`run_inline_ir` with every shell process faked by *shell_fake*."""
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
@@ -620,6 +676,7 @@ def run_inline_ir_with_shell(
             source,
             process_environment=process_environment,
             shell_exec_timeout=shell_exec_timeout,
+            get_sandbox_context=get_sandbox_context,
         )
 
 
@@ -628,12 +685,24 @@ def evaluate_ir_with_shell(
     commands: dict[str, ProcessCaptureResult],
     *,
     cmd_log_ir: list[str] | None = None,
+    argv_log: list[list[str]] | None = None,
+    call_log: "list[ScriptedShellCall] | None" = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> dict[str, Value]:
-    shell = _scripted_shell(commands, cmd_log=cmd_log_ir)
-    return completed_bindings(run_inline_ir_with_shell(source, shell))
+    shell = _scripted_shell(commands, cmd_log=cmd_log_ir, argv_log=argv_log, call_log=call_log)
+    return completed_bindings(
+        run_inline_ir_with_shell(source, shell, get_sandbox_context=get_sandbox_context)
+    )
 
 
 def evaluate_ir_raises_with_shell(
-    source: str, commands: dict[str, ProcessCaptureResult]
+    source: str,
+    commands: dict[str, ProcessCaptureResult],
+    *,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> RunError:
-    return uncaught_error(run_inline_ir_with_shell(source, _scripted_shell(commands)))
+    return uncaught_error(
+        run_inline_ir_with_shell(
+            source, _scripted_shell(commands), get_sandbox_context=get_sandbox_context
+        )
+    )

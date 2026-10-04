@@ -1,0 +1,9 @@
+{
+  "diagnostic": {
+    "line": 8,
+    "message_contains": [
+      "Missing required argument",
+      "z"
+    ]
+  }
+}

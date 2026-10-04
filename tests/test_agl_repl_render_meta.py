@@ -177,6 +177,7 @@ class TestRenderEntryResult:
                     declared_name="Box",
                     kind=NominalKind.RECORD,
                     fields=("items",),
+                    field_json_names=("items",),
                 )
             },
             functions={},
@@ -247,46 +248,6 @@ class TestRenderEntryResult:
 
         result = _result(kind="expression", value=UNIT_VALUE, value_type=UnitType(), ok=True)
         assert render_mod.render_entry_result(result, echo=False, echo_unit=True) is None
-
-    def test_dry_run_unit_expression_echoes_type_when_echo_unit_on(self) -> None:
-        from agm.agl.semantics.types import UnitType
-
-        result = _result(kind="expression", value_type=UnitType(), ok=True)
-        rendered = render_mod.render_entry_result(
-            result, echo=True, echo_unit=True, check_only=True
-        )
-        assert rendered == ": unit"
-
-    def test_dry_run_unit_expression_echoes_nothing_by_default(self) -> None:
-        from agm.agl.semantics.types import UnitType
-
-        result = _result(kind="expression", value_type=UnitType(), ok=True)
-        rendered = render_mod.render_entry_result(result, echo=True, check_only=True)
-        assert rendered is None
-
-    def test_check_only_expression_shows_type(self) -> None:
-        # In dry-run there is no value; the echo shows the inferred type.
-        result = _result(kind="expression", value_type=IntType(), ok=True)
-        rendered = render_mod.render_entry_result(result, echo=True, check_only=True)
-        assert rendered == ": int"
-
-    def test_check_only_binding_shows_name_and_type(self) -> None:
-        result = _result(kind="binding", name="x", value_type=IntType(), ok=True)
-        rendered = render_mod.render_entry_result(result, echo=True, check_only=True)
-        assert rendered == "x : int"
-
-    def test_check_only_declaration_confirms_name(self) -> None:
-        result = _result(kind="declaration", name="R", ok=True)
-        rendered = render_mod.render_entry_result(result, echo=True, check_only=True)
-        assert rendered == "R declared"
-
-    def test_check_only_statement_is_none(self) -> None:
-        result = _result(kind="statement", ok=True)
-        assert render_mod.render_entry_result(result, echo=True, check_only=True) is None
-
-    def test_check_only_echo_off_suppresses(self) -> None:
-        result = _result(kind="expression", value_type=IntType(), ok=True)
-        assert render_mod.render_entry_result(result, echo=False, check_only=True) is None
 
     def test_echo_off_suppresses_success(self) -> None:
         result = _result(kind="expression", value=TextValue("hi"), value_type=TextType(), ok=True)
@@ -556,6 +517,13 @@ class TestType:
         table = TypeTable()
         table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID, decl_node_id=1))
         assert format_type_for_repl(RecordType(name="Empty", decl_id=1), table) == "record Empty"
+
+    def test_no_type_table_falls_back_to_compact_repr(self) -> None:
+        from agm.agl.repl.type_display import format_type_for_repl
+        from agm.agl.semantics.types import RecordType
+
+        typ = RecordType(name="Empty", decl_id=1)
+        assert format_type_for_repl(typ, None) == repr(typ)
 
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())
@@ -1385,15 +1353,6 @@ class TestScopedDeclarationEcho:
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
-
-    def test_check_only_scope_region_entry_echoes_its_path(self) -> None:
-        s = _open_session()
-        r = s.eval_entry(
-            "scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools", check_only=True
-        )
-
-        assert r.ok, r.diagnostics
-        assert render_mod.render_entry_result(r, echo=True, check_only=True) == "Tools declared"
 
     def test_empty_scope_region_entry_echoes_its_path(self) -> None:
         s = _open_session()

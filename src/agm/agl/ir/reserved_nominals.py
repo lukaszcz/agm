@@ -39,6 +39,7 @@ import types
 from collections.abc import Mapping
 
 __all__ = [
+    "AGENT_SANDBOX_MEMBERS",
     "NO_DECL_ID",
     "RESERVED_NOMINAL_NAMES",
     "RESERVED_NOMINAL_IDS",
@@ -82,14 +83,14 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "CyclicValueError",
     # Built-in prelude types (mirrors semantics.types.BUILTIN_PRELUDE_TYPE_NAMES).
     "ExecResult",
-    "ParsePolicy",
     "Agent",
     "OutputContract",
     "OutputContractOption",
     "AgentRequest",
     # Host-minted std/option::Option (see runtime/option.py).
     "Option",
-    # Appended prelude types preserve every established reserved identity above.
+    # Reserved ids are positional; the artifact cache key (`_compiler_digest()`
+    # in artifact_storage.py) covers any change to this list.
     "SessionTransport",
     "Session",
     "SessionStats",
@@ -98,6 +99,9 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "ValueParseError",
     # Appended host-decoded std/optional::Optional.
     "Optional",
+    # Appended: the sandboxing mode engine setting and its plain-record shape.
+    "AgentSandbox",
+    "Sandbox",
 )
 
 #: Bare reserved name -> its stable, distinct identity. Derived from
@@ -109,12 +113,21 @@ RESERVED_NOMINAL_IDS: Mapping[str, int] = types.MappingProxyType(
     {name: NO_DECL_ID - (index + 1) for index, name in enumerate(RESERVED_NOMINAL_NAMES)}
 )
 
+#: ``AgentSandbox``'s member names, the single source both the engine-config
+#: enum-shape table (``runtime/engine_config.py``) and the value-decode
+#: boundary (``runtime/sandbox_values.py``) resolve members against, so
+#: neither spells the list out itself.
+AGENT_SANDBOX_MEMBERS: tuple[str, ...] = ("Disabled", "Native", "Sandbox")
+
 #: Stable fallback identities for members of host-known enums. This range is
-#: disjoint from parser node ids and the top-level reserved identities.
+#: disjoint from parser node ids and the top-level reserved identities, except
+#: for a referenced member — one whose value IS another reserved value's
+#: value, be it a standalone reserved record or another enum's member (enum-
+#: record unification) — whose entry deliberately aliases that other value's
+#: own id instead of minting a fresh one (see ``AgentSandbox``'s ``Sandbox``
+#: below).
 RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType(
     {
-        ("ParsePolicy", "Abort"): -1000,
-        ("ParsePolicy", "Retry"): -1001,
         ("Agent", "AgentCommand"): -1010,
         ("Agent", "AgentClaude"): -1011,
         ("Agent", "AgentCodex"): -1012,
@@ -126,6 +139,19 @@ RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType
         ("SessionTransport", "Cli"): -1040,
         ("SessionTransport", "Rpc"): -1041,
         ("Optional", "Default"): -1050,
+        # Referenced members: ``Optional``'s declaration is
+        # ``Option::Some[T] | Option::None | Default``, so its ``None``/``Some``
+        # values ARE ``Option``'s own values -- alias ``Option``'s reserved ids
+        # rather than minting fresh ones (same rule as ``AgentSandbox::Sandbox``
+        # below).
+        ("Optional", "None"): -1030,
+        ("Optional", "Some"): -1031,
+        ("AgentSandbox", "Disabled"): -1060,
+        ("AgentSandbox", "Native"): -1061,
+        # Referenced member: its value IS the standalone ``Sandbox`` record's
+        # own value, so it aliases that record's own reserved nominal id
+        # rather than minting a fresh member id.
+        ("AgentSandbox", "Sandbox"): RESERVED_NOMINAL_IDS["Sandbox"],
     }
 )
 
@@ -145,5 +171,16 @@ def require_reserved_nominal_id(name: str) -> int:
 
 
 def require_reserved_enum_member_id(enum_name: str, member_name: str) -> int:
-    """Return the stable fallback identity for a host-known enum member."""
+    """Return the stable fallback identity for a host-known enum member.
+
+    Looked up by the exact ``(enum_name, member_name)`` pair only. A
+    referenced member (e.g. ``AgentSandbox``'s ``Sandbox``, or ``Optional``'s
+    ``None``/``Some``) carries no identity of its own -- its value IS a
+    standalone reserved record's value, or another enum's member's value --
+    so :data:`RESERVED_ENUM_MEMBER_IDS` lists that one pair explicitly,
+    aliasing the referenced value's own reserved id; there is no generic
+    name-keyed fallback, since any *member_name* that happened to match some
+    other reserved type or member name would silently alias that unrelated
+    value.
+    """
     return RESERVED_ENUM_MEMBER_IDS[(enum_name, member_name)]

@@ -1,0 +1,23 @@
+{
+  "scenarios": [
+    {
+      "name": "stdlib_with_effort",
+      "params": {
+        "effort": "high"
+      },
+      "expect": {
+        "stdout": "Agent::AgentClaude(model = \"\", thinking = \"\")\nAgent::AgentCodex(model = \"\", thinking = \"\")\nAgent::AgentPi(provider = \"\", model = \"\", thinking = \"\")\nAgent::AgentClaude(model = \"\", thinking = \"high\")\nAgent::AgentPi(provider = \"\", model = \"sonnet\", thinking = \"high\")\nAgent::AgentPi(provider = \"anthropic\", model = \"\", thinking = \"\")\nAgent::AgentCodex(model = \"o3\", thinking = \"\")\nAgent::AgentClaude(model = \"opus\", thinking = \"\")\ntrue\n"
+      }
+    },
+    {
+      "name": "no_stdlib_without_effort",
+      "no_stdlib": true,
+      "params": {
+        "effort": ""
+      },
+      "expect": {
+        "stdout": "Agent::AgentClaude(model = \"\", thinking = \"\")\nAgent::AgentCodex(model = \"\", thinking = \"\")\nAgent::AgentPi(provider = \"\", model = \"\", thinking = \"\")\nAgent::AgentClaude(model = \"\", thinking = \"\")\nAgent::AgentPi(provider = \"\", model = \"sonnet\", thinking = \"\")\nAgent::AgentPi(provider = \"anthropic\", model = \"\", thinking = \"\")\nAgent::AgentCodex(model = \"o3\", thinking = \"\")\nAgent::AgentClaude(model = \"opus\", thinking = \"\")\ntrue\n"
+      }
+    }
+  ]
+}

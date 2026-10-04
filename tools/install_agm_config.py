@@ -51,7 +51,7 @@ def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
     return True
 
 
-def _install_tree_files(
+def _install_directory_files(
     *,
     source_dir: Path,
     destination_dir: Path,
@@ -59,8 +59,8 @@ def _install_tree_files(
     installed: list[Path],
     skipped: list[Path],
 ) -> None:
-    """Copy every file under *source_dir* into *destination_dir*."""
-    for source in sorted(source_dir.rglob("*")):
+    """Copy files directly under *source_dir* into *destination_dir*."""
+    for source in sorted(source_dir.iterdir()):
         if not source.is_file():
             continue
         relative = source.relative_to(source_dir)
@@ -122,7 +122,7 @@ def install_user_config(
 
     micro_source_dir = repo_root / "config" / "micro"
     if micro_source_dir.exists():
-        _install_tree_files(
+        _install_directory_files(
             source_dir=micro_source_dir,
             destination_dir=micro_syntax_dir,
             force=force,

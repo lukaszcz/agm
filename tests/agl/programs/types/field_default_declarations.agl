@@ -1,0 +1,43 @@
+# Constructor field defaults declared on records, enum-member payloads,
+# exceptions (including an inherited default), and a generic record.
+# Every call below still supplies every field explicitly.
+
+record Point
+  x: int
+  y: int = 0
+
+enum Result
+  | Ok(value: int, label: text = "ok")
+  | Err(reason: text)
+
+exception BaseErr extends Exception
+  code: int = 0
+
+exception DerivedErr extends BaseErr
+  detail: text
+
+record Box[T]
+  value: T
+  note: Option[T] = None
+
+program def main(base: int) -> unit =
+  let p = Point(x = base, y = base + 1)
+  print p.x
+  print p.y
+
+  let r: Result = Ok(value = base, label = "computed")
+  case r of
+    | Ok(value, label) => print label
+    | Err(reason) => print reason
+
+  let boxed = Box(value = base, note = Some(base + 2))
+  print boxed.value
+  case boxed.note of
+    | Some(value) => print value
+    | None => print 0
+
+  try
+    raise DerivedErr(message = "boom", code = base, detail = "why")
+  catch DerivedErr as e =>
+    print e.code
+    print e.detail

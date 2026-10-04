@@ -6,13 +6,15 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
-from agm.agl.semantics.values import RecordValue
-from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
+from agm.agl.ir.reserved_nominals import AGENT_SANDBOX_MEMBERS
+from agm.agl.semantics.values import IntValue, RecordValue
+from agm.config.engine_keys import ENGINE_KEYS, NON_NEGATIVE_ENGINE_KEYS, EngineKeyKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from agm.agl.ir.builtin_nominals import BuiltinNominals
+    from agm.agl.ir.ids import NominalId
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -22,8 +24,12 @@ __all__ = [
     "convert_config_value",
     "convert_host_value",
     "engine_default_settings",
+    "EngineRangeError",
     "raw_option_str",
     "restamp_engine_setting",
+    "validate_engine_leaf_value",
+    "validate_engine_value",
+    "validate_manifest_leaf_value",
 ]
 
 
@@ -31,6 +37,8 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
     """Return the ``(enum name, member names)`` an engine key *kind* restamps, if any."""
     if kind is EngineKeyKind.AGENT:
         return ("Agent", tuple(AGENT_SPECS))
+    if kind is EngineKeyKind.AGENT_SANDBOX:
+        return ("AgentSandbox", AGENT_SANDBOX_MEMBERS)
     if kind is EngineKeyKind.OPTION_TEXT:
         return ("Option", ("None", "Some"))
     return None
@@ -40,6 +48,42 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
 _ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
     spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
 }
+
+#: Engine key name -> kind, built once from ``ENGINE_KEYS``.
+_ENGINE_KEY_KINDS_BY_NAME: dict[str, EngineKeyKind] = {spec.name: spec.kind for spec in ENGINE_KEYS}
+
+
+def _restamp_value_tree(
+    value: "Value", *, from_table: "BuiltinNominals", to_table: "BuiltinNominals"
+) -> "Value":
+    """Recursively restamp every nominal identity in a record tree from *from_table* to *to_table*.
+
+    A restamped record can itself carry other host-known nominal values (e.g.
+    ``AgentSandbox``'s ``Sandbox`` member has ``Optional``/``Option``-typed
+    fields), so restamping the outer identity alone would leave a nested
+    value's identity unrecognized by *to_table*'s owner. Only records recurse:
+    every engine-setting value is a scalar, an ``Option``/``Optional``, or a
+    record built from those (see ``semantics.engine_keys.ENGINE_KEY_TYPES``)
+    -- never an array or dict -- so this never needs to look inside a
+    collection. A non-record value, including one nested in a field this
+    table has no name for, crosses unchanged.
+    """
+    if not isinstance(value, RecordValue):
+        return value
+    fields = {
+        name: _restamp_value_tree(field_value, from_table=from_table, to_table=to_table)
+        for name, field_value in value.fields.items()
+    }
+    located = from_table.reverse(value.nominal)
+    if located is None:
+        return RecordValue(nominal=value.nominal, fields=fields)
+    name, member_name = located
+    target = (
+        to_table.resolve(name)
+        if member_name is None
+        else to_table.resolve_standard_member(name, member_name)
+    )
+    return RecordValue(nominal=target.nominal, fields=fields)
 
 
 def _restamp_host_enum_member(
@@ -56,12 +100,16 @@ def _restamp_host_enum_member(
     identity) onto a program's own nominal table, and to persist a
     post-run engine-setting value (a program's own identity) back onto the
     reserved fallback table so it survives past that program's own lifetime.
+    Once membership is established, restamping the outer identity together
+    with its nested fields is exactly :func:`_restamp_value_tree`'s job, so
+    this delegates to it rather than rebuilding the fields dict itself.
     """
     for member_name in member_names:
         source = from_table.resolve_standard_member(enum_name, member_name)
         if value.nominal == source.nominal:
-            target = to_table.resolve_standard_member(enum_name, member_name)
-            return RecordValue(nominal=target.nominal, fields=value.fields)
+            restamped = _restamp_value_tree(value, from_table=from_table, to_table=to_table)
+            assert isinstance(restamped, RecordValue)
+            return restamped
     return value
 
 
@@ -70,7 +118,7 @@ def restamp_engine_setting(
 ) -> "Value":
     """Restamp *value* onto *to_table*'s identity when *key* is enum-backed.
 
-    An enum-backed engine key (``AGENT``/``OPTION_TEXT`` kind) carries the
+    An enum-backed engine key (``AGENT``/``AGENT_SANDBOX``/``OPTION_TEXT`` kind) carries the
     identity of whichever nominal table stamped it; every reader of such a
     value needs it in its own table's identity to recognize the value's
     members with :func:`~agm.agl.ir.builtin_nominals.resolve_standard_member_name`
@@ -92,6 +140,29 @@ def restamp_engine_setting(
     )
 
 
+def _normalize_option_text_value(value: object) -> str | None:
+    """Normalize one raw ``Option[text]`` engine value the way a config-file entry is read.
+
+    A non-blank string passes through verbatim (e.g. ``"30s"``); positive
+    numbers become their string spelling (e.g. ``60`` -> ``"60"``); a blank
+    string, a non-positive number, or anything else is treated as absent.
+    Shared by :func:`raw_option_str` (config-file tables) and
+    :func:`validate_manifest_leaf_value` (package manifest ``[config]`` leaves),
+    so both read an ``Option[text]``-kind engine value — ``timeout``,
+    ``trace-file`` — by the identical rule. A CLI flag is never normalized: a
+    blank flag value is an error, not absence.
+    """
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return str(value)
+    if isinstance(value, (float, Decimal)) and value > 0:
+        from agm.core.parse import format_timeout
+
+        return format_timeout(value)
+    return None
+
+
 def raw_option_str(
     primary: "Mapping[str, object]",
     fallback: "Mapping[str, object]",
@@ -99,25 +170,17 @@ def raw_option_str(
 ) -> str | None:
     """Return the raw TOML value for *key* as a string, checking primary then fallback.
 
-    Preserves the exact string written in the config file (e.g. ``"30s"``).
-    For numeric values (int/decimal/float), converts to string (e.g. ``60`` → ``"60"``),
-    but only when the value is positive (a zero/negative numeric config value is
-    treated as absent).
-    Returns ``None`` when the key is absent or empty/invalid in both tables.
+    Each table's value is normalized by :func:`_normalize_option_text_value`;
+    returns ``None`` when the key is absent or normalizes to absent in both
+    tables.
 
     Used by ``commands/exec.py`` and ``commands/repl.py`` to extract the raw
     timeout/trace-file strings before passing them to :func:`convert_config_value`.
     """
     for table in (primary, fallback):
-        val = table.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
-            return str(val)
-        if isinstance(val, (float, Decimal)) and val > 0:
-            from agm.core.parse import format_timeout
-
-            return format_timeout(val)
+        normalized = _normalize_option_text_value(table.get(key))
+        if normalized is not None:
+            return normalized
     return None
 
 
@@ -140,20 +203,37 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 
 
 def engine_default_settings() -> "dict[str, Value]":
-    """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
+    """Build the typed engine-default value for every defaulted scalar engine key.
 
     Derives the raw values from the shared engine-key catalog, then decodes
-    them via :func:`convert_config_value` (``false``/``false``/``none``/``none``),
-    building its own fresh seeded ``TypeTable`` rather than requiring one from
-    the caller.
+    them via :func:`convert_config_value`, building its own fresh seeded
+    ``TypeTable`` rather than requiring one from the caller.
 
-    ``default-agent`` is an ``Agent`` value rather than a scalar or
-    ``Option[text]`` one and has no host-side default: it comes from the
-    ``std/config`` ``builtin var`` declaration like any other declared default.
+    ``default-agent`` is an ``Agent`` value rather than a scalar one and has no
+    host-side default: it comes from the ``std/config`` ``builtin var``
+    declaration like any other declared default.
     """
     return build_engine_config_seeds(
         {spec.name: spec.default for spec in ENGINE_KEYS if spec.has_default}
     )
+
+
+def _reserved_default_resolver(nominal: "NominalId", field_index: int) -> "Value":
+    """Fill an omitted defaulted field of a reserved record with its host-side constant.
+
+    Passed to :func:`~agm.agl.runtime.arguments.decode_param_value` as the
+    ``default_resolver`` for every host engine-config decode
+    (:func:`convert_host_value`). No program — and so no evaluator — exists
+    yet at this boundary, unlike an ordinary program's own field default
+    (filled by ``IrInterpreter.default_for_field`` against the real, fully
+    linked ``NominalDescriptor`` table); a reserved record's default is
+    instead a plain host-side constant in
+    :data:`~agm.agl.semantics.type_table.RESERVED_FIELD_DEFAULT_VALUES` (see
+    :func:`~agm.agl.semantics.type_table.reserved_field_default`).
+    """
+    from agm.agl.semantics.type_table import reserved_field_default
+
+    return reserved_field_default(nominal.value, field_index)
 
 
 def convert_host_value(
@@ -169,18 +249,20 @@ def convert_host_value(
     host engine-setting values (CLI flags, config-file entries) through it.
 
     ``text`` values are taken verbatim; a JSON-compatible Python value (not a
-    string) crosses the canonical JSON boundary directly. A raw string is read
-    through the shared strict-JSON-or-value-syntax dispatch
-    (:func:`~agm.agl.runtime.value_decode.host_text_to_json`): strict JSON
-    first, then one AgL value-syntax literal — no repair of user typos either
-    way. *raw* may instead be an
+    string) crosses the canonical JSON boundary, its nested strings read as a
+    raw string is. A raw string is read through the shared host-text dispatch
+    (:func:`~agm.agl.runtime.value_decode.host_param_text_to_json`): strict
+    JSON first, then one AgL value-syntax literal — no repair of user typos
+    either way. *raw* may instead be an
     :class:`~agm.agl.runtime.arguments.OptionSome` box, for an ``Option[T]``
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and
     is wrapped into the enum's ``Some`` shape, exactly as a program's own
     ``Option[T]`` parameter decodes. *type_obj* is a checked engine-setting
     type with a wire schema; the builtin ``Agent`` enum's schema is dispatched
     through its own shorthand and constructor-call reading. *type_table*
-    resolves record/enum field/variant shapes for *type_obj*.
+    resolves record/enum field/variant shapes for *type_obj*. An omitted defaulted field (e.g.
+    ``Sandbox``'s or an ``Agent`` member's) fills through
+    :func:`_reserved_default_resolver`.
     """
     from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError
@@ -188,7 +270,7 @@ def convert_host_value(
 
     decoder = build_param_decoder(type_obj, type_table)
     try:
-        return decode_param_value(decoder, raw)
+        return decode_param_value(decoder, raw, default_resolver=_reserved_default_resolver)
     except (StrictJsonParseError, ValueError) as exc:
         raise ValueError(f"Setting {name!r}: could not parse as {type_obj!r}: {exc}") from exc
 
@@ -228,3 +310,65 @@ def convert_config_value(
             return none_value(nominals=NO_BUILTIN_DECLARATIONS)
         return convert_host_value(name, OptionSome(raw), key_type, table)
     return convert_host_value(name, raw, key_type, table)
+
+
+class EngineRangeError(ValueError):
+    """A decoded engine value outside its key's accepted range."""
+
+
+def validate_engine_value(
+    name: str, value: "Value", *, nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
+) -> None:
+    """Check one decoded engine setting *value*, raising ``ValueError`` when it is invalid.
+
+    The one post-decode rule shared by host decoding (CLI, config tables,
+    manifest, ``@config``) and a runtime source write: a present
+    ``Option[text]`` must not be blank, ``timeout`` must parse as a duration
+    (:func:`~agm.core.parse.parse_timeout`), and a non-negative key must not be
+    negative (:class:`EngineRangeError`). *nominals* is the table that stamped
+    *value*'s ``Option`` identity.
+    """
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT and isinstance(
+        value, RecordValue
+    ):
+        from agm.agl.runtime.option import option_text
+        from agm.core.parse import parse_timeout
+
+        text = option_text(value, nominals=nominals)
+        if text is not None and not text.strip():
+            raise ValueError(f"Setting {name!r}: value must not be blank.")
+        if text is not None and name == "timeout":
+            parse_timeout(text)
+    if name in NON_NEGATIVE_ENGINE_KEYS and isinstance(value, IntValue) and value.value < 0:
+        raise EngineRangeError(f"setting {name!r} must not be negative, got {value.value}")
+
+
+def validate_engine_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
+    """Decode one named engine setting's raw value, raising ``ValueError`` on any failure.
+
+    Looks up *name*'s type in ``ENGINE_KEY_TYPES``, decodes through
+    :func:`convert_config_value`, and checks the result with
+    :func:`validate_engine_value`. *raw* is decoded as given (a blank ``timeout``
+    or ``trace-file`` fails): callers holding a config-file or manifest spelling
+    normalize it first.
+    """
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
+
+    value = convert_config_value(name, raw, ENGINE_KEY_TYPES[name], type_table)
+    validate_engine_value(name, value)
+    return value
+
+
+def validate_manifest_leaf_value(name: str, raw: object, type_table: "TypeTable") -> "Value":
+    """:func:`validate_engine_leaf_value` for a manifest ``[config]`` leaf.
+
+    An ``Option[text]``-kind key is first normalized by
+    :func:`_normalize_option_text_value`, as a config-file entry is: positive
+    numbers become their string spelling, a blank or non-positive value is absent.
+    A value of any other type (bool, array, table) is an error, not absence.
+    """
+    if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
+        if isinstance(raw, bool) or not isinstance(raw, (str, int, float, Decimal)):
+            raise ValueError(f"Setting {name!r}: expected a string or number, got {raw!r}.")
+        raw = _normalize_option_text_value(raw)
+    return validate_engine_leaf_value(name, raw, type_table)

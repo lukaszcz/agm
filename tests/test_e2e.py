@@ -37,10 +37,15 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests import _agm_zygote
-from tests._agl_helpers import write_file_program
+from tests._agl_helpers import (
+    write_file_program,
+    write_sandbox_home,
+    write_transparent_sandbox_shims,
+)
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 from tests._package_helpers import write_installed_package, write_python_package
 from tests._proc_helpers import wait_for_path
 
@@ -3360,7 +3365,7 @@ class TestInit:
     ) -> None:
         project = tmp_path / "sample"
 
-        result = run_agm(["--dry-run", "init", "sample"], env=env, cwd=str(tmp_path))
+        result = run_agm(["init", "sample", "--dry-run"], env=env, cwd=str(tmp_path))
 
         assert result.returncode == 0
         assert not project.exists()
@@ -3975,6 +3980,40 @@ class TestSandbox:
         )
         assert _srt_command(result) == "npm test --coverage"
 
+    def test_run_preserves_srt_command_arguments(self, tmp_path: Path, env: dict[str, str]) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        srt = bin_dir / "srt"
+        srt.write_text(
+            '#!/bin/bash\nwhile [[ "$1" != "--" ]]; do shift; done\nshift\nbash -c "$*"\n'
+        )
+        srt.chmod(0o755)
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps(_settings(enabled=True)))
+        script = tmp_path / "args.py"
+        script.write_text(
+            "#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n"
+        )
+        script.chmod(0o755)
+        arguments = ["AA BB CC", "", "it's $HOME; echo hi", "x*y", "--flag", "plain"]
+
+        result = run_agm(
+            [
+                "run",
+                "--no-memory-limit",
+                "--no-swap-limit",
+                "-f",
+                str(settings),
+                str(script),
+                *arguments,
+            ],
+            env=env,
+            cwd=str(tmp_path),
+        )
+
+        assert json.loads(result.stdout) == arguments
+
     def test_run_memory_flag_overrides_config(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_systemd_run(tmp_path / "bin", env)
         self._make_fake_srt(tmp_path / "bin", env)
@@ -4028,7 +4067,7 @@ class TestSandbox:
         (work / ".sandbox" / "printf.json").write_text(json.dumps(_settings(enabled=True)))
         env["PROJ_DIR"] = str(proj_dir)
 
-        result = run_agm(["--dry-run", "run", "echo", "hi"], env=env, cwd=str(work))
+        result = run_agm(["run", "--dry-run", "echo", "hi"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: run configuration" in result.stdout
@@ -4060,7 +4099,7 @@ class TestSandbox:
         work.mkdir()
 
         result = run_agm(
-            ["--dry-run", "run", "--no-sandbox", "echo", "hi"],
+            ["run", "--dry-run", "--no-sandbox", "echo", "hi"],
             env=env,
             cwd=str(work),
         )
@@ -5649,7 +5688,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "run"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout
@@ -5702,7 +5741,7 @@ class TestLoop:
         work.mkdir()
 
         result = run_agm(
-            ["--dry-run", "loop", "run", "--no-selector", "--runner", "runner"],
+            ["loop", "--dry-run", "run", "--no-selector", "--runner", "runner"],
             env=env,
             cwd=str(work),
         )
@@ -6123,7 +6162,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
@@ -6162,7 +6201,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
@@ -7792,6 +7831,32 @@ class TestPackageSync:
 
 
 class TestPackageInstall:
+    def test_reinstall_replaces_the_complete_existing_package_tree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (package / "obsolete.txt").write_text("old", encoding="utf-8")
+        store = tmp_path / "agm-home" / "packages" / "alpha" / "1.0.0"
+
+        initial = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        (package / "obsolete.txt").unlink()
+        (package / "replacement.txt").write_text("new", encoding="utf-8")
+        (package / "src" / "main.agl").write_text(
+            "program def main() -> unit = ()\nlet replacement = 1\n", encoding="utf-8"
+        )
+        refused = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path, check=False)
+        replaced = run_agm(["pkg", "install", "--reinstall", str(package)], env=env, cwd=tmp_path)
+
+        assert initial.returncode == 0
+        assert refused.returncode == 1
+        assert "alpha" in refused.stderr and "1.0.0" in refused.stderr
+        assert "--reinstall" in refused.stderr
+        assert replaced.returncode == 0
+        assert not (store / "obsolete.txt").exists()
+        assert (store / "replacement.txt").read_text(encoding="utf-8") == "new"
+        assert "let replacement" in (store / "src" / "main.agl").read_text(encoding="utf-8")
+
     def test_create_rejects_a_resource_excluded_from_the_portable_archive(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -7906,6 +7971,33 @@ class TestPackageInstall:
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
 
+    def test_switch_and_uninstall_exact_package_versions(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        for version in ("1.0.1", "1.0.2"):
+            source = _write_store_test_package(tmp_path / version, "alpha", version)
+            manifest = source / "package.toml"
+            manifest.write_text(
+                manifest.read_text()
+                + '\n[commands]\nalpha-version = { program = "alpha/main::main" }\n'
+            )
+            (source / "src" / "main.agl").write_text(
+                f'program def main() -> unit = print("{version}")\n'
+            )
+            run_agm(["pkg", "install", str(source)], env=env, cwd=tmp_path)
+
+        run_agm(["pkg", "switch", "alpha@1.0.1"], env=env, cwd=tmp_path)
+        selected = run_agm(["alpha-version"], env=env, cwd=tmp_path)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        run_agm(["pkg", "uninstall", "alpha@1.0.2"], env=env, cwd=tmp_path)
+        final = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+
+        assert "alpha 1.0.1 active" in listing.stdout
+        assert "alpha 1.0.2 installed" in listing.stdout
+        assert selected.stdout == "1.0.1\n"
+        assert final.stdout.strip() == "alpha 1.0.1 active"
+
     def test_info_reports_python_requirements_and_whether_they_hold(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -7990,14 +8082,15 @@ class TestPackageInstall:
             "import std/config\n"
             'let noun = "subject"\n'
             '@doc("Publish a %{noun}")\n'
-            "program def main(subject: text) -> unit =\n"
+            "program def main(@arg-named subject: text) -> unit =\n"
             "  print subject\n"
             "  print std/config::strict-json\n"
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
         (package / "src" / "inspect.agl").write_text(
-            "program def main(subject: text) -> unit = print subject\n", encoding="utf-8"
+            "program def main(@arg-named subject: text) -> unit = print subject\n",
+            encoding="utf-8",
         )
         home.mkdir()
         (home / "config.toml").write_text(
@@ -8056,14 +8149,14 @@ class TestPackageInstall:
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
         configured = run_agm(["publish"], env=env, cwd=tmp_path)
-        dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path)
+        removed_dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path, check=False)
         uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
         unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
         assert installed.returncode == 0
         assert published.stdout == "flag\ntrue\n"
         assert configured.stdout == "configured\ntrue\n"
-        assert "call-sites:" in dry_run.stdout
+        assert removed_dry_run.returncode != 0
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 
@@ -8134,6 +8227,8 @@ class TestPackageInstall:
         assert "<name>" in command_help.stdout
         assert "--tag" in command_help.stdout
         assert "Greet someone" in command_help.stdout
+        assert_lists_execution_options(command_help.stdout)
+        assert execution_options_is_last(command_help.stdout)
         assert short_help.returncode == 0
         assert "--tag" in short_help.stdout
         assert configured.stdout == "alice:configured\n"
@@ -8273,14 +8368,14 @@ class TestPackageInstall:
         archive = tmp_path / "alpha.agmpkg"
 
         created = run_agm(
-            ["--dry-run", "pkg", "create", str(source), "-o", str(archive)],
+            ["pkg", "create", str(source), "-o", str(archive), "--dry-run"],
             env=env,
             cwd=tmp_path,
         )
         write_archive = run_agm(
             ["pkg", "create", str(source), "-o", str(archive)], env=env, cwd=tmp_path
         )
-        installed = run_agm(["--dry-run", "pkg", "install", str(archive)], env=env, cwd=tmp_path)
+        installed = run_agm(["pkg", "install", str(archive), "--dry-run"], env=env, cwd=tmp_path)
 
         assert created.returncode == 0
         assert "dry-run: agm create-package-archive" in created.stdout
@@ -8317,7 +8412,7 @@ class TestPackageInstall:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
 
-        dry_run = run_agm(["--dry-run", "pkg", "install", str(package)], env=env, cwd=tmp_path)
+        dry_run = run_agm(["pkg", "install", str(package), "--dry-run"], env=env, cwd=tmp_path)
         editable = run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
         program = tmp_path / "program.agl"
         program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
@@ -8341,7 +8436,7 @@ class TestPackageInstall:
         root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
-        dry_run = run_agm(["--dry-run", "pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
+        dry_run = run_agm(["pkg", "uninstall", "alpha", "--dry-run"], env=env, cwd=tmp_path)
         listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
 
         assert installed.returncode == 0
@@ -8459,10 +8554,10 @@ class TestHelp:
         assert result.returncode == 0, f"help {cmd} failed"
         assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
 
-    def test_help_help_mentions_completion_options(
+    def test_help_overview_mentions_completion_options(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        result = run_agm(["help", "help"], env=env, cwd=str(tmp_path))
+        result = run_agm(["help"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert "--install-completion" in result.stdout
         assert "--show-completion" in result.stdout
@@ -8494,9 +8589,10 @@ class TestHelp:
         assert "--embedded" in result.stdout
         assert "--split" in result.stdout
         assert "PROJECT_NAME" in result.stdout
-        # The non-URL form (PROJECT_NAME without REPO_URL) must not show --branch.
-        # Partition at the standalone PROJECT_NAME usage line to check only the non-URL forms.
-        assert "--branch" not in result.stdout.partition("PROJECT_NAME\n")[0]
+        # The non-URL usage form (before the REPO_URL forms) must not show -b/--branch.
+        non_url_form = result.stdout.partition("REPO_URL")[0].rpartition("\nagm init")[0]
+        assert "[PROJECT_NAME]" in non_url_form
+        assert "-b" not in non_url_form
 
     def test_help_aliases_resolve(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Aliases show help for the canonical command."""
@@ -8512,7 +8608,7 @@ class TestHelp:
             (["help", "wt", "new"], ["wt", "new", "-h"], "agm wt new"),
             (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
             (["help", "workspace", "setup"], ["workspace", "setup", "-h"], "agm workspace setup"),
-            (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm workspace list"),
+            (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm wsp list"),
             (
                 ["help", "workspace", "shell-regen"],
                 ["workspace", "shell-regen", "-h"],
@@ -8628,7 +8724,7 @@ class TestHelp:
             (["tmux", "open", "-n", "abc"], ["tmux", "open", "-h"], "pane count"),
         ],
     )
-    def test_incorrect_usage_includes_full_help(
+    def test_incorrect_usage_shows_the_usage(
         self,
         argv: list[str],
         help_argv: list[str],
@@ -8641,7 +8737,7 @@ class TestHelp:
 
         assert result.returncode != 0
         assert error_text in result.stderr.lower()
-        assert expected.stdout in result.stderr
+        assert expected.stdout.partition("\n\n")[0] in result.stderr
 
 
 # ── edge cases ─────────────────────────────────────────────────────────────
@@ -9450,8 +9546,110 @@ def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
     return alpha, module
 
 
+def _install_transparent_sandbox_shims(
+    directory: Path, env: dict[str, str], *, log_dir: Path
+) -> None:
+    """Install the shared transparent sandbox shims and prepend *directory* to ``PATH``."""
+    write_transparent_sandbox_shims(directory, log_dir=log_dir)
+    env["PATH"] = f"{directory}:{env['PATH']}"
+
+
 class TestExecCommand:
     """agm exec: run an AgL workflow program through the checkout CLI."""
+
+    @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+    def test_chat_inherits_stdio_and_resumes_after_the_agent_exits(
+        self, tmp_path: Path, env: dict[str, str], agent: str
+    ) -> None:
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name=agent,
+            script='printf "agent UI: %s\\n" "$*"\n'
+            'read -r response\nprintf "input: %s\\n" "$response"\n',
+        )
+        program = tmp_path / "chat.agl"
+        program.write_text(
+            "program def main() -> unit =\n"
+            '  chat("Help me debug this", sandbox = Disabled)\n'
+            '  print "resumed"\n'
+        )
+        completed = subprocess.run(
+            _agm_argv(["exec", "--no-trace", "--default-agent", agent, str(program)]),
+            env=_agm_env(env),
+            cwd=tmp_path,
+            input="user reply\n",
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout == "agent UI: -- Help me debug this\ninput: user reply\nresumed\n"
+
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1)))
+    def test_exec_removes_temp_paths_when_terminated_unless_debugging(
+        self, tmp_path: Path, env: dict[str, str], flags: list[str], kept: int
+    ) -> None:
+        os_temp = tmp_path / "os-temp"
+        os_temp.mkdir()
+        env["TMPDIR"] = str(os_temp)
+        ready = tmp_path / "ready"
+        program = tmp_path / "main.agl"
+        program.write_text(
+            "import std/fs\n"
+            "program def main() -> unit =\n"
+            "  let dir = fs::temp-dir()\n"
+            f'  fs::write("{ready}", dir)\n'
+            '  let _: text = exec("sleep 30")\n'
+        )
+
+        process = subprocess.Popen(
+            _agm_argv(["exec", "--no-trace", *flags, str(program)]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_agm_env(env),
+            cwd=tmp_path,
+        )
+        try:
+            _wait_for_path(ready)
+            assert Path(ready.read_text()).is_dir()
+            process.send_signal(signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=60)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=60)
+
+        assert process.returncode == 128 + signal.SIGTERM
+        assert "Traceback" not in stderr
+        # A cold process may also leave the parser's own cache file there.
+        assert len(list(os_temp.glob("agm-*"))) == kept
+
+    @pytest.mark.parametrize(
+        ("flags", "returncode", "stdout"),
+        ((["--parse-error-retries", "2"], 0, "2"), (["--parse-error-retries", "-1"], 1, "")),
+    )
+    def test_exec_seeds_parse_error_retries_from_the_cli(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        flags: list[str],
+        returncode: int,
+        stdout: str,
+    ) -> None:
+        program = tmp_path / "main.agl"
+        program.write_text(
+            "import std/config\nprogram def main() -> unit = print(config::parse-error-retries)\n"
+        )
+
+        result = run_agm(
+            ["exec", "--no-trace", *flags, str(program)], env=env, cwd=tmp_path, check=False
+        )
+
+        assert result.returncode == returncode
+        assert result.stdout.strip() == stdout
 
     def test_exec_uses_checkout_with_ambient_python_package_and_stdlib(
         self, tmp_path: Path, env: dict[str, str]
@@ -9589,7 +9787,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "greet.agl"
         program.write_text(
-            'program def main(name: text) -> unit =\n  print "hi "\n  print name\n',
+            'program def main(@arg-named name: text) -> unit =\n  print "hi "\n  print name\n',
             encoding="utf-8",
         )
 
@@ -9630,7 +9828,7 @@ class TestExecCommand:
         write_file_program(
             program,
             'let reviewer = AgentCommand("claude -p \\%{SESSION_ID}")\n'
-            'let r = reviewer.ask("ping")\n'
+            'let r = reviewer.ask("ping", sandbox = AgentSandbox::Disabled)\n'
             "print r\n",
             encoding="utf-8",
         )
@@ -9647,6 +9845,143 @@ class TestExecCommand:
         assert result.returncode == 0
         assert result.stdout.strip() == "pong"
 
+    def test_exec_default_sandboxed_agent_call_reaches_the_wrapped_agent_binary(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # No ``sandbox =`` override on this ``ask``: it exercises the
+        # ``default-sandbox`` engine setting, proving the whole wrapped
+        # systemd-run/srt chain reaches the real agent binary -- not just
+        # that sandboxed argv is constructed correctly, which the adapter
+        # unit tests already cover.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            'let r = AgentCommand("fake-sandboxed-agent").ask("hello")\nprint r\n',
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        fake_agent = tmp_path / "bin" / "fake-sandboxed-agent"
+        fake_agent.parent.mkdir(parents=True)
+        env["FAKE_AGENT_LOG"] = str(tmp_path / "agent.log")
+        fake_agent.write_text('#!/bin/bash\necho "$@" >> "$FAKE_AGENT_LOG"\nprintf \'pong\'\n')
+        fake_agent.chmod(fake_agent.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_agent.parent}:{env['PATH']}"
+
+        trace_path = tmp_path / "trace.jsonl"
+        result = run_agm(
+            ["exec", "--trace-file", str(trace_path), str(program)], env=env, cwd=str(work)
+        )
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "pong"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
+        assert Path(env["FAKE_AGENT_LOG"]).exists()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        responses = [record for record in records if record.get("kind") == "agent_response"]
+        assert responses
+        response = responses[-1]
+        assert response["sandboxed"] is True
+        assert response["argv"][0] == "systemd-run"
+        assert response["argv"][-2] == "fake-sandboxed-agent"
+
+    def test_exec_default_sandboxed_free_ask_reaches_the_wrapped_agent_binary(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # A free ``ask(...)`` (no receiver, no explicit ``agent =``) routes
+        # through the default session, opened lazily on first use: its
+        # sandboxing is fixed at that open, from the same ``default-sandbox``
+        # engine setting, and must reach the real agent binary exactly like an
+        # explicit-agent call's ephemeral session does.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            "import std/config\n"
+            'std/config::default-agent := AgentCommand("fake-free-agent \\%{SESSION_ID}")\n'
+            'let r = ask("hello")\n'
+            "print r\n",
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        fake_agent = tmp_path / "bin" / "fake-free-agent"
+        fake_agent.parent.mkdir(parents=True)
+        env["FAKE_AGENT_LOG"] = str(tmp_path / "agent.log")
+        fake_agent.write_text('#!/bin/bash\necho "$@" >> "$FAKE_AGENT_LOG"\nprintf \'pong\'\n')
+        fake_agent.chmod(fake_agent.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_agent.parent}:{env['PATH']}"
+
+        trace_path = tmp_path / "trace.jsonl"
+        result = run_agm(
+            ["exec", "--trace-file", str(trace_path), str(program)], env=env, cwd=str(work)
+        )
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "pong"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
+        assert Path(env["FAKE_AGENT_LOG"]).exists()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        responses = [record for record in records if record.get("kind") == "agent_response"]
+        assert responses
+        response = responses[-1]
+        assert response["sandboxed"] is True
+        assert response["argv"][0] == "systemd-run"
+
+    def test_exec_sandboxed_stdin_delivered_prompt_reaches_the_agent_binary_intact(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # Codex is the only built-in spec that delivers its prompt on stdin
+        # rather than a prompt file (``PromptDelivery.STDIN``): nothing else
+        # composes that delivery mode with a sandbox-wrapped command. The
+        # fake ``codex`` binary below is ``cat`` with no ``"$@"``, so it
+        # ignores argv entirely and can only reproduce the prompt by reading
+        # it off stdin -- proof stdin reaches it intact through the full
+        # ``systemd-run ... -- bash -c <bootstrap> -- srt --settings ... --
+        # codex ... -`` wrapper chain.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            'let r = AgentCodex("fake-model", "high").ask("stdin survives the sandbox wrap")\n'
+            "print r\n",
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        fake_codex = tmp_path / "bin" / "codex"
+        fake_codex.parent.mkdir(parents=True)
+        fake_codex.write_text("#!/bin/bash\ncat\n")
+        fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_codex.parent}:{env['PATH']}"
+
+        result = run_agm(["exec", str(program)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "stdin survives the sandbox wrap"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
+
     def test_exec_runs_multi_agent_review_fix_workflow(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -9662,17 +9997,21 @@ class TestExecCommand:
             "enum Fix\n"
             "  | Complete(output: text)\n"
             "\n"
-            "program def main(task: text) -> unit =\n"
+            "program def main(@arg-named task: text) -> unit =\n"
             '  let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
             '  let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
-            '  var artifact: text = impl.ask("Implement %{task}")\n'
+            "  var artifact: text = impl.ask(\n"
+            '    "Implement %{task}", sandbox = AgentSandbox::Disabled\n'
+            "  )\n"
             "  var review: Review = Pass\n"
             "  do[3]\n"
-            '    review := reviewer.ask("Review %{artifact}")\n'
+            '    review := reviewer.ask("Review %{artifact}", sandbox = AgentSandbox::Disabled)\n'
             "    case review of\n"
             "      | Pass() => ()\n"
             "      | Fail(issues) =>\n"
-            '          let fix: Fix = impl.ask("Fix %{issues} in %{artifact}")\n'
+            "          let fix: Fix = impl.ask(\n"
+            '            "Fix %{issues} in %{artifact}", sandbox = AgentSandbox::Disabled\n'
+            "          )\n"
             "          case fix of\n"
             "            | Complete(output) =>\n"
             "                artifact := output\n"
@@ -9731,7 +10070,7 @@ class TestExecCommand:
             "  | Pass\n"
             'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
             'let review: Review = reviewer.ask("Review now", '
-            "on-parse-error = Retry(n = 1))\n"
+            "parse-error-retries = 1, sandbox = AgentSandbox::Disabled)\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
             encoding="utf-8",
@@ -9747,7 +10086,7 @@ class TestExecCommand:
             'count=$((count + 1)); echo "$count" > "$COUNT_FILE"\n'
             'for arg in "$@"; do [[ "$arg" == @* ]] && cat "${arg#@}" >> "$PROMPT_LOG"; done\n'
             "if [[ $count -eq 1 ]]; then printf 'not json'; "
-            'else printf \'{"$case":"Pass"}\'; fi\n'
+            "else printf '\"Pass\"'; fi\n"
         )
         runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
@@ -9797,7 +10136,7 @@ class TestCheckCommand:
     def test_check_library_module_without_program_def_succeeds(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Unlike `agm exec --dry-run`, `agm check` accepts a file with no `program def`."""
+        """Unlike `agm exec`, `agm check` accepts a file with no `program def`."""
         work = tmp_path / "work"
         work.mkdir()
         module = work / "lib.agl"
@@ -9863,6 +10202,28 @@ class TestCheckCommand:
 
 class TestReplCommand:
     """agm repl: interactive AgL read-eval-print loop."""
+
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1)))
+    def test_repl_removes_temp_paths_on_exit_unless_debugging(
+        self, tmp_path: Path, env: dict[str, str], flags: list[str], kept: int
+    ) -> None:
+        os_temp = tmp_path / "os-temp"
+        os_temp.mkdir()
+        env["TMPDIR"] = str(os_temp)
+
+        result = run_agm(
+            ["repl", "--no-trace", *flags],
+            env=env,
+            cwd=tmp_path,
+            input=(
+                'import std/fs\nlet t = fs::temp-file()\nfs::append(t, "x")\nfs::read(t)\n:quit\n'
+            ),
+        )
+
+        assert result.returncode == 0
+        assert any(line.split()[-1:] == ['"x"'] for line in result.stdout.splitlines())
+        # A cold process may also leave the parser's own cache file there.
+        assert len(list(os_temp.glob("agm-*"))) == kept
 
     def test_repl_evaluates_entries_from_stdin_and_exits(
         self, tmp_path: Path, env: dict[str, str]

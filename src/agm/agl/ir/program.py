@@ -39,7 +39,6 @@ from agm.agl.zones import ParamZone
 __all__ = [
     "ContractId",
     "ContractRequest",
-    "DryRunEntry",
     "ExecutableModule",
     "ExecutableProgram",
     "ExternFunctionBody",
@@ -153,6 +152,17 @@ class NominalDescriptor:
                        ``semantics.arguments.positional_field_names``), in
                        field order. Used for RECORD and EXCEPTION; ``()`` for
                        ENUM and for a fieldless RECORD/EXCEPTION.
+    ``field_defaults`` — each field's lowered default expression, strictly
+                       paired with ``fields`` (``None`` for a required
+                       field); the constructor counterpart of
+                       ``IrFunctionParam.default``. A construction site may
+                       leave it ``()``, which ``__post_init__`` normalizes to
+                       an all-``None`` tuple sized to ``fields`` — the common
+                       case for a declaration with no defaulted fields, and
+                       the whole case for ENUM (``fields`` itself is always
+                       ``()`` there). ``IrMakeRecord``/``IrMakeException``
+                       fill an omitted field with ``UseDefault(index)``,
+                       which the evaluator resolves against this tuple.
     ``bears_name_path`` — whether this identity is the one its
                        ``(module_id, scope_path, declared_name)`` path
                        currently resolves to, per the type table's name
@@ -187,8 +197,21 @@ class NominalDescriptor:
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
     positional_fields: tuple[str, ...] = ()
+    field_defaults: "tuple[IrExpr | None, ...]" = ()
     bears_name_path: bool = field(default=True, compare=False)
     base: NominalId | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize an omitted ``field_defaults`` into an all-``None`` tuple sized to ``fields``.
+
+        Mirrors ``TypeDef.field_has_default``'s normalization: a construction
+        site that declares no defaulted field, or knows nothing about
+        defaults at all (every builtin/reserved/generic-template site but
+        the two record/exception builders), may simply leave
+        ``field_defaults`` at its default ``()``.
+        """
+        if not self.field_defaults and self.fields:
+            object.__setattr__(self, "field_defaults", (None,) * len(self.fields))
 
     @property
     def display_name(self) -> str:
@@ -226,10 +249,12 @@ class SourceFile:
 
     ``display_name``    — human-readable file name for error messages.
     ``normalized_text`` — the normalised UTF-8 source text (LF line endings).
+    ``file_name``      — source label used by trace records, or ``None`` when unknown.
     """
 
     display_name: str
     normalized_text: str
+    file_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,35 +400,6 @@ class IrProgramParam:
 
 
 # ---------------------------------------------------------------------------
-# Dry-run inventory
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class DryRunEntry:
-    """Inventory entry for a single call site in a linked module.
-
-    module            — module containing the call site.
-    callee            — human-readable callee label (agent name, "exec", etc.).
-    codec_name        — codec used ("text", "json").
-    target_type_label — repr(target_type) from the contract spec, or "text".
-    has_schema        — True when the contract carries a JSON Schema.
-    parse_policy      — parse policy string from the call site record.
-    line              — 1-based source line of the call.
-    col               — 0-based source column of the call.
-    """
-
-    module: ModuleId
-    callee: str
-    codec_name: str
-    target_type_label: str
-    has_schema: bool
-    parse_policy: str
-    line: int
-    col: int
-
-
-# ---------------------------------------------------------------------------
 # Program root
 # ---------------------------------------------------------------------------
 
@@ -492,7 +488,6 @@ class ExecutableProgram:
     param_spans: Mapping[StaticBindingKey, object] = field(default_factory=dict)
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     target_contracts: dict["ContractId", TargetContractRequest] = field(default_factory=dict)
-    dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     builtin_var_declarations: frozenset[BuiltinVarKey] = frozenset()
     exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = field(

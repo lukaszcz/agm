@@ -406,7 +406,7 @@ class TestDecodeValueHappy:
             ),
             host_agent=False,
         )
-        result = decode_value(schema, {"$case": "Red"})
+        result = decode_value(schema, "Red")
         assert result == RecordValue(nominal=NominalId(2), fields={})
 
     def test_enum_with_payload(self) -> None:
@@ -467,8 +467,8 @@ class TestDecodeValueHappy:
         result = decode_value(schema, {"x-coord": 1})
         assert result == RecordValue(nominal=nominal, fields={"x": IntValue(1)})
 
-    def test_enum_matches_case_against_renamed_json_tag(self) -> None:
-        """``$case`` is matched against ``VariantDecode.json_name``, not the declared name."""
+    def test_enum_matches_member_against_renamed_json_tag(self) -> None:
+        """A member is matched against ``VariantDecode.json_name``, not the declared name."""
         nominal = NominalId(1)
         schema = EnumDecode(
             nominal=nominal,
@@ -486,7 +486,7 @@ class TestDecodeValueHappy:
             ),
             host_agent=False,
         )
-        result = decode_value(schema, {"$case": "RED"})
+        result = decode_value(schema, "RED")
         assert result == RecordValue(nominal=NominalId(2), fields={})
 
 
@@ -581,85 +581,65 @@ class TestDecodeValueErrors:
         with pytest.raises(ValueError, match="Missing field"):
             decode_value(schema, {})
 
-    def test_enum_type_got_non_dict(self) -> None:
-        schema = EnumDecode(
+    @staticmethod
+    def _enum(*, plain: bool) -> EnumDecode:
+        """An enum of fieldless ``A``, plus -- unless *plain* -- ``B(x: int)``."""
+        variants = [
+            VariantDecode(
+                name="A",
+                json_name="A",
+                nominal=NominalId(2),
+                display_name="E::A",
+                fields=(),
+                alias=None,
+            )
+        ]
+        if not plain:
+            x = FieldDecode(
+                "x", "x", ScalarDecode(kind=ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+            )
+            variants.append(
+                VariantDecode(
+                    name="B",
+                    json_name="B",
+                    nominal=NominalId(3),
+                    display_name="E::B",
+                    fields=(x,),
+                    alias=None,
+                )
+            )
+        return EnumDecode(
             nominal=NominalId(1),
             display_name="E",
             name="E",
-            variants=(
-                VariantDecode(
-                    name="A",
-                    json_name="A",
-                    nominal=NominalId(2),
-                    display_name="E::A",
-                    fields=(),
-                    alias=None,
-                ),
-            ),
+            variants=tuple(variants),
             host_agent=False,
         )
+
+    def test_enum_type_got_non_dict(self) -> None:
         with pytest.raises(ValueError, match="object for enum"):
-            decode_value(schema, "oops")
+            decode_value(self._enum(plain=False), "A")
 
     def test_enum_missing_case_tag(self) -> None:
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            name="E",
-            variants=(
-                VariantDecode(
-                    name="A",
-                    json_name="A",
-                    nominal=NominalId(2),
-                    display_name="E::A",
-                    fields=(),
-                    alias=None,
-                ),
-            ),
-            host_agent=False,
-        )
         with pytest.raises(ValueError, match=r"\$case"):
-            decode_value(schema, {})
+            decode_value(self._enum(plain=False), {})
 
     def test_enum_case_tag_not_string(self) -> None:
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            name="E",
-            variants=(
-                VariantDecode(
-                    name="A",
-                    json_name="A",
-                    nominal=NominalId(2),
-                    display_name="E::A",
-                    fields=(),
-                    alias=None,
-                ),
-            ),
-            host_agent=False,
-        )
         with pytest.raises(ValueError, match=r"\$case"):
-            decode_value(schema, {"$case": 42})
+            decode_value(self._enum(plain=False), {"$case": 42})
 
     def test_enum_unknown_variant(self) -> None:
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            name="E",
-            variants=(
-                VariantDecode(
-                    name="A",
-                    json_name="A",
-                    nominal=NominalId(2),
-                    display_name="E::A",
-                    fields=(),
-                    alias=None,
-                ),
-            ),
-            host_agent=False,
-        )
         with pytest.raises(ValueError, match="Unknown enum variant"):
-            decode_value(schema, {"$case": "X"})
+            decode_value(self._enum(plain=False), {"$case": "X"})
+
+    @pytest.mark.parametrize("obj", [{"$case": "A"}, 42, None, ["A"]])
+    def test_plain_enum_got_non_string(self, obj: object) -> None:
+        with pytest.raises(ValueError, match="string for enum"):
+            decode_value(self._enum(plain=True), obj)
+
+    def test_plain_enum_unknown_member(self) -> None:
+        with pytest.raises(ValueError, match="Unknown enum variant"):
+            decode_value(self._enum(plain=True), "X")
 
     def test_enum_missing_payload_field(self) -> None:
         schema = EnumDecode(

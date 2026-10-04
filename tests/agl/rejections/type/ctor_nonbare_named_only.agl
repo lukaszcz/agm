@@ -1,5 +1,7 @@
 enum E
-  | Fail(@arg-named x: int, @arg-named y: int)
+  | Fail
+      @arg-named x: int
+      @arg-named y: int
 
 program def main() -> unit =
   let e = Fail(1, 2)

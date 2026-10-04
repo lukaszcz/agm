@@ -1,0 +1,8 @@
+def make() -> int = 1
+
+record P
+  n: int = make()
+
+program def main() -> unit =
+  let p = P()
+  p

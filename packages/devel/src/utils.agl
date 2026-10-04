@@ -1,0 +1,6 @@
+# Common utility functions
+
+import std/time
+
+def new-path(prefix: text, extension: text) -> path =
+  ".agent-files/" ++ prefix ++ "-" ++ time::timestamp() ++ extension

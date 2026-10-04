@@ -10,7 +10,7 @@ from typing import Any, cast
 import click
 import pytest
 import typer
-from click.shell_completion import ShellComplete
+from typer._completion_classes import ZshComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
@@ -55,7 +55,23 @@ def test_complete_registered_commands_reads_active_index(
     package_root.mkdir(parents=True)
     (package_root / MODULE_TREE_DIRNAME).mkdir()
     (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
-        "program def main(level: text) -> unit = ()\n", encoding="utf-8"
+        "enum Level\n"
+        '  | @name("silent") Silent\n'
+        '  | @name("error") Error\n'
+        '  | @name("warn") Warn\n'
+        '  | @name("info") Info\n'
+        '  | @name("debug") Debug\n'
+        "\n"
+        "@param\n"
+        '@opt-name("log-level")\n'
+        "var level: Level = Info\n"
+        "\n"
+        "program def main(\n"
+        '  @arg-named @opt-name("program-level") mode: Level,\n'
+        '  @arg-named @opt-name("optional-level") maybe: Option[Level],\n'
+        '  @arg-named @opt-name("default-level") fallback: Optional[Level]\n'
+        ") -> unit = ()\n",
+        encoding="utf-8",
     )
     (package_root / "package.toml").write_text(
         """[package]
@@ -86,7 +102,7 @@ review-tools = { program = "tools/review::main" }
     from agm.cli import app
 
     cli_command = typer.main.get_command(app)
-    shell_complete = ShellComplete(cli_command, {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(cli_command, {}, "agm", "_AGM_COMPLETE")
 
     first_segments = [item.value for item in shell_complete.get_completions([], "to")]
     assert "tools" in first_segments
@@ -99,9 +115,15 @@ review-tools = { program = "tools/review::main" }
     registered_options = [
         item.value for item in shell_complete.get_completions(["tools", "lint"], "--")
     ]
-    assert "--level" in registered_options
-    assert "--dry-run" in registered_options
-    assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
+    assert "--log-level" in registered_options
+    assert "--program-level" in registered_options
+    assert "--optional-level" in registered_options
+    assert "--default-level" in registered_options
+    assert "--dry-run" not in registered_options
+    for flag in ("--log-level", "--program-level", "--optional-level", "--default-level"):
+        assert [
+            item.value for item in shell_complete.get_completions(["tools", "lint", flag], "")
+        ] == ["silent", "error", "warn", "info", "debug"]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "to") == ["tools"]
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
 
@@ -131,7 +153,7 @@ def test_one_completion_loads_the_command_index_once(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     shell_complete.get_completions(["tools", "lint"], "--")
 
     assert loads == 1
@@ -151,7 +173,7 @@ _PATH_PROGRAM = (
 def _completion_values(args: list[str], incomplete: str) -> list[str]:
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     return [cast(str, item.value) for item in shell_complete.get_completions(args, incomplete)]
 
 
@@ -278,7 +300,7 @@ def test_registered_command_completes_path_parameter_values(
     assert _completion_values(["tools", "lint"], f"--journal={files}/d") == [expected]
     assert expected in _completion_values(["tools", "lint"], f"{files}/d")
     assert expected in _completion_values(
-        ["tools", "lint", "--trace-file", "trace.jsonl", "--dry-run"], f"{files}/d"
+        ["tools", "lint", "--trace-file", "trace.jsonl", "--no-trace"], f"{files}/d"
     )
     assert _completion_values(["tools", "lint", "--name"], f"{files}/d") == []
     assert _completion_values(["tools", "lint", "--timeout"], f"{files}/d") == []
@@ -303,7 +325,7 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(region: text, verbose: bool = false) -> unit = print region\n",
+        "program def main(@arg-named region: text, verbose: bool = false) -> unit = print region\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -320,7 +342,7 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     values = [
         item.value for item in shell_complete.get_completions(["exec", "tools/review::main"], "--")
     ]
@@ -346,8 +368,8 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def first(level: text) -> unit = ()\n"
-        "program def second(region: text) -> unit = ()\n",
+        "program def first(@arg-named level: text) -> unit = ()\n"
+        "program def second(@arg-named region: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -364,7 +386,7 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     values = [
         item.value
         for item in shell_complete.get_completions(["exec", "tools/review::second"], "--")
@@ -393,13 +415,11 @@ def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_refere
     try:
         from agm.cli_support.exec_target import is_installed_reference
 
-        assert is_installed_reference(str(unreadable), command=None) is False
+        assert is_installed_reference(str(unreadable), code=None) is False
 
         from agm.cli import app
 
-        shell_complete = ShellComplete(
-            typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS"
-        )
+        shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
         values = [
             item.value for item in shell_complete.get_completions(["exec", str(unreadable)], "--")
         ]
@@ -461,7 +481,7 @@ def test_registered_command_param_completion_offers_program_value_argument_flags
     (package_root / MODULE_TREE_DIRNAME).mkdir()
     (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
         "@param let module-verbose: bool = false\n"
-        "program def main(tag: text, verbose: bool = false) -> unit = ()\n",
+        "program def main(@arg-named tag: text, verbose: bool = false) -> unit = ()\n",
         encoding="utf-8",
     )
     (package_root / "package.toml").write_text(
@@ -498,7 +518,7 @@ version = "1.0.0"
     assert "--no-verbose" in values
     assert "--tools.lint.module-verbose" in values
     assert "--no-tools.lint.module-verbose" in values
-    assert "--dry-run" in values
+    assert "--dry-run" not in values
     assert "--trace-file" in values
     assert "--no-timeout" in values
     assert "--module-path" not in values
@@ -1205,6 +1225,15 @@ class TestPathCandidates:
         monkeypatch.chdir(tmp_path)
         assert completion._path_candidates("sub/") == ["sub/file.txt"]
 
+    def test_parent_relative_prefix_is_kept_as_typed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        (tmp_path / "cur").mkdir()
+        (tmp_path / "sibling").mkdir()
+        monkeypatch.chdir(tmp_path / "cur")
+        assert completion._path_candidates("../s") == ["../sibling/"]
+        assert completion._path_candidates("../") == ["../cur/", "../sibling/"]
+
 
 class TestCompleteOpenTarget:
     def test_returns_empty_when_resolve_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1900,28 +1929,18 @@ class TestCompleteWorktreeBranchExceptionHandler:
 
 
 class TestPathCandidatesValueError:
-    def test_symlink_base_dir_outside_cwd_triggers_value_error(
+    def test_symlinked_directory_prefix_is_kept_as_typed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When the resolved base_dir is outside cwd, paths found by iterdir
-        raise ValueError in relative_to, causing absolute path display."""
         work = tmp_path / "work"
         work.mkdir()
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "target.txt").write_text("x")
-
-        # Create a symlink inside work pointing outside
-        link = work / "ext"
-        link.symlink_to(outside)
+        (work / "ext").symlink_to(outside)
         monkeypatch.chdir(work)
 
-        # incomplete="ext/t" => parent="ext" => base_dir = resolve_module(work/ext) = outside
-        # Iterating outside/ finds target.txt which is not relative to work
-        result = completion._path_candidates("ext/t")
-        # Should use absolute path for display
-        assert len(result) == 1
-        assert result[0] == str(outside / "target.txt")
+        assert completion._path_candidates("ext/t") == ["ext/target.txt"]
 
 
 class TestCompleteAglFile:
@@ -1967,11 +1986,32 @@ class TestExecCommandShellComplete:
         return typer.main.get_command(app)
 
     def _complete(self, args: list[str], incomplete: str) -> list[str]:
-        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
-    def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
-        """``agm exec FILE --<TAB>`` also offers the program's own value-parameter flags."""
+    def test_implicit_positional_enum_completes_values(self, tmp_path: Path) -> None:
+        """A required enum parameter completes at its positional slot."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'enum Mode\n  | @name("fast") Fast\n  | @name("slow") Slow\n\n'
+            "program def main(mode: Mode) -> unit = ()\n"
+        )
+
+        assert self._complete(["exec", str(agl_file)], "") == ["fast", "slow"]
+        assert self._complete(["exec", str(agl_file)], "f") == ["fast"]
+
+    def test_enum_completion_omits_members_requiring_arguments(self, tmp_path: Path) -> None:
+        """Only members a bare name can construct are offered as values."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Mode\n  | Fast\n  | Tuned(level: int)\n  | Custom(level: int = 1)\n\n"
+            "program def main(mode: Mode) -> unit = ()\n"
+        )
+
+        assert self._complete(["exec", str(agl_file)], "") == ["Fast", "Custom"]
+
+    def test_file_program_omits_implicit_positional_flag(self, tmp_path: Path) -> None:
+        """``agm exec FILE --<TAB>`` offers flags only for named CLI parameters."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "program def main(name: text, verbose: bool = false) -> unit = print name\n"
@@ -1979,14 +2019,29 @@ class TestExecCommandShellComplete:
 
         result = self._complete(["exec", str(agl_file)], "--")
 
-        assert "--name" in result
+        assert "--name" not in result
         assert "--verbose" in result
         assert "--no-verbose" in result
+
+    def test_file_program_offers_both_polarities_of_a_required_negatable_parameter(
+        self, tmp_path: Path
+    ) -> None:
+        """A required ``bool`` or optional-enum parameter keeps its flag pair."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "program def main(tag: Option[text], dry: bool, name: text) -> unit = print name\n"
+        )
+
+        result = self._complete(["exec", str(agl_file)], "--")
+
+        assert {"--tag", "--no-tag", "--dry", "--no-dry"} <= set(result)
+        assert "--name" not in result
 
     def test_command_flag_source_offers_program_value_argument_flags(self) -> None:
         """``agm exec -c 'program def ...' --<TAB>`` discovers value-argument flags too."""
         result = self._complete(
-            ["exec", "-c", "program def main(count: int) -> unit = print count"], "--"
+            ["exec", "-c", "program def main(@arg-named count: int) -> unit = print count"],
+            "--",
         )
         assert "--count" in result
 
@@ -2041,7 +2096,7 @@ class TestProgramArgumentCompletionItems:
 
     def test_text_and_bool_value_parameters_offer_their_flags(self) -> None:
         values = self._values(
-            "program def main(name: text, verbose: bool = false) -> unit = print name\n",
+            "program def main(@arg-named name: text, verbose: bool = false) -> unit = print name\n",
             None,
             "--",
         )
@@ -2052,7 +2107,9 @@ class TestProgramArgumentCompletionItems:
 
     def test_incomplete_prefix_filters_results(self) -> None:
         values = self._values(
-            "program def main(apple: text, banana: text) -> unit = ()\n", None, "--a"
+            "program def main(@arg-named apple: text, @arg-named banana: text) -> unit = ()\n",
+            None,
+            "--a",
         )
 
         assert values == ["--apple"]
@@ -2067,7 +2124,8 @@ class TestProgramArgumentCompletionItems:
 
     def test_requested_name_selects_among_several_programs(self) -> None:
         values = self._values(
-            "program def one(alpha: text) -> unit = ()\nprogram def two(beta: text) -> unit = ()\n",
+            "program def one(@arg-named alpha: text) -> unit = ()\n"
+            "program def two(@arg-named beta: text) -> unit = ()\n",
             "two",
             "--",
         )
@@ -2100,7 +2158,9 @@ class TestProgramArgumentCompletionItems:
         assert "-s" not in values
 
     def test_reservation_collision_degrades_to_empty(self) -> None:
-        assert self._values("program def main(help: text) -> unit = ()\n", None, "--") == []
+        assert (
+            self._values("program def main(@arg-named help: text) -> unit = ()\n", None, "--") == []
+        )
 
 
 class TestExecCommandShellCompleteEdgeCases:
@@ -2121,15 +2181,15 @@ class TestExecCommandShellCompleteEdgeCases:
         return cmd
 
     def _complete(self, args: list[str], incomplete: str) -> list[str]:
-        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
     def test_non_option_incomplete_returns_base_only(self, tmp_path: Path) -> None:
         """When incomplete does not start with '-', shell_complete returns base result only."""
-        from click.shell_completion import _resolve_context
+        from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
+        agl_file.write_text("program def main(@arg-named msg: text) -> unit = ()\n")
 
         cli = self._get_cli()
         exec_cmd = self._get_exec_cmd()
@@ -2143,10 +2203,10 @@ class TestExecCommandShellCompleteEdgeCases:
     def test_non_string_module_paths_are_ignored(
         self, tmp_path: Path, module_paths: object
     ) -> None:
-        from click.shell_completion import _resolve_context
+        from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
+        agl_file.write_text("program def main(@arg-named msg: text) -> unit = ()\n")
         cli = self._get_cli()
         ctx = _resolve_context(cli, {}, "agm", ["exec", str(agl_file)])
         ctx.params["module_paths"] = module_paths
@@ -2231,7 +2291,7 @@ def test_pkg_install_completion_includes_directories_and_archives(
     from agm.cli import app
 
     cli = typer.main.get_command(app)
-    shell_complete = ShellComplete(cli, {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(cli, {}, "agm", "_AGM_COMPLETE")
     candidates = [
         item.value for item in shell_complete.get_completions(["pkg", "install"], "package")
     ]

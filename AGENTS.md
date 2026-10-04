@@ -70,7 +70,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 ## Instructions
 
 - NEVER duplicate code. Abstract common logic into parameterized functions and separate modules.
-- Do NOT create new worktrees - edit the current worktree directly.
+- ALWAYS merge and remove any temporary worktrees you create.
 - Do NOT try to circumvent static analysis tools. Adapt the code to pass `just check` properly - do not ignore checks or suppress rules. If you absolutely need to bypass a static analysis tool, ALWAYS ask the user for approval and explain why this is necessary.
 - Be concise and precise in your responses, comments, docs, and explanations.
 - When finished, verify with `just check` and commit.

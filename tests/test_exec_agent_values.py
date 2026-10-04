@@ -145,7 +145,7 @@ def test_exec_retries_with_the_output_contract_feedback(
     write_file_program(
         program,
         'let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count", '
-        "on-parse-error = Retry(n = 1))\n"
+        "parse-error-retries = 1)\n"
         "print answer\n",
     )
     fake_agent_transport.queue(
@@ -177,7 +177,8 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     write_file_program(
         program,
         "try\n"
-        '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count")\n'
+        '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask('
+        '"count", parse-error-retries = 0)\n'
         "  print answer\n"
         f"catch {caught_type} as error =>\n"
         "  print render(error.agent)\n",
@@ -189,3 +190,17 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     assert invocation.exit_code == 0, invocation.output
     assert "AgentCommand" in invocation.output
     assert "mock" in invocation.output
+
+
+def test_exec_agent_failure_displays_captured_stderr(
+    tmp_path: Path, fake_agent_transport: FakeAgentTransport
+) -> None:
+    program = tmp_path / "program.agl"
+    write_file_program(program, 'let answer: text = AgentCodex().ask("review")\nprint answer\n')
+    diagnostic = "failed printing to stdout: Resource temporarily unavailable (os error 11)"
+    fake_agent_transport.queue(fake_agent_transport.failure(returncode=101, stderr=diagnostic))
+
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
+
+    assert result.exit_code != 0
+    assert diagnostic in result.output

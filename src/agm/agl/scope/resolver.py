@@ -1734,16 +1734,12 @@ class _Resolver(ModuleSources):
         VarRef nodes that refer to them (e.g. ``Abort(message: …)``) resolve
         correctly and are placed in ``constructor_refs``.
 
-        For builtin prelude ENUM types (e.g. ParsePolicy), we register each
-        variant whose name does NOT conflict with any builtin exception type name.
-        Conflicting variants (like ``ParsePolicy::Abort``) must be accessed via
-        qualified syntax (e.g. ``ParsePolicy::Abort``).
+        For builtin prelude ENUM types (e.g. Agent), each variant is registered
+        as a bare constructor candidate.
 
         Seeded handles and member ``TypeDef`` values provide the same stable
         declaration identities as source member records.
         """
-        exception_names: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
-
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._add_constructor_candidate(
                 exc_name,
@@ -1762,30 +1758,26 @@ class _Resolver(ModuleSources):
             if type_name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
                 continue
             if isinstance(type_val, EnumType):
-                # Register variants that don't conflict with exception names.
-                # Conflicting variants (e.g. ParsePolicy::Abort ↔ Abort exception)
-                # must be used in qualified form.  Variant names come from the
-                # shared prelude TypeDef literal — the handle itself carries
-                # no shape data.
+                # Variant names come from the shared prelude TypeDef literal —
+                # the handle itself carries no shape data.
                 typedef = BUILTIN_PRELUDE_TYPE_DEFS[type_name]
                 for member in typedef.members:
                     member_def = BUILTIN_PRELUDE_MEMBER_TYPE_DEFS[member.decl_id]
                     variant_name = member.name
-                    if variant_name not in exception_names:
-                        self._add_constructor_candidate(
-                            variant_name,
-                            self._canonical_constructor_ref(
-                                ConstructorRef(
-                                    owner_name=variant_name,
-                                    owner_decl_node_id=member.decl_id,
-                                    type_params=member_def.type_params,
-                                    owner_module_id=RESERVED_ID,
-                                    can_match_bare_pattern=not member_def.fields,
-                                    owner_path=(type_name,),
-                                    is_builtin=True,
-                                )
-                            ),
-                        )
+                    self._add_constructor_candidate(
+                        variant_name,
+                        self._canonical_constructor_ref(
+                            ConstructorRef(
+                                owner_name=variant_name,
+                                owner_decl_node_id=member.decl_id,
+                                type_params=member_def.type_params,
+                                owner_module_id=RESERVED_ID,
+                                can_match_bare_pattern=not member_def.fields,
+                                owner_path=(type_name,),
+                                is_builtin=True,
+                            )
+                        ),
+                    )
             else:
                 self._add_constructor_candidate(
                     type_name,
@@ -1909,7 +1901,7 @@ class _Resolver(ModuleSources):
         - Constructor-vs-constructor at the same scope: allowed (overload set).
         - A constructor declared in *another* module never collides: the two
           spellings stay separable by qualification, so declaring over a
-          prelude name such as ``Retry`` is always legal.
+          prelude name such as ``ExecResult`` is always legal.
         - A same-module constructor that declares the bare name (record,
           exception, alias) colliding with an ordinary value binding is a
           duplicate declaration, because no qualified spelling could tell the
@@ -2085,7 +2077,7 @@ class _Resolver(ModuleSources):
 
         At the true root, a declaration may claim the bare spelling of a
         constructor declared in another module (e.g. the prelude
-        ``Retry``/``ExecResult`` names) or of a same-module enum variant,
+        ``AgentCommand``/``ExecResult`` names) or of a same-module enum variant,
         since ``Owner::variant`` and a qualified module path still reach
         those.  A same-module record, exception, or alias constructor
         declares the bare name itself, so it collides.
@@ -2374,6 +2366,23 @@ class _Resolver(ModuleSources):
         else:
             with self._named_scope(path):
                 self._validate_type_decl(node)
+                self._resolve_field_defaults(node)
+
+    def _resolve_field_defaults(self, node: RecordDef | EnumDef | ExceptionDef) -> None:
+        """Resolve field defaults in the declaration's lexical scope."""
+        fields = (
+            tuple(
+                field
+                for member in node.members
+                if isinstance(member, VariantDef)
+                for field in member.fields
+            )
+            if isinstance(node, EnumDef)
+            else node.fields
+        )
+        for field in fields:
+            if field.default is not None:
+                self._resolve_expr(field.default)
 
     def _reject_alias_cycles(self) -> None:
         """Reject the own aliases whose targets lead back to them: they denote no type.

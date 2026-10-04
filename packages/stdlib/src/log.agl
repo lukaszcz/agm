@@ -1,9 +1,17 @@
 
-enum Level = Silent | Error | Warn | Info | Debug
+enum Level
+  | @name("silent") Silent
+  | @name("error") Error
+  | @name("warn") Warn
+  | @name("info") Info
+  | @name("debug") Debug
 
-@param @opt-name("log-level") @doc("Least severe level printed by log:: calls.")
+@param
+@opt-name("log-level")
+@doc("Logging level: silent, error, warn, info, debug.")
 var level: Level = Info
 
+@doc("Return the logging level's integer value from 0 (silent) to 4 (debug).")
 def Level::to-int(self) -> int =
   case self of
     | Silent => 0
@@ -12,6 +20,7 @@ def Level::to-int(self) -> int =
     | Info => 3
     | Debug => 4
 
+@doc("Convert 0 through 4 to a logging level, using debug for other integers.")
 def Level::from-int(l: int) -> Level =
   if
     | l == 0 => Silent
@@ -21,67 +30,85 @@ def Level::from-int(l: int) -> Level =
     | l == 4 => Debug
     | else => Debug
 
+@doc("Print the value when the requested level is enabled.")
 def print[T](lvl: Level, val: T) -> unit =
   if lvl.to-int() <= level.to-int() =>
     print val
 
+@doc("Print a separator line when the requested level is enabled.")
 def print-sep(lvl: Level) -> unit =
   ::print(lvl, "------------------------------------------")
 
+@doc("Print a blank line when the requested level is enabled.")
 def print-nl(lvl: Level) -> unit =
   ::print(lvl, "")
 
+@doc("Print a Markdown heading surrounded by blank lines when the requested level is enabled.")
 def print-heading[T](lvl: Level, val: T) -> unit =
   print-nl(lvl)
-  print-sep(lvl)
-  ::print(lvl, val)
-  print-sep(lvl)
+  ::print(lvl, "## %{val}")
   print-nl(lvl)
 
+@doc("Print the value when error logging is enabled.")
 def error[T](val: T) -> unit =
   ::print(Error, val)
 
+@doc("Print a separator line when error logging is enabled.")
 def error-sep() -> unit =
   print-sep(Error)
 
+@doc("Print a blank line when error logging is enabled.")
 def error-nl() -> unit =
-  print-sep(Error)
+  print-nl(Error)
 
+@doc("Print a Markdown heading surrounded by blank lines when error logging is enabled.")
 def error-heading[T](val: T) -> unit =
   print-heading(Error, val)
 
+@doc("Print the value when warn logging is enabled.")
 def warn[T](val: T) -> unit =
   ::print(Warn, val)
 
+@doc("Print a separator line when warn logging is enabled.")
 def warn-sep() -> unit =
   print-sep(Warn)
 
+@doc("Print a blank line when warn logging is enabled.")
 def warn-nl() -> unit =
-  print-sep(Warn)
+  print-nl(Warn)
 
+@doc("Print a Markdown heading surrounded by blank lines when warn logging is enabled.")
 def warn-heading[T](val: T) -> unit =
   print-heading(Warn, val)
 
+@doc("Print the value when info logging is enabled.")
 def info[T](val: T) -> unit =
   ::print(Info, val)
 
+@doc("Print a separator line when info logging is enabled.")
 def info-sep() -> unit =
   print-sep(Info)
 
+@doc("Print a blank line when info logging is enabled.")
 def info-nl() -> unit =
-  print-sep(Info)
+  print-nl(Info)
 
+@doc("Print a Markdown heading surrounded by blank lines when info logging is enabled.")
 def info-heading[T](val: T) -> unit =
   print-heading(Info, val)
 
+@doc("Print the value when debug logging is enabled.")
 def debug[T](val: T) -> unit =
   ::print(Debug, val)
 
+@doc("Print a separator line when debug logging is enabled.")
 def debug-sep() -> unit =
   print-sep(Debug)
 
+@doc("Print a blank line when debug logging is enabled.")
 def debug-nl() -> unit =
-  print-sep(Debug)
+  print-nl(Debug)
 
+@doc("Print a Markdown heading surrounded by blank lines when debug logging is enabled.")
 def debug-heading[T](val: T) -> unit =
-  print-heading(Info, val)
+  print-heading(Debug, val)

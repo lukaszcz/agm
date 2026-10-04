@@ -550,12 +550,16 @@ class IrMakeRecord:
     ``nominal`` — the ``NominalId`` of the record type.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each ``expr`` is already coerced to the declared field type by the
-        lowerer via ``lower_coerced``.
+        lowerer via ``lower_coerced``. An omitted defaulted field carries
+        ``UseDefault(index)`` in place of ``expr`` — the evaluator fills it
+        from ``nominal``'s own ``NominalDescriptor.field_defaults[index]``,
+        the same sentinel an omitted call argument uses against its callee's
+        ``FunctionDescriptor.params``.
     """
 
     location: Location
     nominal: NominalId
-    fields: "tuple[tuple[str, IrExpr], ...]"
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,11 +573,13 @@ class IrMakeException:
         ``builtin exception`` included.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each expression is coerced to the declared field type by the lowerer.
+        An omitted defaulted field carries ``UseDefault(index)``, exactly as
+        ``IrMakeRecord.fields`` does.
     """
 
     location: Location
     nominal: NominalId
-    fields: "tuple[tuple[str, IrExpr], ...]"
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -928,9 +934,15 @@ class IrCapture:
 
 @dataclass(frozen=True, slots=True)
 class UseDefault:
-    """Sentinel in IrDirectCall.arguments: use the param default for this arg.
+    """Sentinel for an omitted defaulted argument/field: use the owner's own default.
 
-    ``param_index`` indexes the declared parameters, excluding leading ``IrContract`` operands.
+    In ``IrDirectCall.arguments``, ``param_index`` indexes the callee's
+    ``FunctionDescriptor.params`` after any leading ``IrContract`` operands.
+    In ``IrMakeRecord.fields``/
+    ``IrMakeException.fields``, it indexes the constructed nominal's own
+    ``NominalDescriptor.field_defaults`` — the same sentinel, reused rather
+    than duplicated, because both cases fill an omitted slot from an
+    owner-carried default expression.
     """
 
     param_index: int
@@ -1027,20 +1039,27 @@ class IrCopyValue:
 
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
+    """IR host-op: ask(prompt, agent:, parse_error_retries:, sandbox:, env:) builtin call.
 
     Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
     through the value-driven agent runtime, parses the response via the contract,
     and returns the typed Value.
 
-    ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
+    ``parse_error_retries`` evaluates to an ``int``, read once per call; the
+    attempt count is ``1 + parse_error_retries``.
+    ``sandbox`` evaluates to an ``AgentSandbox`` value, decoded once and reused
+    across every retry attempt. ``env`` evaluates to an ``Environ`` value (or an
+    empty dict without ``std/env``), likewise decoded once and reused across
+    every retry attempt and process this call spawns.
     """
 
     location: Location
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    parse_error_retries: "IrExpr"
+    sandbox: "IrExpr"
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1049,13 +1068,21 @@ class IrSessionOpen:
 
     ``transport`` is absent when the source omits its optional transport
     argument. ``name`` always holds an expression, including the empty-text
-    default, so the host receives a concrete session name.
+    default, so the host receives a concrete session name. ``sandbox``
+    likewise always holds an expression -- the operand, or a
+    ``default-sandbox`` load when omitted -- and fixes this session's
+    sandboxing for its whole lifetime. ``env`` always holds an expression too
+    -- the operand, or the ambient ``std/env::environ`` (an empty dict
+    without ``std/env``) -- and likewise fixes this session's environment for
+    its whole lifetime.
     """
 
     location: Location
     agent: "IrExpr"
     transport: "IrExpr | None"
     name: "IrExpr"
+    sandbox: "IrExpr"
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1074,11 +1101,14 @@ class IrContract:
 class IrSessionDefault:
     """IR host-op: obtain the lazily managed default session.
 
-    Evaluation reads the current ``default-agent`` register; the host creates
-    its default session from that agent once, then returns the same snapshot.
+    Evaluation reads the current ``default-agent``/``default-sandbox``
+    registers and ``env``; the host creates its default session from that
+    agent, sandbox mode, and environment once, then returns the same
+    snapshot on every later use, even after a later write to any of them.
     """
 
     location: Location
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1095,7 +1125,7 @@ class IrSessionAsk:
     session: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    parse_error_retries: "IrExpr"
 
 
 class IrSessionOpKind(enum.StrEnum):
@@ -1129,18 +1159,28 @@ class IrAskRequest:
     Builds the AgentRequest record value describing the call that the matching
     ``ask`` would have dispatched: it carries the same output contract and the
     same retry budget, and evaluating it neither dispatches nor parses.
+    ``sandbox`` evaluates to the ``AgentSandbox`` value carried verbatim into
+    the built record's own ``sandbox`` field. ``ask-request`` accepts no
+    ``env`` operand: printing the built record must never leak secrets, so it
+    carries no environment field to fill.
     """
 
     location: Location
     agent: "IrExpr"
     prompt: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    parse_error_retries: "IrExpr"
+    sandbox: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
 class IrExec:
-    """IR host-op: exec(command, env:, cwd:, timeout:, ...) builtin call."""
+    """IR host-op: exec(command, env:, cwd:, timeout:, sandbox:, ...) builtin call.
+
+    ``sandbox`` evaluates to an ``Option[Sandbox]`` value: ``None`` runs
+    unsandboxed; ``Some(record)`` runs under the sandbox library with the
+    profile selected from the command's first shell word.
+    """
 
     location: Location
     command: "IrExpr"
@@ -1148,7 +1188,8 @@ class IrExec:
     cwd: "IrExpr"
     timeout: "IrExpr"
     contract_id: "ContractId"
-    max_attempts: int
+    parse_error_retries: "IrExpr"
+    sandbox: "IrExpr"
 
 
 # ---------------------------------------------------------------------------

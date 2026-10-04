@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 import pytest
@@ -13,6 +13,7 @@ from agm.agent.spec import (
     AgentCommand,
     AgentPi,
     AgentSpec,
+    PermissionMode,
     SessionTransport,
 )
 from agm.agl import PipelineDriver
@@ -34,32 +35,72 @@ from agm.agl.runtime.sessions import (
     default_session_transport,
     with_ephemeral_session,
 )
+from agm.sandbox.request import SandboxLimits
+from tests._agl_helpers import hermetic_get_sandbox_context
 
 
 @dataclass
 class _Host:
     handles: dict[str, tuple[AgentSpec, str]] = field(default_factory=dict)
+    sandboxing: dict[str, tuple[PermissionMode, SandboxLimits | None]] = field(default_factory=dict)
+    envs: dict[str, dict[str, str]] = field(default_factory=dict)
     prompts: dict[str, list[str]] = field(default_factory=dict)
     operations: list[tuple[str, str, str]] = field(default_factory=list)
     closed: set[str] = field(default_factory=set)
     default_handle: str | None = None
 
-    def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+    def open(
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
+    ) -> str:
         handle = f"s{len(self.handles) + 1}"
         self.handles[handle] = (agent, transport)
+        self.sandboxing[handle] = (permission_mode, sandbox)
+        self.envs[handle] = env
         self.prompts[handle] = []
         self.operations.append((handle, "open", name))
         return handle
 
     def open_ephemeral(
-        self, agent: AgentSpec, transport: str, *, single_prompt: bool = False
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
     ) -> str:
         del single_prompt
-        return self.open(agent, transport)
+        return self.open(
+            agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+        )
 
-    def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
+    ) -> str:
         if self.default_handle is None:
-            self.default_handle = self.open(agent, transport, name=name)
+            self.default_handle = self.open(
+                agent,
+                transport,
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
+            )
         return self.default_handle
 
     def ask(self, handle: str, prompt: str) -> str:
@@ -77,7 +118,14 @@ class _Host:
 
     def fork(self, handle: str) -> str:
         agent, transport = self._live(handle, "fork")
-        child = self.open(agent, transport)
+        permission_mode, sandbox = self.sandboxing[handle]
+        child = self.open(
+            agent,
+            transport,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=self.envs[handle],
+        )
         self.operations.append((handle, "fork", child))
         return child
 
@@ -91,7 +139,15 @@ class _Host:
 
     def snapshot(self, handle: str) -> SessionSnapshot:
         agent, transport = self.handles[handle]
-        return SessionSnapshot(agent, transport)
+        permission_mode, sandbox = self.sandboxing[handle]
+        return SessionSnapshot(
+            agent,
+            transport,
+            permission_mode,
+            sandbox,
+            self.envs[handle],
+            continues_conversation=True,
+        )
 
     def close(self, handle: str) -> None:
         if handle not in self.handles:
@@ -114,8 +170,17 @@ class _LifecycleHost(_Host):
     single_prompt_flags: list[bool] = field(default_factory=list)
 
     def with_ephemeral(
-        self, _agent: AgentSpec, _transport: str, action: object, *, single_prompt: bool = False
+        self,
+        _agent: AgentSpec,
+        _transport: str,
+        action: object,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+        env: dict[str, str],
     ) -> object:
+        del permission_mode, sandbox, env
         self.single_prompt_flags.append(single_prompt)
         if not callable(action):
             raise AssertionError("expected callable action")
@@ -126,8 +191,10 @@ def test_with_ephemeral_session_opens_and_closes_non_lifecycle_hosts() -> None:
     host = _Host()
     agent = AgentCommand(command="worker")
 
-    first = with_ephemeral_session(host, agent, "Cli", lambda handle: handle)
-    second = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
+    first = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, env={})
+    second = with_ephemeral_session(
+        host, agent, "Cli", lambda handle: handle, single_prompt=True, env={}
+    )
 
     assert {first, second} == host.closed
 
@@ -137,25 +204,49 @@ def test_with_ephemeral_session_delegates_single_prompt_lifecycle_hosts() -> Non
     agent = AgentCommand(command="worker")
 
     assert (
-        with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
+        with_ephemeral_session(
+            host, agent, "Cli", lambda handle: handle, single_prompt=True, env={}
+        )
         == "lifecycle"
     )
     assert host.single_prompt_flags == [True]
 
 
 def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() -> None:
+    """Dispatched requests carry the session's fixed-at-open sandboxing, never their own."""
     requests: list[AgentRequest] = []
     host = AgentDispatcherSessionHost(
         lambda request: requests.append(request) or AgentResponse("answer", {"source": "test"})
     )
     agent = AgentCommand(command="worker")
-    handle = host.open_ephemeral(agent, "Cli")
-    request = AgentRequest(agent=agent, prompt="question", attempt=2)
+    session_sandbox = SandboxLimits(memory="8G")
+    handle = host.open_ephemeral(
+        agent,
+        "Cli",
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=session_sandbox,
+        env={},
+    )
+    request = AgentRequest(agent=agent, prompt="question", env={}, attempt=2)
 
     response = host.ask_request(handle, request)
 
     assert response == AgentResponse("answer", {"source": "test"})
-    assert requests == [request]
+    assert requests == [
+        replace(request, permission_mode=PermissionMode.UNRESTRICTED, sandbox=session_sandbox)
+    ]
+
+    overriding_request = AgentRequest(
+        agent=agent,
+        prompt="another question",
+        env={},
+        permission_mode=PermissionMode.NATIVE,
+        sandbox=None,
+    )
+    host.ask_request(handle, overriding_request)
+    assert requests[-1].permission_mode == PermissionMode.UNRESTRICTED
+    assert requests[-1].sandbox == session_sandbox
+
     assert host.ask(handle, "another question") == "answer"
     host.close(handle)
     with pytest.raises(SessionHostError):
@@ -168,13 +259,14 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
         return host.ask(ephemeral, "single prompt")
 
     assert (
-        with_ephemeral_session(host, agent, "Cli", _single_prompt, single_prompt=True) == "answer"
+        with_ephemeral_session(host, agent, "Cli", _single_prompt, single_prompt=True, env={})
+        == "answer"
     )
     with pytest.raises(SessionHostError):
         host.ask(ephemeral_handles[0], "released")
 
     no_dispatcher = AgentDispatcherSessionHost(None)
-    unavailable_handle = no_dispatcher.open_ephemeral(agent, "Cli")
+    unavailable_handle = no_dispatcher.open_ephemeral(agent, "Cli", env={})
     with pytest.raises(SessionAskError) as ask_error:
         no_dispatcher.ask(unavailable_handle, "question")
     assert ask_error.value.cause == "no_dispatcher"
@@ -185,13 +277,13 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
             AgentCallHostError(cause="timeout", exit_code=1, stderr_tail="late", elapsed=2.0)
         )
     )
-    failed_handle = failed_dispatcher.open_ephemeral(agent, "Cli")
+    failed_handle = failed_dispatcher.open_ephemeral(agent, "Cli", env={})
     with pytest.raises(SessionAskError) as dispatch_error:
         failed_dispatcher.ask(failed_handle, "question")
     assert dispatch_error.value.cause == "timeout"
 
-    default = host.default(agent, "Cli")
-    assert host.default(AgentCommand(command="other"), "Rpc") == default
+    default = host.default(agent, "Cli", env={})
+    assert host.default(AgentCommand(command="other"), "Rpc", env={}) == default
     assert host.snapshot(default).agent == agent
     assert host.snapshot(default).transport == "Cli"
     host.close(default)
@@ -200,7 +292,7 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
         host.ask(default, "closed")
 
     unavailable_operations = (
-        lambda: host.open(agent, "Cli"),
+        lambda: host.open(agent, "Cli", env={}),
         lambda: host.compact("missing"),
         lambda: host.reset("missing"),
         lambda: host.fork("missing"),
@@ -221,9 +313,10 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
         requests.append(request)
         return AgentResponse(["not a number", "7"][len(requests) - 1])
 
-    result = PipelineDriver(agent_dispatcher=dispatch).run(
-        "program def main() -> unit =\n"
-        '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n'
+    result = PipelineDriver(
+        resolve_agent_spec=None, agent_dispatcher=dispatch, get_sandbox_context=None
+    ).run(
+        'program def main() -> unit =\n  let number: int = ask("count", parse-error-retries = 1)\n'
     )
 
     assert result.ok
@@ -233,24 +326,43 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
     assert "not a number" in requests[1].prompt
 
 
-def _run(source: str, host: _Host) -> RunResult:
-    return PipelineDriver(session_host=host).run(source)
+def _run(
+    source: str, host: _Host, *, process_environment: dict[str, str] | None = None
+) -> RunResult:
+    return PipelineDriver(resolve_agent_spec=None, session_host=host, get_sandbox_context=None).run(
+        source, process_environment=process_environment
+    )
 
 
-def test_session_failures_report_the_session_call_location() -> None:
+@pytest.mark.parametrize(
+    "invocation",
+    (
+        'Session::open(AgentCommand("worker"))',
+        'ask("question", agent = AgentCommand("worker"))',
+    ),
+)
+def test_session_failures_report_the_session_call_location(invocation: str) -> None:
     class FailingHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+            env: dict[str, str],
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox, env
             raise SessionHostError("unavailable", "open")
 
     result = _run(
-        "program def main() -> unit =\n"
-        "  let before = 1\n"
-        '  let session = Session::open(AgentCommand("worker"))\n',
+        f"program def main() -> unit =\n  let before = 1\n  let session = {invocation}\n",
         FailingHost(),
     )
 
     assert result.error is not None
+    assert result.error.type_name == "SessionError"
     assert result.error.line == 3
     assert result.error.col == 17
 
@@ -275,7 +387,17 @@ def test_session_operation_failures_report_the_operation_location() -> None:
 
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+            env: dict[str, str],
+        ) -> str:
+            del permission_mode, sandbox, env
             raise SessionAgentError("invalid agent", "open")
 
     result = _run(
@@ -317,6 +439,174 @@ def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:
         ("s3", "set-name", "child"),
     ]
     assert host.closed == {"s1", "s2", "s3"}
+
+
+def test_host_snapshot_and_fork_preserve_the_sessions_permission_mode_and_sandbox() -> None:
+    """A session's ``permission_mode``/``sandbox`` must survive both a direct
+    snapshot and a fork, matching what it was opened with."""
+    host = _Host()
+    limits = SandboxLimits(memory="8G")
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"), '
+        'sandbox = Sandbox(memory = Some("8G")))\n'
+        "  let child = session.fork()\n"
+        "  ()",
+        host,
+    )
+
+    assert result.ok
+    parent = host.snapshot("s1")
+    child = host.snapshot("s2")
+    assert parent.permission_mode == PermissionMode.UNRESTRICTED
+    assert parent.sandbox == limits
+    assert child.permission_mode == parent.permission_mode
+    assert child.sandbox == parent.sandbox
+
+
+def test_default_environ_reaches_session_open() -> None:
+    """``Session::open``'s ``env`` defaults to the ambient environ, like ``exec``."""
+    host = _Host()
+    result = _run(
+        'program def main() -> unit =\n  let session = Session::open(AgentCommand("worker"))\n  ()',
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"AMBIENT": "present"}
+
+
+def test_default_environ_reaches_a_free_ask_with_an_explicit_agent() -> None:
+    """A free ``ask`` naming its own ``agent`` still defaults ``env`` to the ambient environ."""
+    host = _Host()
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let r: text = ask("hi", agent = AgentCommand("worker"))\n'
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"AMBIENT": "present"}
+
+
+def test_default_environ_reaches_agent_receiver_ask() -> None:
+    """``Agent::ask``'s ``env`` defaults to the ambient environ."""
+    host = _Host()
+    result = _run(
+        'program def main() -> unit =\n  let r: text = AgentCommand("worker").ask("hi")\n  ()',
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"AMBIENT": "present"}
+
+
+def test_explicit_env_override_on_session_open() -> None:
+    host = _Host()
+    result = _run(
+        "import std/env::Environ\n"
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"), '
+        'env = Environ(vars = {"ONLY": "child"}))\n'
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"ONLY": "child"}
+
+
+def test_explicit_env_override_on_ask_with_an_explicit_agent() -> None:
+    host = _Host()
+    result = _run(
+        "import std/env::Environ\n"
+        "program def main() -> unit =\n"
+        '  let r: text = ask("hi", agent = AgentCommand("worker"), '
+        'env = Environ(vars = {"ONLY": "child"}))\n'
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"ONLY": "child"}
+
+
+def test_environ_extended_reaches_session_open() -> None:
+    host = _Host()
+    result = _run(
+        "import std/env::*\n"
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"), '
+        'env = environ.extended({"EXTRA": "value"}))\n'
+        "  ()",
+        host,
+        process_environment={"BASE": "original"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"BASE": "original", "EXTRA": "value"}
+
+
+def test_session_open_captures_env_at_open_and_a_later_setenv_has_no_effect() -> None:
+    """A session's environment is fixed once, at open: a later ``setenv`` on
+    the ambient ``environ`` never reaches an already-open session."""
+    host = _Host()
+    result = _run(
+        "import std/env::Environ\n"
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        '  std/env::setenv("LATER", "added")\n'
+        '  session.ask("hi")\n'
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s1"] == {"AMBIENT": "present"}
+
+
+def test_default_session_snapshots_the_ambient_environment_at_first_use() -> None:
+    """The default session's environment is fixed at its first (lazy) open:
+    a later ``setenv`` never reaches asks it already dispatched through."""
+    host = _Host()
+    result = _run(
+        "import std/config\n"
+        "import std/env::Environ\n"
+        "program def main() -> unit =\n"
+        '  std/config::default-agent := AgentCommand("worker")\n'
+        '  let first: text = ask("one")\n'
+        '  std/env::setenv("LATER", "added")\n'
+        '  let second: text = ask("two")\n'
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert list(host.handles) == ["s1"]
+    assert host.envs["s1"] == {"AMBIENT": "present"}
+
+
+def test_fork_inherits_the_parents_environment() -> None:
+    host = _Host()
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        "  let child = session.fork()\n"
+        "  ()",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert host.envs["s2"] == host.envs["s1"] == {"AMBIENT": "present"}
 
 
 def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:
@@ -373,13 +663,16 @@ def test_free_ask_retries_in_the_default_session() -> None:
 
     host = RetryingHost()
     result = _run(
-        "program def main() -> unit =\n"
-        '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n',
+        'program def main() -> unit =\n  let number: int = ask("count", parse-error-retries = 1)\n',
         host,
+        process_environment={"AMBIENT": "present"},
     )
 
     assert result.ok
     assert list(host.handles) == ["s1"]
+    # The retry reuses the same default session, so its environment -- fixed
+    # when the default session was first opened -- survives across attempts.
+    assert host.envs["s1"] == {"AMBIENT": "present"}
     assert host.prompts["s1"][0].startswith("count")
     assert "Validation errors:" in host.prompts["s1"][1]
 
@@ -437,6 +730,29 @@ def _ask_program(prompt: str, *, catching: str = "") -> str:
     )
 
 
+def test_session_ask_request_carries_the_sessions_fixed_environment() -> None:
+    class EnvelopeHost(_Host):
+        requests: list[AgentRequest]
+
+        def ask_request(self, handle: str, request: AgentRequest) -> AgentResponse:
+            self.requests.append(request)
+            return AgentResponse(content=self.ask(handle, request.prompt))
+
+    host = EnvelopeHost()
+    host.requests = []
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        '  let _: text = session.ask("hi")\n'
+        "  session.close()\n",
+        host,
+        process_environment={"AMBIENT": "present"},
+    )
+
+    assert result.ok
+    assert [request.env for request in host.requests] == [{"AMBIENT": "present"}]
+
+
 def test_session_ask_retries_with_corrective_follow_ups() -> None:
     class RetryingHost(_Host):
         def ask(self, handle: str, prompt: str) -> str:
@@ -447,13 +763,18 @@ def test_session_ask_retries_with_corrective_follow_ups() -> None:
     result = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
-        '  let number: int = session.ask("one chance", on-parse-error = Retry(n = 3))\n'
+        '  let number: int = session.ask("one chance", parse-error-retries = 3)\n'
         '  let later: text = session.ask("what did I ask?")\n'
         "  session.close()\n",
         host,
+        process_environment={"AMBIENT": "present"},
     )
 
     assert result.ok
+    # The corrective retries and the later ask all reuse the one session opened
+    # at the start: its environment, fixed then, never changes across attempts.
+    assert list(host.handles) == ["s1"]
+    assert host.envs["s1"] == {"AMBIENT": "present"}
     assert len(host.prompts["s1"]) == 3
     assert host.prompts["s1"][0].startswith("one chance")
     assert "one chance" not in host.prompts["s1"][1]
@@ -467,7 +788,14 @@ def test_session_ask_retries_with_corrective_follow_ups() -> None:
     "call_info",
     [
         pytest.param(
-            AgentCallInfo(argv=("worker",), prompt_via_stdin=True, elapsed=1.0, exit_code=2),
+            AgentCallInfo(
+                argv=("worker",),
+                prompt_via_stdin=True,
+                elapsed=1.0,
+                exit_code=2,
+                sandboxed=False,
+                permission_mode="none",
+            ),
             id="with-call-info",
         ),
         pytest.param(None, id="without-call-info"),
@@ -515,7 +843,7 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
     result = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
-        '  let number: int = session.ask("parse me", on-parse-error = Retry(n = 1))\n',
+        '  let number: int = session.ask("parse me", parse-error-retries = 1)\n',
         host,
     )
 
@@ -530,12 +858,12 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
 @pytest.mark.parametrize(
     ("options", "expected_attempts"),
     [
-        pytest.param("", 1, id="default"),
-        pytest.param(", on-parse-error = Abort", 1, id="abort"),
-        pytest.param(", on-parse-error = Retry(n = 2)", 3, id="retry"),
+        pytest.param("", 5, id="default"),
+        pytest.param(", parse-error-retries = 0", 1, id="abort"),
+        pytest.param(", parse-error-retries = 2", 3, id="retry"),
     ],
 )
-def test_session_parse_policies_stop_retrying_when_exhausted(
+def test_session_parse_error_retries_stop_retrying_when_exhausted(
     options: str, expected_attempts: int
 ) -> None:
     class AlwaysInvalidHost(_Host):
@@ -574,7 +902,7 @@ def test_session_retry_stops_at_a_transport_failure() -> None:
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
         "  try\n"
-        '    let number: int = session.ask("parse me", on-parse-error = Retry(n = 3))\n'
+        '    let number: int = session.ask("parse me", parse-error-retries = 3)\n'
         "    ()\n"
         "  catch AgentCallError =>\n"
         "    session.close()\n",
@@ -646,13 +974,22 @@ _CLOSE_AFTER_DEFAULT = (
     [pytest.param(_CLOSE_AFTER_OPEN, id="open"), pytest.param(_CLOSE_AFTER_DEFAULT, id="default")],
 )
 def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -> None:
-    assert PipelineDriver().run(source).ok
+    assert PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(source).ok
 
 
 def test_a_failing_default_becomes_a_catchable_session_error() -> None:
     class FailingDefaultHost(_Host):
-        def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def default(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+            env: dict[str, str],
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox, env
             raise SessionHostError("unavailable", "default")
 
     assert _run(_CLOSE_AFTER_DEFAULT, FailingDefaultHost()).ok
@@ -660,8 +997,17 @@ def test_a_failing_default_becomes_a_catchable_session_error() -> None:
 
 def test_a_failing_open_becomes_a_catchable_session_error() -> None:
     class FailingOpenHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+            env: dict[str, str],
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox, env
             raise SessionHostError("unavailable", "open")
 
     assert _run(_CLOSE_AFTER_OPEN, FailingOpenHost()).ok
@@ -771,10 +1117,16 @@ def test_production_session_host_carries_the_stream_decode_offset(
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    host = create_agl_session_host(idle_timeout=None)
-    result = PipelineDriver(session_host=host).run(
+    host = create_agl_session_host(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
+    # This test targets the decode-offset diagnostic, not sandbox preparation, so
+    # it seeds ``Disabled`` explicitly rather than exercising the default sandbox.
+    result = PipelineDriver(
+        resolve_agent_spec=None, session_host=host, get_sandbox_context=None
+    ).run(
         "program def main() -> unit =\n"
-        '  let answer: text = ask("hello", agent = AgentCommand("runner"))\n'
+        '  let answer: text = ask("hello", agent = AgentCommand("runner"), sandbox = Disabled)\n'
         "  print(answer)\n"
     )
 

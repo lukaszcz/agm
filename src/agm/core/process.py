@@ -16,6 +16,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryFile
 from types import FrameType
 from typing import IO, NoReturn, TextIO
 
@@ -56,13 +57,9 @@ def terminate_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def kill_process_group(process: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
-    """Tear down *process* and every other member of its process group.
-
-    *pgid* names the group when the caller isolated the child under an id
-    other than its pid; it defaults to ``process.pid``.
-    """
-    group = process.pid if pgid is None else pgid
+def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Tear down *process* and every other member of its process group."""
+    group = process.pid
     try:
         os.killpg(group, signal.SIGTERM)
     except ProcessLookupError:
@@ -109,8 +106,45 @@ def _wait_for_process_group_exit(pgid: int, *, grace: float) -> None:
         time.sleep(0.01)
 
 
+_Handler = Callable[[int, FrameType | None], object] | signal.Handlers
+
+
 @contextlib.contextmanager
-def terminating_signals_raise_interrupt() -> Iterator[None]:
+def _signals_handled_by(signals: tuple[int, ...], handler: _Handler) -> Iterator[None]:
+    """Install *handler* for *signals* inside the block, restoring the previous ones after.
+
+    A no-op off the main thread: ``signal.signal`` only works there, and
+    process-wide disposition is never a non-main thread's to change.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous: dict[int, _Handler | int | None] = {}
+    try:
+        for number in signals:
+            previous[number] = signal.signal(number, handler)
+        yield
+    finally:
+        for number, restored in previous.items():
+            signal.signal(number, restored)
+
+
+def _terminating_signals_handled_by(
+    handler: Callable[[int, FrameType | None], NoReturn],
+) -> AbstractContextManager[None]:
+    """Install *handler* for SIGTERM and SIGHUP inside the block."""
+    return _signals_handled_by((signal.SIGTERM, signal.SIGHUP), handler)
+
+
+def _raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
+    raise KeyboardInterrupt
+
+
+def _raise_exit(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+def terminating_signals_raise_interrupt() -> AbstractContextManager[None]:
     """Deliver SIGTERM and SIGHUP as ``KeyboardInterrupt`` inside the block.
 
     Under the default disposition a termination signal tears the interpreter
@@ -122,18 +156,17 @@ def terminating_signals_raise_interrupt() -> Iterator[None]:
     same teardown as Ctrl-C, so the scope goes away with its children rather
     than outliving them both.
     """
+    return _terminating_signals_handled_by(_raise_interrupt)
 
-    def raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
-        raise KeyboardInterrupt
 
-    previous = {
-        number: signal.signal(number, raise_interrupt) for number in (signal.SIGTERM, signal.SIGHUP)
-    }
-    try:
-        yield
-    finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+def terminating_signals_exit() -> AbstractContextManager[None]:
+    """Deliver SIGTERM and SIGHUP as ``SystemExit(128 + signum)`` inside the block.
+
+    Unwinds like :func:`terminating_signals_raise_interrupt`, so ``finally``
+    cleanup runs, but is not mistaken for Ctrl-C by a host that treats
+    ``KeyboardInterrupt`` as "cancel this step" (the REPL).
+    """
+    return _terminating_signals_handled_by(_raise_exit)
 
 
 def _run_cleanup_command(
@@ -156,7 +189,7 @@ def _run_cleanup_command(
     )
 
 
-def _stop_process(
+def stop_process(
     process: subprocess.Popen[bytes],
     *,
     isolate_process_group: bool,
@@ -164,6 +197,12 @@ def _stop_process(
     cwd: Path | None,
     env: dict[str, str] | None,
 ) -> None:
+    """Run *interrupt_cleanup_cmd* (if any), then kill or terminate *process*.
+
+    Shared by every internal stop path and by a long-lived child a caller
+    owns directly (e.g. a persistent RPC session), so cleanup-command
+    semantics never diverge between them.
+    """
     try:
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
     finally:
@@ -188,6 +227,30 @@ def _read_pipe_chunks(
     finally:
         stream.close()
         output_queue.put((name, None))
+
+
+def _read_file_chunks(
+    stream: IO[bytes],
+    process: subprocess.Popen[bytes],
+    *,
+    output_queue: queue.Queue[tuple[str, bytes | None]],
+) -> None:
+    """Tail captured stdout without sharing the child's file position."""
+    offset = 0
+    try:
+        while True:
+            exited = process.poll() is not None
+            chunk = os.pread(stream.fileno(), 65_536, offset)
+            if chunk:
+                offset += len(chunk)
+                output_queue.put(("stdout", chunk))
+            elif exited:
+                return
+            else:
+                time.sleep(0.01)
+    finally:
+        stream.close()
+        output_queue.put(("stdout", None))
 
 
 def _drain_process_streams(
@@ -236,7 +299,7 @@ def _drain_process_streams(
                 stream_name, chunk = stream_queue.get()
         except queue.Empty:
             # Idle timeout: no output received within the deadline.
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -266,7 +329,7 @@ def _drain_process_streams(
         try:
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -330,16 +393,17 @@ def _start_process_with_readers(
     isolate_process_group: bool,
     stdin_text: str | None,
     interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_to_file: bool = False,
 ) -> tuple[
     subprocess.Popen[bytes],
     list[threading.Thread],
     queue.Queue[tuple[str, bytes | None]],
     threading.Thread | None,
 ]:
-    """Spawn the process and start pipe-reader threads.
+    """Spawn the process and start output-reader threads.
 
     Return ``(process, readers, queue, stdin_writer)`` where ``readers`` contains
-    only the stdout/stderr pipe-reader threads (each posts to *queue*).
+    only the stdout/stderr reader threads (each posts to *queue*).
     ``stdin_writer`` is a separate thread that writes *stdin_text* to the process
     stdin pipe — it does NOT post to *queue* and must be joined separately after
     draining.  It is ``None`` when *stdin_text* is ``None``."""
@@ -351,13 +415,19 @@ def _start_process_with_readers(
     process: subprocess.Popen[bytes] | None = None
     stdin_writer: threading.Thread | None = None
     readers: list[threading.Thread] = []
+    stdout_file: IO[bytes] | None = None
     try:
+        if stdout_to_file:
+            stdout_file = TemporaryFile()
+        stdout_target: IO[bytes] | int | None = stdout_file
+        if stdout_target is None and need_stdout_pipe:
+            stdout_target = subprocess.PIPE
         # core.env imports this module, so it cannot import resolve_env here without a cycle
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=os.environ if env is None else env,
-            stdout=subprocess.PIPE if need_stdout_pipe else None,
+            stdout=stdout_target,
             stderr=subprocess.PIPE if need_stderr_pipe else None,
             stdin=stdin_pipe,
             text=False,
@@ -392,11 +462,16 @@ def _start_process_with_readers(
                 )
                 stdin_writer.start()
 
-            if process.stdout is not None:
+            stdout_stream = stdout_file if stdout_file is not None else process.stdout
+            if stdout_stream is not None:
                 reader = threading.Thread(
                     target=partial(
+                        _read_file_chunks, stdout_stream, process, output_queue=stream_queue
+                    )
+                    if stdout_file is not None
+                    else partial(
                         _read_pipe_chunks,
-                        process.stdout,
+                        stdout_stream,
                         name="stdout",
                         output_queue=stream_queue,
                     ),
@@ -423,7 +498,7 @@ def _start_process_with_readers(
         return process, readers, stream_queue, stdin_writer
     except BaseException:
         if process is not None:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -437,6 +512,8 @@ def _start_process_with_readers(
             for pipe in (process.stdin, process.stdout, process.stderr):
                 if pipe is not None:
                     pipe.close()
+        if stdout_file is not None:
+            stdout_file.close()
         raise
 
 
@@ -452,6 +529,7 @@ def _running_process(
     isolate_process_group: bool,
     stdin_text: str | None,
     interrupt_cleanup_cmd: list[str] | None,
+    stdout_to_file: bool = False,
 ) -> Iterator[
     tuple[subprocess.Popen[bytes], list[threading.Thread], queue.Queue[tuple[str, bytes | None]]]
 ]:
@@ -470,11 +548,12 @@ def _running_process(
                 isolate_process_group=isolate_process_group,
                 stdin_text=stdin_text,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                stdout_to_file=stdout_to_file,
             )
         yield process, readers, stream_queue
     except BaseException:
         if process is not None:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -580,6 +659,39 @@ def run_foreground(
         idle_timeout=idle_timeout,
     )
     return result.returncode
+
+
+_IGNORED_WHILE_WAITING = (signal.SIGINT, signal.SIGQUIT)
+
+
+def run_foreground_ignoring_signals(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    interrupt_cleanup_cmd: list[str] | None = None,
+) -> int:
+    """Run a command inheriting stdio; this process ignores SIGINT/SIGQUIT while waiting.
+
+    Git's editor behavior: Ctrl-C reaches the child but cannot end this run. The
+    ignore starts only after spawn, since SIG_IGN would survive the child's exec;
+    an interrupt before then stops the child via ``_running_process``.
+    """
+    with (
+        _running_process(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=False,
+            stdout_callback=None,
+            stderr_callback=None,
+            isolate_process_group=False,
+            stdin_text=None,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        ) as (process, _readers, _queue),
+        _signals_handled_by(_IGNORED_WHILE_WAITING, signal.SIG_IGN),
+    ):
+        return process.wait()
 
 
 def run_capture(
@@ -729,6 +841,7 @@ def _run_capture_result_impl(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    stdout_to_file: bool = False,
 ) -> tuple[ProcessCaptureResult, OSError | ValueError | None]:
     """Internal implementation of ``run_capture_result``.
 
@@ -754,6 +867,7 @@ def _run_capture_result_impl(
                     capture_output=True,
                     stdout_callback=stdout_callback,
                     stderr_callback=stderr_callback,
+                    stdout_to_file=stdout_to_file,
                     isolate_process_group=isolate_process_group,
                     stdin_text=stdin_text,
                     interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -838,6 +952,7 @@ def run_capture_result(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    stdout_to_file: bool = False,
 ) -> ProcessCaptureResult:
     """Run *cmd* and return a :class:`ProcessCaptureResult`.
 
@@ -849,6 +964,9 @@ def run_capture_result(
     Parameters match :func:`run_capture` where applicable:
     *idle_timeout* (seconds), *cwd*, *env*, *stdin_text*, *isolate_process_group*,
     *interrupt_cleanup_cmd*, *stdout_callback*, *stderr_callback*.
+
+    *stdout_to_file* tails an anonymous temporary file instead of a pipe,
+    preventing pipe backpressure from failing a child's nonblocking writes.
     """
     result, _ = _run_capture_result_impl(
         cmd,
@@ -860,6 +978,7 @@ def run_capture_result(
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        stdout_to_file=stdout_to_file,
     )
     return result
 

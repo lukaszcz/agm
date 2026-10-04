@@ -102,6 +102,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from tests._agl_helpers import retries_ir
 
 # ---------------------------------------------------------------------------
 # Helper factories
@@ -1078,6 +1079,7 @@ class TestIrField:
                     declared_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
+                    field_json_names=("x", "y"),
                 )
             },
         )
@@ -1140,6 +1142,7 @@ class TestIrField:
                     NominalKind.RECORD,
                     ("x",),
                     mutable_fields=frozenset({"x"}),
+                    field_json_names=("x",),
                 )
             },
         )
@@ -1271,6 +1274,7 @@ class TestIrUpdateRecord:
                     declared_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
+                    field_json_names=("x", "y"),
                 )
             },
         )
@@ -1281,6 +1285,121 @@ class TestIrUpdateRecord:
         original = bindings["rec"]
         assert isinstance(original, RecordValue)
         assert original.fields == {"x": IntValue(1), "y": IntValue(2)}
+
+
+# ---------------------------------------------------------------------------
+# IrMakeRecord / IrMakeException — UseDefault field slots
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorFieldDefaults:
+    """Tests for ``UseDefault`` field slots on ``IrMakeRecord``/``IrMakeException``.
+
+    A constructor's own ``NominalDescriptor.field_defaults`` carries the
+    lowered default per field, the same shape a function's
+    ``FunctionDescriptor.params`` carries via ``IrFunctionParam.default``;
+    ``UseDefault(index)`` indexes into it.
+    """
+
+    def test_omitted_field_evaluates_its_default(self) -> None:
+        """A UseDefault slot evaluates the descriptor's own default expression."""
+        out_sym, out_desc = _let_sym(0, "out")
+        nominal = NominalId(9)
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrMakeRecord(
+                        _LOC,
+                        nominal,
+                        (("x", IrConstInt(_LOC, 1)), ("y", UseDefault(param_index=1))),
+                    ),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
+                    kind=NominalKind.RECORD,
+                    fields=("x", "y"),
+                    field_defaults=(None, IrConstInt(_LOC, 0)),
+                    field_json_names=("x", "y"),
+                )
+            },
+        )
+        out = IrInterpreter(prog).run()["out"]
+        assert isinstance(out, RecordValue)
+        assert out.fields == {"x": IntValue(1), "y": IntValue(0)}
+
+    def test_omitted_exception_field_evaluates_its_default(self) -> None:
+        """A UseDefault slot on IrMakeException evaluates the descriptor's default."""
+        out_sym, out_desc = _let_sym(0, "out")
+        nominal = NominalId(9)
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrMakeException(_LOC, nominal, (("code", UseDefault(param_index=0)),)),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Problem",
+                    kind=NominalKind.EXCEPTION,
+                    fields=("code",),
+                    field_defaults=(IrConstInt(_LOC, 0),),
+                    field_json_names=("code",),
+                )
+            },
+        )
+        out = IrInterpreter(prog).run()["out"]
+        assert isinstance(out, ExceptionValue)
+        assert out.fields == {"code": IntValue(0)}
+
+    def test_omitted_field_default_evaluates_fresh_on_every_construction(self) -> None:
+        """Each omitted-field construction evaluates its default anew, not once and shared.
+
+        A mutable-typed default (here an array) must not become the same
+        aliased ``Value`` object across two separate constructions — the same
+        pitfall a shared mutable default argument would have.
+        """
+        first_sym, first_desc = _let_sym(0, "first")
+        second_sym, second_desc = _let_sym(1, "second")
+        nominal = NominalId(9)
+        make = IrMakeRecord(_LOC, nominal, (("items", UseDefault(param_index=0)),))
+        prog = _make_program(
+            (
+                IrBind(_LOC, first_sym, make),
+                IrBind(_LOC, second_sym, make),
+            ),
+            {first_sym: first_desc, second_sym: second_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Box",
+                    kind=NominalKind.RECORD,
+                    fields=("items",),
+                    field_defaults=(IrMakeArray(_LOC, ()),),
+                    field_json_names=("items",),
+                )
+            },
+        )
+        bindings = IrInterpreter(prog).run()
+        first, second = bindings["first"], bindings["second"]
+        assert isinstance(first, RecordValue)
+        assert isinstance(second, RecordValue)
+        assert first.fields["items"] is not second.fields["items"]
 
 
 # ---------------------------------------------------------------------------
@@ -1985,7 +2104,9 @@ class TestIrAsk:
                         ),
                     ),
                     contract_id=contract_id,
-                    max_attempts=1,
+                    parse_error_retries=retries_ir(1, prompt_location),
+                    sandbox=IrConstText(_LOC, "unused"),
+                    env=IrConstText(_LOC, "unused"),
                 ),
             )
         )
@@ -2042,8 +2163,9 @@ class TestIrExec:
             env=_empty_environ(location),
             cwd=_none_option(location),
             timeout=_none_option(location),
+            sandbox=_none_option(location),
             contract_id=cid,
-            max_attempts=max_attempts,
+            parse_error_retries=retries_ir(max_attempts, location),
         )
         return ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2113,8 +2235,9 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=retries_ir(1, _LOC),
         )
         sym_desc = SymbolDescriptor(
             symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID
@@ -2154,8 +2277,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 # First call: succeeds but returns invalid JSON (triggers retry)
@@ -2204,8 +2328,9 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
-            max_attempts=2,
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2334,8 +2459,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2373,8 +2499,9 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
-            max_attempts=2,
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2416,8 +2543,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2455,8 +2583,9 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
-            max_attempts=2,
+            parse_error_retries=retries_ir(2, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,
@@ -2494,8 +2623,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             # Returns a valid JSON string (not int), so schema validation fails with errors
             return ProcessCaptureResult(
                 returncode=0,
@@ -2523,8 +2653,9 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
-            max_attempts=1,
+            parse_error_retries=retries_ir(1, _LOC),
         )
         prog = ExecutableProgram(
             entry_module=ENTRY_ID,

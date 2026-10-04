@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 from uuid import uuid4
 
@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
+    from agm.sandbox.prepare import SandboxContext
+    from agm.sandbox.request import SandboxLimits
 
 from agm.agent.session.protocol import (
     SessionAgentError as AgentSessionAgentError,
@@ -27,7 +29,8 @@ from agm.agent.session.protocol import (
     SessionOperations,
     SessionStats,
 )
-from agm.agent.spec import SessionTransport
+from agm.agent.spec import PermissionMode, SessionTransport
+from agm.agent.transport import AgentOutputCallback
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
@@ -43,6 +46,10 @@ class _HostSession:
     agent: "AgentSpec"
     transport: str
     ephemeral: bool = False
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: "SandboxLimits | None" = None
+    env: dict[str, str] = field(kw_only=True, repr=False)
+    continues_conversation: bool = field(kw_only=True)
 
 
 class AglSessionHost:
@@ -52,17 +59,80 @@ class AglSessionHost:
         self._service = service
         self._sessions: dict[str, _HostSession] = {}
 
-    def open(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
-        handle = self._open(agent, transport, name=name)
-        self._sessions[handle] = _HostSession(agent, transport)
+    def open(
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
+    ) -> str:
+        handle = self._open(
+            agent,
+            transport,
+            name=name,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
+        self._register(
+            handle, agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+        )
         return handle
 
+    def _register(
+        self,
+        handle: str,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        ephemeral: bool = False,
+        permission_mode: PermissionMode,
+        sandbox: "SandboxLimits | None",
+        env: dict[str, str],
+    ) -> None:
+        """Retain the AgL-facing identity of the freshly opened *handle*."""
+        self._sessions[handle] = _HostSession(
+            agent,
+            transport,
+            ephemeral=ephemeral,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+            continues_conversation=self._service.continues_conversation(handle),
+        )
+
     def open_ephemeral(
-        self, agent: "AgentSpec", transport: str, *, single_prompt: bool = False
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
-        handle = self._open(agent, transport, ephemeral=True, single_prompt=single_prompt)
-        self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
+        handle = self._open(
+            agent,
+            transport,
+            ephemeral=True,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
+        self._register(
+            handle,
+            agent,
+            transport,
+            ephemeral=True,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
         return handle
 
     def with_ephemeral(
@@ -72,11 +142,22 @@ class AglSessionHost:
         action: Callable[[str], _T],
         *,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> _T:
         """Run *action* in one ephemeral session and release it afterward."""
 
         def register(handle: str) -> _T:
-            self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
+            self._register(
+                handle,
+                agent,
+                transport,
+                ephemeral=True,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
+            )
             return action(handle)
 
         return self._call_host(
@@ -86,6 +167,9 @@ class AglSessionHost:
                 register,
                 on_closed=self._retire_ephemeral,
                 single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         )
 
@@ -97,6 +181,9 @@ class AglSessionHost:
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         return self._call_host(
             lambda: self._service.open(
@@ -105,14 +192,36 @@ class AglSessionHost:
                 name=name,
                 ephemeral=ephemeral,
                 single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         )
 
-    def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
+    ) -> str:
         handle = self._call_host(
-            lambda: self._service.default(agent, SessionTransport(transport), name=name)
+            lambda: self._service.default(
+                agent,
+                SessionTransport(transport),
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
+            )
         )
-        self._sessions.setdefault(handle, _HostSession(agent, transport))
+        if handle not in self._sessions:
+            self._register(
+                handle, agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+            )
         return handle
 
     def ask(self, handle: str, prompt: str) -> str:
@@ -120,19 +229,33 @@ class AglSessionHost:
         return self._ask(handle, prompt).content
 
     def ask_request(self, handle: str, request: "AgentRequest") -> "AgentResponse":
-        """Preserve a session response's metadata across the AgL firewall."""
+        """Preserve a session response's metadata across the AgL firewall.
+
+        *request*'s decoded ``permission_mode``/``sandbox`` describe what the
+        call site asked for, but they never reach the backend here: a
+        session's sandboxing is fixed once, at ``open`` (or, for the
+        ephemeral session a one-shot ``ask``/``Agent::ask`` opens, when it is
+        opened), so this call sends only the prompt.
+        """
         from agm.agl.runtime.request import AgentResponse
 
-        response = self._ask(handle, request.prompt)
+        response = self._ask(handle, request.prompt, request.output_callback)
         return AgentResponse(
             content=response.content,
             metadata=dict(response.metadata),
             call_info=response.call_info,
         )
 
-    def _ask(self, handle: str, prompt: str) -> SessionAskResponse:
+    def _ask(
+        self,
+        handle: str,
+        prompt: str,
+        output_callback: "AgentOutputCallback | None" = None,
+    ) -> SessionAskResponse:
         try:
-            return self._service.ask(handle, SessionAskRequest(prompt))
+            return self._service.ask(
+                handle, SessionAskRequest(prompt, output_callback=output_callback)
+            )
         except SessionAskError as error:
             self._raise_ask_error(error)
         except SessionHostError as error:
@@ -167,7 +290,14 @@ class AglSessionHost:
         from agm.agl.runtime.sessions import SessionSnapshot
 
         session = self._session_for(handle, "snapshot")
-        return SessionSnapshot(agent=session.agent, transport=session.transport)
+        return SessionSnapshot(
+            agent=session.agent,
+            transport=session.transport,
+            permission_mode=session.permission_mode,
+            sandbox=session.sandbox,
+            env=session.env,
+            continues_conversation=session.continues_conversation,
+        )
 
     def close(self, handle: str) -> None:
         self._call_host(lambda: self._service.close(handle))
@@ -235,18 +365,37 @@ class AglSessionHost:
             AglSessionHost._raise_host_error(error)
 
 
-def create_agl_session_host(*, idle_timeout: float | None) -> AglSessionHost:
-    """Create the production AgL session host with transport-aware backends."""
+def create_agl_session_host(
+    *, idle_timeout: float | None, get_sandbox_context: "Callable[[], SandboxContext]"
+) -> AglSessionHost:
+    """Create the production AgL session host with transport-aware backends.
+
+    *get_sandbox_context* is the `SandboxContext` builder every session
+    backend needs to prepare a sandboxed process (see
+    `sandbox.prepare.lazy_sandbox_context`); the host passes in one shared
+    callable so this host, `value_driven_agent_factory`, and the execution
+    services all resolve sandbox configuration from the same context.
+    """
     from agm.agent.session.cli_adapters import open_cli_session
     from agm.agent.session.rpc import PiRpcSessionBackend
     from agm.agent.spec import AgentPi
 
     def backend_for(request: SessionOpenRequest) -> SessionBackend:
         if request.transport is SessionTransport.CLI:
-            return open_cli_session(request, idle_timeout=idle_timeout)
+            return open_cli_session(
+                request, idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+            )
         if not isinstance(request.agent, AgentPi):
             raise SessionHostError("RPC transport is only supported by AgentPi", "open")
-        return PiRpcSessionBackend.open(request.agent, name=request.name, idle_timeout=idle_timeout)
+        return PiRpcSessionBackend.open(
+            request.agent,
+            name=request.name,
+            permission_mode=request.permission_mode,
+            sandbox=request.sandbox,
+            env=request.env,
+            idle_timeout=idle_timeout,
+            get_sandbox_context=get_sandbox_context,
+        )
 
     return AglSessionHost(SessionService(backend_for))
 
@@ -259,6 +408,8 @@ class _SessionEntry:
     agent: "AgentSpec"
     transport: SessionTransport
     ephemeral: bool
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: "SandboxLimits | None" = None
     closed: bool = False
 
 
@@ -278,11 +429,26 @@ class SessionService:
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
-        """Open a backend session and return its host-generated handle id."""
+        """Open a backend session and return its host-generated handle id.
+
+        *permission_mode*/*sandbox*/*env* fix the sandboxing and environment
+        this session's backend runs every process under, for the session's
+        whole lifetime.
+        """
         backend = self._backend_factory(
             SessionOpenRequest(
-                agent=agent, transport=transport, name=name, single_prompt=single_prompt
+                agent=agent,
+                transport=transport,
+                name=name,
+                single_prompt=single_prompt,
+                ephemeral=ephemeral,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         )
         handle = str(uuid4())
@@ -291,13 +457,31 @@ class SessionService:
             agent=agent,
             transport=transport,
             ephemeral=ephemeral,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
         )
         return handle
 
-    def default(self, agent: "AgentSpec", transport: SessionTransport, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: "AgentSpec",
+        transport: SessionTransport,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
+    ) -> str:
         """Return the lazily opened default session, snapshotting its first agent."""
         if self._default_handle is None:
-            self._default_handle = self.open(agent, transport, name=name)
+            self._default_handle = self.open(
+                agent,
+                transport,
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
+            )
         return self._default_handle
 
     def ask(self, handle: str, request: SessionAskRequest) -> SessionAskResponse:
@@ -328,6 +512,8 @@ class SessionService:
             agent=entry.agent,
             transport=entry.transport,
             ephemeral=False,
+            permission_mode=entry.permission_mode,
+            sandbox=entry.sandbox,
         )
         return forked_handle
 
@@ -357,6 +543,10 @@ class SessionService:
             del self._entries[handle]
         else:
             entry.closed = True
+
+    def continues_conversation(self, handle: str) -> bool:
+        """Whether a later prompt to *handle* continues the earlier ones."""
+        return self._entry_for(handle, "continues_conversation").backend.continues_conversation
 
     def is_known(self, handle: str) -> bool:
         """Whether *handle* is still retained by this service."""
@@ -407,9 +597,21 @@ class SessionService:
         name: str = "",
         on_closed: Callable[[str], None] | None = None,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> _T:
         """Run *action* in a short-lived session and release it afterward."""
-        handle = self.open(agent, transport, name=name, ephemeral=True, single_prompt=single_prompt)
+        handle = self.open(
+            agent,
+            transport,
+            name=name,
+            ephemeral=True,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
+        )
 
         def close() -> None:
             self.close(handle)

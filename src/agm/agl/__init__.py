@@ -25,13 +25,11 @@ if TYPE_CHECKING:
         RunResult,
     )
     from agm.agl.runtime.agents import AgentFn
-    from agm.agl.runtime.types import CallSiteInfo
 
 __all__ = [
     "AgentFn",
     "AglError",
     "ArgumentPreflightFailure",
-    "CallSiteInfo",
     "Diagnostic",
     "format_diagnostic",
     "PipelineDriver",
@@ -49,7 +47,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AgentFn": ("agm.agl.runtime.agents", "AgentFn"),
     "AglError": ("agm.agl.diagnostics", "AglError"),
     "ArgumentPreflightFailure": ("agm.agl.pipeline", "ArgumentPreflightFailure"),
-    "CallSiteInfo": ("agm.agl.runtime.types", "CallSiteInfo"),
     "Diagnostic": ("agm.agl.diagnostics", "Diagnostic"),
     "format_diagnostic": ("agm.agl.diagnostics", "format_diagnostic"),
     "PipelineDriver": ("agm.agl.pipeline", "PipelineDriver"),

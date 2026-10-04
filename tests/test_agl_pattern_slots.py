@@ -25,7 +25,7 @@ from agm.agl.syntax import (
     pattern_binding_node_ids,
 )
 from agm.agl.typecheck import AglTypeError
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests.agl.module_graph import (
     check_resolved,
     resolve_and_check_inline_entry,
@@ -41,8 +41,8 @@ def _run(source: str) -> tuple[bool, str, list[str]]:
     """Run *source*, returning its success flag, stdout, and diagnostics."""
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        runtime = PipelineDriver()
-        result = run_inline_command(runtime, source, param_values={})
+        runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        result = run_inline_code(runtime, source, param_values={})
     return result.ok, buffer.getvalue(), [d.message for d in result.diagnostics]
 
 

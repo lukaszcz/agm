@@ -1,0 +1,6 @@
+record P
+  n: int = "oops"
+
+program def main() -> unit =
+  let p = P()
+  p

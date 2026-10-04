@@ -2,14 +2,14 @@
 
 | Command | Description |
 |---|---|
-| `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Shortcut for `agm workspace open` |
+| `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] [--no-fetch] TARGET` | Shortcut for `agm workspace open` |
 | `agm close [-f\|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH` | Shortcut for `agm workspace close` |
-| `agm workspace open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main workspace or a branch workspace, creating or checking it out when needed |
+| `agm workspace open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] [--no-fetch] TARGET` | Open the main workspace or a branch workspace, creating or checking it out when needed |
 | `agm workspace close [-f\|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH` | Remove a branch workspace and close its tmux session |
 | `agm workspace list [-v\|--verbose]` | List all open AGM workspaces |
 | `agm workspace setup` | Run setup scripts for the current workspace |
 | `agm workspace shell-regen SHELL_DIR` | Regenerate the per-session shell wrapper and rc files in `SHELL_DIR` |
-| `agm wsp open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Alias form of `agm workspace open` |
+| `agm wsp open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] [--no-fetch] TARGET` | Alias form of `agm workspace open` |
 | `agm wsp close [-f\|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH` | Alias form of `agm workspace close` |
 | `agm wsp list [-v\|--verbose]` | Alias form of `agm workspace list` |
 | `agm wsp setup` | Alias form of `agm workspace setup` |
@@ -36,12 +36,14 @@ branch it was opened for); other Git worktrees of the repo are not workspaces.
 - a missing branch is created from `--parent` or the main workspace's current branch and then opened
 - with `--parent`, an existing target branch warns (`--parent` only bases new branches); an existing target workspace errors
 - a workspace whose tmux session is already running errors instead of reopening, and nothing is created; attach to the running session instead
+- `--no-fetch` skips Git fetches; remote branches are resolved using the local refs already available
 
 `agm workspace open` options:
 
 - `-d`, `--detach`: create the tmux session without attaching
 - `-n`, `--num-panes PANES`: create the session with `PANES` panes
 - `-p`, `--parent PARENT`: base a newly created branch workspace on `PARENT`
+- `--no-fetch`: skip Git fetches, avoiding network access to remote repositories
 
 `agm workspace close` options:
 

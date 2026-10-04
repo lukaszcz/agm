@@ -1,0 +1,1 @@
+let n: int = ask("How many?", on-parse-error = 1)

@@ -39,7 +39,7 @@ from agm.agl.typecheck.checker import (
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from agm.agl.zones import ParamZone
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
 from tests.agl.module_graph import load_graph, resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = agl_roots()
@@ -77,6 +77,11 @@ def test_no_stdlib_still_allows_explicit_std_prelude_import() -> None:
     )
 
 
+def test_std_os_module_resolves_without_the_default_standard_library() -> None:
+    """Every name `std/os` uses (e.g. `Option`) must be its own explicit import."""
+    _check("import std/os\n()\n", default_stdlib=False)
+
+
 def test_unknown_builtin_function_is_rejected() -> None:
     with pytest.raises(AglTypeError, match="Unknown builtin function 'mystery'"):
         _check("builtin def mystery() -> unit\n()\n")
@@ -108,11 +113,10 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert (
         params[3].name == "strict-json" and params[3].type == BoolType() and params[3].has_default
     )
-    policy_param = params[4]
-    assert policy_param.name == "on-parse-error"
-    assert isinstance(policy_param.type, EnumType)
-    assert policy_param.type.name == "ParsePolicy"
-    assert policy_param.has_default is True
+    retries_param = params[4]
+    assert retries_param.name == "parse-error-retries"
+    assert retries_param.type == IntType()
+    assert retries_param.has_default is True
 
 
 def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
@@ -122,7 +126,7 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     ask = _builtin_function_signature("ask")
     assert ask is not None
     ask_params = {param.name: param.type for param in ask.params}
-    assert ask_params["on-parse-error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
+    assert ask_params["parse-error-retries"] == IntType()
     ask_request = _builtin_function_signature("ask-request")
     assert ask_request is not None
     assert ask_request.result == BUILTIN_PRELUDE_TYPES["AgentRequest"]
@@ -140,11 +144,15 @@ def test_ask_surfaces_declare_every_named_argument_they_accept() -> None:
     canonical signature (:func:`_builtin_function_signature`) without being
     rejected outright.
     """
-    for name in ("ask", "ask-request"):
+    expected_named_args = {
+        "ask": BuiltinCallChecker._ASK_ALLOWED_NAMED_ARGS,
+        "ask-request": BuiltinCallChecker._ASK_REQUEST_ALLOWED_NAMED_ARGS,
+    }
+    for name, allowed in expected_named_args.items():
         signature = _builtin_function_signature(name)
         assert signature is not None
         optional = {param.name for param in signature.params if param.has_default}
-        assert optional == BuiltinCallChecker._ASK_ALLOWED_NAMED_ARGS
+        assert optional == allowed
 
 
 def test_builtin_function_signature_mismatches_are_rejected() -> None:
@@ -324,6 +332,52 @@ def test_builtin_type_shape_must_match() -> None:
         _check("builtin record ExecResult\n  stdout: text\n()\n")
 
 
+def test_builtin_record_shape_must_match_field_default_presence() -> None:
+    """A ``builtin`` declaration adding a default the host contract does not
+    have is a structural mismatch, distinct from a field type/name mismatch."""
+    with pytest.raises(AglTypeError, match="Builtin type 'SessionStats' has an invalid definition"):
+        _check(
+            "builtin record SessionStats\n"
+            "  input-tokens: int\n"
+            "  output-tokens: int\n"
+            "  cost: decimal\n"
+            "  context-percent: decimal = 0.0"
+            "\n()\n",
+            default_stdlib=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("command", "claude"),
+    [
+        pytest.param(
+            "AgentCommand(command: text)",
+            'AgentClaude(model: text, thinking: text = "")',
+            id="missing-default",
+        ),
+        pytest.param(
+            'AgentCommand(command: text = "")',
+            'AgentClaude(model: text = "", thinking: text = "")',
+            id="extra-default",
+        ),
+    ],
+)
+def test_builtin_enum_member_shape_must_match_field_default_presence(
+    command: str, claude: str
+) -> None:
+    """An enum member's field default presence is part of the host contract."""
+    with pytest.raises(AglTypeError, match="Builtin type 'Agent' has an invalid definition"):
+        _check(
+            "builtin enum Agent\n"
+            f"  | {command}\n"
+            f"  | {claude}\n"
+            '  | AgentCodex(model: text = "", thinking: text = "")\n'
+            '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
+            "()\n",
+            default_stdlib=False,
+        )
+
+
 def test_std_core_source_builtin_shape_is_not_masked_by_seed(
     tmp_path: Path,
 ) -> None:
@@ -387,6 +441,21 @@ def test_builtin_optional_must_reference_option_members() -> None:
             "  | Default\n"
             "()\n",
             default_stdlib=False,
+        )
+
+
+def test_builtin_agent_sandbox_must_reference_the_builtin_sandbox_record() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'AgentSandbox' has an invalid definition"):
+        _check(
+            "scope Fake\n"
+            "  record Sandbox\n"
+            "end Fake\n"
+            "\n"
+            "builtin enum AgentSandbox\n"
+            "  | Disabled\n"
+            "  | Native\n"
+            "  | Fake::Sandbox\n"
+            "()\n"
         )
 
 
@@ -456,12 +525,16 @@ def test_exception_in_applied_field_type_is_built_before_rejection() -> None:
         )
 
 
-def test_exception_extends_cycle_is_uninhabitable() -> None:
+@pytest.mark.parametrize("field_type", ("int", "int = 1"))
+def test_exception_extends_cycle_is_uninhabitable(field_type: str) -> None:
     # A extends B and B extends A: an `extends` cycle gives neither side
     # independent evidence to become inhabited, so both stay uninhabited —
     # the same inhabitation fixpoint that rejects field recursion.
     with pytest.raises(AglTypeError, match="uninhabitable"):
-        _check("exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n")
+        _check(
+            f"exception A extends B\n  a: {field_type}\n"
+            f"exception B extends A\n  b: {field_type}\n()\n"
+        )
 
 
 def test_lowerer_skips_builtin_function_definitions() -> None:
@@ -529,7 +602,10 @@ def test_builtin_exception_own_fields_are_standard_zone(
 ) -> None:
     """A builtin exception's own fields follow the standard zone, so they
     accept positional arguments in a constructor call."""
-    result = run_inline_command(PipelineDriver(), 'print(IndexError(1, 2, message = "m").index)\n')
+    result = run_inline_code(
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+        'print(IndexError(1, 2, message = "m").index)\n',
+    )
 
     assert list(result.diagnostics) == [], " | ".join(d.message for d in result.diagnostics)
     assert result.error is None

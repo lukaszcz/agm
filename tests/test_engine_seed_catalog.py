@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
 from agm.agl.runtime.engine_config import (
     build_engine_config_seeds,
     engine_default_settings,
     raw_option_str,
 )
-from agm.agl.runtime.option import option_text
-from agm.agl.semantics.values import BoolValue
+from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import (
     ENGINE_KEY_NAMES,
@@ -19,6 +22,7 @@ from agm.config.engine_keys import (
     ENGINE_REGISTERS,
     TRACE_ENGINE_KEYS,
     TRACE_REGISTER,
+    EngineKeySpec,
     trace_write_implies_enabled,
 )
 from agm.config.general import ExecConfig, exec_config_from_merged
@@ -28,16 +32,22 @@ _CONFIG_RAW_VALUES: dict[str, object] = {
     "trace": True,
     "strict-json": True,
     "default-agent": 'AgentCommand("configured")',
+    "default-sandbox": "Native",
     "trace-file": "configured.jsonl",
     "timeout": "12s",
+    "debug": True,
+    "parse-error-retries": 7,
 }
 
 _CLI_VALUES: dict[str, object] = {
     "trace": False,
     "strict-json": False,
     "default-agent": 'AgentCommand("cli")',
+    "default-sandbox": "Disabled",
     "trace-file": "cli.jsonl",
     "timeout": "3s",
+    "debug": False,
+    "parse-error-retries": 0,
 }
 
 
@@ -50,7 +60,47 @@ def _config_for(key: str, configured: bool) -> ExecConfig:
         default_agent='AgentCommand("configured")'
         if configured and key == "default-agent"
         else None,
+        default_sandbox="Native" if configured and key == "default-sandbox" else None,
+        debug=configured if key == "debug" else False,
+        parse_error_retries=7 if configured and key == "parse-error-retries" else None,
     )
+
+
+#: One raw ``[exec]`` TOML value per engine key, paired with the
+#: ``ExecConfig`` attribute value ``exec_config_from_merged`` must produce
+#: from it. Values are chosen so the hop is meaningful for every key's own
+#: parsing (``timeout`` parses a duration string; every other key here is a
+#: straight pass-through), never merely a coincidental identity.
+_RAW_AND_EXPECTED_BY_KEY: dict[str, tuple[object, object]] = {
+    "trace": (True, True),
+    "strict-json": (True, True),
+    "default-agent": ('AgentCommand("raw-agent")', 'AgentCommand("raw-agent")'),
+    "default-sandbox": ("Native", "Native"),
+    "trace-file": ("raw.jsonl", "raw.jsonl"),
+    "timeout": ("5s", 5.0),
+    "debug": (True, True),
+    "parse-error-retries": (2, 2),
+}
+
+
+@pytest.mark.parametrize("spec", ENGINE_KEYS, ids=lambda spec: spec.name)
+def test_exec_config_from_merged_reflects_every_engine_key_config_attr(
+    spec: EngineKeySpec,
+) -> None:
+    """Each ``[exec]`` TOML key reaches its own declared ``ExecConfig`` attribute.
+
+    ``ExecConfig(default_sandbox=...)`` built directly (as :func:`_config_for`
+    does) never runs ``exec_config_from_merged``'s own TOML-key lookup, so a
+    typo there (e.g. reading the wrong raw key string) would silently leave
+    an attribute at its default with nothing failing. Parametrized over the
+    whole catalog, so a future engine key is covered automatically.
+    """
+    assert spec.config_attr is not None
+    raw, expected = _RAW_AND_EXPECTED_BY_KEY[spec.name]
+
+    config = exec_config_from_merged({"exec": {spec.name: raw}})
+
+    assert getattr(config, spec.config_attr) == expected
 
 
 @pytest.mark.parametrize("key", [spec.name for spec in ENGINE_KEYS])
@@ -75,20 +125,24 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
     # A supplied trace-file also implies the readable ``trace`` setting.
     if key == "trace-file" and (cli_given or config_given):
         expected_keys.add("trace")
+    # A winning true ``debug`` (the config value here; the CLI value is false)
+    # turns the readable ``trace`` setting on.
+    if key == "debug" and config_given and not cli_given:
+        expected_keys.add("trace")
     assert actual_keys == expected_keys
 
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("claude/sonnet-medium", agent_value("AgentClaude", model="sonnet", thinking="medium")),
-        ("codex/o3-high", agent_value("AgentCodex", model="o3", thinking="high")),
+        ("claude/sonnet:medium", agent_value("AgentClaude", model="sonnet", thinking="medium")),
+        ("codex/o3:high", agent_value("AgentCodex", model="o3", thinking="high")),
         (
-            "pi/openai/gpt-5-low",
+            "pi/openai/gpt-5:low",
             agent_value("AgentPi", provider="openai", model="gpt-5", thinking="low"),
         ),
         (
-            "anthropic/claude-opus-custom",
+            "anthropic/claude-opus:custom",
             agent_value("AgentPi", provider="anthropic", model="claude-opus", thinking="custom"),
         ),
         ("worker --flag", agent_value("AgentCommand", command="worker --flag")),
@@ -122,7 +176,7 @@ def test_toml_default_agent_decodes_through_the_same_host_text_dispatch() -> Non
         timeout=None,
         trace=False,
         trace_file=None,
-        default_agent="claude/sonnet-experimental",
+        default_agent="claude/sonnet:experimental",
     )
 
     seeds = build_host_engine_seeds(
@@ -148,6 +202,66 @@ def test_config_table_default_agent_is_json_shaped_data() -> None:
     ).merged()
 
     assert seeds["default-agent"] == agent_value("AgentClaude", model="opus", thinking="high")
+
+
+def _optional_default() -> RecordValue:
+    return RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
+    )
+
+
+def _option_none() -> RecordValue:
+    return RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Option", "None")), fields={}
+    )
+
+
+def test_bare_default_sandbox_cli_value_fills_every_omitted_field() -> None:
+    """A bare ``Sandbox`` fills all four defaulted fields from the host-side constant table.
+
+    No program exists yet at this pre-execution boundary, so the omitted
+    fields are filled by :func:`~agm.agl.semantics.type_table.reserved_field_default`
+    rather than any evaluator.
+    """
+    config = _config_for("default-sandbox", configured=False)
+
+    seeds = build_host_engine_seeds(
+        config=config, primary_table={}, cli_values={"default-sandbox": "Sandbox"}
+    ).merged()
+
+    assert seeds["default-sandbox"] == RecordValue(
+        nominal=NominalId(require_reserved_nominal_id("Sandbox")),
+        fields={
+            "memory": _optional_default(),
+            "swap": _optional_default(),
+            "settings": _option_none(),
+            "patch": BoolValue(True),
+        },
+    )
+
+
+def test_partial_default_sandbox_cli_value_keeps_its_explicit_field_and_defaults_the_rest() -> None:
+    """An explicit field decodes normally; every omitted field still defaults."""
+    config = _config_for("default-sandbox", configured=False)
+
+    seeds = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        cli_values={"default-sandbox": 'Sandbox(memory = Some("8G"))'},
+    ).merged()
+
+    assert seeds["default-sandbox"] == RecordValue(
+        nominal=NominalId(require_reserved_nominal_id("Sandbox")),
+        fields={
+            "memory": RecordValue(
+                nominal=NominalId(require_reserved_enum_member_id("Option", "Some")),
+                fields={"value": TextValue("8G")},
+            ),
+            "swap": _optional_default(),
+            "settings": _option_none(),
+            "patch": BoolValue(True),
+        },
+    )
 
 
 def test_invalid_default_agent_value_exits_before_anything_runs(
@@ -229,22 +343,15 @@ def test_none_config_values_do_not_suppress_a_builtin_initializer(
     assert set(seeds) == set()
 
 
-@pytest.mark.parametrize("key", ["timeout", "trace-file"])
-def test_explicit_empty_option_cli_value_remains_a_seed(key: str) -> None:
-    """Commands encode their negation flags as a present ``None`` value.
-
-    A bare ``trace-file`` negation, with no config-table ``trace``/``trace-file``
-    to derive from, leaves the derived ``trace`` key absent -- it does not
-    manufacture an explicit ``false``.
-    """
+def test_explicit_empty_option_cli_value_remains_a_seed() -> None:
+    """``--no-timeout`` is encoded as a present ``None`` value."""
     seeds = build_host_engine_seeds(
-        config=_config_for(key, configured=False),
+        config=_config_for("timeout", configured=False),
         primary_table={},
-        cli_values={key: None},
+        cli_values={"timeout": None},
     ).merged()
 
-    assert key in seeds
-    assert set(seeds) == {key}
+    assert set(seeds) == {"timeout"}
 
 
 def test_invalid_raw_option_value_is_absent() -> None:
@@ -299,6 +406,63 @@ def test_path_valued_engine_keys_carry_a_text_option() -> None:
     paths = [spec for spec in ENGINE_KEYS if spec.is_path]
     assert paths
     assert all(spec.kind is EngineKeyKind.OPTION_TEXT for spec in paths)
+
+
+@pytest.mark.parametrize(
+    ("cli_values", "primary_table"),
+    [({"parse-error-retries": -1}, {}), ({}, {"parse-error-retries": -1})],
+)
+def test_negative_parse_error_retries_exits(
+    cli_values: dict[str, object], primary_table: dict[str, object]
+) -> None:
+    config = exec_config_from_merged({"exec": primary_table})
+
+    with pytest.raises(SystemExit) as exc_info:
+        build_host_engine_seeds(config=config, primary_table=primary_table, cli_values=cli_values)
+
+    assert exc_info.value.code == 1
+
+
+@pytest.mark.parametrize("raw", ["three", True, 1.5])
+def test_non_integer_configured_parse_error_retries_exits(raw: object) -> None:
+    config = exec_config_from_merged({"exec": {"parse-error-retries": raw}})
+
+    with pytest.raises(SystemExit):
+        build_host_engine_seeds(
+            config=config, primary_table={"parse-error-retries": raw}, cli_values={}
+        )
+
+
+@pytest.mark.parametrize("key", ["strict-json", "trace", "debug"])
+def test_configured_bool_string_decodes_like_a_cli_token(key: str) -> None:
+    table: dict[str, object] = {key: "true"}
+    config = exec_config_from_merged({"exec": table})
+
+    seeds = build_host_engine_seeds(config=config, primary_table=table, cli_values={})
+
+    assert seeds.upper[key] == BoolValue(True)
+
+
+@pytest.mark.parametrize("key", ["strict-json", "trace", "debug"])
+@pytest.mark.parametrize("raw", ["banana", 1])
+def test_undecodable_configured_bool_exits_instead_of_seeding_false(key: str, raw: object) -> None:
+    table: dict[str, object] = {key: raw}
+    config = exec_config_from_merged({"exec": table})
+
+    with pytest.raises(SystemExit) as exc_info:
+        build_host_engine_seeds(config=config, primary_table=table, cli_values={})
+
+    assert exc_info.value.code == 1
+
+
+def test_zero_parse_error_retries_is_a_valid_seed() -> None:
+    seeds = build_host_engine_seeds(
+        config=_config_for("parse-error-retries", configured=False),
+        primary_table={},
+        cli_values={"parse-error-retries": 0},
+    ).merged()
+
+    assert seeds["parse-error-retries"] == IntValue(0)
 
 
 def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:
@@ -523,52 +687,14 @@ def test_a_middle_trace_file_of_none_hides_a_lower_tier_trace_file() -> None:
 
 
 @pytest.mark.parametrize(
-    ("primary", "fallback"),
-    [
-        ({"trace-file": "path.jsonl"}, {}),
-        ({}, {"trace-file": "path.jsonl"}),
-    ],
-    ids=["program_table_trace_file", "exec_trace_file"],
-)
-def test_cli_no_trace_file_does_not_suppress_a_configured_trace_file(
-    primary: dict[str, object], fallback: dict[str, object]
-) -> None:
-    """``--no-trace-file`` clears only the CLI seed; a configured path still traces.
-
-    Documented in docs/agl/reference/host-environment.md ("--no-trace-file
-    semantics") and docs/commands/agl.md: ``--no-trace-file`` clears the
-    initial CLI ``trace-file`` value only -- it does not suppress a trace a
-    program-table or ``[exec]`` ``trace-file`` configures. The seeded
-    ``trace-file`` register still reflects the CLI negation (``None``); the
-    derived ``trace`` register still comes on because the config value
-    independently enables tracing.
-    """
-    config = exec_config_from_merged({"exec": fallback}, program_table=primary)
-    tiers = build_host_engine_seeds(
-        config=config,
-        primary_table=primary,
-        fallback_table=fallback,
-        cli_values={"trace-file": None},
-    )
-
-    merged = tiers.merged()
-    assert merged["trace"] == BoolValue(True)
-    assert option_text(merged["trace-file"], nominals=NO_BUILTIN_DECLARATIONS) is None
-
-
-@pytest.mark.parametrize(
     ("primary", "fallback", "cli_values"),
     [
-        ({"trace": "yes"}, {}, {}),
         ({}, {"trace-file": "   "}, {}),
         ({"trace": False}, {"trace-file": "trace.jsonl"}, {}),
-        ({}, {"trace": True}, {"trace-file": None}),
     ],
     ids=[
-        "invalid_trace_value_in_program_table",
         "whitespace_only_trace_file_in_exec",
         "program_trace_false_and_exec_trace_file",
-        "cli_trace_file_negation_with_configured_trace",
     ],
 )
 def test_merged_trace_matches_config_trace_or_trace_file_is_set(

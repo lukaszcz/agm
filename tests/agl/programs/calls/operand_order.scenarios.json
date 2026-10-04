@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "ask_operands_evaluate_in_signature_order",
+      "params": {"mode": 0},
+      "agents": {"reviewer": ["ok"]},
+      "expect": {"stdout": "prompt\nretries\nsandbox\nok\n", "calls": {"reviewer": 1}}
+    },
+    {
+      "name": "agent_method_operands_evaluate_in_signature_order",
+      "params": {"mode": 1},
+      "runtime": {"session_host": true},
+      "agents": {"reviewer": ["ok"]},
+      "expect": {"stdout": "prompt\nretries\nsandbox\nok\n", "calls": {"reviewer": 1}}
+    },
+    {
+      "name": "ask_request_operands_evaluate_in_signature_order",
+      "params": {"mode": 2},
+      "expect": {"stdout": "prompt\nretries\nsandbox\np\n"}
+    },
+    {
+      "name": "exec_operands_evaluate_in_signature_order",
+      "params": {"mode": 3},
+      "shell": [{"command": "echo x", "stdout": "x"}],
+      "expect": {"stdout": "command\ntimeout\nsandbox\nretries\nx\n"}
+    }
+  ]
+}

@@ -247,7 +247,7 @@ record_def       ::= attributes? builtin_modifier? "record" decl_head type_param
 record_body      ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
-field_def        ::= attributes? "var"? field_name ":" type_expr
+field_def        ::= attributes? "var"? field_name ":" type_expr ("=" or_expr)?
 
 enum_def         ::= attributes? builtin_modifier? "enum" decl_head type_params?
                     "="? enum_body
@@ -258,8 +258,9 @@ first_enum_member ::= "|"? enum_member
 enum_member      ::= attributes? name member_payload? | qualifier_chain name member_type_args?
 member_type_args ::= "[" type_expr ("," type_expr)* "]"
 member_payload   ::= "(" field_list? ")"
+                   | NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
 field_list       ::= field_inline ("," field_inline)* ","?
-field_inline     ::= attributes? "var"? field_name ":" type_expr
+field_inline     ::= attributes? "var"? field_name ":" type_expr ("=" or_expr)?
 
 exception_def    ::= attributes? builtin_modifier? "exception" decl_head
                     exception_base? exception_body?
@@ -286,6 +287,12 @@ the indented block form, the attribute may sit on the field's line or on the
 line above it. Fields are listed in zone order — positional-only, then
 standard, then named-only.
 
+A field's `"=" or_expr` default is a constant expression, evaluated once at
+the declaration; a constructor call may omit that field, exactly like a
+defaulted function parameter. No required positional-fillable field may
+follow a defaulted one in the same zone. An exception field inherits its
+base's default unchanged.
+
 A `type_params` list declares the declaration's type parameters; each named
 entry is an ordinary name in scope as a type throughout the declaration's body.
 `_` is an unused positional slot and introduces no type name. See
@@ -293,7 +300,8 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 
 An enum member written as a bare `name` declares a record in the enum's scope;
 its optional field list is that record's field list, including optional `var`
-field markers. `var` is valid for records and enum-member records,
+field markers. The list is parenthesized, or an indented block under the
+member, one field per line. `var` is valid for records and enum-member records,
 but not exception fields. A qualified member is a
 reference to an existing record, so it has no field list. Qualification is the
 declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while
@@ -459,7 +467,7 @@ targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there; a field
 assignment likewise accepts any record-typed postfix receiver, provided its
-field is marked `var`. See [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+field is marked `var`. See [Bindings and scope](bindings-and-scope.md#destructive-assignment)
 for which roots are legal and the evaluation order. Each opening `[` must be
 adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
 while `xs [0]` is not.
@@ -774,7 +782,7 @@ not permitted inside `%{…}`.
 A `$` template's payload (its `verbatim_text`) is specified in
 [Lexical structure](lexical-structure.md#verbatim-literals); its
 interpolation semantics are in
-[Strings and interpolation](strings-and-interpolation.md#the--literal).
+[Strings and interpolation](strings-and-interpolation.md#the-literal).
 
 ```agl
 program def main() -> unit =

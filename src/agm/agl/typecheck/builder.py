@@ -624,6 +624,11 @@ class _TypeBuilder:
         """
         return tuple(self._attributes.param_zones[fd.node_id] for fd in fields)
 
+    @staticmethod
+    def _field_has_default(fields: tuple[Param, ...]) -> tuple[bool, ...]:
+        """Record which declaration fields have defaults."""
+        return tuple(field.default is not None for field in fields)
+
     def _resolve_fields(
         self,
         fields: Sequence[Param],
@@ -685,6 +690,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
             field_kinds=self._field_zones(stmt.fields),
+            field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             # A generic record keeps the identity of the handle template
             # registered in phase 1 (:meth:`_register_record_or_enum_handle`),
@@ -777,6 +783,7 @@ class _TypeBuilder:
                 fields=tuple(fields.items()),
                 mutable_fields=_mutable_field_names(vd.fields),
                 field_kinds=self._field_zones(vd.fields),
+                field_has_default=self._field_has_default(vd.fields),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
                 external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
@@ -872,6 +879,7 @@ class _TypeBuilder:
             abstract=base_type is None,
             base=None if base_type is None else base_type.decl_id,
             field_kinds=self._field_zones(stmt.fields),
+            field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             field_external_names=self._field_external_names(stmt.fields),
@@ -980,7 +988,10 @@ class _TypeBuilder:
         A builtin may live at any source path, but its enum members must be
         inline so host-minted values and source constructors share identities.
         ``Optional`` instead reuses its selected builtin ``Option``'s
-        ``Some``/``None`` members and declares ``Default`` inline. Nominal types
+        ``Some``/``None`` members and declares ``Default`` inline; likewise
+        ``AgentSandbox`` reuses the builtin ``Sandbox`` record as its
+        ``Sandbox`` member (enum-record unification: the value IS the
+        record), with ``Disabled``/``Native`` declared inline. Nominal types
         inside fields and an exception's base remain contract-bearing and are
         normalized by :func:`contract_for_typedef` relative to the declaration's
         own frame.
@@ -1003,6 +1014,24 @@ class _TypeBuilder:
                     for member in stmt.members
                 )
                 if not shares_option or not default_is_inline:
+                    raise AglTypeError(
+                        f"Builtin type '{stmt.name}' has an invalid definition.",
+                        span=stmt.span,
+                    )
+            elif bare_name == "AgentSandbox":
+                sandbox = self._env.type_table.builtin_declaration("Sandbox")
+                actual_members = {member.name: member for member in typedef.members}
+                shares_sandbox = (
+                    sandbox is not None
+                    and "Sandbox" in actual_members
+                    and actual_members["Sandbox"].decl_id == sandbox.decl_node_id
+                )
+                other_members_inline = all(
+                    isinstance(member, VariantDef)
+                    for member in stmt.members
+                    if not (isinstance(member, VariantRef) and member.chain.member == "Sandbox")
+                )
+                if not shares_sandbox or not other_members_inline:
                     raise AglTypeError(
                         f"Builtin type '{stmt.name}' has an invalid definition.",
                         span=stmt.span,

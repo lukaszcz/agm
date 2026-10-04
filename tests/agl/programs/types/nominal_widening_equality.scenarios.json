@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "some_a",
+      "params": {
+        "pick": "a",
+        "status": 1
+      },
+      "expect": {
+        "stdout": "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "some_b",
+      "params": {
+        "pick": "b",
+        "status": 2
+      },
+      "expect": {
+        "stdout": "false\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\nfalse\n"
+      }
+    },
+    {
+      "name": "none",
+      "params": {
+        "pick": "",
+        "status": 1
+      },
+      "expect": {
+        "stdout": "true\nfalse\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

@@ -168,11 +168,13 @@ class RunConfig:
     def alias_for(self, command_name: str) -> str | None:
         return self.alias.for_command(command_name)
 
-    def memory_limit_for(self, command_name: str) -> str | None:
+    def memory_limit_for(self, command_name: str | None) -> str | None:
+        if command_name is None:
+            return self.memory.default
         return self.memory.for_command(command_name)
 
-    def swap_limit_for(self, command_name: str) -> str | None:
-        return self.swap.for_command(command_name)
+    def swap_limit_for(self, command_name: str | None) -> str | None:
+        return self.swap.default if command_name is None else self.swap.for_command(command_name)
 
     def pty_for(self, command_name: str) -> bool:
         return self.pty.for_command(command_name)
@@ -291,7 +293,7 @@ def _anchor_section_paths(
     return resolved
 
 
-def _resolve_section_paths(
+def resolve_section_paths(
     section: TomlDict,
     fields: Sequence[str],
     config_dir: Path,
@@ -299,6 +301,13 @@ def _resolve_section_paths(
     *,
     sentinels: dict[str, set[str]],
 ) -> TomlDict:
+    """Interpolate and anchor *section*'s path-like *fields* to *config_dir*.
+
+    Shared by config-file loading (anchored to the file's own directory) and
+    package manifest ``[config]`` engine-key resolution (anchored to *cwd* for
+    both arguments, like a CLI flag value), so each origin resolves a relative
+    path the way its own spelling implies.
+    """
     expanded, unresolved_fields = _interpolate_and_expand_section_paths(section, fields)
     resolved = _anchor_section_paths(
         expanded,
@@ -310,7 +319,7 @@ def _resolve_section_paths(
     )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
-            resolved[key] = _resolve_section_paths(
+            resolved[key] = resolve_section_paths(
                 toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
             )
     return resolved
@@ -324,7 +333,7 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
             # unknown/program sections carry only engine keys, so they fall
             # back to the path-valued ones.
             fields = _CONFIG_PATH_FIELDS.get(section_name, PATH_ENGINE_KEYS)
-            resolved[section_name] = _resolve_section_paths(
+            resolved[section_name] = resolve_section_paths(
                 toml_dict(section),
                 fields,
                 config_dir,
@@ -623,21 +632,32 @@ def load_revise_config(
 class ExecConfig:
     """Resolved exec-command configuration."""
 
-    strict_json: bool
+    # Raw TOML values (``None`` = unset): exec/repl decode the bool and
+    # ``parse_error_retries`` engine keys through the shared host-value decoder.
+    strict_json: object | None
     timeout: float | None
-    trace: bool
+    trace: object | None
     trace_file: str | None
+    # Echo streamed agent output on the host's stderr channel.
+    echo: bool = False
     # Raw TOML value (a string or a native table): exec/repl decode it as a
     # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
+    # Raw TOML value (a string or a native table): exec/repl decode it as a
+    # host AgentSandbox value through the shared host-value decoder.
+    default_sandbox: object | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
+    # Keep debugging artifacts (``std/fs`` temporary paths) past the host session.
+    debug: object | None = None
+    parse_error_retries: object | None = None
 
 
 def exec_config_from_merged(
     merged: TomlDict,
     *,
     program_table: dict[str, object] | None = None,
+    package_table: dict[str, object] | None = None,
 ) -> ExecConfig:
     """Build :class:`ExecConfig` from an already-merged config dict.
 
@@ -649,38 +669,50 @@ def exec_config_from_merged(
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
-    Engine keys use kebab-case names: ``strict-json``, ``trace-file``.
+    *package_table* — a package-owned program's manifest ``[config]`` values —
+    ranks between ``[exec]`` and *program_table*. Engine keys use kebab-case
+    names: ``strict-json``, ``trace-file``.
     """
     exec_table = toml_dict(merged.get("exec"))
 
-    # Qualified per-program engine-key overrides win over [exec].KEY.
-    # Engine keys use kebab-case names.
+    # Effective precedence, low to high: [exec] < package manifest < the
+    # qualified program table (exact route, then inherited groups).
     effective: TomlDict = dict(exec_table)
-    if program_table is not None:
+    for table in (package_table, program_table):
+        if table is None:
+            continue
         for key, _ in ENGINE_KEY_KINDS:
-            if key in program_table:
-                effective[key] = program_table[key]
+            if key in table:
+                effective[key] = table[key]
 
-    resolved_strict_json = _optional_bool(effective, "strict-json")
+    resolved_strict_json = effective.get("strict-json")
+    resolved_echo = _optional_bool(exec_table, "echo") is True
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
 
-    resolved_trace = _optional_bool(effective, "trace")
+    resolved_trace = effective.get("trace")
     resolved_trace_file = _optional_str(effective, "trace-file")
-    # Keep every explicitly supplied Agent value raw (a string or a native
-    # TOML table) so exec/repl can decode it through the shared host-value
-    # decoder at their AgL host boundary; other commands stay free of AgL
-    # imports.
+    resolved_debug = effective.get("debug")
+    # Keep every explicitly supplied engine value raw (``default-agent`` and
+    # ``default-sandbox`` may be a native TOML table) so exec/repl decode and
+    # validate it through the shared host-value decoder at their AgL host
+    # boundary; other commands stay free of AgL imports.
     resolved_default_agent = effective.get("default-agent")
+    resolved_default_sandbox = effective.get("default-sandbox")
+    resolved_parse_error_retries = effective.get("parse-error-retries")
 
     return ExecConfig(
+        echo=resolved_echo,
         strict_json=resolved_strict_json,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
         trace=resolved_trace,
         trace_file=resolved_trace_file,
         default_agent=resolved_default_agent,
+        default_sandbox=resolved_default_sandbox,
+        debug=resolved_debug,
+        parse_error_retries=resolved_parse_error_retries,
     )
 
 

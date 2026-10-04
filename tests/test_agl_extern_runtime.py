@@ -27,7 +27,7 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
-from tests._agl_helpers import agl_roots, file_program, prepare_inline_command
+from tests._agl_helpers import agl_roots, file_program, prepare_inline_code
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
@@ -301,7 +301,7 @@ def test_indirect_extern_call_uses_the_default_for_an_omitted_trailing_argument(
     assert IrInterpreter(program, extern_registry=registry).run()["result"] == IntValue(11)
 
 
-def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> None:
+def test_check_only_never_imports_the_companion(tmp_path: Path) -> None:
     marker = tmp_path / "marker.txt"
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
@@ -313,31 +313,29 @@ def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> N
         f"    open({str(marker)!r}, 'a').write('called')\n"
         "    return x + 1\n",
     )
-    driver = PipelineDriver()
-    prepared = prepare_inline_command(
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
         default_stdlib=False,
     )
     result = driver.run_prepared(prepared, check_only=True)
     assert result.ok is True
-    assert [cs.callee for cs in result.call_sites] == ["f"]
     assert not marker.exists()
 
 
-def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
+def test_check_only_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
-    driver = PipelineDriver()
-    prepared = prepare_inline_command(
+    driver = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
         default_stdlib=False,
     )
     result = driver.run_prepared(prepared, check_only=True)
     assert result.ok is True
-    assert [cs.callee for cs in result.call_sites] == ["f"]
 
 
 def test_an_attributed_extern_calls_the_companion_it_names(tmp_path: Path) -> None:
@@ -452,6 +450,21 @@ def test_runtime_state_without_close_behaves_exactly_as_before(tmp_path: Path) -
     assert bindings["a"] == bindings["b"]
 
 
+@pytest.mark.parametrize(("debug", "expected"), ((False, ["plain", "kept"]), (True, ["plain"])))
+def test_runtime_state_keeps_debug_retained_values_open_in_debug_mode(
+    debug: bool, expected: list[str]
+) -> None:
+    state = ExternRuntimeState()
+    closed: list[str] = []
+    state.get_or_create("kept", lambda: "kept", closed.append, keep_in_debug=True)
+    state.get_or_create("plain", lambda: "plain", closed.append)
+
+    state.close_all(debug=debug)
+    state.close_all(debug=debug)
+
+    assert closed == expected
+
+
 def test_runtime_state_closer_runs_once_when_an_uncaught_exception_escapes(
     tmp_path: Path,
 ) -> None:
@@ -472,14 +485,14 @@ def test_runtime_state_closer_runs_once_when_process_exit_raises_system_exit(
     closed_log = tmp_path / "closed.log"
     companion = _counting_state_companion(created_log, closed_log)
     entry_path = tmp_path / "entry.agl"
-    source = file_program(
-        "import std/process\nextern def get() -> int\nlet _ = get()\nprocess::exit(0)\n"
-    )
+    source = file_program("import std/os\nextern def get() -> int\nlet _ = get()\nos::exit(0)\n")
     entry_path.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 
     with pytest.raises(SystemExit):
-        PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
+            source, entry_path=entry_path, roots=agl_roots()
+        )
 
     assert closed_log.read_text().count("\n") == 1
 
@@ -536,7 +549,9 @@ def test_pipeline_run_surfaces_a_failing_companion_closer_as_a_run_error_note(
     entry_path.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 
-    result = PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run(
+        source, entry_path=entry_path, roots=agl_roots()
+    )
 
     assert result.ok is False
     assert result.error is not None

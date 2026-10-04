@@ -3,6 +3,7 @@ import std/env::Environ
 import std/errors::Exception
 import std/option::Option
 import std/path::path
+import std/sandbox::Sandbox
 
 builtin
 record ExecResult
@@ -21,9 +22,16 @@ exception ExecError extends Exception
   stderr: text
   timed-out: bool
 
+@doc("""
+  Run a shell command and return its captured output and exit status.
+
+  Non-zero exit statuses are returned in `ExecResult`. Raises `ExecError` on spawn or sandbox
+  preparation failure, timeout, or invalid UTF-8 output; raises `TypeError` for an invalid timeout.
+""")
 builtin def exec(
   command: text,
   env: Environ = std/env::environ,
   cwd: Option[path] = None,
   timeout: Option[text] = std/config::timeout,
+  sandbox: Option[Sandbox] = None,
 ) -> ExecResult

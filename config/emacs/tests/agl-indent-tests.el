@@ -4,8 +4,9 @@
 
 ;; Scenario tables for the AgL indentation engine: block opening and
 ;; closing, branch-marker alignment for every marker, scope regions and
-;; their closers, bracket continuation, TAB cycling, electric re-indent,
-;; and the immunity of `$' verbatim payloads and multi-line templates.  See the layout rules in
+;; their closers, bracket continuation, enum member fields, TAB cycling,
+;; electric re-indent, and the immunity of `$' verbatim payloads and
+;; multi-line templates.  See the layout rules in
 ;; docs/agl/reference/lexical-structure.md.
 
 ;;; Code:
@@ -506,6 +507,82 @@ level under a deeper body."
   ;; declaration, so the body's level carries over.
   (should (= (agl-ind--indent-of "record R\n@arg-named a: int\n" 2) 2))
   (should (= (agl-ind--indent-of "exception Boom extends Exception\n  message: text\n@arg-named code: int\n" 3) 2)))
+
+;; --- Enum member fields hang from the member ---
+
+(ert-deftest agl-ind-member-field-block-indents-under-the-member ()
+  ;; A member's field block hangs one level under the member itself, which
+  ;; starts after its `|', rather than under the marker.
+  (should (= (agl-ind--indent-of "enum E\n  | A\nx: int\n" 3) 6))
+  (should (= (agl-ind--indent-of "enum E\n  | A\n      x: int\ny: text\n" 4) 6))
+  (should (= (agl-ind--indent-of "enum E =\n| A  # first\nx: int\n" 3) 4))
+  (should (= (agl-ind--indent-of "scope S\n  enum E\n    | @doc(\"a (b)\") @arg-named A\nx: int\n" 4)
+             8))
+  (should (= (agl-ind--indent-of "enum Flag | On\n          | Off\nx: int\n" 3) 14)))
+
+(ert-deftest agl-ind-member-bracketed-fields-indent-under-the-member ()
+  ;; A payload whose parenthesis ends the member's line holds the same
+  ;; fields the block form does, so they stand at the same column.
+  (should (= (agl-ind--indent-of "enum V\n  | Completed(\n@doc(\"x\")\n" 3) 6))
+  (should (= (agl-ind--indent-of
+              "enum V\n  | Completed(\n      @doc(\"x\")\nnext-task-file: path)\n" 4)
+             6))
+  (should (= (agl-ind--indent-of "enum V\n  | Completed(\n      next: path\n)\n" 4) 2))
+  ;; A payload begun on the member's line still aligns with its content.
+  (should (= (agl-ind--indent-of "enum V\n  | Completed(a: int,\nb: int)\n" 3) 14)))
+
+(ert-deftest agl-ind-member-sibling-returns-past-a-field-block ()
+  (should (= (agl-ind--indent-of "enum E\n  | A\n      x: int\n      y: text\n| B\n" 5) 2))
+  (should (= (agl-ind--indent-of "enum V\n  | A(\n      x: int)\n| B\n" 4) 2)))
+
+(ert-deftest agl-ind-member-with-a-payload-opens-no-field-block ()
+  ;; Only a member declared by a bare name can still take a block: a
+  ;; payload already lists the fields, and a reference declares none.
+  (should (= (agl-ind--indent-of "enum E\n  | A(x: int)\nx\n" 3) 2))
+  (should (= (agl-ind--indent-of "enum E\n  | ::R\nx\n" 3) 2))
+  (should (= (agl-ind--indent-of "enum E\n  | mod::Box[int]\nx\n" 3) 2)))
+
+(ert-deftest agl-ind-other-branches-are-not-enum-members ()
+  ;; A `|' continues an `if' or a `case' as well, and their branches keep
+  ;; the level of the marker.
+  (should (= (agl-ind--indent-of "def f() -> int =\n  case v of\n    | A\nx\n" 4) 4))
+  (should (= (agl-ind--indent-of "def f() -> int =\n  case v of\n    | A => g(\nx)\n" 4) 6))
+  (should (= (agl-ind--indent-of
+              "enum E\n  | A\n\ndef f() -> int =\n  if\n    | ready\nx\n" 7)
+             4)))
+
+(ert-deftest agl-ind-member-field-attribute-keeps-the-field-level ()
+  (should (= (agl-ind--indent-of "enum E\n  | A\n@doc(\"x\")\n" 3) 6))
+  (should (= (agl-ind--indent-of "enum E\n  | A\n      x: int\n@doc(\"y\")\n" 4) 6)))
+
+(ert-deftest agl-ind-region-keeps-member-field-blocks ()
+  (let ((text (concat "enum Shape\n"
+                      "  | Point\n"
+                      "  | Circle\n"
+                      "      radius: int\n"
+                      "  | Rect(\n"
+                      "      @doc(\"horizontal extent\")\n"
+                      "      width: int,\n"
+                      "      height: int)\n"
+                      "  | Label\n"
+                      "      @doc(\"shown text\")\n"
+                      "      caption: text\n"
+                      "\n"
+                      "def f() -> int = 1\n")))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-region-keeps-a-member-field-block-at-its-own-column ()
+  ;; The block's first line chooses its level, as any body's does.
+  (let ((text "enum E\n  | A\n    x: int\n    y: text\n  | B\n"))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-typing-member-field-blocks ()
+  (should (equal (agl-ind--typed
+                  (concat "enum E\n| A\nx: int\ny: text\n| B\n@doc(\"z\")\nz: int\n"
+                          "| C(\nw: int)\n| D\ndef f() -> int = 1"))
+                 (concat "enum E\n  | A\n      x: int\n      y: text\n  | B\n"
+                         "      @doc(\"z\")\n      z: int\n"
+                         "  | C(\n      w: int)\n  | D\ndef f() -> int = 1"))))
 
 ;; --- Word markers find the construct they name ---
 

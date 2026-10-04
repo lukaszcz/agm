@@ -15,6 +15,9 @@
 ;;   open, the logical line continues, and a continuation line aligns with
 ;;   the bracket's content column — except the line that closes the
 ;;   bracket, which returns to the level of the line that opened it.
+;; - Enum member fields: a member's fields hang one level under the member
+;;   itself, which starts after its `|', whether they are an indented block
+;;   or a parenthesized payload opened at the end of the member's line.
 ;; - Branch-marker continuation: a line whose first token is `|', `else',
 ;;   `catch', `until', or `done' continues the enclosing construct and
 ;;   aligns with the line that opened it, or with the `|' sibling that
@@ -158,6 +161,17 @@ Python companion, so no block follows either.")
           (regexp-opt '("record" "enum" "exception")) "[ \t]")
   "Regexp matching a record, enum, or exception declaration line.")
 
+(defconst agl--enum-declaration-re
+  "\\`[ \t]*\\(?:builtin[ \t]+\\)?enum[ \t]"
+  "Regexp matching an enum declaration line.")
+
+(defconst agl--bare-member-re
+  (concat "\\`" agl--declaration-head-re "[ \t]*\\'")
+  "Regexp matching the text of an enum member declared by a bare name.
+
+A qualified spelling also matches, since `::' is part of a declaration
+head; `agl--field-block-column' tells the two apart.")
+
 (defconst agl--type-header-re
   (concat "\\`[ \t]*\\(?:builtin[ \t]+\\)?"
           (regexp-opt '("record" "enum" "exception"))
@@ -286,9 +300,12 @@ Return non-nil when such a line was found."
   "Return the content column of the innermost open bracket, or nil.
 
 While a bracket is open the logical line continues, so a continuation
-line aligns just past that bracket.  A line that opens with the closing
-bracket ends that logical line instead of continuing it, so it returns
-to the level of the line the bracket was opened on."
+line aligns just past that bracket.  A bracket that ends its line has no
+content column to offer, so its lines indent one level under the item
+it belongs to: the enum member when the line declares one, and the line
+itself otherwise.  A line that opens with the closing bracket ends that
+logical line instead of continuing it, so it returns to the level of the
+line the bracket was opened on."
   (let* ((state (save-excursion (syntax-ppss (line-beginning-position))))
          (open (nth 1 state)))
     (when open
@@ -302,7 +319,9 @@ to the level of the line the bracket was opened on."
           (forward-char 1)
           (skip-chars-forward " \t")
           (if (eolp)
-              (+ (progn (goto-char open) (current-indentation)) agl-indent-offset)
+              (+ (progn (goto-char open)
+                        (or (agl--enum-member-column) (current-indentation)))
+                 agl-indent-offset)
             (current-column))))))))
 
 (defun agl--logical-line-indentation ()
@@ -396,14 +415,83 @@ case the two align."
                         (line-beginning-position) (agl--line-code-end)))
        t))
 
+(defun agl--enum-declaration-line-p ()
+  "Return non-nil if the current line declares an enum."
+  (and (string-match-p agl--enum-declaration-re
+                       (buffer-substring-no-properties
+                        (line-beginning-position) (agl--line-code-end)))
+       t))
+
+(defun agl--enum-member-line-p ()
+  "Return non-nil if the current line\='s `|\=' declares an enum member.
+
+A `|\=' continues an `if\=' or a `case\=' as well, so the construct it
+belongs to settles it: the nearest line above that is no deeper than the
+marker and is neither a sibling `|\=' at its column nor the closer of a
+sibling\='s bracket.  Deeper lines are the siblings\=' own fields."
+  (and (agl--pipe-marker-line-p)
+       (save-excursion
+         (let ((column (current-indentation))
+               (owner nil))
+           (while (and (null owner) (agl--goto-previous-code-line))
+             (let ((indent (current-indentation)))
+               (unless (or (> indent column)
+                           (agl--closing-bracket-line-p)
+                           (and (= indent column) (agl--pipe-marker-line-p)))
+                 (setq owner (if (agl--enum-declaration-line-p) 'enum 'other)))))
+           (eq owner 'enum)))))
+
+(defun agl--enum-member-column ()
+  "Return the column the current line\='s enum member starts at, or nil.
+
+The member starts at the first token after its `|\=': its name, or the
+attribute prefixing it."
+  (and (agl--enum-member-line-p)
+       (save-excursion
+         (beginning-of-line)
+         (skip-chars-forward " \t")
+         (forward-char 1)
+         (skip-chars-forward " \t")
+         (current-column))))
+
+(defun agl--field-block-column ()
+  "Return the column of the field block the current line may open, or nil.
+
+An enum member declared by a bare name takes its fields in an indented
+block, which hangs one level under the member rather than under its
+`|\='.  A member whose payload is already written in parentheses takes no
+block, and neither does a qualified one (`::Entry\=', `mod::Box[T]\='),
+which references a record declared elsewhere."
+  (let ((column (agl--enum-member-column))
+        (end (agl--line-code-end)))
+    (when column
+      (save-excursion
+        (move-to-column column)
+        ;; Step over the member\='s attributes; one whose arguments run past
+        ;; this line leaves a bracket open, and the member is not bare.
+        (while (and (eq (char-after) ?@) (< (point) end))
+          (skip-chars-forward "^ \t\n(")
+          (when (eq (char-after) ?\()
+            (goto-char (or (ignore-errors (scan-lists (point) 1 0)) (point-max))))
+          (skip-chars-forward " \t"))
+        (and (< (point) end)
+             (let ((member (buffer-substring-no-properties (point) end)))
+               (and (string-match-p agl--bare-member-re member)
+                    (not (string-match-p "::" member))))
+             (+ column agl-indent-offset))))))
+
+(defun agl--field-owner-line-p ()
+  "Return non-nil if the current line declares something that takes fields."
+  (or (agl--type-declaration-line-p) (agl--enum-member-line-p)))
+
 (defun agl--field-attribute-p ()
   "Return non-nil when the current line\='s attribute prefixes a field.
 
 A `record\=', `enum\=', or `exception\=' body holds fields rather than
-declarations, so an attribute written in one prefixes a field.  The body
-is recognized from its header: the nearest line above the attribute that
-is indented less than the line it follows, or that line itself when the
-attribute opens the body.
+declarations, and so does an enum member\='s field block, so an attribute
+written in one prefixes a field.  The body is recognized from its header:
+the nearest line above the attribute that is indented less than the line
+it follows, or that line itself when the attribute opens the body.
 
 The walk stops at that line whether or not it declares a type.  Going on
 past it would leave the body altogether and reach the declarations
@@ -412,14 +500,14 @@ attribute that prefixes something else entirely."
   (save-excursion
     (beginning-of-line)
     (when (agl--goto-previous-code-line)
-      (or (agl--type-declaration-line-p)
+      (or (agl--field-owner-line-p)
           (let ((body (current-indentation))
                 (header nil)
                 (found nil))
             (while (and (not found) (agl--goto-previous-code-line))
               (when (< (current-indentation) body)
                 (setq found t
-                      header (agl--type-declaration-line-p))))
+                      header (agl--field-owner-line-p))))
             header)))))
 
 (defun agl--attribute-indent ()
@@ -652,18 +740,19 @@ whether the spelling it found is a whole AgL token."
   "Return the column carried over from the line above the current one.
 
 The previous logical line sets the level: its own when it opens nothing,
-and one `agl-indent-offset\=' deeper when it opens a block.  A `$' verbatim
-payload IS its opener\='s block, so crossing one returns to the opener\='s
-level rather than nesting under it."
+and one `agl-indent-offset\=' deeper when it opens a block.  An enum
+member that can still take a field block places that block itself.  A
+`$' verbatim payload IS its opener\='s block, so crossing one returns to
+the opener\='s level rather than nesting under it."
   (save-excursion
     (beginning-of-line)
     (if (not (agl--goto-previous-code-line))
         0
-      (let ((previous (agl--logical-line-indentation))
-            (crossed agl--crossed-verbatim-region))
-        (if (and (agl--opens-block-p) (not crossed))
-            (+ previous agl-indent-offset)
-          previous)))))
+      (let ((previous (agl--logical-line-indentation)))
+        (cond (agl--crossed-verbatim-region previous)
+              ((agl--field-block-column))
+              ((agl--opens-block-p) (+ previous agl-indent-offset))
+              (t previous))))))
 
 (defun agl-calculate-indent ()
   "Return the column `agl-indent-line' should indent the current line to."
@@ -724,18 +813,18 @@ A line may sit at any enclosing level (`agl--indent-levels\='), and a line
 that starts a nested body may sit at any column deeper than that body\='s
 header: the first line is what chooses the level, so re-indenting it to
 the one computed target would rewrite well-formatted source.  That holds
-for a block body and equally for a `|\=' branch, whose markers commonly
-align under an inline first marker (`if | a => x\=').  The terminators
-`else\=', `catch\=', `until\=', `done\=' and `end\=' continue or close the construct
-itself rather than opening a body, so they stay subject to the levels
-above."
+for a block body, for an enum member\='s field block, and equally for a
+`|\=' branch, whose markers commonly align under an inline first marker
+\(`if | a => x\=').  The terminators `else\=', `catch\=', `until\=', `done\='
+and `end\=' continue or close the construct itself rather than opening a
+body, so they stay subject to the levels above."
   (let ((column (current-indentation)))
     (or (memq column (agl--indent-levels))
         (save-excursion
           (beginning-of-line)
           (and (agl--goto-previous-code-line)
                (not agl--crossed-verbatim-region)
-               (agl--opens-block-p)
+               (or (agl--opens-block-p) (agl--field-block-column))
                (> column (current-indentation))))
         (save-excursion
           (beginning-of-line)

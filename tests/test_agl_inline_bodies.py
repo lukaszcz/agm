@@ -33,14 +33,18 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.syntax import FuncDef, VarRef
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
     """Run *source*, returning its success flag, stdout, and diagnostics."""
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        result = run_inline_command(PipelineDriver(), source, param_values={})
+        result = run_inline_code(
+            PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
+            source,
+            param_values={},
+        )
     return result.ok, buffer.getvalue(), [d.message for d in result.diagnostics]
 
 

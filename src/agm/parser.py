@@ -7,6 +7,7 @@ import textwrap
 from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
+from agm.cli_support.execution_options import execution_options_section
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.core.env import help_width
 from agm.util.text import first_paragraph, format_description_column
@@ -16,756 +17,458 @@ class _Writeable(Protocol):
     def write(self, data: str) -> object: ...
 
 
+# Option rows shared by the AgL commands' help pages.
+_MODULE_PATH_ROW = (
+    "  -I, --module-path DIR  Add a module search root (repeatable; relative to the\n"
+    "                         working directory).\n"
+)
+_NO_STDLIB_ROW = "  --no-stdlib            Disable the automatic `import std/prelude::*`.\n"
+
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
-        agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm open [-d] [-n PANES] [-p PARENT] [--no-fetch] [--dry-run] TARGET
 
-        Open a tmux session for an AGM workspace, creating or checking out a branch as needed.
+        Open a workspace's tmux session, creating or checking out TARGET's branch
+        as needed. Also: agm workspace open, agm wsp open.
 
         Options:
-          -d, --detach            Create the tmux session without attaching to it.
-          -n, --num-panes PANES   Create the session with PANES panes.
-          -p, --parent PARENT     Base a newly created branch workspace on PARENT instead of
-                                  the main workspace's current branch.
+          -d, --detach           Do not attach to the session.
+          -n, --num-panes PANES  Create the session with PANES panes.
+          -p, --parent PARENT    Base a new branch on PARENT instead of the main
+                                 workspace's branch.
+          --no-fetch             Resolve remote branches from local refs.
 
-        Behavior:
-          repo           Open the main workspace.
-          default branch Open the main workspace when TARGET matches the
-                         branch currently checked out there.
-          existing branch workspace
-                         Open the tmux session for an existing branch workspace.
-                         With --parent, this is an error.
-          existing branch Check out BRANCH into a Git worktree, then open it as a workspace.
-                         A branch that exists only on a remote is checked out as a
-                         tracking branch of that remote; a branch carried by several
-                         remotes is ambiguous and is rejected.
-                         With --parent, warn and ignore --parent.
-          missing branch  Create BRANCH from PARENT/current branch, then open it.
+        TARGET:
+          repo              The main workspace.
+          main's branch     The main workspace (its checked-out branch).
+          branch workspace  That workspace; an error with --parent.
+          existing branch   Checked out into a new worktree; a remote-only branch
+                            tracks its remote (error if several remotes carry
+                            it); --parent is ignored with a warning.
+          new branch        Created from PARENT or the main workspace's branch.
 
-        A workspace whose tmux session is already running is reported as an error
-        instead of being opened again; attach to that session instead.
+        A workspace whose session is already running is an error; attach to it.
 
         Examples:
           agm open repo
-          agm open -d repo
-          agm open main
-          agm open feat/login
-          agm open --num-panes 4 feat/login
-          agm open --parent main feat/search
+          agm open -d -n 4 feat/login
+          agm open -p main feat/search
     """),
     "close": textwrap.dedent("""\
-        agm close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
+        agm close [-f] [-D] [--keep-branch] [--keep-workspace] [--dry-run] BRANCH
 
-        Close a branch workspace.
-
-        Remove the workspace's Git worktree unless --keep-workspace is used, then kill
-        the corresponding tmux session.
+        Close a branch workspace: remove its worktree and workspace config,
+        safe-delete its branch (git branch -d), and kill its tmux session.
+        Also: agm workspace close, agm wsp close.
 
         Options:
-          -f, --force   Force remove the branch workspace's Git worktree
-                        (even with untracked or uncommitted changes) and force delete the branch
-                        (git branch -D). Implies -D.
-          -D            Force delete the branch (git branch -D) instead of
-                        safe delete (git branch -d). The Git worktree is only
-                        removed if the branch deletion would succeed.
-          --keep-branch
-                        Remove the Git worktree but keep the local branch.
-          --keep-workspace
-                        Keep the Git worktree and local branch; only close the
-                        workspace session. Implies --keep-branch.
+          -f, --force       Remove the worktree despite uncommitted or untracked
+                            changes; implies -D.
+          -D                Force-delete the branch (git branch -D). The worktree is
+                            removed only if the deletion would succeed.
+          --keep-branch     Keep the local branch.
+          --keep-workspace  Keep the worktree and branch; only kill the session.
     """),
     "init": textwrap.dedent("""\
-        agm init [--embedded | --split]
-                 [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]
-        agm init [--embedded | --split]
-                 [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]
-                 PROJECT_NAME
-        agm init [--embedded | --split] [-b|--branch BRANCH]
-                 [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]
-                 [PROJECT_NAME] REPO_URL
-        agm init --clone [--embedded | --split] [-b|--branch BRANCH]
-                 [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]
-                 REPO_URL
+        agm init [--embedded|--split] [--no-git-init] [--no-repo-git]
+                 [--no-config-git] [--no-notes-git] [--dry-run] [PROJECT_NAME]
+        agm init ... [-b BRANCH] [PROJECT_NAME] REPO_URL
+        agm init --clone ... [-b BRANCH] REPO_URL
 
-        Initialize a project. Without PROJECT_NAME, agm initializes the current
-        directory. With PROJECT_NAME, agm initializes a child directory with that
-        name. When REPO_URL is provided, agm also clones it into repo/ by default,
-        or into the project root with --embedded. Use --clone with a URL-only init
-        to initialize a child directory derived from the repo URL. Without an
-        explicit layout flag, agm chooses the embedded layout when the target
-        project directory is already a git repo; otherwise it chooses the
-        split layout. When that embedded repository has no commits, agm creates
-        its initial commit containing the generated .gitignore.
+        Initialize a project in the current directory, or in PROJECT_NAME/. With
+        REPO_URL, clone it into repo/ (split) or the project root (embedded).
+
+        The layout defaults to embedded when the project directory is already a
+        git repo, else split. An embedded repo without commits gets an initial
+        commit of the generated .gitignore.
 
         Options:
-          --embedded   Force the embedded layout with AGM data under .agm/.
-          --split      Force the split layout with repo/, deps/, notes/,
-                       worktrees/, and config/ under the project root.
-          --clone      Initialize a new project directory derived from REPO_URL.
-          -b, --branch BRANCH
-                       Clone this branch when REPO_URL is provided.
-          --no-git-init
-                       Do not create git repositories in repo/, config/, and notes/.
-          --no-repo-git
-                       Do not create a git repository in repo/.
-          --no-config-git
-                       Do not create a git repository in config/.
-          --no-notes-git
-                       Do not create a git repository in notes/.
+          --embedded           Embedded layout: AGM data under .agm/.
+          --split              Split layout: repo/, deps/, notes/, worktrees/,
+                               config/.
+          --clone              Name the project directory after REPO_URL.
+          -b, --branch BRANCH  Clone BRANCH.
+          --no-git-init        Create no git repos in repo/, config/, notes/.
+          --no-repo-git        Create no git repo in repo/.
+          --no-config-git      Create no git repo in config/.
+          --no-notes-git       Create no git repo in notes/.
     """),
     "workspace": textwrap.dedent("""\
-        agm workspace open  [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-        agm workspace close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
-        agm workspace setup
-        agm workspace list  [-v|--verbose]
-        agm workspace shell-regen SHELL_DIR
-        agm wsp open        [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-        agm wsp close       [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
-        agm wsp setup
-        agm wsp list        [-v|--verbose]
+        agm workspace COMMAND
+        agm wsp COMMAND
 
-        Manage AGM workspaces. A workspace may be the main repo or a linked
-        Git worktree in the project's worktrees directory, interpreted with
-        AGM project config, workspace config, dependency environment, setup
-        scripts, and tmux session lifecycle.
-    """),
-    "sync": textwrap.dedent("""\
-        agm sync fetch
-        agm sync pull
-
-        Synchronize the main repository, dependency repositories, and their
-        checked-out Git worktrees.
+        Manage workspaces: the main repo and the worktrees under the project's
+        worktrees directory, with their config, dependency environment, setup
+        scripts, and tmux sessions.
 
         Commands:
-          fetch   Fetch the main repository and all checked-out dependencies,
-                  then create missing local tracking branches.
-          pull    Run sync fetch, then run git merge in every Git worktree.
+          open         Open a workspace's tmux session (also: agm open)
+          close        Close a branch workspace (also: agm close)
+          setup        Run the current workspace's setup scripts
+          list         List open workspaces
+          shell-regen  Regenerate a session's shell wrapper files
+    """),
+    "sync": textwrap.dedent("""\
+        agm sync COMMAND
+
+        Synchronize the main repo, dependency repos, and their worktrees.
+
+        Commands:
+          fetch  Fetch all repos and create missing local tracking branches
+          pull   Fetch, then merge in every worktree
     """),
     "loop": textwrap.dedent("""\
-        agm loop [--runner COMMAND] [--selector COMMAND|--no-selector]
-                 [--tasks-dir DIR] [--no-log|--log-file PATH]
-                 [--prompt TEXT|--prompt-file PATH]
-                 [--selector-prompt TEXT|--selector-prompt-file PATH]
-                 [--extra-prompt TEXT|--extra-prompt-file PATH]
-                 [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                 [--timeout DURATION]
-                 CMD [RUNNER_ARGS...]
-        agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
-                     [--tasks-dir DIR] [--no-log|--log-file PATH]
-                     [--prompt TEXT|--prompt-file PATH]
-                     [--selector-prompt TEXT|--selector-prompt-file PATH]
-                     [--extra-prompt TEXT|--extra-prompt-file PATH]
-                     [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                     [--timeout DURATION]
-                     [CMD [RUNNER_ARGS...]]
-        agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [--no-log|--log-file PATH]
-                      [--prompt TEXT|--prompt-file PATH]
-                      [--selector-prompt TEXT|--selector-prompt-file PATH]
-                      [--extra-prompt TEXT|--extra-prompt-file PATH]
-                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                      [--timeout DURATION]
-                      CMD [RUNNER_ARGS...]
-        agm loop select [--runner COMMAND] [--selector COMMAND|--no-selector]
-                        [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
-                        [--selector-prompt TEXT|--selector-prompt-file PATH]
-                        [--extra-prompt TEXT|--extra-prompt-file PATH]
-                        [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                        [--timeout DURATION]
-                        [CMD [RUNNER_ARGS...]]
+        agm loop [OPTIONS] [--dry-run] CMD [RUNNER_ARGS...]
+        agm loop run|step [OPTIONS] [--dry-run] [CMD [RUNNER_ARGS...]]
+        agm loop select [OPTIONS] [--dry-run] [CMD [RUNNER_ARGS...]]
 
-        Repeatedly run a prompt command until the selected loop mode reports
-        completion, perform one loop iteration, or run the progress-update
-        prompt once.
+        Run agent prompts until the agent reports COMPLETE. Bare `agm loop` prints
+        this help; `agm loop CMD` means `agm loop run CMD`.
 
-        Command config:
-          [loop] runner = "claude -p" in config.toml sets the default runner
-          command prefix. [loop] selector = "codex exec" sets the selector
-          command prefix. [loop] no_selector = true disables the selector and
-          switches to no-selector mode. [loop] tasks_dir = ".agent-files/tasks"
-          sets the tasks directory checked for ``PROGRESS.md`` and task files.
-          [loop] timeout = "30m" sets an idle timeout that kills the current
-          runner process tree when no output is received for the given duration.
-          It fails that invocation only; the loop or command continues. When
-          logging is enabled, loop diagnostics are recorded in the loop log.
-          Accepts seconds (plain number or ``Ns``), minutes (``Nm``), or
-          hours (``Nh``). Disabled by default. ``--timeout DURATION``
-          overrides the config value.
-          [loop] prompt = "text" or [loop] prompt_file = "path" set the prompt
-          text or file, overriding the default prompts/implement.md runner
-          prompt (preprocessed after task selection with ``%{TASK_FILE}``) in
-          selector mode or loop.md in no-selector mode. ``--prompt`` and
-          ``--prompt-file`` are
-          mutually exclusive and override the config values.
-          [loop] selector_prompt = "text" or [loop] selector_prompt_file = "path"
-          set the selector prompt text or file, overriding the default
-          select.md prompt. ``--selector-prompt`` and
-          ``--selector-prompt-file`` are mutually exclusive and override the
-          config values.
-          [loop] extra_prompt = "text" or [loop] extra_prompt_file = "path"
-          append extra content to the runner prompt, after the primary
-          prompt (whether default or explicitly set).
-          ``--extra-prompt`` and ``--extra-prompt-file`` are mutually
-          exclusive and override the config values.
-          [loop] extra_selector_prompt = "text" or
-          [loop] extra_selector_prompt_file = "path" append extra content
-          to the selector prompt, after the primary selector prompt
-          (whether default or explicitly set).
-          ``--extra-selector-prompt`` and ``--extra-selector-prompt-file``
-          are mutually exclusive and override the config values.
-          ``agm loop CMD`` is shorthand for ``agm loop run CMD`` when ``CMD``
-          is not a built-in subcommand, and still selects ``[loop.CMD]``
-          overrides; those values override ``[loop]``. ``agm loop --runner "..."``,
-          ``agm loop --selector "..."``, ``agm loop --no-selector``, and
-          ``agm loop --tasks-dir ...`` override those values. ``RUNNER_ARGS``
-          are appended to the final runner command after AGM resolves
-          ``--runner``, config, or the built-in default. Bare ``agm loop``
-          prints this help text.
+        Commands:
+          run     Loop until COMPLETE
+          step    Run one iteration
+          select  Run the selector prompt once (selector mode only)
 
-        Behavior:
-          With a selector (the default), AGM runs the selector with
-          ``@select.md``. If the selector returns ``COMPLETE`` after
-          whitespace is removed, AGM stops. Otherwise the selector output is
-          treated as the next task path. AGM preprocesses prompts/implement.md
-          with ``%{TASK_FILE}`` set to that path, then runs the runner with the
-          resulting prompt. When no explicit selector command is configured, the runner
-          command is used for the progress update.
-          With ``--no-selector`` / ``no_selector = true``, AGM appends
-          ``@<resolved-loop-prompt>`` as the final argument to the runner and
-          stops when the response is ``COMPLETE`` after whitespace is removed.
-          Creates a ``loop-YYYYMMDD-HHMMSS.log`` file in the current directory
-          by default, or writes to ``--log-file PATH``. ``--no-log`` disables
-          file logging entirely. The command prints each step header and stops
-          when the active mode reports completion.
-          By default, AGM appends the prompt file path as a trailing
-          ``@<path>`` argument to the runner/selector command. To control
-          where the path appears, use the ``%%`` or ``%{PROMPT_FILE}``
-          placeholder in the command — it is replaced with the resolved
-          prompt file path. If neither placeholder is present, the ``@<path>``
-          suffix is appended as usual.
-          ``--prompt TEXT`` or ``--prompt-file PATH`` (or the corresponding
-          config.toml ``prompt`` / ``prompt_file`` keys) specify the prompt
-          to feed the runner, replacing the default prompts/implement.md
-          runner prompt (preprocessed after task selection with
-          ``%{TASK_FILE}``) in selector mode or the loop.md prompt file in
-          no-selector mode. The prompt text is saved to a temporary file and
-          follows the prompt
-          interpolation rules below. ``%%`` and ``%{PROMPT_FILE}`` in
-          the command string resolve to this processed prompt file. In
-          selector mode, the selected task file path is available in the
-          ``TASK_FILE`` environment variable passed to the runner.
-          ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` (or
-          the corresponding config.toml ``selector_prompt`` /
-          ``selector_prompt_file`` keys) specify the prompt to feed the
-          selector, replacing the default ``select.md`` prompt.
-          The prompt follows the interpolation rules below.
-          ``--extra-prompt TEXT`` or ``--extra-prompt-file PATH`` (or the
-          corresponding config.toml ``extra_prompt`` / ``extra_prompt_file``
-          keys) append extra content to the runner prompt, after the
-          primary prompt (whether default or explicitly set). ``--extra-prompt``
-          and ``--extra-prompt-file`` are mutually exclusive.
-          ``--extra-selector-prompt TEXT`` or ``--extra-selector-prompt-file PATH``
-          (or the corresponding config.toml ``extra_selector_prompt`` /
-          ``extra_selector_prompt_file`` keys) append extra content to the
-          selector prompt, after the primary selector prompt (whether default
-          or explicitly set). ``--extra-selector-prompt`` and
-          ``--extra-selector-prompt-file`` are mutually exclusive.
+        CMD selects [loop.CMD] config over [loop]. RUNNER_ARGS are appended to
+        the runner command. Options precede CMD.
 
-        Prompt interpolation:
-          AGM expands ``%{name}`` holes before passing prompt or command
-          text to the runner or selector. A name is an AgL identifier (for
-          example, ``%{log-file}``). ``\\%{`` writes a literal ``%{`` and a
-          bare ``%`` is literal. ``$VAR`` and ``${VAR}`` are plain literal
-          text. An unknown variable, invalid hole name, or unterminated
-          ``%{`` is an error. Prompt-content variables are the full process
-          environment overlaid with AGM values, which win on conflicts:
-            TASKS_DIR  the resolved tasks directory path, in every loop prompt
-            TASK_FILE  the selected task path, only in a selector-mode runner
-                       prompt after task selection
-          When expansion changes a file, AGM writes a temporary prompt file;
-          otherwise it uses the original file. Runner and selector command
-          arguments interpolate the same holes as the prompt they accompany,
-          further overlaid with ``PROMPT_FILE``, which wins on conflicts.
-          ``%%`` is its ``PROMPT_FILE`` alias. Command strings are
-          shlex-split before interpolation, so quote or otherwise protect
-          ``\\%{`` so its backslash reaches the argv element.
+        Options:
+          --runner COMMAND      Runner command prefix.
+          --selector COMMAND    Selector command prefix (unset: the runner).
+          --no-selector         Use no-selector mode.
+          --tasks-dir DIR       Directory of PROGRESS.md and task files
+                                (%{TASKS_DIR}).
+          --prompt TEXT, --prompt-file PATH
+                                Runner prompt (default: prompts/implement.md;
+                                prompts/loop.md in no-selector mode).
+          --selector-prompt TEXT, --selector-prompt-file PATH
+                                Selector prompt (default: prompts/select.md).
+          --extra-prompt TEXT, --extra-prompt-file PATH
+                                Append to the runner prompt.
+          --extra-selector-prompt TEXT, --extra-selector-prompt-file PATH
+                                Append to the selector prompt.
+          --timeout DURATION    Kill a runner silent for DURATION (N, Ns, Nm, Nh)
+                                and fail only that invocation.
+          --log-file PATH       Log to PATH (default: ./loop-YYYYMMDD-HHMMSS.log).
+          --no-log              Disable file logging.
 
-          ``agm loop step`` performs a single loop iteration using the same
-          runner, selector, and logging behavior as ``agm loop run``.
-          ``agm loop select`` runs ``select.md`` once using the
-          resolved selector, or the resolved runner when no selector is
-          configured. It requires selector mode; ``--no-selector`` is an
-          error for ``loop select``.
+        Each TEXT/PATH pair, --selector/--no-selector, and --log-file/--no-log
+        are mutually exclusive; select takes no --log-file or --no-log. Options
+        override the [loop] keys of the same name with underscores (prompt_file,
+        no_selector, ...). Default prompts are read from the AGM home.
+
+        Modes:
+          selector     The selector runs its prompt and replies COMPLETE to stop
+                       or with the next task file, which the runner prompt gets
+                       as %{TASK_FILE} and the runner as $TASK_FILE.
+          no-selector  The runner runs its prompt and replies COMPLETE to stop.
+        COMPLETE is matched ignoring whitespace.
+
+        Prompt passing:
+          The prompt file replaces %% or %{PROMPT_FILE} in the command, or is
+          appended as @PATH. Prompt text, and a prompt file changed by
+          interpolation, are passed as temporary files.
+
+        Prompt interpolation (also for review, revise, refine):
+          Prompts expand %{name} holes (name: an AgL identifier) from the
+          environment overlaid with the command's variables. \\%{ is a literal
+          %{; bare % and $VAR are literal; an unknown name or malformed hole is
+          an error. Command strings are shlex-split, then each argument expands
+          the same holes plus %{PROMPT_FILE} (alias %%); quote \\%{ so its
+          backslash survives shlex.
     """),
     "review": textwrap.dedent("""\
-        agm review [COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
-                   [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND]
-                   [--prompt TEXT|--prompt-file PATH]
-                   [--extra-prompt TEXT|--extra-prompt-file PATH]
-                   [--review-file FILE|auto|none|--no-review-file]
+        agm review [COMMAND] [OPTIONS] [--dry-run]
 
-        Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
-        during prompt preprocessing. Prompt holes use strict ``%{name}``
-        interpolation from the process environment overlaid with REVIEW_SCOPE
-        and REVIEW_ASPECTS, which win on conflicts. Runner command arguments
-        interpolate the same way, with ``%{PROMPT_FILE}`` (alias ``%%``) bound
-        to the prepared prompt file; see ``agm help loop`` for the full
-        interpolation rules. The default prompt is review.md.
-        Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS-microseconds.md
-        by default. Use --review-file FILE to choose a path, --review-file none
-        or --no-review-file to disable saving, and --review-file auto to use
-        the default timestamped path.
-        When COMMAND is provided, config from [review.COMMAND] is merged over
-        [review].
+        Run the review prompt (default: prompts/review.md). COMMAND merges
+        [review.COMMAND] config over [review].
 
-        Command config:
-          [review] runner = "claude -p" sets the review runner. When unset,
-          AGM uses the same default runner as agm loop.
-          [review] scope, aspects, extra_aspects, prompt, prompt_file,
-          extra_prompt, extra_prompt_file, and review_file correspond to the
-          CLI options.
+        Options:
+          --runner COMMAND   Runner command (unset: agm loop's default).
+          --scope SCOPE      %{REVIEW_SCOPE} (default: changes on current branch).
+          --aspects ASPECTS  %{REVIEW_ASPECTS} (default: correctness, completeness,
+                             maintainability, adherence to AGENTS.md).
+          --extra-aspects ASPECTS
+                             Append to the aspects.
+          --prompt TEXT, --prompt-file PATH
+                             Replace the prompt.
+          --extra-prompt TEXT, --extra-prompt-file PATH
+                             Append to the prompt.
+          --review-file FILE|auto|none
+                             Save the review to FILE, to the default
+                             .agent-files/review-YYYYMMDD-HHMMSS-MICROS.md (auto),
+                             or nowhere (none). Default: auto.
+          --no-review-file   Same as --review-file none.
+
+        Each TEXT/PATH pair is mutually exclusive. Options override the [review]
+        keys of the same name with underscores. For prompt interpolation, see
+        agm help loop.
     """),
     "revise": textwrap.dedent("""\
-        agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT|--prompt-file PATH]
-                   [--extra-prompt TEXT|--extra-prompt-file PATH]
-                   REVIEW_FILE
+        agm revise [COMMAND] [OPTIONS] [--dry-run] REVIEW_FILE
 
-        Run the revision prompt with REVIEW_FILE available during prompt
-        preprocessing. Prompt holes use strict ``%{name}`` interpolation from
-        the process environment overlaid with REVIEW_FILE, which wins on
-        conflicts. Runner command arguments interpolate the same way, with
-        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
-        see ``agm help loop`` for the full interpolation rules. The default
-        prompt is revise.md.
-        When COMMAND is provided before REVIEW_FILE, config from
-        [revise.COMMAND] is merged over [revise].
+        Run the revision prompt (default: prompts/revise.md) with
+        %{REVIEW_FILE}. COMMAND merges [revise.COMMAND] config over [revise].
 
-        Command config:
-          [revise] runner = "claude -p" sets the revision runner. When unset,
-          AGM uses the same default runner as agm loop.
-          [revise] prompt, prompt_file, extra_prompt, and extra_prompt_file
-          correspond to the CLI options.
+        Options:
+          --runner COMMAND  Runner command (unset: agm loop's default).
+          --prompt TEXT, --prompt-file PATH
+                            Replace the prompt.
+          --extra-prompt TEXT, --extra-prompt-file PATH
+                            Append to the prompt.
+
+        Each TEXT/PATH pair is mutually exclusive. Options override the [revise]
+        keys of the same name with underscores. For prompt interpolation, see
+        agm help loop.
     """),
     "refine": textwrap.dedent("""\
-        agm refine [COMMAND] [--max-steps N|unlimited] [--no-max-steps] [--runner COMMAND]
-                   [--reviewer COMMAND] [--reviser COMMAND]
-                   [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
-                   [--review-prompt TEXT|--review-prompt-file PATH]
-                   [--extra-review-prompt TEXT|--extra-review-prompt-file PATH]
-                   [--revise-prompt TEXT|--revise-prompt-file PATH]
-                   [--extra-revise-prompt TEXT|--extra-revise-prompt-file PATH]
-                   [--save-review|--no-save-review] [--review-file FILE|auto|none]
-                   [--log-file PATH|--no-log]
+        agm refine [COMMAND] [OPTIONS] [--dry-run]
 
-        Run review/revise cycles until revise returns COMPLETE, or until the
-        maximum number of revision attempts is reached. Review prompts receive
-        REVIEW_SCOPE and REVIEW_ASPECTS; revise prompts receive REVIEW_FILE.
-        Prompt holes use strict ``%{name}`` interpolation from the process
-        environment overlaid with those values, which win on conflicts. Runner,
-        reviewer, and reviser command arguments interpolate the same way, with
-        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
-        see ``agm help loop`` for the full interpolation rules. A CONTINUE
-        response
-        starts a fresh review; any other response retries revise with the same
-        review file. The default maximum is 12.
-        Review output is saved to the default timestamped review path by
-        default. Use --no-save-review to keep review handoff files temporary
-        only, or --review-file FILE to choose a custom path.
-        When COMMAND is provided, config from [refine.COMMAND] is merged over
-        [refine] and the same command name is forwarded to review/revise
-        config lookup.
+        Alternate agm review and agm revise until revise replies COMPLETE or the
+        step limit is reached. CONTINUE starts a fresh review; any other reply
+        retries revise with the same review. COMMAND merges [refine.COMMAND]
+        over [refine] and is forwarded to the review and revise config lookup.
 
-        Logging:
-          By default writes refine-YYYYMMDD-HHMMSS.log in the current
-          directory. --log-file PATH writes to a specific file. --no-log
-          disables file logging.
+        Options:
+          --max-steps N|unlimited  Maximum revision attempts (default: 12).
+          --no-max-steps           No step limit.
+          --runner COMMAND         Runner for both steps.
+          --reviewer COMMAND       Review runner (overrides --runner).
+          --reviser COMMAND        Revision runner (overrides --runner).
+          --scope SCOPE            %{REVIEW_SCOPE}.
+          --aspects ASPECTS        %{REVIEW_ASPECTS}.
+          --review-prompt TEXT, --review-prompt-file PATH
+                                   Replace the review prompt.
+          --extra-review-prompt TEXT, --extra-review-prompt-file PATH
+                                   Append to the review prompt.
+          --revise-prompt TEXT, --revise-prompt-file PATH
+                                   Replace the revision prompt.
+          --extra-revise-prompt TEXT, --extra-revise-prompt-file PATH
+                                   Append to the revision prompt.
+          --save-review, --no-save-review
+                                   Save reviews (default), or keep them in
+                                   temporary files.
+          --review-file FILE|auto|none
+                                   Review file, as for agm review.
+          --log-file PATH          Log to PATH (default:
+                                   ./refine-YYYYMMDD-HHMMSS.log).
+          --no-log                 Disable file logging.
 
-        Command config:
-          [refine] max_steps, no_max_steps, runner, reviewer, reviser, scope, aspects,
-          review_prompt, review_prompt_file, extra_review_prompt,
-          extra_review_prompt_file, revise_prompt, revise_prompt_file,
-          extra_revise_prompt, extra_revise_prompt_file, save_review,
-          log_file, and no_log correspond to the CLI options.
+        Each TEXT/PATH pair is mutually exclusive. Options override the [refine]
+        keys of the same name with underscores. For prompt interpolation, see
+        agm help loop.
     """),
     "config": textwrap.dedent("""\
-        agm config copy DIRNAME
-        agm config cp   DIRNAME
-        agm config env
-        agm config update
+        agm config COMMAND
 
-        Copy project dot configuration files into an existing target directory.
-        Print shell statements that refresh the current workspace environment
-        from project and workspace config.toml [deps] tables, .env,
-        .env.local, and env.sh files.
-        Create missing project and workspace config.toml files under the project
-        config directory.
+        Manage project configuration.
 
-        General-config path-valued settings, including the independently
-        loaded ``[modules] lib_root`` and ``roots``, expand ``%{VAR}`` from
-        the process environment and a leading ``~``; unresolved or malformed
-        holes remain literal because one config file serves every command.
+        Commands:
+          copy    Copy the project's dot config files into a directory (alias: cp)
+          env     Print shell statements that set the workspace environment
+          update  Create missing project and workspace config.toml files
 
-        To apply the environment to the current shell:
-          eval "$(agm config env)"
+        Config files, later ones overriding earlier:
+          <install-prefix>/.agm/config.toml
+          the AGM home's config.toml ($AGM_HOME, else an installed
+            <install-prefix>/.agm, else ~/.agm)
+          the project config directory's config.toml
+          ./.agm/config.toml
+
+        Path-valued settings, including [modules] lib_root and roots, expand ~
+        and %{VAR} from the environment; an unresolved or malformed hole stays
+        literal.
     """),
     "worktree": textwrap.dedent("""\
-        agm worktree new      [-d|--dir DIR] BRANCH
-        agm worktree remove   [-f|--force] BRANCH
-        agm wt new            [-d|--dir DIR] BRANCH
-        agm wt rm             [-f|--force] BRANCH
+        agm worktree COMMAND
+        agm wt COMMAND
 
-        Low-level git worktree management.
+        Low-level Git worktree management.
 
-        Options:
-          agm worktree new --dir DIR BRANCH
-              Create the worktree under DIR instead of the default project
-              worktrees directory.
-          agm worktree remove --force BRANCH
-              Force removal even when git reports uncommitted or locked state.
+        Commands:
+          new     Create a worktree for a branch
+          remove  Remove a worktree and its branch (alias: rm)
     """),
     "dep": textwrap.dedent("""\
-        agm dep list   [-v|--verbose] [--all]
-        agm dep new    [-b|--branch BRANCH] REPO_URL
-        agm dep rm     --all DEP
-        agm dep rm     DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
-        agm dep switch [-b|--branch] DEP BRANCH
+        agm dep COMMAND
 
-        Manage dependency repos and dependency Git worktrees under deps/.
-        AGM tracks dependency checkout names in config.toml [deps] tables.
+        Manage dependency repos and their worktrees under deps/. Config.toml
+        [deps] tables record each workspace's dependency checkouts.
 
-        Options:
-          agm dep list --verbose
-              Show the checkout path after each dep/branch.
-          agm dep list --all
-              List all dependency checkouts on disk, instead of
-              only the current workspace.
-          agm dep new --branch BRANCH REPO_URL
-              Clone the dependency's initial checkout from BRANCH instead of
-              its default branch.
-          agm dep rm --all DEP
-              Remove the entire dependency directory, including the main repo
-              checkout and any linked worktrees.
-          agm dep switch --branch DEP BRANCH
-              Create DEP's BRANCH from the dependency's default branch, then
-              add a worktree for it. Without this flag, BRANCH must already
-              exist in the dependency repo.
-
-        Targets:
-          DEP/NAME_OR_BRANCH Remove a dependency checkout by directory name
-                             under deps/DEP/ or by checked-out branch name.
-          DEP/repo           Remove the main dependency checkout.
-          DEP/MAIN_CHECKOUT  Remove the main dependency checkout by directory name.
-
-        Removal targets must be relative paths without . or .. components.
-        Dependencies must resolve below deps/, and worktrees below their dependency.
-        With --all, detached or out-of-dependency worktrees stop removal before
-        any worktree is removed.
+        Commands:
+          list    List dependency checkouts
+          new     Clone a dependency
+          switch  Select or create a dependency checkout
+          rm      Remove a dependency checkout (alias: remove)
     """),
     "pkg": textwrap.dedent("""\
-        agm pkg init [DIR] [--name NAME] [--version VERSION]
-        agm pkg check [DIR]
-        agm pkg create [DIR] [-o FILE]
-        agm pkg install [--editable] [--shadow] SRC
-        agm pkg uninstall NAME
-        agm pkg list
-        agm pkg info NAME
-        agm pkg sync
+        agm pkg COMMAND
 
-        Initialize, validate, create, install, inspect, and remove AgL packages, and sync the
-        active packages' [python] requirements into AGM's interpreter environment. Archives and
-        directory installs are copied into AGM's versioned store; editable installs mount their
-        live source directory.
+        Manage AgL packages in AGM's versioned store.
 
-        Nested package.toml [commands] tables form multi-word command paths; entries name a
-        program, or describe a group when program is omitted. A command naming a program is
-        documented by that program's @doc; a group states its own doc text and generates a
-        subcommand listing. [aliases] maps alternate paths to canonical commands or groups.
-        Alias paths also name config tables: rev = "devel review" makes [rev] equivalent
-        to [devel.review]. See docs/commands/pkg.md for the manifest reference.
+        Commands:
+          init       Create a package
+          check      Validate a package
+          create     Build a package archive
+          install    Install and activate a package
+          switch     Activate an installed version
+          uninstall  Remove an installed version
+          list       List installed packages
+          info       Describe an active package
+          sync       Install the active packages' Python requirements
+
+        package.toml [commands] tables form multi-word command paths; an entry
+        names a program (documented by its @doc) or, without one, a group with
+        its own doc. [aliases] maps alternate paths to commands or groups, and
+        an alias path also names config tables: rev = "devel review" makes [rev]
+        equivalent to [devel.review]. Manifest reference: docs/commands/pkg.md.
     """),
     "run": textwrap.dedent("""\
-        agm run [--no-sandbox] [--no-patch] [--pty|--no-pty]
-        [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit]
-        [-f|--file SETTINGS] COMMAND [ARGS...]
+        agm run [--no-sandbox] [-f SETTINGS] [--no-patch] [--pty|--no-pty]
+                [--memory LIMIT|--no-memory-limit] [--swap LIMIT|--no-swap-limit]
+                [--dry-run] COMMAND [ARGS...]
 
-        Run a command inside an Anthropic Sandbox Runtime container.
-
-        Command config:
-          <install-prefix>/.agm/config.toml is loaded first, then
-          the AGM home config ($AGM_HOME/config.toml, or
-          $HOME/.agm/config.toml when AGM_HOME is unset), followed by the
-          project config.toml and ./.agm/config.toml.
-          [run.<command>] alias = "<other-command>" makes
-          "agm run <command>" execute <other-command> instead.
+        Run COMMAND in an Anthropic Sandbox Runtime (srt) sandbox.
 
         Options:
-          --no-sandbox
-                       Run COMMAND directly without wrapping it in srt.
-                       This skips sandbox settings discovery and patching.
-          -f, --file SETTINGS
-                       Use this settings file directly instead of discovering
-                       and combining the default sandbox settings files.
-          --pty, --no-pty
-                       Enable or disable a controlling pseudo-terminal for
-                       interactive commands. Enabled by default and only
-                       allocated when stdin and stdout are terminals.
-          --memory LIMIT
-                       Wrap COMMAND in a delegated systemd-run --user --scope
-                       with MemoryMax=LIMIT, optional MemorySwapMax, and
-                       Delegate=yes.
-                       The wrapper exports SANDBOX_CGROUP and enables the
-                       memory controller for descendant cgroups. The default
-                       memory limit is 32G. Use 0 for a zero limit or
-                       unlimited for no memory cap.
-          --swap LIMIT
-                       Set MemorySwapMax=LIMIT in the delegated systemd-run
-                       scope. In sandbox mode the default is 0. Use unlimited
-                       for no swap cap.
-          --no-memory-limit
-                       Do not set MemoryMax.
-          --no-swap-limit
-                       Do not set MemorySwapMax.
-          --no-patch   Do not append the project notes, deps, and repo .git
-                       paths to filesystem.allowWrite after loading the
-                       selected settings.
+          --no-sandbox         Run COMMAND directly, without srt or settings.
+          -f, --file SETTINGS  Use the SETTINGS file as-is.
+          --no-patch           Do not add the project's notes/, deps/, and repo .git
+                               to filesystem.allowWrite (added when PROJ_DIR is set).
+          --pty, --no-pty      Relay a pseudo-terminal when stdin and stdout are
+                               terminals (default: on).
+          --memory LIMIT       Run in a delegated systemd-run --user scope with
+                               MemoryMax=LIMIT (default: 32G), exporting
+                               SANDBOX_CGROUP.
+          --swap LIMIT         Set MemorySwapMax=LIMIT (sandbox default: 0).
+          --no-memory-limit    Do not set MemoryMax.
+          --no-swap-limit      Do not set MemorySwapMax.
 
-        Settings resolution:
-          default      For each directory below, load <command>.json when it
-                       exists there; otherwise try the aliased command's
-                       settings file, then fall back to default.json.
-                       Then merge the existing files in this order:
-                         1. $AGM_HOME/sandbox/<command>.json
-                            (or $HOME/.agm/sandbox/<command>.json when unset)
-                            fallback: $AGM_HOME/sandbox/default.json
-                            (or $HOME/.agm/sandbox/default.json when unset)
-                         2. the project sandbox config directory
-                         3. ./.sandbox/<command>.json
-                            fallback: ./.sandbox/default.json
-                       Later files are merged over earlier ones. network and
-                       filesystem are merged by key; list-valued keys are
-                       appended and deduplicated in precedence order. Later
-                       network.deniedDomains removes earlier allowedDomains;
-                       later filesystem denyRead/denyWrite removes earlier
-                       allowRead/allowWrite. ignoreViolations replaces the
-                       earlier value; enabled and enableWeakerNestedSandbox are
-                       overridden when set.
-          -f, --file SETTINGS
-                       Skip default discovery and use SETTINGS as-is.
+        LIMIT: 0, infinity or unlimited, a percentage, or whitespace-separated
+        <number>[KMGTPE][B] groups (case-sensitive).
 
-        Automatic patching:
-          Unless --no-patch is set, agm adds the project notes, deps, and
-          repo .git paths to filesystem.allowWrite when PROJ_DIR is set.
+        config.toml: [run] and [run.COMMAND] set memory, swap, and pty;
+        [run.COMMAND] alias = "OTHER" runs OTHER instead.
+
+        Settings: each directory below contributes COMMAND.json, else the
+        alias's file, else default.json; later files override earlier:
+          1. $AGM_HOME/sandbox/ (for the AGM home default, see agm help config)
+          2. the project config directory's sandbox/
+          3. ./.sandbox/
+        network and filesystem merge by key; lists append, deduplicated. A later
+        deniedDomains entry removes an earlier allowedDomains one, and a later
+        denyRead/denyWrite an earlier allowRead/allowWrite. ignoreViolations is
+        replaced; enabled and enableWeakerNestedSandbox override when set.
     """),
     "tmux": textwrap.dedent("""\
-        agm tmux open   [-d|--detach] [-n|--num-panes PANES] [SESSION]
-        agm tmux close  SESSION
-        agm tmux layout PANES [-w|--window WINDOW_ID]
+        agm tmux COMMAND
 
-        Tmux session and layout management.
+        Manage tmux sessions and layouts.
 
-        Options:
-          agm tmux open --detach
-              Create the session without attaching to it.
-          agm tmux open --num-panes PANES
-              Create the session with PANES panes.
-    """),
-    "exec": textwrap.dedent("""\
-        agm exec [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--default-agent AGENT] [--timeout DURATION|--no-timeout]
-                 [--dry-run]
-                 [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
-                 [--no-stdlib] [-I DIR]... [-p PATH]
-                 (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
-
-        Execute an AgL (Agent Language) workflow program from FILE, an installed
-        PACKAGE/MODULE::PROGRAM reference, or the inline program text given with
-        -c/--command.
-
-        A file must declare at least one `program def`; select one of several
-        with -p PATH. Inline source is wrapped in a synthetic `program def main`
-        when it does not declare one.
-
-        The selected program's own value parameters project onto the CLI
-        surface: a positional-zone parameter fills a positional slot, and a
-        name-addressable one becomes its own `--<name>` option (bool as
-        `--name/--no-name`; `Option[T]` as `--name VALUE`/`--no-name`; text
-        verbatim; `Optional[T]` adds `--name default` for `Default`; Agent in
-        host syntax; every other type as a JSON string). An `@opt-name`,
-        `@opt-short`, `@opt-metavar`, or `@opt-hidden` attribute on a
-        parameter shapes that option's spelling and presentation, and `@doc`
-        supplies the prose describing the program and each of its options.
-        An omitted argument resolves from an `@opt-env` variable (an empty
-        variable counts as unset), then the program's own qualified config
-        table (which reaches name-addressable parameters only), then its
-        signature default; a required parameter with none of these errors.
-
-        A static `@param` let or var in the selected program's import closure
-        is also host-configurable. Its external name supplies a bare flag when
-        it resolves and dotted qualified flags such as --A.logging.verbose;
-        bool, Option[T], and Optional[T] values also accept --no- forms. Module parameters
-        resolve as CLI > @opt-env > selected-program config table > declaring
-        module config table > initializer. Help groups them by module after
-        the selected program's own options; an ambiguous bare spelling errors
-        only when used.
-
-        The selected program owns -h/--help: `agm exec FILE -h` prints that
-        program's own usage, description, and options rather than this text.
-        With several declared programs and none selected with -p, this text
-        is printed followed by the paths to choose from.
-
-        Trace logging is OFF by default.  Enable it with --trace, --trace-file,
-        or [exec] trace = true in config.toml.  A source ``std/config::KEY := VALUE``
-        write takes effect from its program point and overrides the CLI flag,
-        which overrides the config-file layer.
-
-        Options:
-          -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
-          -p, --program PATH     Select a program def by declaration path.
-          --strict-json         Require bare JSON output from agents (no recovery).
-          --no-strict-json      Use lenient JSON recovery (default).
-          --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > config).
-          --default-agent AGENT Seed the free-ask default session from an Agent value
-                                or command.
-          --timeout DURATION    Override initial shell-exec and agent idle timeouts;
-                                seed std/config::timeout to Some(DURATION). Mutually
-                                exclusive with --no-timeout.
-          --no-timeout          Remove configured initial shell-exec and agent timeouts;
-                                seed std/config::timeout to None. Mutually exclusive
-                                with --timeout.
-          --dry-run             Run the full static pipeline and validate program
-                                arguments, but do not execute the workflow.
-          --trace               Enable trace logging (auto timestamped path).
-          --trace-file PATH     Write trace log to PATH.
-          --no-trace-file       Clear the CLI trace-file seed only; use --no-trace
-                                to disable tracing entirely.
-          --no-trace            Disable trace logging (overrides config).
-          --trace, --trace-file, and --no-trace are mutually exclusive.
-          --trace-file and --no-trace-file are mutually exclusive.
-          --no-stdlib           Disable the automatic import std/prelude::* prelude
-                                throughout the loaded program (entry and library modules).
-          -I DIR, --module-path DIR
-                                Add DIR as an additional module search root
-                                (repeatable). Resolved relative to the invocation
-                                working directory. Joins the unordered root set;
-                                a module id found in two roots is an ambiguity error.
-
-        Select a FILE, an installed PACKAGE/MODULE::PROGRAM reference, or -c/--command.
-        The positional file/reference selector and -c/--command are mutually exclusive;
-        exactly one source selector is required.
-
-        Exit codes:
-          0  The workflow completed successfully.
-          1  Pre-execution failure: unreadable file, static diagnostics
-             (lex/parse/scope/type/match), host configuration error, or
-             program-argument validation failure.
-          2  The workflow executed but ended with an uncaught AgL exception.
-    """),
-    "repl": textwrap.dedent("""\
-        agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--default-agent AGENT] [--dry-run] [--no-stdlib]
-                 [--quiet] [--trace|--trace-file PATH|--no-trace] [--plain]
-
-        Start an interactive read-eval-print loop for AgL.  Each entry is
-        parsed, type-checked, and evaluated once against a persistent session
-        that accumulates bindings, types, and declarations across entries, so
-        earlier results stay available and agent calls fire exactly once.  The
-        session reuses the [exec] configuration (default agent, call-depth
-        limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
-        import std/prelude::* prelude to each loaded program, so standard-library
-        names are available unqualified. An explicit import whose expansion
-        includes std/prelude supplies the prelude contribution instead, so plain
-        import std/prelude leaves prelude names qualified-only. Other imports are
-        qualified by default; --no-stdlib disables the automatic prelude.
-
-        The REPL has two front ends: an interactive prompt_toolkit console
-        with syntax highlighting, completion, and history, and a plain
-        line-oriented mode with no styling or ANSI escapes, for a pipe, a
-        comint buffer, or any other non-terminal consumer. The plain front end
-        is used automatically when stdin or stdout is not a terminal, or when
-        TERM=dumb; --plain forces it even on a terminal. There is no flag to
-        force the console front end onto a non-terminal.
-
-        Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
-        entered at the REPL prompt takes effect from that point and persists for
-        the session; :reset clears it.  Set session-wide defaults via CLI flags
-        or [exec] config.
-
-        Options:
-          --strict-json         Require bare JSON output from agents (no recovery).
-          --no-strict-json      Use lenient JSON recovery (default).
-          --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > config; source pragmas are not applied in the REPL).
-          --default-agent AGENT Seed the free-ask default session from an Agent value
-                                or command.
-          --quiet               Suppress automatic echoing of entry results.
-          --no-stdlib           Disable the automatic import std/prelude::* prelude for
-                                each loaded REPL program (entries and library modules).
-                                Explicit imports remain available, and :reset
-                                keeps this choice.
-          --trace               Enable trace logging (auto timestamped path).
-          --trace-file PATH     Write a JSONL trace log to PATH.
-          --no-trace            Disable trace logging.
-          --trace, --trace-file, and --no-trace are mutually exclusive.
-          --dry-run             Statically check only: run the full static pipeline
-                                for each entry but never evaluate it (no agent/exec
-                                calls, no persisted bindings); echo the inferred type.
-          --plain               Force the plain, non-interactive line front end
-                                (auto-detected otherwise).
-
-        Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
-        exits.  Ctrl-C cancels the current entry without exiting.
-
-        Exit codes:
-          0  The session ended normally (:quit / :exit / Ctrl-D).
-          1  Pre-loop setup failure: invalid [exec] config or an
-             unwritable --trace-file (reported before the prompt).
+        Commands:
+          open    Create a tmux session
+          close   Kill a tmux session
+          layout  Tile a window's panes
     """),
     "check": textwrap.dedent("""\
-        agm check [-I DIR]... [--no-stdlib] FILE...
+        agm check [OPTIONS] FILE...
 
-        Run the full static AgL pipeline (parse, module loading, scope
-        resolution, type checking, match compilation, and lowering) over each
-        FILE independently, in argument order, and report GNU-style
-        diagnostics.  Unlike `agm exec`, no FILE needs to declare a `program
-        def`, so library modules can be checked too.  A `program def` present
-        in a file is validated but never selected, resolved against
-        configuration, or run: `check` never evaluates anything and never
-        invokes an agent.
-
-        Every FILE is checked even when an earlier one failed.  Diagnostics
-        print to stderr as a location, then `error:` or `warning:`, then the
-        message; a span renders as `path:line:col-endcol` (or
-        `path:line:col-endline:endcol` across lines).  A clean FILE produces
-        no output.  Warnings never affect the exit code.
-
-        This is a different check from `agm pkg check`, which validates a
-        package directory's manifest and module-tree discipline rather than
-        AgL program correctness.
+        Statically check each AgL FILE, from parsing through lowering, without
+        running anything. A FILE needs no `program def`. Every FILE is checked;
+        diagnostics go to stderr as `path:line:col[-[endline:]endcol]: error:
+        message` (or `warning:`). For package structure, see agm pkg check.
 
         Options:
-          -I DIR, --module-path DIR
-                                Add DIR as an additional module search root
-                                (repeatable). Resolved relative to the invocation
-                                working directory. Joins the unordered root set;
-                                a module id found in two roots is an ambiguity error.
-          --no-stdlib           Disable automatic std/prelude opening throughout
-                                each checked file (entry and library modules).
+        """)
+    + _MODULE_PATH_ROW
+    + _NO_STDLIB_ROW
+    + textwrap.dedent("""\
 
         Exit codes:
-          0  No FILE produced an error-severity diagnostic.
-          1  Some FILE produced an error-severity diagnostic, was unreadable
-             or missing, or had an invalid module-root configuration.
+          0  No errors (warnings do not count).
+          1  An error diagnostic, an unreadable FILE, or invalid module roots.
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
 
-        Show help information for commands and subcommands.
-
-        Global options:
-          --install-completion  Install shell completion for the current shell.
-          --show-completion     Print the shell completion script.
+        Show the command overview, or COMMAND's help (as agm COMMAND --help).
     """),
+}
+
+# Help for commands that take the shared execution options: the text before and after
+# their ``Execution options`` section.
+_EXECUTION_HELP_TEXTS: dict[str, tuple[str, str]] = {
+    "exec": (
+        textwrap.dedent("""\
+            agm exec [OPTIONS] (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE)
+                     [ARG]... [--NAME VALUE]...
+
+            Run an AgL program from FILE, an installed PACKAGE/MODULE::PROGRAM, or
+            inline SOURCE.
+
+            Options:
+              -c, --code SOURCE      AgL source; wrapped in `program def main`
+                                     unless it declares a program.
+              -p, --program PATH     Select a `program def` by declaration path.
+            """)
+        + _MODULE_PATH_ROW
+        + _NO_STDLIB_ROW,
+        textwrap.dedent("""\
+            Execution options override config files; a `std/config::KEY := VALUE`
+            write overrides both from its program point.
+
+            Program arguments:
+              The selected program's value parameters fill ARG slots (positional)
+              and take --NAME options (named). bool: --NAME/--no-NAME; Option[T]:
+              --NAME VALUE/--no-NAME, Optional[T] also --NAME default; text:
+              verbatim; Agent: host Agent syntax; others: JSON or AgL value syntax.
+              An omitted argument falls back to its @opt-env variable (empty is
+              unset), the program's config table (named only), then its default.
+              `@param` bindings in the program's import closure add bare and
+              dotted flags (--A.logging.verbose), falling back to @opt-env, the
+              program's table, the declaring module's table, then the initializer.
+              A bare flag matching several bindings errors when used.
+
+            With a single program or -p, `agm exec FILE -h` shows the program's
+            help. With several programs and no -p, this help lists them.
+
+            Exit codes:
+              0  Success.
+              1  Failure before execution: unreadable source, static error, or
+                 invalid config or arguments.
+              2  Uncaught AgL exception.
+        """),
+    ),
+    "repl": (
+        textwrap.dedent("""\
+            agm repl [OPTIONS]
+
+            Evaluate AgL entries in one persistent session: bindings, types, and
+            declarations accumulate, and each entry runs exactly once.
+
+            Options:
+              --quiet      Do not echo entry results.
+              --plain      Use the plain line front end even on a terminal.
+              --no-stdlib  Disable the automatic `import std/prelude::*`; kept by
+                           :reset.
+            """),
+        textwrap.dedent("""\
+            Execution options override [exec] config; a `std/config::KEY := VALUE`
+            entry holds for the session until :reset.
+
+            The interactive console needs a terminal on stdin and stdout and TERM
+            other than dumb; otherwise the plain front end runs, without styling.
+
+            :help lists meta-commands; :quit or Ctrl-D exits; Ctrl-C cancels the
+            current entry.
+
+            Exit codes:
+              0  Normal exit.
+              1  Setup failure before the prompt: invalid [exec] config or
+                 execution option, or an unwritable --trace-file.
+        """),
+    ),
 }
 
 _HELP_ALIASES: dict[str, str] = {
@@ -773,301 +476,233 @@ _HELP_ALIASES: dict[str, str] = {
     "wsp": "workspace",
 }
 
+# Subcommand paths documented by another path's help.
+_PATH_ALIASES: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("workspace", "open"): ("open",),
+    ("workspace", "close"): ("close",),
+    ("config", "cp"): ("config", "copy"),
+    ("worktree", "rm"): ("worktree", "remove"),
+    ("dep", "remove"): ("dep", "rm"),
+}
+
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
-    ("workspace", "open"): textwrap.dedent("""\
-        agm workspace open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-
-        Open a tmux session for an AGM workspace, creating or checking out a
-        branch workspace as needed.
-    """),
-    ("wsp", "open"): textwrap.dedent("""\
-        agm wsp open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-
-        Alias form of agm workspace open.
-    """),
-    ("workspace", "close"): textwrap.dedent("""\
-        agm workspace close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
-
-        Close a branch workspace, remove its Git worktree unless --keep-workspace is used,
-        remove workspace config when removing the worktree, and kill its tmux session.
-    """),
-    ("wsp", "close"): textwrap.dedent("""\
-        agm wsp close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
-
-        Alias form of agm workspace close.
-    """),
     ("workspace", "setup"): textwrap.dedent("""\
-        agm workspace setup
+        agm workspace setup [--dry-run]
 
-        Run configured setup scripts for the current AGM workspace.
-    """),
-    ("wsp", "setup"): textwrap.dedent("""\
-        agm wsp setup
-
-        Alias form of agm workspace setup.
+        Run the current workspace's configured setup scripts.
     """),
     ("workspace", "list"): textwrap.dedent("""\
-        agm workspace list [-v|--verbose]
+        agm workspace list [-v]
 
-        List all open AGM workspaces.
-    """),
-    ("wsp", "list"): textwrap.dedent("""\
-        agm wsp list [-v|--verbose]
+        List open workspaces.
 
-        Alias form of agm workspace list.
+        Options:
+          -v, --verbose  Show workspace directories.
     """),
     ("workspace", "shell-regen"): textwrap.dedent("""\
-        agm workspace shell-regen SHELL_DIR
+        agm workspace shell-regen [--dry-run] SHELL_DIR
 
-        Regenerate the per-session shell wrapper and rc files in SHELL_DIR.
-
-        Invoked by the workspace shell wrapper to self-heal after its cache
-        directory is deleted. Not normally called directly.
-    """),
-    ("wsp", "shell-regen"): textwrap.dedent("""\
-        agm wsp shell-regen SHELL_DIR
-
-        Alias form of agm workspace shell-regen.
+        Regenerate the session shell wrapper and rc files in SHELL_DIR. Run by
+        the wrapper when its cache directory was deleted.
     """),
     ("sync", "fetch"): textwrap.dedent("""\
-        agm sync fetch
+        agm sync fetch [--dry-run]
 
-        Fetch the main repository and all checked-out dependencies, then create
-        missing local tracking branches.
+        Fetch the main repo and all checked-out dependencies, then create missing
+        local tracking branches.
     """),
     ("sync", "pull"): textwrap.dedent("""\
-        agm sync pull
+        agm sync pull [--dry-run]
 
-        Run agm sync fetch, then run git merge in the main workspace, every
-        branch workspace, and all dependency worktrees.
-    """),
-    ("config", "cp"): textwrap.dedent("""\
-        agm config cp DIRNAME
-
-        Copy project dot config files into an existing target directory.
+        Run agm sync fetch, then git merge in the main workspace, every branch
+        workspace, and every dependency worktree.
     """),
     ("config", "copy"): textwrap.dedent("""\
-        agm config copy DIRNAME
+        agm config copy [--dry-run] DIRNAME
 
-        Copy project dot config files into an existing target directory.
+        Copy the project's dot config files into the existing directory DIRNAME.
+        Alias: cp.
     """),
     ("config", "env"): textwrap.dedent("""\
         agm config env
 
-        Print shell statements that refresh the current workspace environment
-        from project and workspace config.toml [deps] tables, .env,
-        .env.local, and env.sh files.
-
-        To apply the environment to the current shell:
-          eval "$(agm config env)"
+        Print shell statements that set the current workspace's environment from
+        the project and workspace config.toml [deps] tables, .env, .env.local,
+        and env.sh. Apply with: eval "$(agm config env)"
     """),
     ("config", "update"): textwrap.dedent("""\
-        agm config update
+        agm config update [--dry-run]
 
-        Create missing project and workspace config.toml files under the project
+        Create missing project and workspace config.toml files in the project
         config directory.
     """),
-    ("wt", "new"): textwrap.dedent("""\
-        agm wt new [-d|--dir DIR] BRANCH
-
-        Create a bare Git worktree or check out an existing branch.
-    """),
-    ("wt", "rm"): textwrap.dedent("""\
-        agm wt rm [-f|--force] BRANCH
-
-        Remove a worktree and delete its local branch.
-    """),
-    ("wt", "remove"): textwrap.dedent("""\
-        agm wt remove [-f|--force] BRANCH
-
-        Remove a worktree and delete its local branch.
-    """),
-    ("loop", "select"): textwrap.dedent("""\
-        agm loop select [--runner COMMAND] [--selector COMMAND|--no-selector]
-                        [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
-                        [--selector-prompt TEXT|--selector-prompt-file PATH]
-                        [--extra-prompt TEXT|--extra-prompt-file PATH]
-                        [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                        [--timeout DURATION]
-                        [CMD [RUNNER_ARGS...]]
-
-        Run the update-progress prompt once using the resolved selector, or
-        the resolved runner when no selector is configured. Requires selector
-        mode; ``--no-selector`` is an error for this subcommand.
-        ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md prompt. ``--timeout DURATION`` sets an idle
-        timeout; prompt files use strict ``%{name}`` interpolation. See
-        ``agm help loop`` for details.
-    """),
     ("loop", "run"): textwrap.dedent("""\
-        agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
-                     [--tasks-dir DIR] [--no-log|--log-file PATH]
-                     [--prompt TEXT|--prompt-file PATH]
-                     [--selector-prompt TEXT|--selector-prompt-file PATH]
-                     [--extra-prompt TEXT|--extra-prompt-file PATH]
-                     [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                     [--timeout DURATION]
-                     [CMD [RUNNER_ARGS...]]
+        agm loop run [OPTIONS] [--dry-run] [CMD [RUNNER_ARGS...]]
 
-        Run the loop prompt until completion. Selector mode is the default;
-        ``--no-selector`` switches to the no-selector loop-prompt mode.
-        ``--prompt TEXT`` or ``--prompt-file PATH`` overrides the default
-        prompts/implement.md runner prompt in selector mode, which AGM
-        preprocesses after task selection with ``%{TASK_FILE}``, or loop.md in
-        no-selector mode. ``--selector-prompt TEXT`` or ``--selector-prompt-file
-        PATH`` overrides the default select.md selector prompt. ``--timeout
-        DURATION`` sets an idle timeout; prompt files use strict ``%{name}``
-        interpolation. See ``agm help loop`` for details.
-        Bare ``agm loop CMD`` is a shorthand for this command when ``CMD``
-        is not a built-in subcommand.
+        Run the loop until COMPLETE. `agm loop CMD` is shorthand. For OPTIONS
+        and modes, see agm help loop.
     """),
     ("loop", "step"): textwrap.dedent("""\
-        agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [--no-log|--log-file PATH]
-                      [--prompt TEXT|--prompt-file PATH]
-                      [--selector-prompt TEXT|--selector-prompt-file PATH]
-                      [--extra-prompt TEXT|--extra-prompt-file PATH]
-                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                      [--timeout DURATION]
-                      CMD [RUNNER_ARGS...]
+        agm loop step [OPTIONS] [--dry-run] [CMD [RUNNER_ARGS...]]
 
-        Perform one loop iteration using the same runner and selector
-        resolution as ``agm loop run``. ``--prompt TEXT`` or
-        ``--prompt-file PATH`` overrides the default prompts/implement.md
-        runner prompt in selector mode, which AGM preprocesses after task
-        selection with ``%{TASK_FILE}``, or loop.md in no-selector mode.
-        ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md selector prompt. ``--timeout DURATION`` sets an
-        idle timeout; prompt files use strict ``%{name}`` interpolation. See
-        ``agm help loop`` for details.
+        Run one loop iteration. For OPTIONS and modes, see agm help loop.
+    """),
+    ("loop", "select"): textwrap.dedent("""\
+        agm loop select [OPTIONS] [--dry-run] [CMD [RUNNER_ARGS...]]
+
+        Run the selector prompt once, with the selector or else the runner.
+        --no-selector is an error. For OPTIONS, see agm help loop.
     """),
     ("worktree", "new"): textwrap.dedent("""\
-        agm worktree new [-d|--dir DIR] BRANCH
+        agm worktree new [-d DIR] [--no-fetch] [--dry-run] BRANCH
 
-        Create a bare Git worktree or check out an existing branch.
-    """),
-    ("worktree", "remove"): textwrap.dedent("""\
-        agm worktree remove [-f|--force] BRANCH
-
-        Remove a worktree and delete its local branch.
-    """),
-    ("worktree", "rm"): textwrap.dedent("""\
-        agm worktree rm [-f|--force] BRANCH
-
-        Remove a worktree and delete its local branch.
-    """),
-    ("dep", "list"): textwrap.dedent("""\
-        agm dep list [-v|--verbose] [--all]
-
-        List dependency checkouts for the current workspace. With --all, list
-        all dependency checkouts for every workspace. By default only dep/branch
-        names are printed; with -v/--verbose the checkout path is also shown.
-    """),
-    ("dep", "new"): textwrap.dedent("""\
-        agm dep new [-b|--branch BRANCH] REPO_URL
-
-        Clone a dependency into deps/ using its default branch or BRANCH.
-    """),
-    ("dep", "switch"): textwrap.dedent("""\
-        agm dep switch [-b|--branch] DEP BRANCH
-
-        Select an existing dependency checkout by directory name or checked-out
-        branch name. If neither exists, add a worktree at deps/DEP/BRANCH for
-        an existing dependency branch. With -b/--branch, create DEP's BRANCH
-        from the dependency's default branch first. Updates the relevant
-        config.toml [deps] entry with the dependency checkout directory name.
-    """),
-    ("dep", "rm"): textwrap.dedent("""\
-        agm dep rm --all DEP
-        agm dep rm TARGET
-
-        Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
-        checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
-    """),
-    ("dep", "remove"): textwrap.dedent("""\
-        agm dep remove --all DEP
-        agm dep remove TARGET
-
-        Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
-        checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
-    """),
-    ("pkg", "init"): textwrap.dedent("""\
-        agm pkg init [DIR] [--name NAME] [--version VERSION]
-
-        Initialize a package in DIR, writing a package.toml manifest and a starter module at
-        src/main.agl in the package's module tree. DIR defaults to the current directory and
-        is created when missing. The package name defaults to the directory name and the
-        version to 0.1.0.
+        Create a worktree for BRANCH, creating the branch or checking out an
+        existing one.
 
         Options:
-          --name NAME      Name the package NAME instead of the directory name.
-          --version VERSION
-                           Set the initial package version.
+          -d, --dir DIR  Create it under DIR instead of the project's worktrees
+                         directory.
+          --no-fetch     Resolve remote branches from local refs.
+    """),
+    ("worktree", "remove"): textwrap.dedent("""\
+        agm worktree remove [-f] [--dry-run] BRANCH
+
+        Remove BRANCH's worktree and delete its local branch. Alias: rm.
+
+        Options:
+          -f, --force  Remove despite uncommitted changes or a lock.
+    """),
+    ("dep", "list"): textwrap.dedent("""\
+        agm dep list [-v] [--all]
+
+        List the current workspace's dependency checkouts as DEP/BRANCH.
+
+        Options:
+          -v, --verbose  Show checkout paths.
+          --all          List every dependency checkout on disk.
+    """),
+    ("dep", "new"): textwrap.dedent("""\
+        agm dep new [-b BRANCH] [--dry-run] REPO_URL
+
+        Clone a dependency into deps/.
+
+        Options:
+          -b, --branch BRANCH  Clone BRANCH instead of the default branch.
+    """),
+    ("dep", "switch"): textwrap.dedent("""\
+        agm dep switch [-b] [--no-fetch] [--dry-run] DEP BRANCH
+
+        Use DEP's checkout named BRANCH (directory name or checked-out branch),
+        adding a worktree at deps/DEP/BRANCH for an existing branch if none
+        exists, and record it in config.toml [deps].
+
+        Options:
+          -b, --branch  Create BRANCH from DEP's default branch first.
+          --no-fetch    Resolve remote branches from local refs.
+    """),
+    ("dep", "rm"): textwrap.dedent("""\
+        agm dep rm [--dry-run] DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
+        agm dep rm --all [--dry-run] DEP
+
+        Remove a dependency worktree (by directory name under deps/DEP/ or
+        checked-out branch), the main checkout (DEP/repo or its directory
+        name), or with --all the whole deps/DEP/ directory. Alias: remove.
+
+        A target is a relative path without . or .. components, resolving below
+        deps/ (a worktree below its dependency). With --all, a detached or
+        out-of-dependency worktree stops removal before anything is removed.
+    """),
+    ("pkg", "init"): textwrap.dedent("""\
+        agm pkg init [--name NAME] [--version VERSION] [--dry-run] [DIR]
+
+        Create a package in DIR (default: the current directory, created if
+        missing): a package.toml manifest and a starter src/main.agl.
+
+        Options:
+          --name NAME        Package name (default: the directory name).
+          --version VERSION  Initial version (default: 0.1.0).
     """),
     ("pkg", "check"): textwrap.dedent("""\
         agm pkg check [DIR]
 
-        Validate the package manifest, module-tree discipline, and registered program references
-        in DIR. DIR defaults to the current directory. Each unsatisfied [python] requirement is
-        reported and fails the check; nothing is installed (see agm pkg sync).
+        Validate the package in DIR (default: the current directory): manifest,
+        module-tree discipline, registered program references, and [python]
+        requirements, which are reported, not installed (see agm pkg sync).
     """),
     ("pkg", "create"): textwrap.dedent("""\
-        agm pkg create [DIR] [-o FILE]
+        agm pkg create [-o FILE] [--dry-run] [DIR]
 
-        Run package validation and write a deterministic <name>-<version>.agmpkg archive beside DIR.
-        DIR defaults to the current directory and -o selects the output file.
+        Validate the package in DIR (default: the current directory) and write
+        a deterministic <name>-<version>.agmpkg archive beside it, or to FILE.
     """),
     ("pkg", "install"): textwrap.dedent("""\
-        agm pkg install [--editable] [--shadow] SRC
+        agm pkg install [--editable] [--reinstall] [--shadow] [--dry-run] SRC
 
-        Install a package directory or .agmpkg archive into AGM's versioned store and activate its
-        version. --editable mounts a directory SRC directly. Conflicting registered commands refuse
-        installation unless --shadow replaces the existing registration. URL dependencies are
-        fetched with their declared SHA-256 hash before install. When a [python] requirement of the
-        active packages is unsatisfied, all of their [python] requirements are installed jointly
-        into AGM's interpreter environment (uv, else pip) before activation; a failed Python
-        install, including a conflict between packages, fails the package install.
+        Install a package directory or .agmpkg archive into the store and
+        activate it. URL dependencies are fetched and verified against their
+        SHA-256. If any [python] requirement of the active packages is
+        unsatisfied, all of them are installed together into AGM's interpreter
+        (uv, else pip); a failure fails the install.
+
+        Options:
+          --editable   Activate the SRC directory in place.
+          --reinstall  Replace the installation of the same name and version;
+                       not with --editable.
+          --shadow     Replace conflicting registered commands instead of
+                       failing.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
-        agm pkg uninstall NAME
+        agm pkg uninstall [--dry-run] NAME[@VERSION]
 
-        Verify the active package RECORD, remove its installed tree, and clear its activation.
-        Editable packages only have their activation cleared.
+        Verify and remove a stored version (default: the active one), clearing
+        its activation. An editable package is only deactivated.
+    """),
+    ("pkg", "switch"): textwrap.dedent("""\
+        agm pkg switch [--dry-run] NAME@VERSION
+
+        Activate a version already in the store.
     """),
     ("pkg", "list"): textwrap.dedent("""\
         agm pkg list
 
-        List immutable installed versions and active editable packages.
+        List installed versions and active editable packages.
     """),
     ("pkg", "info"): textwrap.dedent("""\
         agm pkg info NAME
 
-        Show design metadata, command registrations, direct dependency status, and Python
-        requirement status for an active package. Each [python] requirement is reported as
-        installed VERSION, installed VERSION (unsatisfied), missing, or not applicable (marker
-        false) in AGM's interpreter environment.
+        Show an active package's metadata, registered commands, direct
+        dependencies, and [python] requirements, each installed VERSION,
+        installed VERSION (unsatisfied), missing, or not applicable (marker
+        false).
     """),
     ("pkg", "sync"): textwrap.dedent("""\
-        agm pkg sync
+        agm pkg sync [--dry-run]
 
-        When a [python] requirement of the active packages is unsatisfied, install all of their
-        [python] requirements jointly into AGM's interpreter environment (uv, else pip) and list
-        the ones that were unsatisfied. Nothing is ever uninstalled.
+        If any [python] requirement of the active packages is unsatisfied,
+        install all of them together into AGM's interpreter (uv, else pip) and
+        list the unsatisfied ones. Nothing is uninstalled.
     """),
     ("tmux", "open"): textwrap.dedent("""\
-        agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]
+        agm tmux open [-d] [-n PANES] [--dry-run] [SESSION]
 
-        Create a tmux session, optionally detached and with a chosen pane count.
+        Create a tmux session, named SESSION or by tmux.
+
+        Options:
+          -d, --detach           Do not attach to the session.
+          -n, --num-panes PANES  Create the session with PANES panes.
     """),
     ("tmux", "close"): textwrap.dedent("""\
-        agm tmux close SESSION
+        agm tmux close [--dry-run] SESSION
 
-        Kill an existing tmux session by name.
+        Kill the tmux session SESSION.
     """),
     ("tmux", "layout"): textwrap.dedent("""\
-        agm tmux layout PANES [-w|--window WINDOW_ID]
+        agm tmux layout [-w WINDOW_ID] [--dry-run] PANES
 
-        Apply AGM's tiled pane layout to the current tmux window.
+        Apply AGM's tiled layout for PANES panes to the current tmux window.
+
+        Options:
+          -w, --window WINDOW_ID  Target window WINDOW_ID instead.
     """),
 }
 
@@ -1096,7 +731,7 @@ def _overview_text() -> str:
     lines = [
         "agm - Agent Management Framework",
         "",
-        "Usage: agm <command> [options] [args]",
+        "Usage: agm COMMAND [ARGS]...",
         "",
         "Commands:",
     ]
@@ -1109,12 +744,17 @@ def _overview_text() -> str:
     lines.extend(
         [
             "",
-            "Global options:",
-            "  --dry-run             Print planned commands and AGM operations only.",
+            "Options:",
+            "  --version             Show the AGM and AgL standard-library versions.",
             "  --install-completion  Install shell completion for the current shell.",
             "  --show-completion     Print the shell completion script.",
             "",
-            "Run 'agm help <command>' for detailed help on a specific command.",
+            "Command options:",
+            "  -h, --help  Show the command's help.",
+            "  --dry-run   Print planned actions instead of performing them, where the",
+            "              command's usage lists it.",
+            "",
+            "Run 'agm help COMMAND' for a command's help.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -1122,6 +762,9 @@ def _overview_text() -> str:
 
 def help_text_for(command: str) -> str | None:
     canonical = _HELP_ALIASES.get(command, command)
+    if canonical in _EXECUTION_HELP_TEXTS:
+        before, after = _EXECUTION_HELP_TEXTS[canonical]
+        return f"{before}\n{execution_options_section(width=help_width())}\n{after}"
     return _HELP_TEXTS.get(canonical)
 
 
@@ -1141,22 +784,26 @@ def print_command_help(command: str, file: _Writeable | None = None) -> None:
 
 
 def _canonical_command_path(command_path: Sequence[str]) -> tuple[str, ...]:
-    if len(command_path) == 1:
-        return (_HELP_ALIASES.get(command_path[0], command_path[0]),)
-    return tuple(command_path)
+    """Resolve command-group and subcommand aliases to the path documenting them."""
+    head, *rest = command_path
+    path = (_HELP_ALIASES.get(head, head), *rest)
+    return _PATH_ALIASES.get(path, path)
 
 
 def _help_text_for_path(command_path: Sequence[str]) -> str:
+    """Return *command_path*'s help, its usage spelled as typed when it is an alias."""
     normalized = _canonical_command_path(command_path)
     if len(normalized) == 1:
         text = help_text_for(normalized[0])
-        if text is None:
-            raise ValueError(f"unknown command path: {' '.join(command_path)}")
-        return text
-    text = _PATH_HELP_TEXTS.get(tuple(command_path))
+    else:
+        text = _PATH_HELP_TEXTS.get(normalized)
     if text is None:
         raise ValueError(f"unknown command path: {' '.join(command_path)}")
-    return text
+    usage, separator, body = text.partition("\n\n")
+    typed = f"agm {' '.join(command_path)}"
+    if typed not in usage:
+        usage = usage.replace(f"agm {' '.join(normalized)}", typed)
+    return usage + separator + body
 
 
 def print_help_for_command_path(
@@ -1170,11 +817,10 @@ def print_help_for_command_path(
 def exit_with_usage_error(
     command_path: Sequence[str], message: str, *, exit_code: int = 1
 ) -> NoReturn:
-    help_text = _help_text_for_path(command_path)
-    usage_line, _, _ = help_text.partition("\n")
+    """Report *message* with the command's usage lines and exit with *exit_code*."""
+    usage, _, _ = _help_text_for_path(command_path).partition("\n\n")
+    prefix = "usage: "
     print(message, file=sys.stderr)
-    print(file=sys.stderr)
-    print(f"usage: {usage_line}", file=sys.stderr)
-    print(file=sys.stderr)
-    print(help_text, end="", file=sys.stderr)
+    print(prefix + usage.replace("\n", "\n" + " " * len(prefix)), file=sys.stderr)
+    print(f"Run 'agm help {' '.join(command_path)}' for details.", file=sys.stderr)
     raise SystemExit(exit_code)

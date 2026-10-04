@@ -10,10 +10,41 @@ record Match
 exception RegexError extends Exception
   pattern: text
 
+@doc("""
+  Check if `pattern` occurs anywhere in `s`.
+
+  Raises `RegexError` when the pattern is invalid.
+""")
 extern def test(pattern: text, s: text) -> bool
+
+@doc("""
+  Return the first match as `Option`, if one occurs.
+
+  Raises `RegexError` when the pattern is invalid.
+""")
 extern def find(pattern: text, s: text) -> Option[Match]
+
 @extern-name("find_all")
+@doc("""
+  Return every non-overlapping match in left-to-right order.
+
+  Raises `RegexError` when the pattern is invalid.
+""")
 extern def find-all(pattern: text, s: text) -> array[Match]
+
+@doc("""
+  Replace all matches using Python `re` replacement/backreference syntax.
+
+  Raises `RegexError` when the pattern is invalid.
+""")
 extern def replace(pattern: text, s: text, replacement: text) -> text
+
+@doc("""
+  Split using Python `re` semantics, retaining captured separators.
+
+  Raises `RegexError` when the pattern is invalid.
+""")
 extern def split(pattern: text, s: text) -> array[text]
+
+@doc("Escape literal text for use as a Python `re` pattern.")
 extern def escape(s: text) -> text

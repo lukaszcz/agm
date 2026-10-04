@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "defaults_fill_from_omitted_json_keys",
+      "params": {
+        "cfg": "{\"verbose\": true}",
+        "ln": "{\"label\": \"custom\"}",
+        "holder": "{\"keep\": false}"
+      },
+      "expect": {
+        "stdout": "Retry(count = 3)\ntrue\nPoint(1, 2)\ntrue\ntag=Tag(n = 7)\ntrue\n"
+      }
+    },
+    {
+      "name": "explicit_values_override_defaults",
+      "params": {
+        "cfg": "{\"retry\": {\"count\": 9}, \"verbose\": true}",
+        "ln": "{\"start\": {\"x\": 5, \"y\": 6}, \"label\": \"custom\"}",
+        "holder": "{\"label\": \"explicit\", \"keep\": true}"
+      },
+      "expect": {
+        "stdout": "Retry(count = 9)\nfalse\nPoint(5, 6)\nfalse\nexplicit\nfalse\n"
+      }
+    }
+  ]
+}

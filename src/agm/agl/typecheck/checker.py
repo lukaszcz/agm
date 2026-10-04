@@ -54,7 +54,14 @@ from agm.agl.diagnostics import (
     static_root_message,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, Reader, is_std_config_root, spell_declaration
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    STD_ENV_ID,
+    ModuleId,
+    Reader,
+    is_std_config_root,
+    spell_declaration,
+)
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
@@ -114,6 +121,7 @@ from agm.agl.semantics.types import (
     iter_type,
     match_nominal_owner_template,
     reroot_type,
+    standard_option_type,
     substitute,
     transform_type,
 )
@@ -164,6 +172,7 @@ from agm.agl.syntax.nodes import (
     NameTarget,
     NullLit,
     OperatorRef,
+    Param,
     Pattern,
     Placeholder,
     Program,
@@ -183,6 +192,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantDef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -218,7 +228,6 @@ from agm.agl.typecheck.constructors import (
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
-    CallSiteRecord,
     CheckedModule,
     ConstructorSignature,
     FunctionSignature,
@@ -427,7 +436,7 @@ class _SelectedBuiltinMethod:
 
 @dataclass(frozen=True, slots=True)
 class PendingExternCallObligation:
-    """Syntax-derived extern inventory metadata awaiting region finalization.
+    """Syntax-derived extern call metadata awaiting region finalization.
 
     ``contract_targets`` are the callee's target-parameter instantiations.
     """
@@ -492,7 +501,6 @@ class _InferenceRegion:
     function_call_param_types: dict[int, tuple[Type, ...]]
     finalization_obligations: list[_PendingFinalization]
     added_side_table_keys: dict[str, set[int]] = field(default_factory=dict)
-    call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
     builtin_defaults: list[tuple[InferenceVarType, Type, SourceSpan, str]] = field(
@@ -548,14 +556,23 @@ def _self_param(receiver_type: RecordType | EnumType) -> ParamSpec:
 
 
 def _as_builtin_method(
-    signature: FunctionSignature, receiver_type: RecordType | EnumType
+    signature: FunctionSignature,
+    receiver_type: RecordType | EnumType,
+    *,
+    exclude: frozenset[str] = frozenset({"agent"}),
 ) -> FunctionSignature:
-    """Rebind a root agent-taking signature as a receiver method."""
+    """Rebind a root agent-taking signature as a receiver method.
+
+    *exclude* drops the named root params the receiver already fixes:
+    every receiver drops ``agent`` (the receiver owns it); ``Session::ask``
+    also drops ``sandbox`` and ``env``, since a session's mode and
+    environment are fixed at open, not chosen per ask.
+    """
     return replace(
         signature,
         params=(
             _self_param(receiver_type),
-            *(param for param in signature.params if param.name != "agent"),
+            *(param for param in signature.params if param.name not in exclude),
         ),
     )
 
@@ -588,6 +605,8 @@ def _session_static_signature(kind: BuiltinStaticKind) -> FunctionSignature:
                         has_default=True,
                     ),
                     _std_param("name", TextType(), has_default=True),
+                    _std_param("sandbox", BUILTIN_PRELUDE_TYPES["AgentSandbox"], has_default=True),
+                    _std_param("env", RecordType(name="Environ"), has_default=True),
                 ),
                 result=BUILTIN_PRELUDE_TYPES["Session"],
             )
@@ -605,7 +624,13 @@ def _ask_signature(name: str) -> FunctionSignature:
             _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
             _std_param("format", TextType(), has_default=True),
             _std_param("strict-json", BoolType(), has_default=True),
-            _std_param("on-parse-error", BUILTIN_PRELUDE_TYPES["ParsePolicy"], has_default=True),
+            _std_param("parse-error-retries", IntType(), has_default=True),
+            _std_param("sandbox", BUILTIN_PRELUDE_TYPES["AgentSandbox"], has_default=True),
+            *(
+                (_std_param("env", RecordType(name="Environ"), has_default=True),)
+                if name == "ask"
+                else ()
+            ),
         ),
         result=TypeVarType("T") if name == "ask" else BUILTIN_PRELUDE_TYPES["AgentRequest"],
         type_params=("T",),
@@ -631,7 +656,11 @@ def _builtin_function_signature(
             allow_stdlib_session_declaration and method_receiver_name == "Session"
         ):
             if name == "ask":
-                return _as_builtin_method(_ask_signature(name), _SESSION_PRELUDE_TYPE)
+                return _as_builtin_method(
+                    _ask_signature(name),
+                    _SESSION_PRELUDE_TYPE,
+                    exclude=frozenset({"agent", "sandbox", "env"}),
+                )
             session_self = _self_param(_SESSION_PRELUDE_TYPE)
             return {
                 "compact": FunctionSignature(
@@ -690,6 +719,11 @@ def _builtin_function_signature(
                     _std_param("env", RecordType(name="Environ"), has_default=True),
                     _std_param("cwd", OPTION_TEXT_TYPE, has_default=True),
                     _std_param("timeout", OPTION_TEXT_TYPE, has_default=True),
+                    _std_param(
+                        "sandbox",
+                        standard_option_type(BUILTIN_PRELUDE_TYPES["Sandbox"]),
+                        has_default=True,
+                    ),
                 ),
                 result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )
@@ -705,6 +739,7 @@ def _builtin_function_signature_alternates(
     method_receiver_name: str | None = None,
     allow_stdlib_session_declaration: bool = False,
     static_kind: BuiltinStaticKind | None = None,
+    type_table: TypeTable | None = None,
 ) -> tuple[FunctionSignature, ...]:
     expected = _builtin_function_signature(
         name,
@@ -716,9 +751,28 @@ def _builtin_function_signature_alternates(
     )
     if expected is None:
         return ()
-    if name == "ask" and not is_method:
+    # A redeclaration may omit the trailing ``env`` parameter only when there
+    # is no ``Environ`` type to name it with (``std/env`` is not loaded).
+    env_omittable = type_table is None or type_table.get(STD_ENV_ID, "Environ") is None
+    if env_omittable and (
+        (name == "ask" and is_method and method_receiver_name == "Agent")
+        or static_kind is BuiltinStaticKind.SESSION_OPEN
+    ):
+        # A scoped ``Agent::ask``/``Session::open`` redeclaration with no
+        # ``Environ`` type to name legitimately omits the trailing ``env``
+        # parameter -- accept that shape too.
         return (
             expected,
+            replace(expected, params=tuple(p for p in expected.params if p.name != "env")),
+        )
+    if env_omittable and name == "ask" and not is_method:
+        # A scoped free ``ask`` redeclaration with no ``Environ`` type to name
+        # legitimately omits the trailing ``env`` parameter -- accept that
+        # shape too, alongside the fully reduced single-parameter shape some
+        # scoped fixtures use.
+        return (
+            expected,
+            replace(expected, params=tuple(p for p in expected.params if p.name != "env")),
             FunctionSignature(params=(_std_param("prompt", TextType()),), result=TextType()),
         )
     if name == "exec":
@@ -948,7 +1002,6 @@ class _Checker:
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
         self._target_contract_specs: dict[int, tuple[OutputContractSpec, ...]] = {}
-        self._call_sites: list[CallSiteRecord] = []
         self._warnings: list[Diagnostic] = []
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
@@ -1002,7 +1055,8 @@ class _Checker:
         self._method_selections: dict[int, MethodDef] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
-        # value is actually called, dry-run inventory records that call site.
+        # value is actually called, its target contracts are validated the
+        # same way a direct extern call's are.
         self._extern_expr_targets: dict[int, _ExternTargets] = {}
         self._extern_binding_targets: dict[int, _ExternTargets] = {}
         self._builtins = BuiltinCallChecker(self)
@@ -1210,6 +1264,7 @@ class _Checker:
                 method_receiver_name=method_receiver_name,
                 allow_stdlib_session_declaration=self._module_id.is_standard_library,
                 static_kind=static_kind,
+                type_table=self._env.type_table,
             )
             if not any(
                 _signature_matches(rerooted_sig, expected_sig, self._env.type_table)
@@ -1341,6 +1396,12 @@ class _Checker:
                 self._check_program_config(item)
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            if isinstance(item, (RecordDef, ExceptionDef)):
+                self._check_field_defaults(item.fields, frozenset(item.type_params))
+            elif isinstance(item, EnumDef):
+                for member in item.members:
+                    if isinstance(member, VariantDef):
+                        self._check_field_defaults(member.fields, frozenset(item.type_params))
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
             self._check_builtin_var(item)
@@ -1441,6 +1502,45 @@ class _Checker:
         finally:
             self._current_type_vars = old_type_vars
             self._current_bounds = old_bounds
+
+    def _check_field_defaults(self, fields: tuple[Param, ...], type_vars: frozenset[str]) -> None:
+        """Check a record/enum-member/exception field list's default expressions.
+
+        Reuses the function-parameter default rules for omission, named
+        supply, and positional supply (``validate_required_after_defaulted``),
+        but — unlike a function parameter default — a field default must be a
+        constant expression: it is part of the type's shape (wire schema,
+        value syntax, host decoding), which has no evaluation context.
+        *type_vars* are the declaration's own type parameters (empty for a
+        non-generic declaration or an exception), rigid while checking, so a
+        default like ``None`` for ``Option[T]`` checks against the field's
+        own generic type.
+        """
+        validate_required_after_defaulted(
+            fields, self._resolved.attributes.param_zones, entry_desc="Field"
+        )
+        if not any(fd.default is not None for fd in fields):
+            return
+        old_type_vars = self._current_type_vars
+        self._current_type_vars = type_vars
+        try:
+            for fd in fields:
+                if fd.default is None:
+                    continue
+                assert fd.type_expr is not None
+                field_type = self._env.resolve_type_expr(
+                    fd.type_expr, span=fd.span, type_vars=type_vars
+                )
+                default_type = self._check_boundary_expr(fd.default, expected=field_type)
+                self._assert_assignable_from(default_type, field_type, fd.default.span, fd.default)
+                if not self._is_constant_expr(fd.default):
+                    raise AglTypeError(
+                        "Field default must be a constant expression "
+                        f"({_CONSTANT_EXPRESSION_SHAPE}).",
+                        span=fd.default.span,
+                    )
+        finally:
+            self._current_type_vars = old_type_vars
 
     def _check_program_config(self, node: FuncDef) -> None:
         """Check a ``program def``'s ``@config`` entries, if it carries one.
@@ -1967,7 +2067,6 @@ class _Checker:
             {},
             [],
             {},
-            len(self._call_sites),
             len(self._warnings),
             tuple(len(targets) for targets in self._return_extern_targets_stack),
         )
@@ -2044,16 +2143,12 @@ class _Checker:
                 # Extern-target result types are already validated for leaked
                 # inference variables by ``_finalize_extern_provenance`` above (via
                 # ``_zonk_extern_targets``), so they are deliberately not re-walked
-                # here — this pass covers only node/param types and call sites.
+                # here — this pass covers only node/param types.
                 if self_validation_enabled():
                     region.engine.assert_no_inference_vars(
                         (
                             *final_node_types.values(),
                             *(t for ts in final_param_types.values() for t in ts),
-                            *(
-                                call_site.target_type
-                                for call_site in self._call_sites[region.call_sites_start :]
-                            ),
                         )
                     )
             else:
@@ -2145,7 +2240,7 @@ class _Checker:
         target_type: Type,
         contract_targets: tuple[Type, ...] = (),
     ) -> None:
-        """Queue typed extern inventory metadata in source registration order."""
+        """Queue one extern call's target-contract metadata in source registration order."""
         self._active_region().finalization_obligations.append(
             PendingExternCallObligation(
                 node_id=node.node_id,
@@ -2598,8 +2693,14 @@ class _Checker:
         span: SourceSpan,
         expected: Type | None,
         subject: str,
+        all_defaulted: bool = False,
     ) -> Type:
-        """Freshen a generic constructor value in the active expression region."""
+        """Freshen a generic constructor value in the active expression region.
+
+        *all_defaulted* extends the nullary-constructor rule: a
+        field-bearing constructor whose fields all have declared defaults
+        stays bare (constructs immediately) exactly like a fieldless one.
+        """
         engine = self._active_inference_engine()
         instantiation = engine.instantiate(type_params, (*field_templates, result_template))
         for type_param in type_params:
@@ -2615,7 +2716,7 @@ class _Checker:
         result = instantiation.templates[-1]
         concrete: Type = (
             FunctionType(params=instantiation.templates[:-1], result=result)
-            if field_templates
+            if field_templates and not all_defaulted
             else result
         )
         if expected is not None:
@@ -2934,7 +3035,6 @@ class _Checker:
         ):
             for node_id in region.added_side_table_keys.get(table_name, set()):
                 table.pop(node_id, None)
-        del self._call_sites[region.call_sites_start :]
         del self._warnings[region.warnings_start :]
         for targets, start in zip(
             self._return_extern_targets_stack, region.return_target_lengths, strict=True
@@ -3038,10 +3138,6 @@ class _Checker:
     def _append_warning(self, warning: Diagnostic) -> None:
         """Append a warning produced while finalizing the active region."""
         self._warnings.append(warning)
-
-    def _append_call_site(self, call_site: CallSiteRecord) -> None:
-        """Append a call site produced while finalizing the active region."""
-        self._call_sites.append(call_site)
 
     def _record_method_selection(self, node_id: int, method: MethodDef) -> None:
         """Publish the checker-selected method for one dot access."""
@@ -3464,22 +3560,11 @@ class _Checker:
             )
 
     def _finalize_extern_call_obligation(self, obligation: PendingExternCallObligation) -> None:
-        """Publish one concrete extern inventory record and its target contracts at region close."""
+        """Validate one concrete extern call's target contracts at region close."""
         self._finalize_target_contracts(
             obligation.node_id, obligation.callee, obligation.contract_targets, obligation.span
         )
         self._reject_unresolved_extern_types((obligation.target_type,), obligation.span)
-        self._append_call_site(
-            CallSiteRecord(
-                node_id=obligation.node_id,
-                callee=obligation.callee,
-                target_type=obligation.target_type,
-                codec_name="extern",
-                parse_policy="default",
-                line=obligation.span.start_line,
-                col=obligation.span.start_col,
-            )
-        )
 
     def _zonk_extern_targets(
         self, targets: _ExternTargets, engine: InferenceEngine
@@ -5890,6 +5975,9 @@ class _Checker:
                 field_kinds,
                 call.args,
                 call.named_args,
+                has_default=tuple(
+                    flag for _name, flag in self._env.type_table.field_has_default(owner)
+                ),
                 call_span=call.span,
                 context_desc=f"constructor '{owner.name}'",
             )
@@ -6808,7 +6896,6 @@ class _Checker:
             node_types=self._node_types,
             contract_specs=self._contract_specs,
             target_contract_specs=self._target_contract_specs,
-            call_sites=tuple(self._call_sites),
             warnings=tuple(self._warnings),
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),

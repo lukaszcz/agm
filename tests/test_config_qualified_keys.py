@@ -11,7 +11,9 @@ from agm.config.general import GeneralConfig, load_general_config
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    configured_leaf_table_candidates,
     configured_leaf_tables,
+    resolve_manifest_values,
     resolve_qualified_values,
     route_table_paths,
 )
@@ -258,6 +260,25 @@ class TestQualifiedConfigKeys:
             ): "high"
         }
 
+    def test_a_schema_rooted_command_path_has_no_config_table(self) -> None:
+        """A command registered under a schema section (``agent review``) reads no
+        ``[agent.review]`` or inherited ``[agent]`` table, which belong to AGM's schema."""
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("agent", "review"),)
+        )
+        config = _config({"agent": {"strict": True, "review": {"strict": True}}})
+
+        assert ("agent", "review") not in route_table_paths(
+            key.module_segments, key.scope_path, key.command_paths
+        )
+        assert resolve_qualified_values(config, (key,)) == {}
+        assert (
+            configured_leaf_table_candidates(
+                config, key.module_segments, key.scope_path, key.command_paths
+            )
+            == {}
+        )
+
     def test_configured_leaf_tables_report_command_path_leaves(self) -> None:
         config = _config({"dev": {"review": {"strict": True}}})
 
@@ -318,3 +339,240 @@ class TestQualifiedConfigKeys:
             {"review-tools/judge": {"review": {"trace-file": str(cwd_config / "higher.log")}}},
         )
         assert resolve_qualified_values(config, (key,)) == {key: str(cwd_config / "higher.log")}
+
+
+class TestGroupTableInheritance:
+    """A command path's proper prefixes are inherited config tables."""
+
+    def test_a_group_table_feeds_a_command_beneath_it(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+
+        assert resolve_qualified_values(_config({"devel": {"strict": True}}), (key,)) == {key: True}
+
+    def test_a_deeper_group_table_wins_over_a_shallower_one(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "strict",
+            command_paths=(("devel", "sub", "review"),),
+        )
+        config = _config({"devel": {"strict": False, "sub": {"strict": True}}})
+
+        assert resolve_qualified_values(config, (key,)) == {key: True}
+
+    def test_the_exact_route_beats_every_inherited_group_table(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        config = _config(
+            {"devel": {"review": {"strict": True}, "strict": False}},
+        )
+
+        assert resolve_qualified_values(config, (key,)) == {key: True}
+
+    def test_specificity_beats_layer_order(self) -> None:
+        """An earlier, deeper table beats a later, shallower one."""
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "x",
+            command_paths=(("devel", "sub", "review"),),
+        )
+        earlier = {"devel": {"sub": {"x": 1}}}
+        later = {"devel": {"x": 2}}
+
+        assert resolve_qualified_values(_config(earlier, later), (key,)) == {key: 1}
+
+    def test_a_later_layer_overrides_an_earlier_one_within_one_inherited_tier(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+
+        assert resolve_qualified_values(
+            _config({"devel": {"strict": False}}, {"devel": {"strict": True}}), (key,)
+        ) == {key: True}
+
+    def test_alias_prefixes_are_already_expanded_command_paths(self) -> None:
+        """An alias's own group table (``[dev]``) inherits down just like the canonical one."""
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "strict",
+            command_paths=(("dev", "review"), ("devel", "review")),
+        )
+
+        assert resolve_qualified_values(_config({"dev": {"strict": True}}), (key,)) == {key: True}
+
+    def test_same_depth_conflict_from_two_command_paths_in_one_layer_errors(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "strict",
+            command_paths=(("devel", "review"), ("staging", "review")),
+        )
+        config = _config({"devel": {"strict": True}, "staging": {"strict": False}})
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_qualified_values(config, (key,))
+
+    def test_a_conflict_in_a_tier_shadowed_by_a_higher_one_still_errors(self) -> None:
+        """A higher tier's value winning does not exempt a lower tier from its own conflicts."""
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "x",
+            command_paths=(("dev", "review"), ("devel", "review")),
+        )
+        config = _config({"dev": {"x": 1, "review": {"x": 3}}, "devel": {"x": 2}})
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_qualified_values(config, (key,))
+
+    def test_a_later_layer_non_tabular_exact_route_falls_through_to_an_inherited_tier(
+        self,
+    ) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        config = _config(
+            {"devel": {"review": {"strict": True}, "strict": False}},
+            {"devel": {"review": "off"}},
+        )
+
+        assert resolve_qualified_values(config, (key,)) == {key: False}
+
+    def test_a_later_layer_non_tabular_replacement_drops_an_inherited_value(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+
+        assert (
+            resolve_qualified_values(_config({"devel": {"strict": True}}, {"devel": "off"}), (key,))
+            == {}
+        )
+
+    def test_no_command_paths_means_no_inheritance(self) -> None:
+        key = QualifiedConfigKey(("tools", "review"), ("main",), "strict")
+
+        assert resolve_qualified_values(_config({"tools": {"strict": True}}), (key,)) == {}
+
+    def test_configured_leaf_tables_never_reports_inherited_tables(self) -> None:
+        config = _config({"devel": {"strict": True}})
+
+        assert (
+            configured_leaf_tables(
+                config,
+                ("tools", "review"),
+                ("main",),
+                command_paths=(("devel", "review"),),
+            )
+            == {}
+        )
+
+    def test_configured_leaf_table_candidates_always_includes_inherited_tables(self) -> None:
+        config = _config({"devel": {"strict": True}})
+
+        assert configured_leaf_table_candidates(
+            config,
+            ("tools", "review"),
+            ("main",),
+            command_paths=(("devel", "review"),),
+        ) == {"strict": frozenset({("devel",)})}
+
+    def test_configured_leaf_table_candidates_collects_every_table_across_layers(self) -> None:
+        """Unlike configured_leaf_tables, every table a leaf was ever read from is kept."""
+        config = _config({"devel": {"review": {"strict": True}}}, {"devel": {"strict": False}})
+
+        assert configured_leaf_table_candidates(
+            config,
+            ("tools", "review"),
+            ("main",),
+            command_paths=(("devel", "review"),),
+        ) == {"strict": frozenset({("devel", "review"), ("devel",)})}
+
+
+class TestResolveManifestValues:
+    """A package manifest ``[config]`` table resolves command > groups > root."""
+
+    def test_a_command_table_wins_over_a_group_table(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        manifest = {"devel": {"strict": False, "review": {"strict": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_group_table_wins_over_the_root(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+        manifest = {"strict": False, "devel": {"strict": True}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_deeper_group_table_wins_over_a_shallower_one(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"),
+            ("main",),
+            "strict",
+            command_paths=(("devel", "sub", "review"),),
+        )
+        manifest = {"devel": {"strict": False, "sub": {"strict": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_a_program_with_no_command_paths_reads_only_the_root(self) -> None:
+        key = QualifiedConfigKey(("tools", "review"), ("main",), "strict")
+        manifest = {"strict": True, "devel": {"strict": False}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_no_root_and_no_command_table_resolves_nothing(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "review"), ("main",), "strict", command_paths=(("devel", "review"),)
+        )
+
+        assert resolve_manifest_values({"devel": {"other": 1}}, (key,)) == {}
+
+    def test_a_leaf_alias_resolves_like_its_primary_spelling(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "logging"),
+            ("main",),
+            "verbose",
+            command_paths=(("devel", "review"),),
+            leaf_aliases=("logging.verbose",),
+        )
+        manifest = {"devel": {"review": {"logging.verbose": True}}}
+
+        assert resolve_manifest_values(manifest, (key,)) == {key: True}
+
+    def test_same_tier_conflicting_spellings_error(self) -> None:
+        key = QualifiedConfigKey(
+            ("tools", "logging"),
+            ("main",),
+            "verbose",
+            command_paths=(("devel", "review"),),
+            leaf_aliases=("logging.verbose",),
+        )
+        manifest = {"devel": {"review": {"verbose": True, "logging.verbose": False}}}
+
+        with pytest.raises(QualifiedConfigLookupError):
+            resolve_manifest_values(manifest, (key,))
+
+    def test_a_module_suffix_route_never_addresses_a_manifest_table(self) -> None:
+        """Only command paths and the root apply; a bare module name is not a route."""
+        key = QualifiedConfigKey(("tools", "review"), ("main",), "strict")
+
+        assert resolve_manifest_values({"tools": {"strict": True}}, (key,)) == {}
+
+    def test_a_root_tier_conflict_reports_cleanly_instead_of_crashing(self) -> None:
+        """A program with no command table still gets a clean error, not a raw ``ValueError``."""
+        key = QualifiedConfigKey(
+            ("tools", "logging"), ("main",), "verbose", leaf_aliases=("logging.verbose",)
+        )
+        manifest = {"verbose": True, "logging.verbose": False}
+
+        with pytest.raises(QualifiedConfigLookupError, match=r"config\.verbose"):
+            resolve_manifest_values(manifest, (key,))

@@ -248,10 +248,7 @@ def _handle_load(arg: str, ctx: MetaContext) -> MetaOutcome:
     rendered = [
         text
         for r in results
-        if (
-            text := render_entry_result(r, echo=ctx.echo, echo_unit=ctx.echo_unit, check_only=False)
-        )
-        is not None
+        if (text := render_entry_result(r, echo=ctx.echo, echo_unit=ctx.echo_unit)) is not None
     ]
     return MetaOutcome(text="\n".join(rendered) if rendered else None)
 

@@ -11,12 +11,13 @@ from typing import TYPE_CHECKING, NoReturn, TypedDict, cast
 import click
 from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup, TyperOption
+from typer.models import Context as TyperContext
 
 from agm.cli_support.args import ExecArgs
 from agm.command_catalog import has_subcommands, is_subcommand_path
 from agm.config.context import current_config_context
 from agm.core import dry_run
-from agm.util.text import first_paragraph
+from agm.util.text import first_paragraph, keep_indented_paragraphs
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
@@ -79,34 +80,7 @@ def _path_length(item: tuple[str, CommandRegistration]) -> int:
     return len(item[0].split())
 
 
-DRY_RUN_HELP = "Statically check the program without executing it."
-
-
-def _dry_run_option() -> TyperOption:
-    """Return the eager ``--dry-run`` flag a dispatched command parses."""
-    return TyperOption(
-        param_decls=["--dry-run"],
-        default=False,
-        is_flag=True,
-        is_eager=True,
-        expose_value=False,
-        callback=set_dry_run,
-        help=DRY_RUN_HELP,
-    )
-
-
-def _dry_run_help_option() -> click.Option:
-    """Return the ``--dry-run`` entry a registered command's help lists.
-
-    The parsed flag is eager and carries a callback that help rendering must
-    not run, so the listed entry is a plain option — derived from the parsed
-    declaration, spellings and help alike, so the two cannot drift apart.
-    """
-    parsed = _dry_run_option()
-    return click.Option([*parsed.opts, *parsed.secondary_opts], is_flag=True, help=parsed.help)
-
-
-def registered_run_options(ctx: click.Context) -> tuple[TyperOption, ...]:
+def registered_run_options(ctx: click.Context | TyperContext) -> tuple[TyperOption, ...]:
     """Return ``agm exec``'s run-time options, which a registered command parses too.
 
     They are ``agm exec``'s own option objects, taken from the ``agm`` group at
@@ -128,14 +102,17 @@ class _RunOptionValues(TypedDict):
     """The ``ExecArgs`` fields :func:`registered_run_options` fill, keyed by option name."""
 
     strict_json: bool | None
+    echo: bool | None
     max_call_depth: int | None
     default_agent: str | None
+    default_sandbox: str | None
     trace_file: str | None
     no_trace: bool
     trace: bool
     timeout: str | None
     no_timeout: bool
-    no_trace_file: bool
+    debug: bool | None
+    parse_error_retries: int | None
 
 
 def _command_summary(path: str, command: CommandRegistration) -> str:
@@ -166,10 +143,10 @@ def registered_command_help(
 
     The help is the referenced program's own command help, spelled for the
     command the reader invokes rather than the ``program def`` behind it: its
-    usage line names ``agm <path>`` and the program's positional slots, its
-    options are the program's own plus *run_options* and ``--dry-run``. Its
-    prose is the program's ``@doc`` in full, falling back to the summary the
-    activation index cached when the program itself cannot be read.
+    usage line names ``agm <path>`` and the program's positional slots, and
+    its options are the program's own plus *run_options*. Its prose is the
+    program's ``@doc`` in full, falling back to the summary the activation
+    index cached when the program itself cannot be read.
     """
     from agm.cli_support.program_options import render_program_help
 
@@ -178,11 +155,12 @@ def registered_command_help(
         command,
         program_name=f"agm {path_name}",
         description=description or "Run the registered AgL program.",
-        extra_options=(*run_options, _dry_run_help_option()),
+        extra_options=run_options,
+        list_execution_options=True,
     )
 
 
-def print_registered_command_help(command_path: Sequence[str]) -> bool:
+def print_registered_command_help(command_path: Sequence[str], ctx: object) -> bool:
     """Print registered-command help when *command_path* names one exactly."""
     try:
         context = current_config_context()
@@ -205,7 +183,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
             registration,
             program=program,
             command=command,
-            run_options=registered_run_options(click.get_current_context()),
+            run_options=registered_run_options(cast(click.Context | TyperContext, ctx)),
         ),
         end="",
     )
@@ -226,7 +204,7 @@ def registered_group_help(path_name: str, commands: Mapping[str, CommandRegistra
     }
     guidance = registration.doc if registration is not None and registration.doc else None
     group = click.Group(
-        help=guidance or f"Commands available under {path_name}.",
+        help=keep_indented_paragraphs(guidance or f"Commands available under {path_name}."),
         commands=listed_commands,
     )
     return group.get_help(click.Context(group, info_name=f"agm {path_name}"))
@@ -293,7 +271,6 @@ class RegisteredProgramCommand(TyperCommand):
         }
         super().__init__(name="registered-program", context_settings=context_settings)
         self.params.extend(run_options)
-        self.params.append(_dry_run_option())
         self._run_options = tuple(run_options)
         self._path_name = path_name
         self._registration = registration
@@ -356,7 +333,7 @@ class RegisteredProgramCommand(TyperCommand):
             contains_help_flag,
             program_help_requested,
         )
-        from agm.cli_support.run_options import exec_option_conflict
+        from agm.cli_support.run_options import execution_option_conflict
 
         metadata = cast(dict[str, object], ctx.meta)
         cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
@@ -388,7 +365,7 @@ class RegisteredProgramCommand(TyperCommand):
             argument_tokens=list(ctx.args),
             **cast(_RunOptionValues, ctx.params),
         )
-        conflict = exec_option_conflict(exec_args)
+        conflict = execution_option_conflict(exec_args)
         if conflict is not None:
             declaration, command = program_command()
             self._usage_error(conflict, declaration, command)
@@ -475,7 +452,7 @@ class RegisteredCommandGroup(TyperGroup):
 
         return [*params, *registered_command_value_options(command_path, ctx)]
 
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem[str]]:
         """Extend root completion with the next registered-command path segment.
 
         Past a registered program's path, a non-option token completes that
@@ -498,8 +475,8 @@ class RegisteredCommandGroup(TyperGroup):
                 *(CompletionItem(segment) for segment in registered_segments),
                 *registered_command_positional_completion(command_path, incomplete, ctx),
             ]
-        items_by_value: dict[str, CompletionItem] = {
-            cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
+        items_by_value: dict[str, CompletionItem[str]] = {
+            item.value: item for item in super().shell_complete(ctx, incomplete)
         }
         for segment in registered_segments:
             items_by_value[segment] = CompletionItem(segment)

@@ -207,9 +207,11 @@ For `def`/`extern def`/`builtin def`/lambda, the **default zone is standard**: a
 parameter list with no zone attribute has all parameters in the standard zone
 (positional or named). A method receiver `self` is the exception: it is always
 positional-only. A `program def`'s parameter list defaults to the **named-only**
-zone instead: a plain `name: text` parameter is addressed only by `--name`
-([Host environment](host-environment.md#program-arguments)); an `@arg-pos`
-parameter opens a positional slot.
+AgL zone instead. Its CLI projects an unzoned required parameter to a
+positional-only slot — unless its type is `bool`, `Option[T]`, or
+`Optional[T]` — and every other unzoned parameter to `--name`
+([Host environment](host-environment.md#program-arguments)). Explicit zone
+attributes govern both AgL calls and CLI slots.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -238,6 +240,13 @@ def greet(name: text, greeting: text = "Hello") -> text =
 def with-named-default(x: int, @arg-named tag: text = "ok") -> text =
   "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
+
+A [record field default](types.md#record-types) follows the same `= <constant
+expr>` shape and the same zone-ordering constraint, and is likewise omittable
+at a constructor call; see [Record types](types.md#record-types) for its
+constant-expression rule and [Value syntax](host-environment.md#value-syntax)
+for how an omitted defaulted field is filled outside AgL source (JSON, value
+syntax, agent output).
 
 ## Methods
 
@@ -1068,22 +1077,6 @@ program def main() -> unit =
 `RecursionError` is catchable with `try`/`catch`. The limit counts
 activation frames across all `def` calls including mutual recursion.
 
-## Syntactic arguments
-
-The types the language's own constructs name are ordinary values: a
-`ParsePolicy` or an `ExecResult` can be bound, passed to a function, and
-returned from one.
-
-```agl
-def make-policy(retries: int) -> ParsePolicy =
-  if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
-```
-
-The `on-parse-error` argument of `ask`/`exec` is the one exception: it requires
-a **syntactic** static constructor written at the call site (`Abort`, or
-`Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
-from a function like `make-policy` cannot be passed to it.
-
 ## Complete example
 
 ```agl
@@ -1099,7 +1092,7 @@ def summarize-issues(issues: array[text]) -> text =
 def review-artifact(artifact: text) -> Review =
   let r: Review = reviewer.ask(
     "Review this artifact:\n%{artifact}",
-    on-parse-error = Retry(n = 2)
+    parse-error-retries = 2
   )
   r
 

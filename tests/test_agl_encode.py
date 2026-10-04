@@ -101,9 +101,13 @@ def _walk_tags_from(type_table: TypeTable, *handles: "RecordType | ExceptionType
     for handle in handles:
         typedef = type_table.typedef_of(handle.decl_id)
         descriptor = (
-            exception_descriptor(typedef, handle, type_table, bears_name_path=False)
+            exception_descriptor(
+                typedef, handle, type_table, bears_name_path=False, field_defaults={}
+            )
             if isinstance(handle, ExceptionType)
-            else record_descriptor(typedef, handle, type_table, bears_name_path=False)
+            else record_descriptor(
+                typedef, handle, type_table, bears_name_path=False, field_defaults={}
+            )
         )
         nominals[descriptor.nominal] = descriptor
     return _walk_tags(nominals)
@@ -212,9 +216,9 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     enum = EncodePlan(
         EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
     )
-    assert encode_value(enum, RecordValue(nominal=NominalId(2), fields={}), _NO_EXCEPTIONS) == {
-        "$case": "Member"
-    }
+    assert (
+        encode_value(enum, RecordValue(nominal=NominalId(2), fields={}), _NO_EXCEPTIONS) == "Member"
+    )
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
@@ -418,7 +422,9 @@ def test_encode_bytes_are_preserved_across_agent_request_and_parameter_boundarie
         '"format-instructions": {"$case": "None"}, "json-schema": {"$case": "None"}, '
         '"attempt": 0, "previous-error": {"$case": "None"}, '
         '"metadata": {"codec_name": "text", "strict_json": null, "structured_exec": false, '
-        '"max_attempts": 1}}'
+        '"max_attempts": 1}, '
+        '"sandbox": {"$case": "Sandbox", "memory": {"$case": "Default"}, '
+        '"swap": {"$case": "Default"}, "settings": {"$case": "None"}, "patch": true}}'
     )
 
     choice, choice_def = enum_type("Choice", {"None": {}, "One": {"value": IntType()}})
@@ -883,8 +889,8 @@ class TestDictKeyFormJsonSchemaCrossCheck:
         value.insert(RecordValue(NominalId(a_id), {}), RecordValue(NominalId(b_id), {}))
         value.insert(RecordValue(NominalId(b_id), {}), RecordValue(NominalId(a_id), {}))
         assert self._cross_checked(DictType(key=color, value=color), table, value) == {
-            "x": {"$case": "bleu"},
-            "bleu": {"$case": "x"},
+            "x": "bleu",
+            "bleu": "x",
         }
 
     def test_option_enum_key_entries_form(self) -> None:
@@ -929,7 +935,7 @@ class TestDictKeyFormJsonSchemaCrossCheck:
         )
         value.insert(RecordValue(none_id, {}), TextValue("n"))
         assert self._cross_checked(DictType(key=option_color, value=TextType()), table, value) == [
-            {"key": {"$case": "Some", "value": {"$case": "Red"}}, "value": "r"},
+            {"key": {"$case": "Some", "value": "Red"}, "value": "r"},
             {"key": {"$case": "None"}, "value": "n"},
         ]
 
@@ -1166,8 +1172,8 @@ def test_encode_plan_and_untyped_walk_agree_on_effective_json_name() -> None:
     assert value_to_json_obj(value, tags=tags) == {"val": 3}
 
 
-def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
-    """A renamed enum member's ``@name``/``@json-name`` becomes the ``$case`` tag."""
+def test_encode_plan_uses_member_external_name_as_tag() -> None:
+    """A renamed enum member's ``@name``/``@json-name`` becomes its JSON tag."""
     enum_id = next_decl_id()
     member_id = next_decl_id()
     member = RecordType(name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id)
@@ -1188,7 +1194,7 @@ def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
 
     plan = build_encode_plan(choice, table)
 
-    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"$case": "uno"}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == "uno"
 
 
 def test_encode_plan_json_name_overrides_name_for_field() -> None:

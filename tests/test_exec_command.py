@@ -32,6 +32,7 @@ from agm.cli_support.args import ExecArgs
 from agm.commands import exec_program as exec_engine
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import write_file_program
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 
 
 class RecordedArgs(Protocol):
@@ -47,11 +48,11 @@ def invoke(runner: CliRunner, argv: list[str]) -> Result:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
-def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
+def inline_args(code: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec -c SOURCE`` invocation produces."""
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=argument_tokens or [],
         strict_json=None,
         no_trace=True,
@@ -63,7 +64,7 @@ def print_exec_help(
     *,
     tokens: list[str],
     file: str | None,
-    command: str | None,
+    code: str | None,
     program: str | None = None,
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
@@ -72,21 +73,19 @@ def print_exec_help(
     from agm.cli_support.program_discovery import ExecProgramDiscovery
 
     discovery = ExecProgramDiscovery(
-        command=command,
+        code=code,
         requested_program=program,
         module_paths=module_paths,
         no_stdlib=no_stdlib,
     )
-    return cli._exec_print_help(
-        discovery, tokens=tokens, file=file, command=command, program=program
-    )
+    return cli._exec_print_help(discovery, tokens=tokens, file=file, code=code, program=program)
 
 
 def file_args(path: Path) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec FILE`` invocation produces."""
     return ExecArgs(
         file=str(path),
-        command=None,
+        code=None,
         argument_tokens=[],
         strict_json=None,
         no_trace=True,
@@ -259,6 +258,24 @@ class TestModuleParameterHostInputs:
         assert "retries" in undecodable.output
         assert "false\n" not in undecodable.output
 
+    def test_cli_reports_argument_and_module_parameter_errors_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+    ) -> None:
+        source = tmp_path / "p.agl"
+        source.write_text(
+            "@param let level: int = 1\nprogram def main(name: text) -> unit = print name\n",
+            encoding="utf-8",
+        )
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+
+        result = invoke(runner, ["exec", str(source), "--level", "abc"])
+
+        assert result.exit_code != 0
+        assert "name" in result.output
+        assert "level" in result.output
+
     def test_exec_help_groups_module_parameters_by_module(
         self,
         tmp_path: Path,
@@ -269,7 +286,7 @@ class TestModuleParameterHostInputs:
         self._context(tmp_path, monkeypatch)
 
         assert print_exec_help(
-            tokens=["--help"], file=str(source), command=None, module_paths=[str(modules)]
+            tokens=["--help"], file=str(source), code=None, module_paths=[str(modules)]
         )
 
         output = capsys.readouterr().out
@@ -388,6 +405,23 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "file") == str(agl_file)
 
+    @pytest.mark.parametrize(("flag", "expected"), [("--echo", True), ("--no-echo", False)])
+    def test_agent_output_echo_flags(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        recorded_runs: list[object],
+        flag: str,
+        expected: bool,
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "let x = 1\n")
+
+        result = invoke(runner, ["exec", flag, str(agl_file)])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "echo") is expected
+
     def test_plain_exec_does_not_discover_the_program_during_cli_parsing(
         self,
         runner: CliRunner,
@@ -422,17 +456,31 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "argument_tokens") == ["--k", "v"]
 
+    def test_dry_run_spelling_is_available_to_the_program(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(
+            agl_file,
+            "program def main(dry-run: bool = false) -> unit = print dry-run\n",
+        )
+
+        result = invoke(runner, ["exec", str(agl_file), "--dry-run"])
+
+        assert result.exit_code == 0
+        assert result.stdout == "true\n"
+
     def test_exec_preserves_a_host_looking_program_option_value(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         """A selected program, not the outer command, owns an option's value token."""
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
-        result = invoke(runner, ["exec", "--no-stdlib", str(agl_file), "--msg", "--dry-run"])
+        result = invoke(runner, ["exec", "--no-stdlib", str(agl_file), "--msg", "--no-stdlib"])
 
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--dry-run"]
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--no-stdlib"]
 
     def test_ambiguous_program_value_reuses_cli_static_artifacts(
         self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -444,7 +492,7 @@ class TestExecArgsParsing:
         from agm.agl.typecheck.program import CheckedProgram
 
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
         real_typecheck = pipeline._run_typecheck_program
         typechecks = 0
 
@@ -459,7 +507,7 @@ class TestExecArgsParsing:
 
         result = invoke(
             runner,
-            ["exec", "--no-stdlib", str(agl_file), "--msg", "--dry-run"],
+            ["exec", "--no-stdlib", str(agl_file), "--msg", "--no-stdlib"],
         )
 
         assert result.exit_code == 0
@@ -475,7 +523,7 @@ class TestExecArgsParsing:
         value: str,
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--msg", value])
 
@@ -489,7 +537,7 @@ class TestExecArgsParsing:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
 
-        result = invoke(runner, ["exec", "--trace-file", "--msg", "--dry-run", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace-file", "--msg", "--no-stdlib", str(agl_file)])
 
         assert result.exit_code == 0
         args = recorded_runs[0]
@@ -513,9 +561,9 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
-        result = invoke(runner, ["exec", str(agl_file), "--msg", "--", "--dry-run"])
+        result = invoke(runner, ["exec", str(agl_file), "--msg", "--", "--no-stdlib"])
 
         assert result.exit_code == 0
         assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--"]
@@ -632,7 +680,7 @@ class TestExecArgsParsing:
 
 
 class TestExecCommandArgParsing:
-    """Parser-contract tests for the -c/--command option."""
+    """Parser-contract tests for the -c/--code option."""
 
     def test_exec_command_flag_maps_to_command(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -641,17 +689,17 @@ class TestExecCommandArgParsing:
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "command") == 'print "hi"'
+        assert getattr(args, "code") == 'print "hi"'
         assert getattr(args, "file") is None
 
     def test_exec_command_long_flag_maps_to_command(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["exec", "--command", "let x = 1"])
+        result = invoke(runner, ["exec", "--code", "let x = 1"])
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "command") == "let x = 1"
+        assert getattr(args, "code") == "let x = 1"
 
     def test_exec_file_and_command_are_mutually_exclusive(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -687,7 +735,7 @@ class TestExecCommandArgParsing:
         result = invoke(runner, ["exec", "--help", str(agl_file)])
 
         assert result.exit_code == 0
-        assert "--msg" in result.output
+        assert "<msg>" in result.output
         assert recorded_runs == []
 
     def test_exec_bare_short_help_flag_prints_help(
@@ -707,7 +755,7 @@ class TestExecCommandArgParsing:
         result = invoke(runner, ["exec", str(agl_file), "-h"])
 
         assert result.exit_code == 0
-        assert "--msg" in result.output
+        assert "<msg>" in result.output
         assert recorded_runs == []
 
     def test_exec_short_help_flag_consumed_as_an_argument_value_is_not_help(
@@ -793,25 +841,24 @@ class TestExecCommandArgParsing:
 
 
 class TestExecCommandInline:
-    """Behavior tests for executing an inline -c/--command program."""
+    """Behavior tests for executing an inline -c/--code program."""
 
     def _command_args(self, command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
         return inline_args(command, argument_tokens=argument_tokens)
 
-    def test_inline_command_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_inline_code_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_program_arguments(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_inline_code_with_program_arguments(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = self._command_args(
-            "program def main(msg: text) -> unit = print msg", argument_tokens=["--msg", "hi"]
+            "program def main(@arg-named msg: text) -> unit = print msg",
+            argument_tokens=["--msg", "hi"],
         )
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
-    def test_inline_command_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_inline_code_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._command_args("let x = undefined-name"))
         assert exc_info.value.code == 1
@@ -821,7 +868,7 @@ class TestExecCommandInline:
         """Calling run() with neither source set fails cleanly (defensive guard)."""
         args = ExecArgs(
             file=None,
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -871,6 +918,29 @@ class TestInlineSourceDiagnostics:
     def test_inline_program_def_still_runs(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(inline_args('program def main() -> unit =\n  print "hi"\n')) is None
         assert capsys.readouterr().out == "hi\n"
+
+    def test_trace_run_start_records_command_program_and_source(self, tmp_path: Path) -> None:
+        import json
+
+        entry = tmp_path / "prog.agl"
+        entry.write_text('program def main() -> unit =\n  print "hi"\n', encoding="utf-8")
+        trace = tmp_path / "trace.jsonl"
+        args = file_args(entry)
+        args.trace = True
+        args.no_trace = False
+        args.trace_file = str(trace)
+
+        assert exec_command.run(args) is None
+
+        records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        start = next(record for record in records if record["kind"] == "run_start")
+        assert list(start)[:5] == ["kind", "ts", "file", "line", "col"]
+        assert start["file"] == str(entry.resolve())
+        assert start["command"] == "exec"
+        assert start["function"] == "main"
+        printed = next(record for record in records if record["kind"] == "print")
+        assert list(printed)[:5] == ["kind", "ts", "file", "line", "col"]
+        assert printed["file"] == str(entry.resolve())
 
     def test_file_bare_expression_at_module_root_keeps_the_plain_message(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -925,13 +995,13 @@ class TestExecDynamicHelp:
     degradation) instead.
     """
 
-    def test_exec_help_for_inline_command_includes_discovered_arguments(
+    def test_exec_help_for_inline_code_includes_discovered_arguments(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert print_exec_help(
             tokens=["--help"],
             file=None,
-            command="program def main(count: int = 1) -> unit = print(count + 1)",
+            code="program def main(count: int = 1) -> unit = print(count + 1)",
         )
 
         assert "--count" in capsys.readouterr().out
@@ -965,7 +1035,7 @@ class TestExecDynamicHelp:
         )
 
         assert print_exec_help(
-            tokens=["--help"], file=str(entry), command=None, module_paths=[str(module_root)]
+            tokens=["--help"], file=str(entry), code=None, module_paths=[str(module_root)]
         )
 
         assert "--region" in capsys.readouterr().out
@@ -982,14 +1052,14 @@ class TestExecDynamicHelp:
             lambda **_kwargs: (_ for _ in ()).throw(StdlibResolutionError("unavailable roots")),
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         assert "--msg" not in capsys.readouterr().out
 
     def test_exec_help_for_unreadable_file_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        assert print_exec_help(tokens=["--help"], file=str(tmp_path / "missing.agl"), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(tmp_path / "missing.agl"), code=None)
 
         assert "agm exec" in capsys.readouterr().out
 
@@ -1012,9 +1082,9 @@ class TestExecDynamicHelp:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        assert print_exec_help(tokens=["--help"], file="tools/main::second", command=None)
+        assert print_exec_help(tokens=["--help"], file="tools/main::second", code=None)
 
-        assert "--region" in capsys.readouterr().out
+        assert "<region>" in capsys.readouterr().out
 
 
 class TestExecCommandBehavior:
@@ -1240,6 +1310,33 @@ class TestExecLogFileValidatedUpFront:
         assert "should-not-run" not in captured.out
 
 
+class TestExecBlankOptionTextFlags:
+    """A blank ``--timeout``/``--trace-file`` value is an error, never absence."""
+
+    @pytest.mark.parametrize("flag", ["timeout", "trace_file"])
+    @pytest.mark.parametrize("blank", ["", " "])
+    def test_blank_flag_value_exits_1_before_running(
+        self,
+        flag: str,
+        blank: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, 'program def main() -> unit =\n  print "should-not-run"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(replace(_exec_args(agl_file), **{flag: blank}))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "should-not-run" not in captured.out
+        assert not (tmp_path / " ").exists()
+
+
 class TestExecCommandEdgePaths:
     """Real-program coverage of the ok=True and pre-execution-error branches.
 
@@ -1400,6 +1497,18 @@ class TestExecCommandWarnings:
         captured = capsys.readouterr()
         assert f"{agl_file}:7:3-7: warning: declared agent 'reviewer' is unused" in captured.err
 
+    def test_discovery_warning_is_printed_for_exec(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "tabby.agl"
+        agl_file.write_bytes(b'program def main() -> unit =\n\tprint "hi"\n')
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+
+        captured = capsys.readouterr()
+        assert captured.out == "hi\n"
+        assert captured.err.count("warning:") == 1
+
     def test_error_diagnostic_still_exits_1(
         self,
         tmp_path: Path,
@@ -1418,13 +1527,13 @@ class TestExecCommandWarnings:
         assert "undefined-name" in captured.err
         assert captured.err.startswith("test.agl:2:11-24: error:")
 
-    def test_inline_error_diagnostic_has_command_label(
+    def test_inline_error_diagnostic_has_code_label(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Inline -c errors carry the ``<command>:`` source label (from SourceId)."""
+        """Inline -c errors carry the ``<code>:`` source label (from SourceId)."""
         args = ExecArgs(
             file=None,
-            command="let x = undefined-name\n",
+            code="let x = undefined-name\n",
             argument_tokens=[],
             strict_json=None,
             no_trace=False,
@@ -1437,9 +1546,9 @@ class TestExecCommandWarnings:
         captured = capsys.readouterr()
         assert "undefined-name" in captured.err
         assert "1:9-22: error:" in captured.err
-        # The graph loader stamps inline source with SourceId(label="<command>"),
-        # so <command>: appears as the source label in the diagnostic output.
-        assert "<command>:1:9-22: error:" in captured.err
+        # The graph loader stamps inline source with SourceId(label="<code>"),
+        # so <code>: appears as the source label in the diagnostic output.
+        assert "<code>:1:9-22: error:" in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1511,14 +1620,13 @@ class TestExecParsesSourceOnce:
         from agm.agl.scope.program import ResolvedProgram
         from agm.agl.syntax.advisories import SpacedQualifier
         from agm.agl.syntax.nodes import Program
-        from agm.core import dry_run
 
         agl_file = tmp_path / "prog.agl"
-        # A declared+called agent: exec must read the inventory AND run the
-        # static pipeline, the exact scenario that previously parsed twice.
+        # The declaration exercises agent discovery without needing an agent
+        # call for this one-pass parse regression.
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("impl")\nimpl.ask("do it")\n',
+            'let impl = AgentCommand("impl")\nprint "done"\n',
         )
 
         real_build_repl_graph = loader_mod.build_repl_graph
@@ -1559,9 +1667,6 @@ class TestExecParsesSourceOnce:
 
         monkeypatch.setattr(loader_mod, "build_repl_graph", counting_build_repl_graph)
         monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)
-        # Dry-run drives the full static pipeline (parse → scope → typecheck →
-        # reconcile) without executing any agent.
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert build_graph_calls == 1
@@ -1610,30 +1715,6 @@ class TestExecLowersGraphOnce:
         assert exec_command.run(_exec_args(agl_file, argument_tokens=["--who", "agl"])) is None
 
         assert capsys.readouterr().out == "hi agl\n"
-        assert len(lowerings) == 1
-
-    def test_exec_dry_run_lowers_graph_once_and_reports_call_sites(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        from agm.core import dry_run
-
-        lowerings = self._count_lowerings(monkeypatch)
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'let impl = AgentCommand("impl")\nlet task: text = "do it"\nimpl.ask(task)\n',
-        )
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-
-        captured = capsys.readouterr()
-        # --dry-run keeps its contract: the static call-site inventory is
-        # reported and the program never executes.
-        assert "call-sites:" in captured.out
         assert len(lowerings) == 1
 
     def test_program_argument_error_exits_1_before_the_trace_file_is_prepared(
@@ -1697,7 +1778,7 @@ class TestExecCommandExitCodes:
         write_file_program(
             agl_file,
             'import std/config\nlet worker = AgentCommand("worker")\n'
-            "program def main(value: int) -> unit =\n"
+            "program def main(@arg-named value: int) -> unit =\n"
             "  std/config::trace := false\n"
             "  print value\n",
         )
@@ -1794,86 +1875,6 @@ class TestExecCommandExitCodes:
             exec_command.run(args)
         assert exc_info.value.code == 2
 
-    def test_dry_run_printing_program_exits_0_no_stdout(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """``agm exec --dry-run`` runs the static pipeline only — no output."""
-        from agm.cli_support.args import ExecArgs
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'print "hello"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            argument_tokens=[],
-            strict_json=None,
-            no_trace=False,
-            trace_file=None,
-        )
-        assert exec_command.run(args) is None  # exit 0
-        captured = capsys.readouterr()
-        assert captured.out == ""
-
-    def test_dry_run_static_error_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """a static-error program under --dry-run still exits 1."""
-        from agm.cli_support.args import ExecArgs
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "let x = undefined-name\n")
-
-        args = ExecArgs(
-            file=str(agl_file),
-            argument_tokens=[],
-            strict_json=None,
-            no_trace=False,
-            trace_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 1
-
-    def test_dry_run_unreachable_match_error_exits_1_before_execution(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from agm.cli_support.args import ExecArgs
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'def dormant(x: bool) -> int =\n  case x of\n    | true => 1\nprint "unreachable"\n',
-        )
-        args = ExecArgs(
-            file=str(agl_file),
-            argument_tokens=[],
-            strict_json=None,
-            no_trace=False,
-            trace_file=None,
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert ": error:" in captured.err
-
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "let x = undefined-name\n")
@@ -1904,9 +1905,19 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     captured: dict[str, object] = {}
 
     class RecordingRuntime(RealRuntime):
-        def __init__(self, *, default_call_depth_limit: int | None = None) -> None:
+        def __init__(
+            self,
+            *,
+            default_call_depth_limit: int | None = None,
+            get_sandbox_context: Any | None = None,
+            resolve_agent_spec: Any | None = None,
+        ) -> None:
             captured["default_call_depth_limit"] = default_call_depth_limit
-            super().__init__(default_call_depth_limit=default_call_depth_limit)
+            super().__init__(
+                default_call_depth_limit=default_call_depth_limit,
+                get_sandbox_context=get_sandbox_context,
+                resolve_agent_spec=resolve_agent_spec,
+            )
 
         def configure_execution_services(
             self,
@@ -1915,14 +1926,19 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             agent_dispatcher: Any | None,
             session_host: Any | None,
             shell_exec_timeout: float | None,
+            get_sandbox_context: Any | None,
+            resolve_agent_spec: Any | None,
         ) -> None:
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
+            captured["get_sandbox_context"] = get_sandbox_context
             super().configure_execution_services(
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
                 session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
+                get_sandbox_context=get_sandbox_context,
+                resolve_agent_spec=resolve_agent_spec,
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", RecordingRuntime)
@@ -1965,6 +1981,121 @@ class TestExecConfigWiring:
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is True
+
+    def test_run_wires_a_real_sandbox_context_into_the_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exec_command.run`` -- the real production path, not a hand-built
+        ``PipelineDriver`` -- threads a working ``get_sandbox_context`` into
+        ``configure_execution_services``. A host that forgot to wire one would
+        make a sandboxed ``exec`` raise ``ExecError`` instead of running it;
+        this proves the callable is both present and real."""
+        from collections.abc import Callable
+        from typing import cast
+
+        from agm.cli_support.args import ExecArgs
+        from agm.config.context import ConfigContext
+        from agm.sandbox.prepare import SandboxContext
+
+        home = tmp_path / "home"
+        home.mkdir()
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["get_sandbox_context"] is not None
+        get_sandbox_context = cast("Callable[[], SandboxContext]", captured["get_sandbox_context"])
+        assert isinstance(get_sandbox_context(), SandboxContext)
+
+    def test_run_shares_one_sandbox_context_across_agent_session_and_exec(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exec_command.run`` builds exactly one ``get_sandbox_context`` callable
+        and passes the SAME one to ``value_driven_agent_factory``,
+        ``create_agl_session_host``, and ``configure_execution_services`` -- never
+        a separate one per consumer, so they agree on where sandbox
+        configuration resolves from and the `[run.*]` config loads at most once."""
+        from collections.abc import Callable
+
+        from agm.sandbox.prepare import SandboxContext
+
+        real_factory = exec_engine.value_driven_agent_factory
+        real_session_host = exec_engine.create_agl_session_host
+        captured: dict[str, object] = {}
+
+        def factory_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
+            captured["agent"] = get_sandbox_context
+            return real_factory(idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context)
+
+        def session_host_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
+            captured["session"] = get_sandbox_context
+            return real_session_host(
+                idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+            )
+
+        monkeypatch.setattr(exec_engine, "value_driven_agent_factory", factory_spy)
+        monkeypatch.setattr(exec_engine, "create_agl_session_host", session_host_spy)
+        runtime_captured = _spy_runtime(monkeypatch)
+
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["agent"] is captured["session"] is runtime_captured["get_sandbox_context"]
+
+    def test_no_sandboxed_call_never_builds_the_shared_sandbox_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A program that dispatches no sandboxed agent, session, or ``exec``
+        call never invokes the ``get_sandbox_context`` shared across all three
+        consumers, so it performs no ``[run.*]`` config I/O -- the laziness
+        ``lazy_sandbox_context`` promises survives sharing one callable
+        across consumers instead of each building its own."""
+
+        def raising_get_sandbox_context() -> object:
+            raise AssertionError("sandbox context requested unexpectedly")
+
+        monkeypatch.setattr(
+            exec_engine, "lazy_sandbox_context", lambda _ctx: raising_get_sandbox_context
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
 
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2061,201 +2192,6 @@ class TestExecConfigWiring:
         assert "Error: invalid exec configuration" in capsys.readouterr().err
 
 
-def _exec_args_with_fallback_runtime(
-    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, argument_tokens: list[str] | None = None
-) -> ExecArgs:
-    """Return ExecArgs for *agl_file* and patch PipelineDriver to have a fallback agent.
-
-    In real use the CLI wires the runner-backed default agent; in tests we
-    patch the runtime to supply the default session host for free ``ask`` calls.
-    """
-    from agm.agl.pipeline import PipelineDriver as RealRuntime
-    from agm.agl.runtime.agents import AgentFn
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
-
-    def stub_agent(req: AgentRequest) -> AgentResponse:
-        return AgentResponse(content="stub")
-
-    class FallbackRuntime(RealRuntime):
-        def __init__(
-            self,
-            *,
-            default_strict_json: bool = False,
-            agent_dispatcher: AgentFn | None = None,
-            session_host: Any | None = None,
-            shell_exec_timeout: float | None = None,
-            default_call_depth_limit: int | None = None,
-        ) -> None:
-            del agent_dispatcher
-            super().__init__(
-                default_strict_json=default_strict_json,
-                agent_dispatcher=stub_agent,
-                session_host=session_host,
-                shell_exec_timeout=shell_exec_timeout,
-                default_call_depth_limit=default_call_depth_limit,
-            )
-
-    monkeypatch.setattr(exec_engine, "PipelineDriver", FallbackRuntime)
-    return _exec_args(agl_file, argument_tokens=argument_tokens)
-
-
-class TestDryRunInventory:
-    """--dry-run prints the ."""
-
-    def test_dry_run_inventory_ask_call(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """--dry-run prints one inventory entry per agent call site."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'let x = ask("Hello")\nx\n')
-
-        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
-        assert exec_command.run(args) is None
-        captured = capsys.readouterr()
-        # Should print the call-sites inventory header and one entry.
-        assert "call-sites" in captured.out
-        assert "ask" in captured.out
-        assert "text" in captured.out
-        # The entry surfaces both the source line and column as "line N:C:"
-        # (the captured call-site column is not dead).  `ask` starts at
-        # column 9 of `let x = ask("Hello")`.
-        assert "line 2:11:" in captured.out
-
-    def test_dry_run_inventory_named_agent(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """An Agent-method call appears in the inventory."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("Review this")\n',
-        )
-
-        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
-        assert exec_command.run(args) is None
-        captured = capsys.readouterr()
-        # Agent-method calls retain ``ask`` as the reported callee.
-        assert "ask" in captured.out
-
-    def test_dry_run_inventory_abort_policy(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """An explicit on_parse_error: abort policy surfaces in the inventory."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'ask("Hello", on-parse-error = Abort)\n')
-
-        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
-        assert exec_command.run(args) is None
-        captured = capsys.readouterr()
-        assert "policy: abort" in captured.out
-
-    def test_dry_run_inventory_no_call_sites_empty(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """--dry-run with no agent calls produces no call-sites output."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'print "hello"\n')
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "call-sites" not in captured.out
-
-    def test_dry_run_inventory_static_error_exits_1_no_inventory(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Static error under --dry-run exits 1; no inventory is printed."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "let x = undefined-name\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file))
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "call-sites" not in captured.out
-
-    def test_dry_run_inventory_nothing_executes(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """--dry-run: the registered agent stub is never invoked."""
-        from agm.agl.pipeline import PipelineDriver as RealRuntime
-        from agm.agl.runtime.agents import AgentFn
-        from agm.agl.runtime.request import AgentRequest, AgentResponse
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        agent_calls: list[AgentRequest] = []
-
-        def spy_agent(req: AgentRequest) -> AgentResponse:
-            agent_calls.append(req)
-            raise AssertionError("agent should not be invoked in dry-run mode")
-
-        class SpyRuntime(RealRuntime):
-            def __init__(
-                self,
-                *,
-                default_strict_json: bool = False,
-                agent_dispatcher: AgentFn | None = None,
-                session_host: Any | None = None,
-                shell_exec_timeout: float | None = None,
-                default_call_depth_limit: int | None = None,
-            ) -> None:
-                del agent_dispatcher
-                super().__init__(
-                    default_strict_json=default_strict_json,
-                    agent_dispatcher=spy_agent,
-                    session_host=session_host,
-                    shell_exec_timeout=shell_exec_timeout,
-                    default_call_depth_limit=default_call_depth_limit,
-                )
-
-        monkeypatch.setattr(exec_engine, "PipelineDriver", SpyRuntime)
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'ask("Hi")\n')
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        assert agent_calls == []
-
-
 class TestExecFFI:
     """``agm exec`` running a file-backed program that declares ``extern def``."""
 
@@ -2289,139 +2225,6 @@ class TestExecFFI:
 
         assert capsys.readouterr().out == "42\n"
 
-    def test_dry_run_lists_the_extern_call_site_without_importing_companion(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """--dry-run's inventory lists extern calls without companion side effects."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        marker = tmp_path / "marker.txt"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "extern def add_one(x: int) -> int\nadd_one(41)\n")
-        (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\n"
-            "def add_one(x):\n"
-            f"    open({str(marker)!r}, 'a').write('called')\n"
-            "    return x + 1\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "call-sites" in captured.out
-        assert "add_one" in captured.out
-        assert not marker.exists()
-
-    def test_dry_run_skips_extern_import_and_execution(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A source engine-setting write must not import or call externs during --dry-run."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        marker = tmp_path / "marker.txt"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "extern def choose_runner() -> text\nchoose_runner()\n")
-        (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\n"
-            "def choose_runner():\n"
-            f"    open({str(marker)!r}, 'a').write('called')\n"
-            "    return 'echo'\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "call-sites" in captured.out
-        assert "choose_runner" in captured.out
-        assert not marker.exists()
-
-    def test_dry_run_lists_extern_call_from_imported_module(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        marker = tmp_path / "marker.txt"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "import mylib::*\nmylib::run()\n")
-        (tmp_path / "mylib.agl").write_text(
-            "extern def from_lib(x: int) -> int\ndef run() -> int = from_lib(1)\n"
-        )
-        (tmp_path / "mylib.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\ndef from_lib(x):\n    return x\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "from_lib" in captured.out
-        assert not marker.exists()
-
-    def test_dry_run_lists_extern_returned_from_ordinary_function(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        marker = tmp_path / "marker.txt"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "extern def chosen(x: int) -> int\ndef choose() -> int -> int = chosen\nchoose()(1)\n",
-        )
-        (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "chosen" in captured.out
-        assert not marker.exists()
-
-    def test_dry_run_lists_extern_invoked_after_value_call_return(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-
-        marker = tmp_path / "marker.txt"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "extern def chosen(x: int) -> int\n"
-            "def get() -> int -> int = chosen\n"
-            "let h = get\n"
-            "h()(1)\n",
-        )
-        (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        assert "chosen" in captured.out
-        assert "int -> int" not in captured.out
-        assert not marker.exists()
-
 
 class TestJsonProgramArgumentsCLI:
     """A ``program def``'s structured (record/array/decimal) arguments via JsonCodec."""
@@ -2433,7 +2236,8 @@ class TestJsonProgramArgumentsCLI:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
+            "record Point\n  x: int\n  y: int\n"
+            "program def main(@arg-named pt: Point) -> unit = print pt.x\n",
         )
 
         assert (
@@ -2449,7 +2253,9 @@ class TestJsonProgramArgumentsCLI:
     ) -> None:
         """A decimal-typed argument provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(price: decimal) -> unit = print price\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named price: decimal) -> unit = print price\n"
+        )
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--price", "1.5"]))
@@ -2462,7 +2268,9 @@ class TestJsonProgramArgumentsCLI:
     ) -> None:
         """An array-typed argument provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(tags: array[text]) -> unit = print tags\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named tags: array[text]) -> unit = print tags\n"
+        )
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=['--tags=["a", "b"]']))
@@ -2476,7 +2284,8 @@ class TestJsonProgramArgumentsCLI:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
+            "record Point\n  x: int\n  y: int\n"
+            "program def main(@arg-named pt: Point) -> unit = print pt.x\n",
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2645,7 +2454,7 @@ class TestExecAgentValues:
         write_file_program(
             agl_file,
             'let impl = AgentCommand("value-runner \\%{SESSION_ID}")\n'
-            'let x = impl.ask("do it")\n'
+            'let x = impl.ask("do it", sandbox = AgentSandbox::Disabled)\n'
             "print x\n",
         )
         result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)
@@ -2661,7 +2470,7 @@ class TestExecAgentValues:
         write_file_program(
             agl_file,
             'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE} \\%{SESSION_ID}")\n'
-            'let x = impl.ask("do it")\nprint x\n',
+            'let x = impl.ask("do it", sandbox = AgentSandbox::Disabled)\nprint x\n',
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)
@@ -2672,7 +2481,7 @@ class TestExecAgentValues:
 
 
 class TestExecTimeoutAndLogFileFlags:
-    """CLI ``--timeout`` / ``--no-timeout`` / ``--no-trace-file`` resolution."""
+    """CLI ``--timeout`` / ``--no-timeout`` resolution."""
 
     def _capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from collections.abc import Mapping
@@ -2686,6 +2495,7 @@ class TestExecTimeoutAndLogFileFlags:
         from agm.agl.pipeline import PreparedProgram, RunResult
         from agm.agl.runtime.host_settings import HostSettingsPolicy
         from agm.agl.semantics.values import Value
+        from agm.agl.syntax.spans import SourceSpan
 
         captured: dict[str, object] = {}
 
@@ -2695,7 +2505,11 @@ class TestExecTimeoutAndLogFileFlags:
                 prepared: PreparedProgram,
                 *,
                 check_only: bool = False,
+                echo_agent_output: bool = False,
                 trace_file: Path | None = None,
+                invoked_command: str | None = None,
+                program_function: str | None = None,
+                program_span: SourceSpan | None = None,
                 compiled: MatchCompiledProgram | None = None,
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
@@ -2707,10 +2521,15 @@ class TestExecTimeoutAndLogFileFlags:
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
                 captured["process_environment"] = process_environment
+                captured["echo_agent_output"] = echo_agent_output
                 return super().run_prepared(
                     prepared,
                     check_only=check_only,
+                    echo_agent_output=echo_agent_output,
                     trace_file=trace_file,
+                    invoked_command=invoked_command,
+                    program_function=program_function,
+                    program_span=program_span,
                     compiled=compiled,
                     executable=executable,
                     host_settings_policy=host_settings_policy,
@@ -2756,7 +2575,7 @@ class TestExecTimeoutAndLogFileFlags:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_trace(agl_file, timeout="not-a-duration"))
         assert exc_info.value.code == 1
-        assert "invalid --timeout" in capsys.readouterr().err
+        assert "timeout" in capsys.readouterr().err
 
     def test_cli_no_timeout_clears_engine_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2768,6 +2587,37 @@ class TestExecTimeoutAndLogFileFlags:
         result = exec_command.run(_exec_args_no_trace(agl_file, no_timeout=True))
         assert result is None
         assert captured["shell_exec_timeout"] is None
+
+    def test_cli_echo_flag_reaches_execution_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+        captured = self._capture_timeout(monkeypatch)
+
+        exec_command.run(_exec_args_no_trace(agl_file, echo=True))
+
+        assert captured["echo_agent_output"] is True
+
+    @pytest.mark.parametrize(
+        ("config_echo", "cli_echo", "expected"), [(True, None, True), (True, False, False)]
+    )
+    def test_exec_echo_config_and_cli_precedence(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config_echo: bool,
+        cli_echo: bool | None,
+        expected: bool,
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+        _config_home(tmp_path, monkeypatch, f"[exec]\necho = {str(config_echo).lower()}\n")
+        captured = self._capture_timeout(monkeypatch)
+
+        exec_command.run(_exec_args_no_trace(agl_file, echo=cli_echo))
+
+        assert captured["echo_agent_output"] is expected
 
     def test_cli_timeout_preserves_raw_builtin_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2803,33 +2653,6 @@ class TestExecTimeoutAndLogFileFlags:
         exec_command.run(_exec_args_no_trace(agl_file))
 
         assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
-
-    def test_cli_no_trace_file_clears_visible_seed_not_configured_trace(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        trace_path = tmp_path / "configured.jsonl"
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            f'[exec]\ntrace = true\ntrace-file = "{trace_path}"\n'
-        )
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "import std/config\nprint std/config::trace-file\n")
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        exec_command.run(_exec_args_no_trace(agl_file, no_trace=False, no_trace_file=True))
-
-        assert capsys.readouterr().out == "Option::None\n"
-        assert trace_path.exists()
 
 
 class TestExecSourceConfigPrecedence:
@@ -3031,14 +2854,14 @@ class TestExecSourceConfigPrecedence:
 
 
 def _exec_args_inline_no_trace(
-    command: str,
+    code: str,
     *,
     strict_json: bool | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=[],
         strict_json=strict_json,
         no_trace=True,
@@ -3329,7 +3152,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3363,7 +3186,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3390,7 +3213,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3429,7 +3252,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=None,
-            command="import util::*\nlet r = greet()\nprint r\n",
+            code="import util::*\nlet r = greet()\nprint r\n",
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3607,9 +3430,8 @@ class TestEntryModuleConfig:
 class TestProgramValueArguments:
     """CLI/config binding for a selected program's own value parameters.
 
-    A ``program def``'s value parameters default to the named-only zone, so
-    a plain ``name: text`` parameter is addressed only by ``--name``; an
-    explicit ``@arg-pos`` attribute opens a positional slot.
+    A required unzoned ``program def`` parameter is positional-only on the CLI.
+    An explicit ``@arg-named`` attribute exposes a required ``--name`` flag.
     """
 
     def test_positional_and_named_option_arguments(
@@ -3627,6 +3449,21 @@ class TestProgramValueArguments:
             is None
         )
         assert capsys.readouterr().out == "alice:x\n"
+
+    def test_unzoned_required_argument_follows_a_standard_argument_given_by_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-std n: int = 1, name: text) -> unit =\n  print $ %{name}:%{n}\n",
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--n", "2", "Bob"]))
+            is None
+        )
+        assert capsys.readouterr().out == "Bob:2\n"
 
     def test_name_equals_value_inline_form(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3704,13 +3541,13 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "program def main(worker: Agent) -> unit = print worker\n",
+            "program def main(@arg-named worker: Agent) -> unit = print worker\n",
         )
 
         assert (
             exec_command.run(
                 _exec_args_no_trace(
-                    agl_file, argument_tokens=["--worker", "claude/sonnet-experimental"]
+                    agl_file, argument_tokens=["--worker", "claude/sonnet:experimental"]
                 )
             )
             is None
@@ -3727,7 +3564,7 @@ class TestProgramValueArguments:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[prog.main]\nworker = "pi/openai/gpt-5-low"\n')
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nworker = "pi/openai/gpt-5:low"\n')
         monkeypatch.setattr(
             exec_engine,
             "current_config_context",
@@ -3760,9 +3597,7 @@ class TestProgramValueArguments:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
         agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
-        )
+        write_file_program(agl_file, "program def main(tag: text) -> unit = print tag\n")
 
         assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
@@ -3941,24 +3776,20 @@ class TestProgramValueArguments:
         assert len(reported) == 1
         assert "bogus" in reported[0]
 
-    def test_reserved_flag_projection_is_a_host_diagnostic(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
+    def test_exec_help_omits_dry_run_option(self) -> None:
+        result = invoke(CliRunner(), ["exec", "--help"])
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_trace(agl_file))
-
-        assert exc_info.value.code == 1
-        assert capsys.readouterr().err.startswith("Error:")
+        assert result.exit_code == 0
+        assert "--dry-run" not in result.output
 
     def test_an_agent_parameter_claims_the_agent_flag(self, tmp_path: Path) -> None:
         """``agm exec`` spells the default agent ``--default-agent``, leaving
         ``--agent`` to the program.
         """
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(agent: text) -> unit = print agent\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named agent: text) -> unit = print agent\n"
+        )
 
         result = invoke(CliRunner(), ["exec", "--no-trace", str(agl_file), "--agent", "codex"])
 
@@ -3984,7 +3815,9 @@ class TestProgramValueArguments:
     ) -> None:
         """A flag naming no declared program argument surfaces the program's own usage error."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(name: text) -> unit = print name\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named name: text) -> unit = print name\n"
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
@@ -4273,6 +4106,151 @@ class TestProgramOptionAttributesCLI:
         assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--", "-5"])) is None
         assert capsys.readouterr().out == "-5\n"
 
+    @pytest.mark.parametrize("flag", ["-m", "--mode", "--kind"])
+    def test_a_required_unzoned_parameter_with_a_name_attribute_stays_flag_addressed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        source = (
+            'program def main(@opt-short("m") mode: text) -> unit = print mode\n'
+            if flag != "--kind"
+            else 'program def main(@opt-name("kind") mode: text) -> unit = print mode\n'
+        )
+        write_file_program(agl_file, source)
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=[flag, "x"])) is None
+        assert capsys.readouterr().out == "x\n"
+
+    @pytest.mark.parametrize(
+        ("type_", "tokens", "expected"),
+        [
+            ("Option[text]", ["--x", "foo", "bar"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Option[text]", ["bar", "--x=foo"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Option[text]", ["--no-x", "bar"], "Option::None\nbar\n"),
+            ("Optional[text]", ["--x", "foo", "bar"], 'Option::Some(value = "foo")\nbar\n'),
+            ("Optional[text]", ["--x", "default", "bar"], "Optional::Default\nbar\n"),
+            ("Optional[text]", ["--no-x", "bar"], "Option::None\nbar\n"),
+            ("bool", ["--x", "bar"], "true\nbar\n"),
+            ("bool", ["--no-x", "bar"], "false\nbar\n"),
+        ],
+    )
+    def test_a_required_unzoned_parameter_with_a_negative_polarity_stays_flag_addressed(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        type_: str,
+        tokens: list[str],
+        expected: str,
+    ) -> None:
+        """A positional slot cannot spell ``--no-x``, so these never become one."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f"program def main(x: {type_}, y: text)\n  print(x)\n  print(y)\n")
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=tokens)) is None
+        assert capsys.readouterr().out == expected
+
+    @pytest.mark.parametrize("type_", ["Option[text]", "Optional[text]", "bool"])
+    def test_a_required_unzoned_parameter_with_a_negative_polarity_fills_no_positional_slot(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], type_: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f"program def main(x: {type_}, y: text)\n  print(x)\n  print(y)\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["true", "bar"]))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [
+            (["Red", "foo"], 'Option::Some(value = Color::Red)\nOption::Some(value = "foo")\n'),
+            (["Red", "default"], "Option::Some(value = Color::Red)\nOptional::Default\n"),
+            (
+                ["Red", "--tag", "foo"],
+                'Option::Some(value = Color::Red)\nOption::Some(value = "foo")\n',
+            ),
+            (["Red", "--no-tag"], "Option::Some(value = Color::Red)\nOption::None\n"),
+            (["Red"], "Option::Some(value = Color::Red)\nOptional::Default\n"),
+        ],
+    )
+    def test_a_positional_token_for_an_optional_slot_supplies_some(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        tokens: list[str],
+        expected: str,
+    ) -> None:
+        """A positional token reads ``T`` exactly as the flag's value does."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Color\n  | Red\n  | Green\n\n"
+            "program def main(\n"
+            "  @arg-pos color: Option[Color], @arg-std tag: Optional[text] = Default\n"
+            ")\n  print(color)\n  print(tag)\n"
+        )
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=tokens)) is None
+        assert capsys.readouterr().out == expected
+
+    def test_a_positional_token_for_an_optional_slot_is_not_read_as_the_whole_option(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "enum Color\n  | Red\n  | Green\n\n"
+            "program def main(@arg-pos color: Option[Color])\n  print(color)\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["Some(Red)"]))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize(
+        ("declaration", "prefix"),
+        [
+            ("@arg-pos mode: Mode", []),
+            ("@arg-pos mode: Option[Mode]", []),
+            ("@arg-pos mode: Optional[Mode]", []),
+            ("@arg-std mode: Option[Mode]", []),
+            ("@arg-std mode: Optional[Mode]", ["--mode"]),
+            ("mode: Mode", []),
+            ("mode: Option[Mode]", ["--mode"]),
+            ("mode: Optional[Mode]", ["--mode"]),
+            ("@arg-named mode: Option[Mode]", ["--mode"]),
+        ],
+    )
+    def test_every_completed_enum_value_is_accepted_where_it_was_offered(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        declaration: str,
+        prefix: list[str],
+    ) -> None:
+        """Completion and decoding agree on a slot's and a flag's value spellings."""
+        from typer._completion_classes import ZshComplete
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'enum Mode\n  | @name("fast") Fast\n  | Tuned(level: int)\n'
+            "  | Custom(level: int = 1)\n\n"
+            f"program def main({declaration})\n  print(mode)\n"
+        )
+        completer = ZshComplete(get_command(cli.app), {}, "agm", "_AGM_COMPLETE")
+
+        offered = [
+            item.value for item in completer.get_completions(["exec", str(agl_file), *prefix], "")
+        ]
+
+        assert offered == ["fast", "Custom"]
+        for value in offered:
+            arguments = _exec_args_no_trace(agl_file, argument_tokens=[*prefix, value])
+            assert exec_command.run(arguments) is None
+        assert capsys.readouterr().out.count("\n") == len(offered)
+
     def test_a_short_option_colliding_with_a_host_flag_is_a_host_diagnostic(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -4300,7 +4278,7 @@ class TestProgramArgumentsDynamicHelp:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
@@ -4316,7 +4294,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@doc("Who to greet.") name: text = "you") -> unit = print name\n',
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "Greet a person." in out
@@ -4334,12 +4312,45 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print tag\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
         assert "--debug-mode" not in out
         assert "internal" not in out
+
+    def test_help_omits_the_doc_of_a_hidden_positional_parameter(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '    @doc("Visible one.") shown: text,\n'
+            '    @opt-hidden @doc("Secret one.") secret: text,\n'
+            ") -> unit = print shown\n",
+        )
+
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
+
+        out = capsys.readouterr().out
+        assert "Visible one." in out
+        assert "Secret one." not in out
+
+    def test_help_documents_a_standard_parameter_once(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            '@doc("Greet.")\n'
+            'program def main(@doc("Who to greet.") @arg-std name: text = "you") -> unit ='
+            " print name\n",
+        )
+
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
+
+        assert capsys.readouterr().out.count("Who to greet.") == 1
 
     def test_help_spells_a_short_flag_and_a_metavar(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -4351,7 +4362,7 @@ class TestProgramArgumentsDynamicHelp:
             " print tag\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "-t" in out
@@ -4371,7 +4382,7 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "first" in out
@@ -4394,40 +4405,40 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         assert print_exec_help(
-            tokens=["--help"], file=str(agl_file), command=None, program="review::main"
+            tokens=["--help"], file=str(agl_file), code=None, program="review::main"
         )
 
         out = capsys.readouterr().out
         assert "--count" in out
         assert "--tag" not in out
 
-    def test_help_for_a_program_without_value_parameters_shows_only_the_help_option(
+    def test_help_for_a_program_without_value_parameters_shows_help_and_execution_options(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "hi"\n')
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
         assert "--help" in out
+        options, _, _ = out.partition("Execution options:\n")
+        assert "--strict-json" not in options
+        assert_lists_execution_options(out)
+        assert execution_options_is_last(out)
 
-    def test_help_for_a_program_with_a_colliding_parameter_degrades(
+    def test_help_for_a_program_can_show_a_dry_run_parameter(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A parameter that cannot be projected degrades the help, not a crash.
-
-        ``run()`` reports this collision as a host diagnostic when the program
-        is actually selected; the help path falls back to the host command's
-        own help instead.
-        """
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
-        assert str(agl_file) not in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert str(agl_file) in out
+        assert "--dry-run" in out
 
     def test_help_omits_an_imported_modules_own_program(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -4446,7 +4457,7 @@ class TestProgramArgumentsDynamicHelp:
             'import helper\nprogram def main(tag: text = "default") -> unit = print tag\n',
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
@@ -4462,7 +4473,7 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            print_exec_help(tokens=["--help"], file=str(agl_file), command=None, program="wrong")
+            print_exec_help(tokens=["--help"], file=str(agl_file), code=None, program="wrong")
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4477,7 +4488,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main(tag: text = "a") -> unit = print tag\n')
 
-        assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), code=None)
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--tag", "-h"])) is None
@@ -4497,7 +4508,7 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print alias\n",
         )
 
-        assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), code=None)
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-va", "-h"])) is None
@@ -4518,7 +4529,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@opt-short("v") verbose: bool = false) -> unit = print verbose\n',
         )
 
-        assert not print_exec_help(tokens=["-vh"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-vh"], file=str(agl_file), code=None)
         assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-vh"])) is None
 
         assert "--verbose" in capsys.readouterr().out
@@ -4730,7 +4741,8 @@ class TestExecFileSelectorTokens:
         a runnable program."""
         write_file_program(tmp_path / "inp.agl", 'program def main() -> unit = print "other"\n')
         write_file_program(
-            tmp_path / "--weird.agl", "program def main(input: text) -> unit = print input\n"
+            tmp_path / "--weird.agl",
+            "program def main(@arg-named input: text) -> unit = print input\n",
         )
         monkeypatch.chdir(tmp_path)
 
@@ -5071,7 +5083,7 @@ class TestExecProgramSelection:
     ) -> None:
         args = ExecArgs(
             file=None,
-            command='let value = "inline"\nprint value\n',
+            code='let value = "inline"\nprint value\n',
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -5095,7 +5107,7 @@ class TestExecProgramSelection:
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
             file=None,
-            command='print "only selected mains run"',
+            code='print "only selected mains run"',
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -5123,7 +5135,7 @@ class TestExecProgramSelection:
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
             file=None,
-            command='print "only selected mains run"',
+            code='print "only selected mains run"',
             argument_tokens=["stray"],
             strict_json=None,
             no_trace=True,
@@ -5281,6 +5293,60 @@ class TestExecDevelopmentPackages:
 
         assert exec_command.run(_exec_args_no_trace(entry, no_stdlib=True)) is None
 
+    def test_a_source_declared_command_reaches_manifest_and_file_config_routing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A development package's own ``@command`` registration is discovered from source,
+        not baked into the manifest, so the manifest and file config tables it feeds — command,
+        group, and root tiers alike — must still see it, exactly as an installed package's
+        baked-in ``[commands]`` table does."""
+        alpha = tmp_path / "alpha"
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n'
+            "\n[config]\nroot-verbose = true"
+            "\n\n[config.tools]\ngroup-verbose = true"
+            "\n\n[config.tools.review]\ncommand-verbose = true\n"
+        )
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
+        entry.write_text(
+            "import alpha/logging\n\n"
+            '@command("tools review")\n'
+            "program def main() -> unit =\n"
+            "  print alpha/logging::root-verbose\n"
+            "  print alpha/logging::group-verbose\n"
+            "  print alpha/logging::command-verbose\n"
+            "  print alpha/logging::file-verbose\n"
+        )
+        (alpha / MODULE_TREE_DIRNAME / "logging.agl").write_text(
+            "@param let root-verbose: bool = false\n"
+            "@param let group-verbose: bool = false\n"
+            "@param let command-verbose: bool = false\n"
+            "@param let file-verbose: bool = false\n"
+        )
+        _config_home(tmp_path, monkeypatch, "[tools.review]\nfile-verbose = true\n")
+
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
+
+        assert capsys.readouterr().out == "true\ntrue\ntrue\ntrue\n"
+
+    def test_a_broken_sibling_module_does_not_block_execution_or_its_own_completion(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A development package's own-source command scan tolerates a sibling module that
+        fails to parse: execution still proceeds, and the package's command table is still
+        marked complete since nothing it declares needed the scan's registrations."""
+        alpha = tmp_path / "alpha"
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
+        entry.write_text('program def main() -> unit = print "ran"\n')
+        (alpha / MODULE_TREE_DIRNAME / "broken.agl").write_text("def (\n")
+
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
+
+        assert capsys.readouterr().out == "ran\n"
+
 
 class TestExecStandardLibraryEntries:
     """A directly executed standard-library file is owned by its own package."""
@@ -5377,3 +5443,175 @@ class TestExecStandardLibraryEntries:
             exec_command.run(_exec_args_no_trace(entry, no_stdlib=True, module_paths=[str(loose)]))
             is None
         )
+
+
+class TestExecDebugKeepsTempPaths:
+    """``--debug`` / ``[exec] debug`` keep ``std/fs`` temp paths past the run."""
+
+    _PROGRAM = "import std/fs\nprogram def main() -> unit =\n  let _ = fs::temp-file()\n"
+
+    @pytest.fixture
+    def os_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import tempfile
+
+        directory = tmp_path / "os-temp"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        return directory
+
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1), (["--no-debug"], 0)))
+    def test_debug_flag(
+        self, runner: CliRunner, tmp_path: Path, os_temp: Path, flags: list[str], kept: int
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 0
+        assert len(list(os_temp.iterdir())) == kept
+
+    @pytest.mark.parametrize(("debug", "kept"), ((None, 1), (False, 0)))
+    def test_debug_config_and_cli_override(
+        self,
+        tmp_path: Path,
+        os_temp: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        debug: bool | None,
+        kept: int,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, "[exec]\ndebug = true\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        exec_command.run(_exec_args_no_trace(agl_file, debug=debug))
+
+        assert len(list(os_temp.iterdir())) == kept
+
+
+class TestExecParseErrorRetriesSetting:
+    """``std/config::parse-error-retries``: CLI, config tables, ``@config``, and source writes."""
+
+    _PROGRAM = (
+        "import std/config\nprogram def main() -> unit = print(config::parse-error-retries)\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("config", "flags", "expected"),
+        [
+            ("", [], "4"),
+            ("", ["--parse-error-retries", "2"], "2"),
+            ("[exec]\nparse-error-retries = 3\n", [], "3"),
+            ("[exec]\nparse-error-retries = 3\n[prog.main]\nparse-error-retries = 5\n", [], "5"),
+            ("[exec]\nparse-error-retries = 3\n", ["--parse-error-retries=0"], "0"),
+        ],
+    )
+    def test_cli_and_config_seed_the_setting(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config: str,
+        flags: list[str],
+        expected: str,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == f"{expected}\n"
+
+    def test_source_write_beats_the_cli(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std/config\n"
+            "program def main() -> unit =\n"
+            "  config::parse-error-retries := 1\n"
+            "  print(config::parse-error-retries)\n"
+        )
+
+        exec_command.run(_exec_args_no_trace(agl_file, parse_error_retries=6))
+
+        assert capsys.readouterr().out == "1\n"
+
+    def test_config_attribute_seeds_the_setting(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std/config\n\n@config(config::parse-error-retries = 8)\n"
+            "program def main() -> unit = print(config::parse-error-retries)\n"
+        )
+
+        exec_command.run(_exec_args_no_trace(agl_file))
+
+        assert capsys.readouterr().out == "8\n"
+
+    @pytest.mark.parametrize(
+        ("config", "flags", "program", "exit_code"),
+        [
+            ("", ["--parse-error-retries", "-1"], _PROGRAM, 1),
+            ("[exec]\nparse-error-retries = -2\n", [], _PROGRAM, 1),
+            ("[prog.main]\nparse-error-retries = -2\n", [], _PROGRAM, 1),
+            (
+                "",
+                [],
+                "import std/config\n\n@config(config::parse-error-retries = -3)\n"
+                "program def main() -> unit = ()\n",
+                1,
+            ),
+        ],
+    )
+    def test_negative_values_are_rejected(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config: str,
+        flags: list[str],
+        program: str,
+        exit_code: int,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(program)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == exit_code, result.output
+
+
+class TestExecConfigAttributeValidation:
+    """Every ``@config`` engine value is validated, even one a higher tier overrides."""
+
+    @pytest.mark.parametrize(
+        ("entry", "flags"),
+        [
+            ("parse-error-retries = -3", ["--parse-error-retries", "2"]),
+            ('timeout = Some("bogus")', ["--timeout", "3s"]),
+            ('trace-file = Some("")', ["--no-trace"]),
+            ('timeout = Some("bogus")', []),
+        ],
+    )
+    def test_invalid_value_exits_even_when_overridden(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        entry: str,
+        flags: list[str],
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, "")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            f"import std/config\n\n@config(config::{entry})\nprogram def main() -> unit = ()\n"
+        )
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 1, result.output

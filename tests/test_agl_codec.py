@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import json
 from collections.abc import Callable, Mapping
 from decimal import Decimal
 
@@ -98,9 +99,9 @@ from tests._agl_helpers import (
     enum_type,
     enum_typedef,
     next_decl_id,
-    prepare_inline_command,
+    prepare_inline_code,
     record_type,
-    run_inline_command,
+    run_inline_code,
     strip_decl_ids,
     type_table_for,
 )
@@ -122,7 +123,7 @@ def _sp() -> SourceSpan:
 
 
 def _ask_builtin_items() -> tuple[Item, ...]:
-    """Real ``ParsePolicy``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
+    """Real ``Agent``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
 
     ``_check_program_with_json`` builds a hand-crafted single-module program
     that never imports ``std/prelude`` (see ``resolve_and_check_program_ast``),
@@ -137,23 +138,19 @@ def _ask_builtin_items() -> tuple[Item, ...]:
     """
     program = parse_program(
         "builtin\n"
-        "enum ParsePolicy =\n"
-        "  | Abort\n"
-        "  | Retry(n: int)\n"
-        "\n"
-        "builtin\n"
         "enum Agent =\n"
         "  | AgentCommand(command: text)\n"
-        "  | AgentClaude(model: text, thinking: text)\n"
-        "  | AgentCodex(model: text, thinking: text)\n"
-        "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        '  | AgentClaude(model: text = "", thinking: text = "")\n'
+        '  | AgentCodex(model: text = "", thinking: text = "")\n'
+        '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
         "\n"
         "builtin def ask[T](\n"
         "  prompt: text,\n"
         '  agent: Agent = AgentCommand(command = "x"),\n'
         '  format: text = "",\n'
         "  strict-json: bool = false,\n"
-        "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+        "  parse-error-retries: int = 0,\n"
+        "  sandbox: AgentSandbox = Disabled,\n"
         ") -> T\n",
         start_id=500_000,
     )
@@ -316,6 +313,12 @@ _TEST_DEFAULT_AGENT = RecordValue(
     nominal=NominalId(require_reserved_enum_member_id("Agent", "AgentCommand")),
     fields={"command": TextValue("unused")},
 )
+# Likewise seeds ``default-sandbox``: every ``Session::default``/``Session::open``
+# now reads it too, and this hand-built program never declares one either.
+_TEST_DEFAULT_SANDBOX = RecordValue(
+    nominal=NominalId(require_reserved_enum_member_id("AgentSandbox", "Disabled")),
+    fields={},
+)
 
 
 def _run_with_json_codec(
@@ -342,7 +345,10 @@ def _run_with_json_codec(
             agent_dispatcher=agent_dispatcher,
             strict_json=strict_json,
             host_contracts=contracts,
-            builtin_host_settings={"default-agent": _TEST_DEFAULT_AGENT},
+            builtin_host_settings={
+                "default-agent": _TEST_DEFAULT_AGENT,
+                "default-sandbox": _TEST_DEFAULT_SANDBOX,
+            },
         ).run()
     )
     bindings.descriptors = ValueDescriptors.from_program(executable)
@@ -530,19 +536,10 @@ class TestDeriveSchema:
             "properties": {"x": {"type": "integer"}},
         }
 
-    def test_enum_schema_pass_only(self) -> None:
-        typ, typedef = enum_type("Status", {"Done": {}})
+    def test_plain_enum_schema_lists_member_tags(self) -> None:
+        typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
         schema = derive_schema(typ, type_table_for(typedef))
-        assert schema == {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["$case"],
-                    "properties": {"$case": {"const": "Done"}},
-                }
-            ]
-        }
+        assert schema == {"enum": ["Done", "Pending"]}
 
     def test_enum_schema_review(self) -> None:
         review_type = _make_review_type()
@@ -604,7 +601,7 @@ class TestDeriveSchema:
             "properties": {"val": {"type": "integer"}},
         }
 
-    def test_enum_schema_uses_member_external_name_as_case_const(self) -> None:
+    def test_plain_enum_schema_uses_member_external_name_as_tag(self) -> None:
         enum_id = next_decl_id()
         member_id = next_decl_id()
         member = RecordType(
@@ -623,16 +620,100 @@ class TestDeriveSchema:
         )
         typ = EnumType(name="Choice", decl_id=enum_id)
         schema = derive_schema(typ, type_table_for(member_def, choice_def))
+        assert schema == {"enum": ["uno"]}
+
+
+# ---------------------------------------------------------------------------
+# 1a2. Constructor field defaults at the schema/decode-plan boundary
+# ---------------------------------------------------------------------------
+
+
+class TestFieldDefaultsAtSchemaAndDecodeBoundary:
+    """A declared-defaulted field is dropped from ``required`` and marked in the decode plan.
+
+    Presence (``default_index``) comes straight off the ``TypeTable`` -- a
+    purely structural, declaration-order property -- never from a
+    lowering-run table. A default's VALUE is never emitted into the schema or
+    the decode plan; it is resolved only at decode time (see
+    ``runtime.convert.decode_value``'s ``default_resolver``), against the
+    real, fully-linked ``NominalDescriptor`` table.
+    """
+
+    def test_record_field_default_dropped_from_required_and_marked_in_plan(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type("Retry", {"count": IntType()}, field_has_default=(True,))
+        schema, plan = derive_schema_and_decode(typ, type_table_for(typedef))
         assert schema == {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["$case"],
-                    "properties": {"$case": {"const": "uno"}},
-                }
-            ]
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {"count": {"type": "integer"}},
         }
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.fields[0].default_index == 0
+
+    def test_record_mixed_required_and_defaulted_fields(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type(
+            "Pair",
+            {"x": IntType(), "y": IntType()},
+            field_has_default=(False, True),
+        )
+        schema, plan = derive_schema_and_decode(typ, type_table_for(typedef))
+        assert schema["required"] == ["x"]
+        assert schema["properties"] == {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+        }
+        assert isinstance(plan.root, RecordDecode)
+        x_field, y_field = plan.root.fields
+        assert x_field.default_index is None
+        assert y_field.default_index == 1
+
+    def test_enum_member_field_default_dropped_from_required(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        enum_id = next_decl_id()
+        member_id = next_decl_id()
+        member = RecordType(
+            name="Ok", module_id=ENTRY_ID, scope_path=("Outcome",), decl_id=member_id
+        )
+        member_def = TypeDef(
+            kind="record",
+            name="Ok",
+            module_id=ENTRY_ID,
+            scope_path=("Outcome",),
+            fields=(("tag", TextType()),),
+            field_kinds=(ParamZone.STANDARD,),
+            field_has_default=(True,),
+            decl_node_id=member_id,
+        )
+        outcome_def = TypeDef(
+            kind="enum", name="Outcome", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+        )
+        typ = EnumType(name="Outcome", decl_id=enum_id)
+        schema, plan = derive_schema_and_decode(typ, type_table_for(member_def, outcome_def))
+        variant_schema = _variant_schema_for_case(schema, "Ok")
+        assert variant_schema["required"] == ["$case"]
+        assert variant_schema["properties"]["tag"] == {"type": "string"}
+        assert isinstance(plan.root, EnumDecode)
+        variant = plan.root.variants[0]
+        assert variant.fields[0].default_index == 0
+
+    def test_derivation_order_does_not_affect_default_presence(self) -> None:
+        """Presence is structural, never a lowering-run snapshot: deriving before or after
+        another derivation site (or repeatedly) gives byte-identical results."""
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type(
+            "Pair", {"x": IntType(), "y": IntType()}, field_has_default=(False, True)
+        )
+        table = type_table_for(typedef)
+        before = derive_schema_and_decode(typ, table)
+        after = derive_schema_and_decode(typ, table)
+        assert before == after
 
 
 # ---------------------------------------------------------------------------
@@ -1191,7 +1272,13 @@ class TestRecursiveDecodeDerivation:
             display_name="Wrapper",
             name="Wrapper",
             fields=(
-                FieldDecode("root", "root", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None),
+                FieldDecode(
+                    "root",
+                    "root",
+                    RefDecode("Tree"),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
                 FieldDecode(
                     "label",
                     "label",
@@ -2285,29 +2372,14 @@ class TestValidationErrorsThroughRuntime:
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        #  on_parse_error: Retry(n: 1) as a named arg to ask().
-        # Constructors are now Call nodes (no separate Constructor AST node).
-        retry_ctor = ast.Call(
-            callee=ast.VarRef(name="Retry", span=_sp(), node_id=_nid()),
-            args=(),
-            named_args=(
-                ast.NamedArg(
-                    name="n",
-                    value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
-                    span=_sp(),
-                    node_id=_nid(),
-                ),
-            ),
-            span=_sp(),
-            node_id=_nid(),
-        )
+        # parse-error-retries = 1 as a named arg to ask().
         retry_call = ast.Call(
             callee=ast.VarRef(name="ask", span=_sp(), node_id=_nid()),
             args=(_template(_text_seg("Get issue.")),),
             named_args=(
                 ast.NamedArg(
-                    name="on-parse-error",
-                    value=retry_ctor,
+                    name="parse-error-retries",
+                    value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
                     span=_sp(),
                     node_id=_nid(),
                 ),
@@ -2729,7 +2801,7 @@ class TestCaseDispatch:
 
     def test_bad_case_fails(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"$case": "Exploded"}', typ, strict_json=False, table=type_table_for(typedef)
         )
@@ -2737,21 +2809,201 @@ class TestCaseDispatch:
 
     def test_missing_case_tag_fails(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"done": true}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is False
 
-    def test_nullary_enum_no_extra_fields(self) -> None:
+    def test_nullary_member_of_tagged_enum_has_no_extra_fields(self) -> None:
         codec = JsonCodec()
-        typ, typedef = enum_type("Status", {"Done": {}})
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
         result = _parse_typed(
             codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.fields == {}
+
+
+class TestPlainEnum:
+    """A plain enum (every member fieldless) parses from its member's tag string."""
+
+    @staticmethod
+    def _parse(raw: str, *, strict_json: bool = False) -> tuple[ParseResult, TypeTable, EnumType]:
+        typ, typedef = enum_type("Verdict", {"Pass": {}, "Pass-with-notes": {}, "Fail": {}})
+        table = type_table_for(typedef)
+        return _parse_typed(JsonCodec(), raw, typ, strict_json=strict_json, table=table), table, typ
+
+    @pytest.mark.parametrize(
+        ("raw", "member"),
+        [
+            ('"Fail"', "Fail"),
+            ("Pass", "Pass"),
+            ("I would say Fail.", "Fail"),
+            ('The answer is "Pass".', "Pass"),
+            ("Pass-with-notes", "Pass-with-notes"),
+            ("Fail, and again: Fail", "Fail"),
+            ("3 issues, so Fail", "Fail"),
+            ("```\nPass\n```", "Pass"),
+            ("Fail [1]", "Fail"),
+            ('{"verdict": "Fail", "issues": 2}', "Fail"),
+            ('{"$case": "Pass"}', "Pass"),
+            ('"I would say Pass"', "Pass"),
+            ('I considered Fail, but:\n```json\n"Pass"\n```', "Pass"),
+        ],
+        ids=(
+            "quoted",
+            "bare",
+            "prose",
+            "quoted-in-prose",
+            "longest-tag",
+            "repeated",
+            "beside-a-number",
+            "fenced-bare",
+            "beside-a-json-array",
+            "inside-a-json-object",
+            "tag-object",
+            "inside-a-json-string",
+            "fenced-member-wins-over-prose",
+        ),
+    )
+    def test_lenient_recovers_the_one_named_member(self, raw: str, member: str) -> None:
+        result, table, typ = self._parse(raw)
+        assert result.ok is True
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)[member].decl_id)
+        assert result.value.fields == {}
+        assert result.normalized_raw == f'"{member}"'
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "Pass or Fail",
+            "Passing",
+            "bypass-Fail-safe",
+            "no verdict",
+            '["Pass", "Fail"]',
+            '"Maybe"',
+            "3",
+        ],
+        ids=(
+            "two-members",
+            "tag-inside-a-word",
+            "tag-inside-a-kebab-word",
+            "no-member",
+            "two-members-in-json",
+            "unknown-member",
+            "number",
+        ),
+    )
+    def test_lenient_rejects_anything_else(self, raw: str) -> None:
+        result, _table, _typ = self._parse(raw)
+        assert result.ok is False
+
+    @pytest.mark.parametrize("raw", ["Pass or Fail", '["Pass", "Fail"]'])
+    def test_two_named_members_are_ambiguous_not_a_validation_failure(self, raw: str) -> None:
+        result, _table, _typ = self._parse(raw)
+        assert result.ok is False
+        assert result.errors == ()
+        assert result.normalized_raw is None
+
+    @pytest.mark.parametrize(
+        ("raw", "member"),
+        [
+            ("it needs work", "needs work"),
+            ("it needs a lot", "needs"),
+            ("rated n/a", "n/a"),
+            ("written in C++.", "C++"),
+            ("2", "2"),
+            ("I rate it 2.", "2"),
+            ("true", "true"),
+            ('say "hi" twice', 'say "hi"'),
+            ("c'est très bien", "très bien"),
+        ],
+        ids=(
+            "longest-spaced-tag",
+            "prefix-tag",
+            "slash",
+            "regex-metacharacters",
+            "bare-number-tag",
+            "number-tag-in-prose",
+            "keyword-tag",
+            "quotes",
+            "non-ascii",
+        ),
+    )
+    def test_lenient_recovers_tags_that_are_not_identifiers(self, raw: str, member: str) -> None:
+        tags = ("needs", "needs work", "n/a", "C++", "1", "2", "true", 'say "hi"', "très bien")
+        typ, typedef = enum_type("Rating", {tag: {} for tag in tags})
+        table = type_table_for(typedef)
+        result = _parse_typed(JsonCodec(), raw, typ, table=table)
+        assert result.ok is True
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)[member].decl_id)
+        assert result.normalized_raw == json.dumps(member, ensure_ascii=False)
+
+    @pytest.mark.parametrize(
+        "raw", ["Pass", "I would say Fail.", '```json\n"Pass"\n```', '{"$case": "Pass"}']
+    )
+    def test_strict_accepts_only_the_quoted_tag(self, raw: str) -> None:
+        assert self._parse(raw, strict_json=True)[0].ok is False
+        assert self._parse('"Pass"', strict_json=True)[0].ok is True
+
+    @pytest.mark.parametrize(
+        ("raw", "strict_json"),
+        [('"Maybe"', False), ("3", False), ('{"$case": "Pass"}', True)],
+        ids=("unknown-member", "number", "strict-tag-object"),
+    )
+    def test_wrong_value_is_a_bad_case(self, raw: str, strict_json: bool) -> None:
+        result, _table, _typ = self._parse(raw, strict_json=strict_json)
+        assert [error.category for error in result.errors] == ["bad_case"]
+        assert [error.path for error in result.errors] == ["$"]
+
+    def test_nested_plain_enum_failure_is_located(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"verdicts": ArrayType(verdict)})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"verdicts": ["Pass", "Maybe"]}',
+            report,
+            table=type_table_for(report_def, verdict_def),
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.verdicts[1]")
+        ]
+
+    def test_shared_plain_enum_failure_is_located(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"first": verdict, "second": verdict})
+        table = type_table_for(report_def, verdict_def)
+        assert "$defs" in derive_schema(report, table)
+        result = _parse_typed(
+            JsonCodec(), '{"first": "Pass", "second": "Maybe"}', report, table=table
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.second")
+        ]
+
+    def test_nested_plain_enum_is_never_read_out_of_prose(self) -> None:
+        verdict, verdict_def = enum_type("Verdict", {"Pass": {}, "Fail": {}})
+        report, report_def = record_type("Report", {"verdict": verdict})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"verdict": "it is a Pass"}',
+            report,
+            table=type_table_for(report_def, verdict_def),
+        )
+        assert [(error.category, error.path) for error in result.errors] == [
+            ("bad_case", "$.verdict")
+        ]
+
+    def test_member_tag_scan_does_not_apply_to_a_tagged_enum(self) -> None:
+        typ, typedef = enum_type("Status", {"Done": {}, "Running": {"progress": IntType()}})
+        result = _parse_typed(JsonCodec(), "Done", typ, table=type_table_for(typedef))
+        assert result.ok is False
+        assert result.errors == ()
+        assert result.normalized_raw is None
 
 
 # ---------------------------------------------------------------------------
@@ -2805,8 +3057,8 @@ class TestRecordEnumParams:
     def test_record_program_argument_parsed_from_json_string(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = run_inline_command(
-            PipelineDriver(),
+        result = run_inline_code(
+            PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
             """
 record Issue
   title: text
@@ -2827,14 +3079,14 @@ program def main(issue: Issue) -> unit =
         codec = JsonCodec()
         typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
         table = type_table_for(typedef)
-        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False, table=table)
+        result = _parse_typed(codec, '"Done"', typ, strict_json=False, table=table)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.nominal == NominalId(table.enum_member_names(typ)["Done"].decl_id)
 
     def test_array_program_argument_parsed_from_json_string(self) -> None:
-        rt = PipelineDriver()
-        result = run_inline_command(
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+        result = run_inline_code(
             rt,
             "program def main(tags: array[text]) -> unit = print tags",
             param_values={"tags": '["a", "b"]'},
@@ -2981,9 +3233,11 @@ class TestDecodeValueRejectsMismatchedPayloads:
             (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), {1: "val"}, "Dict key"),
             (_R_DECODE, [1, 2], "record"),
             (_R_DECODE, {}, "Missing field"),
-            (_E_DECODE, "oops", "object for enum"),
-            (_E_DECODE, {}, r"\$case"),
-            (_E_DECODE, {"$case": "X"}, "Unknown enum variant"),
+            (_E_DECODE, {"$case": "A"}, "string for enum"),
+            (_E_DECODE, "X", "Unknown enum variant"),
+            (_E_PAYLOAD_DECODE, "oops", "object for enum"),
+            (_E_PAYLOAD_DECODE, {}, r"\$case"),
+            (_E_PAYLOAD_DECODE, {"$case": "X"}, "Unknown enum variant"),
             (_E_PAYLOAD_DECODE, {"$case": "B"}, "missing field"),
         ],
         ids=(
@@ -2998,6 +3252,8 @@ class TestDecodeValueRejectsMismatchedPayloads:
             "dict-with-non-text-key",
             "record-from-array",
             "record-missing-field",
+            "plain-enum-from-object",
+            "plain-enum-unknown-member",
             "enum-from-text",
             "enum-without-case-tag",
             "enum-unknown-variant",
@@ -3492,7 +3748,11 @@ class TestRegisterCodec:
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
 
-        rt = PipelineDriver(agent_dispatcher=lambda request: "response")
+        rt = PipelineDriver(
+            resolve_agent_spec=None,
+            agent_dispatcher=lambda request: "response",
+            get_sandbox_context=None,
+        )
 
         class AltTextCodec(TC):
             @property
@@ -3504,7 +3764,7 @@ class TestRegisterCodec:
                 return frozenset({"text"})
 
         rt.register_codec(AltTextCodec())
-        result = run_inline_command(
+        result = run_inline_code(
             rt,
             'let answer: text = ask("question", format = "alt_text")\nprint answer',
             param_values={},
@@ -3539,18 +3799,18 @@ class TestRegisterCodec:
             ) -> PR:
                 raise NotImplementedError
 
-        rt = PipelineDriver()
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         rt.register_codec(CustomCodec())
         with pytest.raises(ValueError, match="custom_dup"):
             rt.register_codec(CustomCodec())
 
     def test_register_reserved_codec_name_text_raises(self) -> None:
-        rt = PipelineDriver()
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         with pytest.raises(ValueError, match="text"):
             rt.register_codec(TextCodec())
 
     def test_register_reserved_codec_name_json_raises(self) -> None:
-        rt = PipelineDriver()
+        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
         with pytest.raises(ValueError, match="json"):
             rt.register_codec(JsonCodec())
 
@@ -3607,10 +3867,12 @@ class TestRegisterCodec:
             received.append(req)
             return "hello"
 
-        rt = PipelineDriver(agent_dispatcher=agent)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=agent, get_sandbox_context=None
+        )
         rt.register_codec(TagCodec())
         #  format: arg takes the codec name as a string; let needs a continuation.
-        result = run_inline_command(rt, 'let y: text = ask("Q", format = "tagcodec")\ny')
+        result = run_inline_code(rt, 'let y: text = ask("Q", format = "tagcodec")\ny')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
         assert result.bindings["y"] == TextValue("PARSED::hello")
@@ -3654,9 +3916,11 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "7")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "7", get_sandbox_context=None
+        )
         rt.register_codec(IntCodec())
-        result = run_inline_command(rt, 'let y: int = ask("Q", format = "intcodec")\ny')
+        result = run_inline_code(rt, 'let y: int = ask("Q", format = "intcodec")\ny')
         assert result.ok is True
         assert result.bindings["y"] == IntValue(7)
         assert seen_targets == ["int"]
@@ -3698,9 +3962,11 @@ class TestRegisterCodec:
                 seen_parse_targets.append(repr(target_type))
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "11")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "11", get_sandbox_context=None
+        )
         rt.register_codec(LegacyCodec())
-        result = run_inline_command(rt, 'let y: int = ask("Q", format = "legacy-int")\ny')
+        result = run_inline_code(rt, 'let y: int = ask("Q", format = "legacy-int")\ny')
 
         from agm.agl.runtime.contract import materialize_contract
         from agm.agl.typecheck.env import OutputContractSpec
@@ -3749,9 +4015,11 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "12")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "12", get_sandbox_context=None
+        )
         rt.register_codec(LegacyBoxCodec())
-        result = run_inline_command(
+        result = run_inline_code(
             rt,
             'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value',
         )
@@ -3766,7 +4034,7 @@ class TestRegisterCodec:
         assert seen_parse_targets[0].name == "Box"
         assert seen_parse_targets[0].type_args == (IntType(),)
 
-    def test_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+    def test_custom_codec_materializes_schema_under_check_only(self) -> None:
         class SchemaTextCodec:
             @property
             def name(self) -> str:
@@ -3790,20 +4058,22 @@ class TestRegisterCodec:
             def parse(self, raw: str) -> ParseResult:
                 return ParseResult.success(TextValue(raw))
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "unused", get_sandbox_context=None
+        )
         rt.register_codec(SchemaTextCodec())
 
-        result = run_inline_command(
+        result = run_inline_code(
             rt,
             'let y: text = ask("Q", format = "schema-text")\ny',
             check_only=True,
         )
 
+        # Host contract materialization (including schema generation) runs
+        # under check_only, so a schema-producing codec must not fail here.
         assert result.ok is True
-        assert len(result.call_sites) == 1
-        assert result.call_sites[0].has_schema is True
 
-    def test_graph_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+    def test_graph_custom_codec_materializes_schema_under_check_only(self) -> None:
         class SchemaTextCodec:
             @property
             def name(self) -> str:
@@ -3828,18 +4098,20 @@ class TestRegisterCodec:
                 return ParseResult.success(TextValue(raw))
 
         roots = agl_roots()
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             'let y: text = ask("Q", format = "graph-schema-text")\ny',
             roots=roots,
         )
-        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "unused", get_sandbox_context=None
+        )
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run_prepared(prepared, check_only=True)
 
+        # Host contract materialization (including schema generation) runs
+        # under check_only, so a schema-producing codec must not fail here.
         assert result.ok is True
-        assert len(result.call_sites) == 1
-        assert result.call_sites[0].has_schema is True
 
     def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
         """Custom make_contract hooks may request type_table as a keyword-only arg."""
@@ -4025,9 +4297,11 @@ class TestRegisterCodec:
             received.append(req)
             return "3"
 
-        rt = PipelineDriver(agent_dispatcher=agent)
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=agent, get_sandbox_context=None
+        )
         rt.register_codec(ArrayIntCodec())
-        result = run_inline_command(
+        result = run_inline_code(
             rt,
             'let xs: array[int] = ask("Q", format = "array-int-codec")\nxs',
         )
@@ -4092,9 +4366,11 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "5")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "5", get_sandbox_context=None
+        )
         rt.register_codec(ShapeCodec())
-        result = run_inline_command(
+        result = run_inline_code(
             rt,
             'record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox',
         )
@@ -4498,12 +4774,16 @@ class TestRuntimeBuildsCodecKinds:
         #  format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
-        rt_unreg = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        unreg = run_inline_command(rt_unreg, src)
+        rt_unreg = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "ok", get_sandbox_context=None
+        )
+        unreg = run_inline_code(rt_unreg, src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
-        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
+        rt = PipelineDriver(
+            resolve_agent_spec=None, agent_dispatcher=lambda req: "ok", get_sandbox_context=None
+        )
         rt.register_codec(AltCodec())
-        reg = run_inline_command(rt, src)
+        reg = run_inline_code(rt, src)
         assert reg.ok is True

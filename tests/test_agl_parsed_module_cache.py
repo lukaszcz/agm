@@ -20,7 +20,7 @@ from agm.agl.modules.parsed_module_cache import (
 )
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
-from tests._agl_helpers import all_node_ids, prepare_inline_command, run_inline_command
+from tests._agl_helpers import all_node_ids, prepare_inline_code, run_inline_code
 from tests.agl.module_graph import load_graph
 
 _LIB_ID = ModuleId.from_path("lib/a")
@@ -245,12 +245,12 @@ def _companion_transcript(root: Path, roots: RootSet) -> list[object]:
     module_path = _write_module(root, "lib/a", "extern def f() -> int\n")
     companion = module_path.with_suffix(".py")
     companion.write_text("def f():\n    return 1\n")
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = "import lib/a\nlet v = lib/a::f()"
 
-    first = run_inline_command(runtime, source, roots=roots, default_stdlib=False)
+    first = run_inline_code(runtime, source, roots=roots, default_stdlib=False)
     companion.write_text("def f():\n    return 9\n")
-    second = run_inline_command(runtime, source, roots=roots, default_stdlib=False)
+    second = run_inline_code(runtime, source, roots=roots, default_stdlib=False)
 
     assert first.ok and second.ok, (first.diagnostics, second.diagnostics)
     return [first.bindings["v"], second.bindings["v"]]
@@ -290,12 +290,12 @@ def test_module_with_tab_indentation_is_reparsed(tmp_path: Path, library_parses:
 
 
 def test_warm_cache_preserves_program_behavior(capsys: pytest.CaptureFixture[str]) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
     source = 'print("hi")\nprint(2 + 3)'
 
-    first = run_inline_command(runtime, source)
+    first = run_inline_code(runtime, source)
     first_output = capsys.readouterr().out
-    second = run_inline_command(runtime, source)
+    second = run_inline_code(runtime, source)
     second_output = capsys.readouterr().out
 
     assert first.ok and second.ok
@@ -304,8 +304,8 @@ def test_warm_cache_preserves_program_behavior(capsys: pytest.CaptureFixture[str
 
 
 def test_warm_cache_preserves_diagnostics() -> None:
-    first = prepare_inline_command("print(no_such_name)")
-    second = prepare_inline_command("print(no_such_name)")
+    first = prepare_inline_code("print(no_such_name)")
+    second = prepare_inline_code("print(no_such_name)")
 
     assert first.diagnostics
     assert [d.message for d in first.diagnostics] == [d.message for d in second.diagnostics]

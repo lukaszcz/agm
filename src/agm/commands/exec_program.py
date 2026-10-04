@@ -1,10 +1,10 @@
 """Implementation of the ``agm exec FILE`` command.
 
-Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
+Behaviour: read the ``.agl`` source — either from the inline ``-c/--code``
 argument or from the source file (exit 1 if unreadable), load the
 ``[exec]`` configuration, construct a ``PipelineDriver`` with the resolved
-settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
-print diagnostics to stderr, invoke a selected ``program def`` after linked
+settings and call ``runtime.run``. Print diagnostics to stderr, invoke a
+selected ``program def`` after linked
 initializers when the entry declares one, and exit per the exit-code contract.
 
 Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
@@ -12,14 +12,16 @@ are two separate channels: warnings are printed to stderr like errors but never
 affect the exit code; only error-severity diagnostics yield exit 1.  The
 diagnostic severity is included in compiler-style output, e.g.
 ``path.agl:1:5: warning: message`` or ``1:5: error: message`` for inline
-``-c/--command`` source.
+``-c/--code`` source.
 
 Exit-code contract:
-    0  success (or a clean ``--dry-run`` static check)
+    0  success
     1  pre-execution failure (unreadable file, static errors, argument validation)
     2  program executed but ended with an uncaught AgL exception
 
 Flag notes:
+    - ``--echo`` echoes live agent progress and final output to stderr;
+      ``--no-echo`` disables it. ``[exec] echo = true`` enables it by default.
     - ``--strict-json`` controls JSON-codec strictness: when set, agents must
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
@@ -31,6 +33,9 @@ Flag notes:
     - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
       table/``[exec] default-agent``.
+    - ``--default-sandbox SANDBOX`` seeds ``std/config::default-sandbox`` from host
+      AgentSandbox syntax, taking precedence over the qualified program
+      table/``[exec] default-sandbox``.
     - A sole entry-module ``program def`` runs after initializers; when several
       are declared, ``-p``/``--program`` selects one by declaration path. A file
       must declare at least one program; inline ``-c`` statements are wrapped in
@@ -42,22 +47,18 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``default-agent``, ``timeout``, ``trace``, ``trace-file``) through the
-      ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
-      from its program point onward and overrides the CLI flag, which overrides
-      the config-file layer.  ``--max-call-depth`` remains a host/runtime
-      recursion guard.
-    - ``--dry-run`` (global flag) runs only the static pipeline + contract
-      materialization and never writes a trace.  Evaluation and extern
-      companion imports are skipped, so broken companion Python files do not
-      fail a dry run.
+      ``default-agent``, ``default-sandbox``, ``timeout``, ``trace``, ``trace-file``,
+      ``debug``, ``parse-error-retries``) through the ``std/config`` module; a
+      ``std/config::KEY := VALUE`` write takes effect from its program point onward
+      and overrides the CLI flag, which overrides the config-file layer.
+      ``--max-call-depth`` remains a host/runtime recursion guard.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, assert_never
 
@@ -71,13 +72,18 @@ from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.option import option_text
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
-from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds
+from agm.cli_support.engine_seeds import (
+    build_host_engine_seeds,
+    execution_cli_values,
+    host_agent_spec_resolver,
+    resolve_strict_json,
+    resolve_timeout,
+    validate_config_engine_values,
+)
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
@@ -105,21 +111,27 @@ from agm.cli_support.program_options import (
     native_raw_value,
 )
 from agm.config.context import ConfigContext, current_config_context
-from agm.config.general import exec_config_from_merged, load_general_config
+from agm.config.engine_keys import PATH_ENGINE_KEYS
+from agm.config.general import (
+    exec_config_from_merged,
+    load_general_config,
+    resolve_section_paths,
+)
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    resolve_manifest_values,
     resolve_qualified_values,
 )
-from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
-from agm.core.parse import parse_timeout
-from agm.core.toml import toml_dict
+from agm.core.process import terminating_signals_exit
+from agm.core.toml import TomlDict, toml_dict
 from agm.packages.activation import load_activation_index
-from agm.packages.manifest import command_paths_for_program
-from agm.packages.model import owning_package
+from agm.packages.manifest import command_paths_for_program, expanded_commands
+from agm.packages.model import PackageInfo, owning_package
+from agm.sandbox.prepare import lazy_sandbox_context
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -165,6 +177,8 @@ def _bind_host_inputs(
     config: "GeneralConfig",
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
+    package_command_paths: frozenset[tuple[str, ...]],
+    package_config: TomlDict | None = None,
 ) -> tuple[ProgramArguments, ParamValueTiers]:
     """Bind one selected program's CLI, environment, and config host inputs.
 
@@ -175,8 +189,10 @@ def _bind_host_inputs(
 
     The returned :class:`ParamValueTiers` is handed to
     ``PipelineDriver.preflight_arguments`` unmerged: it, not this function,
-    ranks the module-route (``lower``) tier beneath the selected program's own
-    ``@config`` values, which are only known once the program is lowered.
+    ranks the ``lower`` tier — the plain module route, with a package-owned
+    program's manifest ``[config]`` values already folded in above it — beneath
+    the selected program's own ``@config`` values, which are only known once
+    the program is lowered.
     """
     if program is None:
         if tokens:
@@ -214,6 +230,8 @@ def _bind_host_inputs(
             entry_segments=entry_segments,
             command_paths=command_paths,
             surface=program_command.surface,
+            package_command_paths=package_command_paths,
+            package_config=package_config,
         )
     except QualifiedConfigLookupError as exc:
         print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
@@ -224,10 +242,7 @@ def _bind_host_inputs(
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
-        positional_names = program_command.positionally_filled_names(
-            len(parsed_tail.arguments.positional)
-        )
-        cli_supplied_names = set(program_named) | positional_names
+        cli_supplied_names = set(program_named) | parsed_tail.positionally_filled
         for info, projected, key in argument_options:
             if key in configured_arguments and info.name not in cli_supplied_names:
                 program_named[info.name] = native_raw_value(projected, configured_arguments[key])
@@ -254,32 +269,75 @@ def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[st
     return None if module_id is None else module_id.segments
 
 
-def _registered_command_paths(
+@dataclass(frozen=True)
+class _PackageProgramRoute:
+    """One program's owning package, if any, plus its registered command-path metadata.
+
+    ``command_paths`` is this program's own registration, one more spelling
+    of its configuration table; ``package_command_paths`` is every path the
+    package registers at all (aliases expanded), used to exempt a command's
+    own table from undeclared-key warnings when a leaf is really a
+    descendant command's inherited default. ``package`` is the owner itself,
+    whose manifest ``[config]`` supplies this program's defaults.
+    """
+
+    package: PackageInfo | None
+    command_paths: tuple[tuple[str, ...], ...]
+    package_command_paths: frozenset[tuple[str, ...]]
+
+
+def _package_program_route(
     entry_path: Path,
     roots: RootSet,
     module_segments: tuple[str, ...],
     program_path: tuple[str, ...],
-) -> tuple[tuple[str, ...], ...]:
-    """Return the CLI command paths the entry's own package registers for this program.
+) -> _PackageProgramRoute:
+    """Resolve the entry's owning package once, for every package-derived config route.
 
-    A registered command path addresses the program it names, so it is one
-    more spelling of that program's configuration table — read whether the
-    program was reached as the command, by installed reference, or by file
-    path. The owning package's manifest is the authority dispatch itself
-    checks, so a program no package owns has no command table.
+    Read whether the program was reached as a registered command, by
+    installed reference, or by file path — the owning package's manifest is
+    the authority dispatch itself checks, so a program no package owns has no
+    command table and no manifest defaults. A development checkout's table is
+    completed here, on demand, for this one owning package only — mounting
+    its module root never pays for that scan (see
+    :mod:`agm.packages.development`).
     """
     package = owning_package(entry_path, roots.packages)
     if package is None:
-        return ()
+        return _PackageProgramRoute(None, (), frozenset())
+    if not package.commands_complete:
+        # Lazy: builds the AgL parser, which activation.py also keeps out of
+        # import-time paths.
+        from agm.packages.source_commands import package_with_source_commands_or_declared
+
+        package = package_with_source_commands_or_declared(package)
     reference = "::".join(("/".join(module_segments), *program_path))
-    return command_paths_for_program(package.manifest, reference)
+    command_paths = command_paths_for_program(package.manifest, reference)
+    package_command_paths = frozenset(
+        tuple(path.split()) for path in expanded_commands(package.manifest)
+    )
+    return _PackageProgramRoute(package, command_paths, package_command_paths)
 
 
-def _option_text(value: "Value | None") -> str | None:
-    """Read a standard-identity ``Option[text]`` engine value's payload, if present."""
-    if not isinstance(value, RecordValue):
-        return None
-    return option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
+def _manifest_engine_table(
+    package: PackageInfo, engine_keys: tuple[QualifiedConfigKey, ...], *, cwd: Path
+) -> dict[str, object]:
+    """Resolve *engine_keys* from *package*'s manifest ``[config]``, anchoring path values.
+
+    Command paths beat inherited groups beat the manifest root, per
+    :func:`~agm.config.qualified_keys.resolve_manifest_values`. A relative
+    ``trace-file`` resolves against *cwd*, like a CLI flag value, never
+    against the package root — which for an installed package is immutable.
+    """
+    if not package.manifest.config:
+        return {}
+    raw = {
+        key.leaf: value
+        for key, value in resolve_manifest_values(package.manifest.config, engine_keys).items()
+    }
+    if not raw:
+        return raw
+    return resolve_section_paths(raw, PATH_ENGINE_KEYS, cwd, cwd, sentinels={})
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:
@@ -350,7 +408,7 @@ def registered_program_declaration(
         return None
     artifacts = discover_program_artifacts_for_target(
         file=program,
-        command=None,
+        code=None,
         module_paths=None,
         no_stdlib=False,
         context=context,
@@ -370,17 +428,18 @@ def run(
     *,
     entry_module_segments: tuple[str, ...] | None = None,
     reserved_flags: frozenset[str] = EXEC_RESERVED_FLAGS,
+    invoked_command: str = "exec",
 ) -> None:
     """Run an AgL program selected by an exec argument container.
 
     *reserved_flags* is the invoking surface's flag inventory, which the
     selected program's parameters may not claim.
     """
-    # The program source comes either from an inline ``-c/--command`` argument
+    # The program source comes either from an inline ``-c/--code`` argument
     # or from a file.  The CLI layer guarantees exactly one is provided; the
     # defensive ``else`` keeps ``run`` safe when called directly.
-    if args.command is not None:
-        source = args.command
+    if args.code is not None:
+        source = args.code
         entry_path: Path | None = None
         diagnostic_source_name: str | None = None
     elif args.file is not None:
@@ -388,7 +447,7 @@ def run(
         entry_path = Path(args.file)
         diagnostic_source_name = args.file
     else:
-        print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
+        print("Error: exec requires either a FILE or -c/--code", file=sys.stderr)
         raise SystemExit(1)
 
     ctx = current_config_context()
@@ -433,7 +492,7 @@ def run(
         cached_pipeline.parsed
         if cached_pipeline is not None
         else PipelineDriver.parse_entry(
-            source, entry_path=entry_path, inline_command=args.command is not None
+            source, entry_path=entry_path, inline_code=args.code is not None
         )
     )
 
@@ -457,14 +516,20 @@ def run(
         ),
     )
     engine_program_table: dict[str, object] = {}
+    manifest_engine_table: dict[str, object] = {}
     command_paths: tuple[tuple[str, ...], ...] = ()
+    package_command_paths: frozenset[tuple[str, ...]] = frozenset()
+    owning_package_info: PackageInfo | None = None
     if entry_path is not None and selected_parsed_program is not None:
         program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
             selected_parsed_program.name,
         )
-        command_paths = _registered_command_paths(
+        package_route = _package_program_route(
             entry_path, exec_roots.roots, config_entry_segments, program_path
         )
+        owning_package_info = package_route.package
+        command_paths = package_route.command_paths
+        package_command_paths = package_route.package_command_paths
         engine_keys = tuple(
             QualifiedConfigKey(config_entry_segments, program_path, key, command_paths)
             for key in ENGINE_KEY_NAMES
@@ -474,14 +539,21 @@ def run(
                 key.leaf: value
                 for key, value in resolve_qualified_values(config_view, engine_keys).items()
             }
+            if owning_package_info is not None:
+                manifest_engine_table = _manifest_engine_table(
+                    owning_package_info, engine_keys, cwd=ctx.cwd
+                )
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
     try:
-        config = exec_config_from_merged(merged_config, program_table=engine_program_table)
+        config = exec_config_from_merged(
+            merged_config, program_table=engine_program_table, package_table=manifest_engine_table
+        )
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    resolve_agent_spec = host_agent_spec_resolver(merged_config)
 
     # Resolve max call depth: CLI > config.  ``None`` (nothing set at
     # any layer) lets the driver apply its canonical default.
@@ -496,23 +568,7 @@ def run(
     # value (``--default-agent``/``[exec] default-agent``) decodes through
     # the same shared path as every other key; a bad value exits 1 here,
     # before the module graph is loaded.
-    cli_values: dict[str, object | None] = {}
-    if args.strict_json is not None:
-        cli_values["strict-json"] = args.strict_json
-    if args.timeout is not None:
-        cli_values["timeout"] = args.timeout
-    elif args.no_timeout:
-        cli_values["timeout"] = None
-    if args.no_trace:
-        cli_values["trace"] = False
-    elif args.trace:
-        cli_values["trace"] = True
-    if args.trace_file is not None:
-        cli_values["trace-file"] = args.trace_file
-    elif args.no_trace_file:
-        cli_values["trace-file"] = None
-    if args.default_agent is not None:
-        cli_values["default-agent"] = args.default_agent
+    cli_values = execution_cli_values(args)
 
     # strict-json/timeout/trace are resolved only after preflight, below, once a
     # selected program's own ``@config`` entries (ranked between the config
@@ -524,7 +580,7 @@ def run(
     engine_tiers = build_host_engine_seeds(
         config=config,
         primary_table=engine_program_table,
-        fallback_table=toml_dict(merged_config.get("exec")),
+        fallback_table={**toml_dict(merged_config.get("exec")), **manifest_engine_table},
         cli_values=cli_values,
     )
 
@@ -546,7 +602,11 @@ def run(
     # strict-json/agent-dispatch/session/timeout are wired in below, once the
     # selected program's own ``@config`` entries are known (see
     # ``configure_execution_services``); discovery and preflight never read them.
-    runtime = PipelineDriver(default_call_depth_limit=resolved_call_depth_limit)
+    runtime = PipelineDriver(
+        default_call_depth_limit=resolved_call_depth_limit,
+        get_sandbox_context=None,
+        resolve_agent_spec=None,
+    )
     discovery = (
         cached_pipeline.discovery
         if cached_pipeline is not None
@@ -595,6 +655,10 @@ def run(
         config=config_view,
         entry_segments=config_entry_segments,
         command_paths=command_paths,
+        package_command_paths=package_command_paths,
+        package_config=(
+            owning_package_info.manifest.config if owning_package_info is not None else None
+        ),
     )
 
     # Program arguments are validated against the lowered program, so this
@@ -630,6 +694,11 @@ def run(
             param_values=param_tiers.upper,
             param_values_lower=param_tiers.lower,
         )
+        if argument_preflight.argument_diagnostics:
+            raise RegisteredProgramUsageError(
+                "; ".join(diag.message for diag in argument_preflight.result.diagnostics),
+                selected_program,
+            )
         if isinstance(argument_preflight, ArgumentPreflightFailure):
             for diag in argument_preflight.result.diagnostics:
                 print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
@@ -648,43 +717,41 @@ def run(
             for key, value in argument_preflight.program_config.items()
             if is_engine_builtin_var_key(key)
         }
+    validate_config_engine_values(config_engine_values)
     engine_seeds = engine_tiers.merged(middle=config_engine_values)
 
-    strict_seed = engine_seeds.get("strict-json")
-    resolved_strict_json = isinstance(strict_seed, BoolValue) and strict_seed.value
+    resolved_strict_json = resolve_strict_json(engine_seeds)
 
-    timeout_text = _option_text(engine_seeds.get("timeout"))
-    if timeout_text is not None:
-        try:
-            resolved_timeout: float | None = parse_timeout(timeout_text)
-        except ValueError as exc:
-            origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
-            print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-    else:
-        resolved_timeout = None
+    resolved_timeout = resolve_timeout(engine_seeds)
 
     # One resolution for both the readable ``trace`` seed above and the trace
     # file opened below.
     trace_decision = engine_tiers.trace_decision(middle=config_engine_values)
 
-    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
-    session_host = create_agl_session_host(idle_timeout=resolved_timeout)
+    # Built once and shared by every sandboxing consumer this invocation
+    # dispatches through -- the agent factory, the session host, and the
+    # execution services -- so they all resolve sandbox configuration from
+    # the same `SandboxContext` and the `[run.*]` config loads at most once.
+    get_sandbox_context = lazy_sandbox_context(ctx)
+    factory = value_driven_agent_factory(
+        idle_timeout=resolved_timeout, get_sandbox_context=get_sandbox_context
+    )
+    session_host = create_agl_session_host(
+        idle_timeout=resolved_timeout, get_sandbox_context=get_sandbox_context
+    )
     runtime.configure_execution_services(
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
         session_host=session_host,
         shell_exec_timeout=resolved_timeout,
+        get_sandbox_context=get_sandbox_context,
+        resolve_agent_spec=resolve_agent_spec,
     )
 
-    # Resolve + validate the trace log file up front.  --dry-run is
-    # side-effect-free: no trace is written regardless of --trace-file.  A source
+    # Resolve and validate the trace log file up front. A source
     # ``std/config::trace``/``trace-file`` write takes effect at runtime via the
     # host reconfigurer, not here.
-    if dry_run.enabled():
-        trace_file = None
-    else:
-        trace_file = prepare_trace_log_from_decision(trace_decision, command_name="exec")
+    trace_file = prepare_trace_log_from_decision(trace_decision, command_name="exec")
 
     policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=trace_file),
@@ -711,12 +778,21 @@ def run(
     # preflight already lowered, so the graph is type-checked, match-compiled and
     # lowered exactly once. Keep result-to-exit handling inside the cleanup
     # boundary: a failed result is a primary program failure, just like an
-    # exception, and must not be replaced by a secondary close failure.
-    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+    # exception, and must not be replaced by a secondary close failure. A
+    # termination signal exits through the same boundary, so cleanup still runs.
+    with (
+        terminating_signals_exit(),
+        preserve_primary_error(session_host.close_all, label="agent session cleanup"),
+    ):
         result = runtime.run_prepared(
             prepared,
-            check_only=dry_run.enabled(),
+            echo_agent_output=config.echo if args.echo is None else args.echo,
             trace_file=trace_file,
+            invoked_command=invoked_command,
+            program_function=(
+                None if selected_program is None else selected_program.declaration_path
+            ),
+            program_span=None if selected_program is None else selected_program.span,
             compiled=discovery.compiled,
             executable=executable,
             host_settings_policy=policy,
@@ -743,19 +819,6 @@ def run(
                 )
 
         if result.ok:
-            # Print the static call-site inventory when running under --dry-run.
-            if dry_run.enabled() and result.call_sites:
-                print("call-sites:")
-                for site in result.call_sites:
-                    schema_tag = ", schema: yes" if site.has_schema else ""
-                    policy_tag = (
-                        f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
-                    )
-                    print(
-                        f"  line {site.line}:{site.col}: {site.callee} "
-                        f"→ {site.target_type} "
-                        f"[{site.codec_name}{schema_tag}{policy_tag}]"
-                    )
             return
 
         # Pre-execution failure: print error diagnostics and exit 1.
@@ -813,8 +876,6 @@ def run_registered(
     target = _resolve_installed_reference_or_exit(program, context=context, package_name=package)
 
     if package is not None and command_path is not None:
-        from agm.packages.manifest import expanded_commands
-
         command = expanded_commands(target.package.manifest).get(command_path)
         if command is None or command.program is None:
             _registered_command_mismatch(command_path)
@@ -867,4 +928,5 @@ def run_registered(
         ),
         entry_module_segments=target.module_id.segments,
         reserved_flags=(EXEC_RESERVED_FLAGS if command_path is None else REGISTERED_RESERVED_FLAGS),
+        invoked_command="exec" if command_path is None else command_path,
     )

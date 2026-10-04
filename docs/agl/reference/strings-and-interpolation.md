@@ -241,4 +241,4 @@ commands. See [Shell execution](shell-execution.md) for details.
 - Unterminated string, unterminated interpolation, unknown escape — lexical
   errors.
 - An empty `$` literal, or one written inside brackets — lexical errors (see
-  [The `$` literal](#the--literal) above).
+  [The `$` literal](#the-literal) above).

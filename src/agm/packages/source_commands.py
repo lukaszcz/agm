@@ -33,7 +33,7 @@ from agm.packages.discipline import DisciplineError, package_module_files
 from agm.packages.manifest import CommandSpec, ManifestError, validate_command_set
 from agm.packages.model import PackageInfo
 
-__all__ = ["package_with_source_commands"]
+__all__ = ["package_with_source_commands", "package_with_source_commands_or_declared"]
 
 
 def package_with_source_commands(package: PackageInfo) -> PackageInfo:
@@ -57,7 +57,8 @@ def package_with_source_commands(package: PackageInfo) -> PackageInfo:
     or parsed, an invalid ``@command`` attribute, two programs claiming the
     same command path, a discovered path that conflicts with a different
     manifest registration, or a merged manifest that fails its own
-    consistency rules.
+    consistency rules. The returned package always carries
+    ``commands_complete=True``.
     """
     discovered, docs = _source_commands(package)
     manifest = package.manifest
@@ -81,7 +82,38 @@ def package_with_source_commands(package: PackageInfo) -> PackageInfo:
         validate_command_set(manifest)
     except ManifestError as exc:
         raise DisciplineError(str(exc)) from exc
-    return package if manifest is package.manifest else replace(package, manifest=manifest)
+    if manifest is package.manifest and package.commands_complete:
+        return package
+    return replace(package, manifest=manifest, commands_complete=True)
+
+
+def package_with_source_commands_or_declared(package: PackageInfo) -> PackageInfo:
+    """Complete *package*'s command table from source, tolerating a failed scan.
+
+    Live source may be mid-edit, so a :class:`DisciplineError` here falls back
+    to *package*'s own declared commands instead of propagating — the right
+    behavior for any read of live source (editable-package activation, or a
+    command host completing the selected program's owning package) rather
+    than an operation that persists a decision based on the command set,
+    which must call :func:`package_with_source_commands` directly so a real
+    discipline problem still stops it. Those declared
+    commands stand only if they are consistent without the registrations that
+    failed to arrive: a manifest group or alias whose leaves live only in
+    source leaves the package with no commands at all, since half a command
+    tree is worse than none.
+    """
+    try:
+        return package_with_source_commands(package)
+    except DisciplineError:
+        pass
+    try:
+        validate_command_set(package.manifest)
+    except ManifestError:
+        declared = replace(package.manifest, commands={}, aliases={})
+        return replace(package, manifest=declared, commands_complete=True)
+    if package.commands_complete:
+        return package
+    return replace(package, commands_complete=True)
 
 
 def _documented(spec: CommandSpec, docs: Mapping[str, str]) -> CommandSpec:

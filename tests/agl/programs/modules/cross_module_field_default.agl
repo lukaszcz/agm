@@ -1,0 +1,11 @@
+# A defaulted field's default is evaluated in the DECLARING module's own
+# scope, never the call site's: this entry declares its own same-named
+# binding with a different value, which the imported field default must not
+# see when the field is omitted from another module.
+import shapes
+
+let base-margin = 1
+
+program def main() -> unit =
+  print shapes::Box().value
+  print base-margin

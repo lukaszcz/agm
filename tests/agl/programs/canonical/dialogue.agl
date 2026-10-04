@@ -6,14 +6,14 @@ enum Turn
 program def main(problem: text) -> unit =
   let researcher: Agent = AgentCommand("researcher")
   let critic: Agent = AgentCommand("critic")
-  var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, on-parse-error = Retry(n = 2))
+  var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, parse-error-retries = 2)
   var final-answer: text = ""
 
   do[6]
     case proposal of
       | Continue(message) =>
-          let critique: Turn = ask("Critique this proposal:\n%{message}", agent = critic, on-parse-error = Retry(n = 2))
-          proposal := ask("Revise using critique:\n%{critique}", agent = researcher, on-parse-error = Retry(n = 2))
+          let critique: Turn = ask("Critique this proposal:\n%{message}", agent = critic, parse-error-retries = 2)
+          proposal := ask("Revise using critique:\n%{critique}", agent = researcher, parse-error-retries = 2)
 
       | _ => ()
 

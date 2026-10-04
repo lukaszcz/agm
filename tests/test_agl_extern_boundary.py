@@ -724,6 +724,7 @@ def _synthesize_box_class() -> tuple[NominalId, type[object]]:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
@@ -765,6 +766,7 @@ def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
         declared_name="Problem",
         kind=NominalKind.EXCEPTION,
         fields=("detail",),
+        field_json_names=("detail",),
     )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
@@ -988,6 +990,7 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
         declared_name="Prompt",
         kind=NominalKind.RECORD,
         fields=("ask-prompt", "count"),
+        field_json_names=("ask-prompt", "count"),
     )
     classes = synthesize_nominal_classes((descriptor,))
     prompt = classes[nominal](**{"ask-prompt": "continue", "count": 3})
@@ -1015,6 +1018,7 @@ def test_deep_recursive_nominal_construction_terminates() -> None:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value", "inner"),
+        field_json_names=("value", "inner"),
     )
     classes = synthesize_nominal_classes((descriptor,))
     box_cls = classes[nominal]
@@ -1045,6 +1049,7 @@ def test_shared_immutable_record_graph_stays_shared_across_the_boundary() -> Non
             "Branch",
             NominalKind.RECORD,
             ("left", "right"),
+            field_json_names=("left", "right"),
         ),
     )
     synthesize_nominal_classes(descriptors)
@@ -1127,7 +1132,15 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
     left = _fresh_nominal()
     right = _fresh_nominal()
     descriptors = (
-        NominalDescriptor(record, ENTRY_ID, (), "Shared", NominalKind.RECORD, ("value",)),
+        NominalDescriptor(
+            record,
+            ENTRY_ID,
+            (),
+            "Shared",
+            NominalKind.RECORD,
+            ("value",),
+            field_json_names=("value",),
+        ),
         NominalDescriptor(
             left,
             ENTRY_ID,
@@ -1161,7 +1174,15 @@ def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None
     record = _fresh_nominal()
     enum = _fresh_nominal()
     descriptors = (
-        NominalDescriptor(record, ENTRY_ID, ("M",), "Go", NominalKind.RECORD, ("amount",)),
+        NominalDescriptor(
+            record,
+            ENTRY_ID,
+            ("M",),
+            "Go",
+            NominalKind.RECORD,
+            ("amount",),
+            field_json_names=("amount",),
+        ),
         NominalDescriptor(
             enum,
             ENTRY_ID,
@@ -1219,6 +1240,7 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("left",),
+                field_json_names=("left",),
             ),
             right: NominalDescriptor(
                 nominal=right,
@@ -1227,6 +1249,7 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("right",),
+                field_json_names=("right",),
             ),
         },
     )
@@ -1254,6 +1277,7 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
+        field_json_names=("new",),
     )
     registry = ExternRegistry()
     registry.set_nominals({current: bearer})
@@ -1268,6 +1292,7 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
                 kind=NominalKind.RECORD,
                 fields=("old",),
                 bears_name_path=False,
+                field_json_names=("old",),
             ),
         },
     )
@@ -1287,6 +1312,7 @@ def test_re_registering_the_same_identity_reuses_its_synthesized_class() -> None
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
@@ -1316,6 +1342,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("old",),
+        field_json_names=("old",),
     )
     new = NominalDescriptor(
         nominal=new_nominal,
@@ -1324,6 +1351,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
+        field_json_names=("new",),
     )
     companion = tmp_path / "companion.py"
     companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(old=2)\n")
@@ -1343,6 +1371,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         kind=NominalKind.RECORD,
         fields=("old",),
         bears_name_path=False,
+        field_json_names=("old",),
     )
     registry.set_nominals({old_nominal: old_superseded, new_nominal: new})
 
@@ -1369,6 +1398,7 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
         declared_name="Inner",
         kind=NominalKind.RECORD,
         fields=("x",),
+        field_json_names=("x",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
@@ -1406,6 +1436,7 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})

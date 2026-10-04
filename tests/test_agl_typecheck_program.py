@@ -739,9 +739,9 @@ def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> No
                 "import libA\n"
                 "def b() -> text =\n"
                 "  let _ = libA::a()\n"
-                '  ask("Q", on-parse-error = Abort())\n'
+                '  ask("Q", parse-error-retries = 0)\n'
             ),
-            "libA": 'def a() -> text = ask("Q", on-parse-error = Abort())\n',
+            "libA": 'def a() -> text = ask("Q", parse-error-retries = 0)\n',
         },
     )
 
@@ -1371,7 +1371,11 @@ def test_inline_member_records_resolve_in_local_type_positions() -> None:
         "  enum Outer[T] | Member\n"
         "  enum Tree[T]\n"
         "    | Leaf\n"
-        "    | Node(value: T, mapper: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
+        "    | Node\n"
+        "        value: T\n"
+        "        mapper: (T) -> T\n"
+        "        boxed: Forest::Box[T]\n"
+        "        parent: Outer[T]::Member\n"
         "  record Holder\n"
         "    leaf: Tree::Leaf\n"
         "    node: Tree::Node[int]\n"
@@ -4555,7 +4559,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
                 for parameter_types in module.argument_bindings.function_param_types.values()
                 for param_type in parameter_types
             ),
-            *(site.target_type for site in module.call_sites),
+            *(spec.target_type for spec in module.contract_specs.values()),
         ]
         assert not any(contains_inference_var(typ) for typ in published_types)
 

@@ -5,6 +5,20 @@ AGM workspaces, opening tmux sessions, running setup scripts, executing
 commands with sandbox settings, and running AgL agent workflows — as whole programs (`agm exec`)
 or in an interactive REPL (`agm repl`).
 
+## Documentation
+
+Start at the [documentation landing page](docs/index.md) for the language reference,
+command reference, and architecture guide. Sources remain Markdown under `docs/`.
+
+Run `just docs-build` to build into `site/`, or `just docs-serve` for a live preview at
+<http://0.0.0.0:8000>, accessible over the LAN at `http://<host-ip>:8000`.
+These commands install the locked documentation dependencies;
+pass server options with `just docs-serve --dev-addr 127.0.0.1:8080`.
+
+Read the Docs uses `.readthedocs.yaml` and `mkdocs.yml`. Import this repository into
+[Read the Docs](https://app.readthedocs.org/) to enable hosted builds. Navigation is
+defined in `mkdocs.yml`; relative Markdown links work across all three components.
+
 ## Requirements
 
 - `git`
@@ -24,14 +38,14 @@ Set up the development environment:
 just setup
 ```
 
-Install the CLI into an isolated `uv tool` environment and copy AGM config files,
-prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
-`$HOME/.agm/` by default). It also installs and activates the lockstep immutable
-`std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL editor
-support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when an
-`emacs` binary is available — the AgL Emacs mode (skipped with a notice
-otherwise). It ends by running the installed `agm pkg sync`, restoring the active
-packages' Python requirements into the reinstalled environment:
+Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
+environment and copy AGM config files, prompts, and sandbox templates into the selected
+AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). The config installer refreshes the
+managed standard library; the recipe reinstalls the other packages under `packages/` with
+`agm pkg install --reinstall`, then runs `agm pkg sync` to restore the active packages'
+Python requirements. It also installs the AgL editor support: the Micro syntax file into
+`$HOME/.config/micro/syntax/`, and — when
+an `emacs` binary is available — the AgL Emacs mode (skipped with a notice otherwise):
 
 ```bash
 just install
@@ -110,7 +124,7 @@ agm <command> [options] [args]
 
 Use `agm help` for the command list and `agm help <command>` for detailed help. Global options:
 
-- `--dry-run`
+- `--version` prints the AGM and AgL standard-library versions.
 - `--install-completion`
 - `--show-completion`
 
@@ -131,9 +145,11 @@ agm pkg create [DIR] [-o package.agmpkg]
 agm pkg install path/to/package
 agm pkg install package.agmpkg
 agm pkg install --editable path/to/package
+agm pkg switch package-name@1.0.2
 agm pkg list
 agm pkg info package-name
 agm pkg uninstall package-name
+agm pkg uninstall package-name@1.0.1
 agm pkg sync
 ```
 
@@ -164,7 +180,10 @@ agm open main
 agm open --num-panes 4 feat/login
 agm open --parent develop feat/search
 agm open --detach feat/search
+agm open --no-fetch feat/search
 ```
+
+`--no-fetch` skips Git fetches and resolves remote branches from locally available refs.
 
 ### `agm close`
 
@@ -242,15 +261,21 @@ DSL for composable agent workflows: it supports typed program and module paramet
 user-defined functions (`def`/`fn`), functions implemented by a co-located Python file (`extern def`),
 structured JSON targets, do-loops with retry/abort policies, control flow (if/case/try), shell
 execution (`exec`), and typed `Agent` values. Free `ask` lazily opens a persistent default agent
-session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)` to select
-an explicit agent or conversation. The selected value determines the invoked command. Host
-`Agent` arguments accept compact forms such as `claude/sonnet-medium`,
-`codex/o3-high`, and `pi/openai/gpt-5-low`; other text is a custom command.
+session from `std/config::default-agent`; use `chat(...)` or `agent.chat(...)` for a blocking
+interactive agent UI, and `agent.ask(...)` or `Session::open(...)` to select
+an explicit agent or conversation. The selected value determines the invoked command. Agent calls
+run inside the `agm run` sandbox by default (see `agm run` below), and `sandbox = Native` or
+`sandbox = Disabled` opts one out (free `ask` requires an explicit agent to override its sandbox); `exec` runs
+unsandboxed unless given `sandbox = Some(Sandbox(...))`. Host `Agent` arguments accept compact
+forms such as bare `claude`, `claude/sonnet:medium`, `codex/o3:high`, and `pi/openai/gpt-5:low`;
+other text is a custom command. An `[agent]` config section fills an agent's omitted model, Pi
+provider, and effort per agent CLI, provider, or model.
 
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,
 `review::main`). An entry's own value parameters project onto `agm exec`'s CLI as positional
-arguments and `--name` options (a `program def`'s parameters are named-only by default). A static
+arguments and `--name` options (required parameters are positional by default; defaulted
+parameters use options). A static
 `@param let` or `@param var` in its import closure is a module parameter, configurable through
 the same host channels. Inline `-c` source is wrapped in a synthetic entry when needed. Programs
 can span multiple `.agl` files via
@@ -268,7 +293,7 @@ any configured `[modules] roots` for imported modules.
 agm exec workflow.agl
 agm exec workflow.agl --name Alice   # --<name> per declared program parameter
 agm exec -c 'print "hello"'       # run inline program text instead of a file
-agm exec --dry-run workflow.agl   # static check only — no agent calls
+agm check workflow.agl            # static check only — no program execution
 ```
 
 See `agm help exec` for options, exit codes, and config. The AgL language itself is
@@ -423,6 +448,7 @@ agm dep new https://github.com/org/lib.git
 agm dep new --branch develop https://github.com/org/lib.git
 agm dep switch mylib feat/update
 agm dep switch --branch mylib feat/new-work
+agm dep switch --no-fetch mylib feat/update
 agm dep rm mylib/feat/update
 agm dep rm --all mylib
 ```
@@ -433,6 +459,7 @@ Low-level worktree operations for the main project repo.
 
 ```bash
 agm worktree new feat/search
+agm worktree new --no-fetch feat/search
 agm wt new --dir /tmp/worktrees feat/search
 agm worktree remove --force old-branch
 agm wt rm old-branch

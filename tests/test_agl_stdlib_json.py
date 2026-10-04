@@ -45,6 +45,7 @@ def _json_companion() -> _JsonCompanion:
                 declared_name="JsonParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
             _KEY_ERROR: NominalDescriptor(
                 nominal=_KEY_ERROR,
@@ -53,6 +54,7 @@ def _json_companion() -> _JsonCompanion:
                 declared_name="KeyError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "key"),
+                field_json_names=("message", "key"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },

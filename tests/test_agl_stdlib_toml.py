@@ -40,6 +40,7 @@ def _toml_companion() -> _TomlCompanion:
                 declared_name="TomlParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
             _TOML_RENDER_ERROR: NominalDescriptor(
                 nominal=_TOML_RENDER_ERROR,
@@ -48,6 +49,7 @@ def _toml_companion() -> _TomlCompanion:
                 declared_name="TomlRenderError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
+                field_json_names=("message",),
             ),
         },
     )

@@ -30,6 +30,7 @@
     },
     {
       "name": "abort_on_missing_nested_field",
+      "runtime": {"parse_error_retries": 0},
       "agents": {
         "tree_source": [
           "{\"name\": \"Root\", \"subcategories\": [{\"subcategories\": []}]}"

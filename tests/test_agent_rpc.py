@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 from decimal import Decimal
@@ -14,6 +16,7 @@ from typing import cast
 import pytest
 
 from agm.agent.session import (
+    AglSessionHost,
     SessionAskError,
     SessionAskRequest,
     SessionHostError,
@@ -23,8 +26,15 @@ from agm.agent.session import (
     rpc,
 )
 from agm.agent.session.rpc import PiRpcSessionBackend
-from agm.agent.spec import AgentPi, SessionTransport
+from agm.agent.spec import AgentPi, PermissionMode, SessionTransport
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
+from tests._agl_helpers import (
+    session_sandbox_context,
+    unavailable_sandbox_context,
+    write_sandbox_home,
+    write_transparent_sandbox_shims,
+)
 
 _STUB = r"""#!{python}
 import json, os, sys, time
@@ -38,7 +48,10 @@ def record(name, value):
     with (root / name).open("a") as out:
         out.write(json.dumps(value) + "\n")
         out.flush()
-record("starts.jsonl", {"pid": os.getpid(), "argv": argv, "session": session})
+record(
+    "starts.jsonl",
+    {"pid": os.getpid(), "argv": argv, "session": session, "env": dict(os.environ)},
+)
 def expand(value, command):
     if isinstance(value, str):
         return value.replace("$id", command["id"]).replace(
@@ -88,6 +101,11 @@ for line in sys.stdin.buffer:
         else:
             events = [response(command)]
     for event in expand(events, command):
+        if "stderr" in event:
+            sys.stderr.write(event["stderr"])
+            sys.stderr.flush()
+            time.sleep(.02)
+            continue
         if event == {"exit": True}: sys.exit(0)
         emit(event)
         if (
@@ -98,6 +116,19 @@ for line in sys.stdin.buffer:
         ):
             session = "child"
 """
+
+
+def _install_transparent_sandbox_shims(directory: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Install the shared transparent sandbox shims on the front of ``PATH``.
+
+    Returns the directory their marker files land in, so a test can confirm
+    the wrap chain actually ran, not merely that the wrapped ``pi`` stub
+    happened to start anyway.
+    """
+    log_dir = directory / "log"
+    write_transparent_sandbox_shims(directory, log_dir=log_dir)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return log_dir
 
 
 class RpcStub:
@@ -155,7 +186,11 @@ class RpcStub:
 
 def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
     return PiRpcSessionBackend.open(
-        AgentPi("provider", "model", "high"), name="named", idle_timeout=timeout
+        AgentPi("provider", "model", "high"),
+        name="named",
+        idle_timeout=timeout,
+        get_sandbox_context=unavailable_sandbox_context,
+        env=dict(os.environ),
     )
 
 
@@ -205,6 +240,217 @@ def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
 
     assert command_types(stub) == ["prompt", "get_state", "compact"]
     backend.close()
+
+
+def test_echo_streams_pi_tool_progress_and_stderr_without_replacing_final_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"stderr": "pi diagnostic\n"},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "toolUse",
+                        "content": [{"type": "text", "text": "Checking"}],
+                    },
+                },
+                {"type": "tool_execution_start", "toolName": "bash", "toolCallId": "c1"},
+                {
+                    "type": "tool_execution_update",
+                    "toolCallId": "c1",
+                    "partialResult": {"content": [{"type": "text", "text": "one"}]},
+                },
+                {
+                    "type": "tool_execution_update",
+                    "toolCallId": "c1",
+                    "partialResult": {"content": [{"type": "text", "text": "one two"}]},
+                },
+                {
+                    "type": "tool_execution_end",
+                    "toolCallId": "c1",
+                    "result": {"content": [{"type": "text", "text": "one two!"}]},
+                },
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "done"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [{"type": "text", "text": "done"}],
+                    },
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+    output: list[dict[str, str]] = []
+
+    def collect_output(
+        phase: str,
+        text: str,
+        *,
+        event_type: str | None = None,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> None:
+        event = {"phase": phase, "text": text}
+        for key, value in (
+            ("type", event_type),
+            ("tool_name", tool_name),
+            ("tool_call_id", tool_call_id),
+        ):
+            if value is not None:
+                event[key] = value
+        output.append(event)
+
+    response = backend.ask(SessionAskRequest("question", output_callback=collect_output))
+
+    assert response.content == "done"
+    assert output == [
+        {"phase": "stderr", "text": "pi diagnostic\n"},
+        {"phase": "progress", "type": "message", "text": "Checking"},
+        {
+            "phase": "progress",
+            "type": "tool_call",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "[bash]\n",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "one",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": " two",
+        },
+        {
+            "phase": "progress",
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "text": "!",
+        },
+    ]
+    backend.close()
+
+
+def test_prompt_waits_for_stderr_already_read_by_the_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"stderr": "pi diagnostic\n"},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "answer"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [{"type": "text", "text": "answer"}],
+                    },
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+    child = backend._child
+    assert child is not None
+
+    stderr_read = threading.Event()
+    release_stderr = threading.Event()
+    finish_attempted = threading.Event()
+    original_lock = child.stderr_lock
+
+    class ObservedLock:
+        def __init__(self, lock: rpc._Lock) -> None:
+            self.lock = lock
+
+        def acquire(self) -> bool:
+            if threading.current_thread().name == "rpc-ask":
+                finish_attempted.set()
+            return self.lock.acquire()
+
+        def release(self) -> None:
+            self.lock.release()
+
+    original_lock.acquire()
+    try:
+        child.stderr_lock = ObservedLock(original_lock)
+    finally:
+        original_lock.release()
+
+    capture_stderr = rpc._capture_stderr
+
+    def delay_stderr_delivery(captured_child: rpc._RpcChild, chunk: bytes) -> None:
+        stderr_read.set()
+        release_stderr.wait()
+        capture_stderr(captured_child, chunk)
+
+    monkeypatch.setattr(rpc, "_capture_stderr", delay_stderr_delivery)
+
+    output: list[tuple[str, str]] = []
+    answers: list[str] = []
+    failures: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            answers.append(
+                backend.ask(
+                    SessionAskRequest(
+                        "question",
+                        output_callback=lambda phase, text, **_metadata: output.append(
+                            (phase, text)
+                        ),
+                    )
+                ).content
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    ask_thread = threading.Thread(target=ask, name="rpc-ask")
+    try:
+        ask_thread.start()
+        assert stderr_read.wait(5)
+        assert finish_attempted.wait(5)
+    finally:
+        release_stderr.set()
+        if ask_thread.ident is not None:
+            ask_thread.join(timeout=5)
+        backend.close()
+
+    assert not ask_thread.is_alive()
+    assert failures == []
+    assert answers == ["answer"]
+    assert output == [("stderr", "pi diagnostic\n")]
 
 
 def test_interrupting_prompt_kills_the_active_rpc_child(
@@ -650,8 +896,14 @@ def test_close_and_close_all_terminate_children(
     backend.close()
     backend.close()
     assert_exited(pid)
-    service = SessionService(lambda _request: PiRpcSessionBackend.open(AgentPi("", "", "")))
-    handle = service.open(AgentPi("", "", ""), SessionTransport.RPC)
+    service = SessionService(
+        lambda _request: PiRpcSessionBackend.open(
+            AgentPi("", "", ""),
+            get_sandbox_context=unavailable_sandbox_context,
+            env=dict(os.environ),
+        )
+    )
+    handle = service.open(AgentPi("", "", ""), SessionTransport.RPC, env={})
     child_pid = stub.wait_for("starts.jsonl", 2)[1]["pid"]
     service.close_all()
     service.close_all()
@@ -665,8 +917,10 @@ def test_production_host_routes_every_rpc_lifecycle_operation_natively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stub = RpcStub(tmp_path, monkeypatch)
-    host = create_agl_session_host(idle_timeout=None)
-    handle = host.open(AgentPi("provider", "model", "high"), "Rpc")
+    host = create_agl_session_host(
+        idle_timeout=None, get_sandbox_context=unavailable_sandbox_context
+    )
+    handle = host.open(AgentPi("provider", "model", "high"), "Rpc", env=dict(os.environ))
 
     host.compact(handle, "retain")
     host.set_name(handle, "renamed")
@@ -752,3 +1006,282 @@ def test_stats_accepts_unavailable_context_and_rejects_invalid_values(
                     }
                 }
             )
+
+
+def test_open_spawns_the_rpc_child_wrapped_under_sandbox_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The persistent RPC child is prepared once, at spawn time, under the
+    session's fixed sandbox mode -- the whole systemd-run/srt chain reaches
+    the real ``pi`` process before any prompt is ever sent."""
+    log_dir = _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    stub = RpcStub(tmp_path, monkeypatch)
+
+    backend = PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+        env=dict(os.environ),
+        name="named",
+    )
+
+    stub.wait_for("starts.jsonl")
+    assert (log_dir / "systemd-run").exists()
+    assert (log_dir / "srt").exists()
+    backend.close()
+
+
+def test_open_spawns_the_rpc_child_under_the_environment_given_at_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real spawned Pi RPC child process sees exactly the env given at
+    open -- never a silent fallback to the test process's own environment."""
+    stub = RpcStub(tmp_path, monkeypatch)
+    fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
+    backend = PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"),
+        get_sandbox_context=unavailable_sandbox_context,
+        env=fixed_env,
+    )
+
+    started = stub.wait_for("starts.jsonl")
+
+    assert started[0]["env"] == fixed_env
+    backend.close()
+
+
+def test_fork_spawns_the_replacement_under_the_same_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forking a session spawns its replacement Pi RPC child under the exact
+    same environment fixed at open, never the ambient process's own."""
+    stub = RpcStub(tmp_path, monkeypatch)
+    fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
+    backend = PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"),
+        get_sandbox_context=unavailable_sandbox_context,
+        env=fixed_env,
+    )
+
+    stub.wait_for("starts.jsonl")
+
+    child = backend.fork()
+
+    started = stub.wait_for("starts.jsonl", count=2)
+    assert started[1]["env"] == fixed_env
+    backend.close()
+    child.close()
+
+
+def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ephemeral, one-shot ask (the shape a free/explicit-agent ``ask`` opens)
+    reaches the real sandboxed spawn through the full ``AglSessionHost`` ->
+    ``SessionService`` -> backend chain -- not only when a test opens the
+    backend directly -- proving the mode a one-shot session opens under
+    actually governs its Pi RPC child."""
+    log_dir = _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    RpcStub(tmp_path, monkeypatch)
+
+    host = AglSessionHost(
+        SessionService(
+            lambda request: PiRpcSessionBackend.open(
+                request.agent,
+                get_sandbox_context=session_sandbox_context(home),
+                permission_mode=request.permission_mode,
+                sandbox=request.sandbox,
+                env=request.env,
+            )
+        )
+    )
+
+    answer = host.with_ephemeral(
+        AgentPi("provider", "model", "high"),
+        "Rpc",
+        lambda handle: host.ask(handle, "hi"),
+        single_prompt=True,
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+        env=dict(os.environ),
+    )
+
+    assert answer == "answer"
+    assert (log_dir / "systemd-run").exists()
+    assert (log_dir / "srt").exists()
+
+
+def test_open_prepare_failure_unavailable_becomes_a_session_host_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox backend that cannot run at all -- no ``systemd-run``/``srt``
+    reachable -- is a session lifecycle failure, never a bare spawn of an
+    unsandboxed child.
+
+    ``shutil.which`` is patched directly (rather than relying on the test
+    machine's own ``PATH``) so this fails the same way whether or not those
+    binaries happen to be installed.
+    """
+    RpcStub(tmp_path, monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
+    home = tmp_path / "home"
+    write_sandbox_home(home)  # Settings would resolve if the backend were ever reached.
+
+    with pytest.raises(SessionHostError) as raised:
+        PiRpcSessionBackend.open(
+            AgentPi("provider", "model", "high"),
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env={},
+        )
+    assert raised.value.operation == "open"
+    assert "is not installed or not in PATH" in str(raised.value)
+
+
+def test_open_prepare_failure_no_settings_becomes_a_session_host_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox backend that is available but has no resolvable settings file
+    is likewise a session lifecycle failure, never a bare spawn.
+
+    Installs the shared transparent shims so ``srt`` is deterministically
+    reachable regardless of the test machine's own ``PATH``, then leaves no
+    settings file for it to find.
+    """
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    RpcStub(tmp_path, monkeypatch)
+    home = tmp_path / "home"  # No `.agm/sandbox/default.json` written.
+
+    with pytest.raises(SessionHostError) as raised:
+        PiRpcSessionBackend.open(
+            AgentPi("provider", "model", "high"),
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env=dict(os.environ),
+        )
+    assert raised.value.operation == "open"
+    assert "no sandbox settings file found" in str(raised.value)
+
+
+def test_close_and_fork_replacement_close_the_prepared_sandbox_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``close()`` releases the prepared command backing the child it stops, and
+    forking -- which spawns a freshly prepared replacement for the parent --
+    leaves its own prepared command open only until that replacement itself closes."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    # No scripted "get_state"/"clone" actions: the stub's own default responses
+    # track its live ``session`` variable, which a fork must actually advance.
+    RpcStub(tmp_path, monkeypatch)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    backend = PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+        env=dict(os.environ),
+    )
+
+    assert closed == []  # Nothing closed yet: the child is still alive.
+
+    child = backend.fork()
+    # Forking spawned a freshly prepared replacement for the still-active
+    # parent conversation; the original prepared command transferred to
+    # ``child`` without being re-prepared or closed.
+    assert closed == []
+
+    backend.close()
+    assert closed == [False]  # The replacement's own prepared command closed.
+    child.close()
+    assert closed == [False, False]  # The transferred prepared command closed.
+
+
+def test_spawn_closes_the_prepared_command_when_popen_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spawn failure that happens after a successful sandbox preparation --
+    ``Popen`` itself raising -- still releases the prepared command, exactly
+    like a preparation failure does."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    def fail_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        raise OSError("no such file")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+
+    with pytest.raises(SessionHostError) as raised:
+        PiRpcSessionBackend.open(
+            AgentPi("provider", "model", "high"),
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env=dict(os.environ),
+        )
+    assert raised.value.operation == "open"
+    assert closed == [False]
+
+
+def test_close_still_releases_the_prepared_command_when_stop_process_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``stop_process`` failure (e.g. a missing cleanup binary) must not leak
+    the prepared sandbox command's temp settings file or tracked artifacts."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    RpcStub(tmp_path, monkeypatch)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    def raising_stop_process(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(rpc, "stop_process", raising_stop_process)
+
+    backend = PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+        env=dict(os.environ),
+    )
+
+    with pytest.raises(FileNotFoundError):
+        backend.close()
+    assert closed == [False]

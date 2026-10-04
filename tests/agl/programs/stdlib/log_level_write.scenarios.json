@@ -17,6 +17,30 @@
       "expect": {
         "stdout": "shown-when-raised\ndone\n"
       }
+    },
+    {
+      "name": "level_seeded_with_lowercase_spelling_shows_debug",
+      "params": {
+        "raise-level": false
+      },
+      "module_params": {
+        "std/log::level": "debug"
+      },
+      "expect": {
+        "stdout": "hidden-by-default\nshown-when-raised\ndone\n"
+      }
+    },
+    {
+      "name": "level_seeded_with_silent_spelling_suppresses_debug",
+      "params": {
+        "raise-level": false
+      },
+      "module_params": {
+        "std/log::level": "silent"
+      },
+      "expect": {
+        "stdout": "done\n"
+      }
     }
   ]
 }

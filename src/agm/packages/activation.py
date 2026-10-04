@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -27,7 +27,6 @@ from agm.packages.manifest import (
     PackageManifest,
     expanded_commands,
     load_manifest,
-    validate_command_set,
     validate_package_name,
 )
 from agm.packages.model import (
@@ -464,7 +463,11 @@ def select_package_roots(
     ``agm repl``); it never persists a decision, so like the command-registry
     read path it tolerates an editable package's source failing discovery
     rather than failing every invocation over one half-written module — see
-    :func:`resolve_active_package`.
+    :func:`resolve_active_package`. A development package's command table
+    stays incomplete here (its scan skips the AST pass for cost, and mounting
+    a module root never needs it): whichever program a command host actually
+    selects has its own owning package's table completed at that point
+    instead — see ``commands/exec_program.py:_package_program_route``.
     """
 
     development = tuple(
@@ -928,20 +931,19 @@ def _with_editable_source_commands(
     # Imported lazily so ordinary activation stays independent of the AgL
     # parser unless a caller actually resolves an editable selection.
     from agm.packages.discipline import DisciplineError
-    from agm.packages.source_commands import package_with_source_commands
+    from agm.packages.source_commands import (
+        package_with_source_commands,
+        package_with_source_commands_or_declared,
+    )
 
+    if fallback_to_manifest_commands:
+        return package_with_source_commands_or_declared(package)
     try:
         return package_with_source_commands(package)
     except DisciplineError as exc:
-        if not fallback_to_manifest_commands:
-            raise PackageActivationError(
-                f"cannot derive commands for editable package {package.manifest.name!r}: {exc}"
-            ) from exc
-    try:
-        validate_command_set(package.manifest)
-    except ManifestError:
-        return replace(package, manifest=replace(package.manifest, commands={}, aliases={}))
-    return package
+        raise PackageActivationError(
+            f"cannot derive commands for editable package {package.manifest.name!r}: {exc}"
+        ) from exc
 
 
 def _checked_active_package(

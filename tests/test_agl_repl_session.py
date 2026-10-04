@@ -4,13 +4,14 @@ Drives ``ReplSession`` directly with source strings and fake agents.  Asserts
 user-visible behaviour: persistence across entries, redefinition/shadowing,
 expression/binding echo data, ``type_of`` purity, partial effects on failure,
 exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
-``dump_source``, surfaced warnings, and ``check_only`` (type-only) runs.
+``dump_source``, and surfaced warnings.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import importlib
+import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
@@ -47,7 +48,6 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     BoolType,
-    BottomType,
     DecimalType,
     EnumType,
     ExceptionType,
@@ -144,10 +144,14 @@ def _literal_for_type(typ: Type) -> str:
         return "{}"
     if isinstance(typ, EnumType) and typ.name == "Option":
         return "None"
+    if isinstance(typ, EnumType) and typ.name == "Optional":
+        return "Default"
     if isinstance(typ, EnumType) and typ.name == "Agent":
         return 'AgentCommand("x")'
     if isinstance(typ, EnumType) and typ.name == "SessionTransport":
         return "SessionTransport::Cli"
+    if isinstance(typ, EnumType) and typ.name == "AgentSandbox":
+        return "Disabled"
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -387,6 +391,27 @@ class TestPersistence:
         assert not stale.ok
         assert stale.error is not None
         assert stale.error.type_name == "Detailed"
+
+    def test_redeclared_record_keeps_its_own_default_across_generations(self) -> None:
+        """Each nominal handle keeps the field default that was live when it
+        was bound, mirroring how a redeclaration supersedes cleanly without
+        disturbing an old binding's identity.
+        """
+        session = open_session()
+        assert session.eval_entry("record Ver\n  v: int = 1").ok
+        first = session.eval_entry("let a = Ver()")
+        assert first.ok, first.diagnostics
+
+        assert session.eval_entry("record Ver\n  v: int = 2").ok
+        second = session.eval_entry("let b = Ver()")
+        assert second.ok, second.diagnostics
+
+        read_a = session.eval_entry("a.v")
+        read_b = session.eval_entry("b.v")
+        assert read_a.ok, read_a.diagnostics
+        assert read_b.ok, read_b.diagnostics
+        assert read_a.value == IntValue(1)
+        assert read_b.value == IntValue(2)
 
     def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
         session = open_session()
@@ -3202,7 +3227,15 @@ class TestStdlib:
         for member in typedef.members:
             variant = member.name
             args = _constructor_args(dict(table.record_fields(member)))
-            call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
+            # A referenced member (docs/agl/reference/types.md, "Enum types")
+            # keeps its own declaration path rather than joining the enum's
+            # scope, so only an inline member is reachable qualified.
+            inline = member.module_id == typ.module_id and member.scope_path == (
+                *typ.scope_path,
+                variant,
+            )
+            prefix = f"{name}::" if inline else ""
+            call = f"{prefix}{variant}({args})" if args else f"{prefix}{variant}"
             result = s.eval_entry(call)
             assert result.ok, (name, variant, result.diagnostics)
             assert result.value_type is not None
@@ -3235,9 +3268,9 @@ _EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed
 
 _AGENT_VARIANTS = (
     "  | AgentCommand(command: text)\n"
-    "  | AgentClaude(model: text, thinking: text)\n"
-    "  | AgentCodex(model: text, thinking: text)\n"
-    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    '  | AgentClaude(model: text = "", thinking: text = "")\n'
+    '  | AgentCodex(model: text = "", thinking: text = "")\n'
+    '  | AgentPi(provider: text = "", model: text = "", thinking: text = "")\n'
 )
 
 _AGENT_REQUEST_FIELDS = (
@@ -3249,9 +3282,8 @@ _AGENT_REQUEST_FIELDS = (
     "  attempt: int\n"
     "  previous-error: Option[text]\n"
     "  metadata: json\n"
+    "  sandbox: AgentSandbox\n"
 )
-
-_PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
 
 # A plain (non-``builtin``) ``Option`` declaration, shaped like the standard
 # library's own, for arrangements that declare their own host-contract types
@@ -3271,14 +3303,16 @@ _ASK_REQUEST_OPTIONS = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS = (
     "  prompt: text,\n"
     '  agent: Agent = AgentCommand(command = "noop"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
-    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  parse-error-retries: int = 0,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
 
@@ -3618,7 +3652,7 @@ class TestBuiltinIdentityAcrossEntries:
         assert first.ok, first.diagnostics
         assert second.ok, second.diagnostics
 
-        result = s.eval_entry('B::exec("echo hi")', check_only=True)
+        result = s.eval_entry('B::exec("echo hi")')
 
         assert result.ok, result.diagnostics
         assert isinstance(result.value_type, RecordType)
@@ -3810,9 +3844,9 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         scope had redeclared a builtin there."""
         agent_variants = (
             "\n    | AgentCommand(command: text)"
-            "\n    | AgentClaude(model: text, thinking: text)"
-            "\n    | AgentCodex(model: text, thinking: text)"
-            "\n    | AgentPi(provider: text, model: text, thinking: text)"
+            '\n    | AgentClaude(model: text = "", thinking: text = "")'
+            '\n    | AgentCodex(model: text = "", thinking: text = "")'
+            '\n    | AgentPi(provider: text = "", model: text = "", thinking: text = "")'
         )
         (tmp_path / "libeb.agl").write_text(
             f"scope B\n  builtin enum Agent{agent_variants}\nend B", encoding="utf-8"
@@ -4095,7 +4129,7 @@ class TestBuiltinIdentityAcrossModules:
 # ---------------------------------------------------------------------------
 # Builtin identity for the other host-contract nominals: ``AgentRequest``
 # (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
-# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
+# ``ask``/``ask-request``).
 #
 # Every one of these resolutions goes through a program's own ``builtin``
 # declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
@@ -4104,7 +4138,7 @@ class TestBuiltinIdentityAcrossModules:
 # ``TestBuiltinIdentity*`` above, covering the same arrangements
 # (root/scoped, with/without the standard library, same-entry/earlier-entry/
 # imported-module declarations, and the no-declaration-at-all regression)
-# for each of the three.
+# for each of the two.
 # ---------------------------------------------------------------------------
 
 
@@ -4174,7 +4208,6 @@ class TestAgentRequestBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
             f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
@@ -4273,8 +4306,8 @@ class TestAgentArgumentBuiltinIdentity:
 
     def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
         """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
-        so it rejects the same scoped ``Agent`` value the same way; checked
-        only (an actual agent dispatch is out of scope here)."""
+        so it rejects the same scoped ``Agent`` value the same way, before
+        any agent dispatch is attempted."""
         s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
@@ -4282,7 +4315,7 @@ class TestAgentArgumentBuiltinIdentity:
         g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
-        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
+        result = s.eval_entry('ask("hi", agent = g)')
         assert not result.ok
         assert any("A::Agent" in d.message for d in result.diagnostics)
 
@@ -4296,7 +4329,6 @@ class TestAgentArgumentBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
             f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
@@ -4319,7 +4351,7 @@ class TestAgentArgumentBuiltinIdentity:
         not_agent = s.eval_entry("enum NotAgent\n  | X")
         assert not_agent.ok, not_agent.diagnostics
 
-        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
+        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)')
         assert not result.ok
         assert any("NotAgent" in d.message for d in result.diagnostics)
 
@@ -4447,161 +4479,6 @@ class TestHostRaisedExceptionContractIdentity:
         assert isinstance(result.value, TextValue)
 
 
-class TestParsePolicyBuiltinIdentity:
-    """``on_parse_error``'s static ``ParsePolicy`` constructor recognition
-    (``BuiltinCallChecker._extract_parse_policy_str`` /
-    ``_accepts_as_parse_policy_constructor``)."""
-
-    def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
-        """The reported rejection: a static constructor of the program's own
-        scoped ``ParsePolicy``, written at its own qualified path
-        (``A::ParsePolicy::Retry``), was rejected because the qualifier
-        check only ever accepted the bare root spelling."""
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Retry(n = 2))'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_scoped_parse_policy_abort_constructor_accepted_by_exec(self) -> None:
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Abort)'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_root_parse_policy_without_stdlib_accepted_by_exec(self) -> None:
-        s = open_session(default_stdlib=False)
-        declare = s.eval_entry(
-            f"builtin\nrecord ExecResult\n{_EXEC_RESULT_FIELDS}"
-            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
-            "builtin def exec(command: text) -> ExecResult\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry('let r = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-    def test_on_parse_error_without_named_program_syntax_still_accepts_canonical_forms(
-        self,
-    ) -> None:
-        """Regression: a program that declares none of its own builtin types
-        keeps every canonical ``on_parse_error`` spelling accepted exactly as
-        before this fix."""
-        s = open_session()
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            bare = s.eval_entry('let a = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
-        assert bare.ok, bare.diagnostics
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            qualified = s.eval_entry(
-                'let b = exec::[int]("echo hi", on-parse-error = ParsePolicy::Abort)'
-            )
-        assert qualified.ok, qualified.diagnostics
-
-    def test_on_parse_error_rejects_a_local_binding_shadowing_abort(self) -> None:
-        """The reported bug: a local ``let Abort = ...`` binding shadows the
-        ``ParsePolicy::Abort`` constructor's bare spelling, so the checker
-        must resolve ``on_parse_error``'s value through real name
-        resolution rather than matching the raw spelling ``Abort`` -- a
-        shadowing local binding is not a constructor at all and is rejected
-        exactly like any other non-constructor expression there."""
-        s = open_session()
-        result = s.eval_entry(
-            "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn',
-            check_only=True,
-        )
-        assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
-
-    def test_on_parse_error_rejects_a_local_binding_shadowing_abort_call_form(self) -> None:
-        """The call-form (``Abort()``) counterpart of the shadowing bug:
-        it bypassed real resolution the same way the bare-spelling form
-        did, and is rejected the same way."""
-        s = open_session()
-        result = s.eval_entry(
-            "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort())\nn',
-            check_only=True,
-        )
-        assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
-
-    def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
-        """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
-        bare spelling is rejected rather than silently reinterpreted as a
-        ``ParsePolicy::Retry`` call spelled the same way."""
-        s = open_session()
-        result = s.eval_entry(
-            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn',
-            check_only=True,
-        )
-        assert not result.ok
-        assert any("on-parse-error" in d.message for d in result.diagnostics)
-
-    def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
-        """Regression: an unrelated enum's constructor is still rejected as
-        ``on_parse_error``, with the program's own scoped ``ParsePolicy``
-        also live -- the shape-mismatch direction of this fix."""
-        s = open_session()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-        not_policy = s.eval_entry("enum NotPolicy\n  | Abort")
-        assert not_policy.ok, not_policy.diagnostics
-
-        result = s.eval_entry(
-            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())', check_only=True
-        )
-        assert not result.ok
-        assert any("ParsePolicy" in d.message for d in result.diagnostics)
-
-    def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
-        self, tmp_path: Path
-    ) -> None:
-        """A wildcard import brings ``Lib::ParsePolicy`` into scope at its own
-        path without the module route prefix -- the qualifier spelling this
-        fix recognizes (a module-route-qualified spelling like
-        ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
-        as it was for the canonical ``ParsePolicy`` before it: an on_parse_error
-        constructor was never recognized through an import route prefix)."""
-        (tmp_path / "lib.agl").write_text(
-            f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
-        )
-        s = repl_session_with_root(tmp_path)
-        declare = s.eval_entry("import lib::*")
-        assert declare.ok, declare.diagnostics
-
-        shell = FakeShell(stdout="2")
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on-parse-error = Lib::ParsePolicy::Retry(n = 2))'
-            )
-        assert result.ok, result.diagnostics
-        assert result.value == IntValue(2)
-
-
 # ---------------------------------------------------------------------------
 # Redefinition / shadowing
 # ---------------------------------------------------------------------------
@@ -4637,9 +4514,9 @@ class TestRedefinition:
 builtin
 enum Agent
   | AgentCommand(command: text)
-  | AgentClaude(model: text, thinking: text)
-  | AgentCodex(model: text, thinking: text)
-  | AgentPi(provider: text, model: text, thinking: text)
+  | AgentClaude(model: text = "", thinking: text = "")
+  | AgentCodex(model: text = "", thinking: text = "")
+  | AgentPi(provider: text = "", model: text = "", thinking: text = "")
 """
         session = open_session(default_stdlib=False)
         assert session.eval_entry(declaration).ok
@@ -5540,7 +5417,7 @@ enum Agent
         )
         assert not failed.ok
 
-        call = session.eval_entry('exec("echo hi")', check_only=True)
+        call = session.eval_entry('exec("echo hi")')
 
         assert call.ok, call.diagnostics
         assert isinstance(call.value_type, RecordType)
@@ -5865,7 +5742,7 @@ class TestRecursiveTypesAcrossEntries:
         s = open_session()
         assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
 
-        current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
+        current = s.eval_entry("[Choice::Yes, Choice::No]")
 
         assert not current.ok
         assert any("annotate" in diagnostic.message.lower() for diagnostic in current.diagnostics)
@@ -5873,7 +5750,7 @@ class TestRecursiveTypesAcrossEntries:
         assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
         assert s.eval_entry("enum Choice\n  | Maybe").ok
 
-        mismatch = s.eval_entry("[yes, no]", check_only=True)
+        mismatch = s.eval_entry("[yes, no]")
 
         assert not mismatch.ok
         assert all(
@@ -6761,6 +6638,22 @@ class TestExactlyOnce:
         assert _text(asked.value) == "the-answer"
         assert agent.calls == 1
 
+    def test_check_only_keeps_a_diverging_bindings_type_without_evaluating_or_promoting(
+        self,
+    ) -> None:
+        from agm.agl.semantics.types import BottomType
+
+        session = open_session()
+        result = session.eval_entry(
+            'let doomed: int = raise Abort(message = "stop")', check_only=True
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value is None
+        assert isinstance(result.value_type, BottomType)
+        assert not session.eval_entry("doomed").ok
+        assert session.eval_entry("let doomed = 3").value == IntValue(3)
+
     def test_standalone_ask_echo_is_unquoted(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -6892,12 +6785,12 @@ class TestReset:
 
         host = AgentDispatcherSessionHost(None)
         agent = AgentCommand(command="worker")
-        first = host.default(agent, "Cli")
+        first = host.default(agent, "Cli", env={})
         session = open_session(session_host=host)
 
         session.reset()
 
-        assert host.default(agent, "Cli") != first
+        assert host.default(agent, "Cli", env={}) != first
 
     def test_reset_clears_all_state(self) -> None:
         s = open_session()
@@ -7183,77 +7076,6 @@ class TestWarnings:
         r = s.eval_entry("let x =\t1")
         assert r.ok
         assert any("TAB" in w.message or "tab" in w.message for w in r.warnings)
-
-    def test_match_error_on_check_only_path(self) -> None:
-        s = open_session()
-        s.eval_entry("enum R\n  | Pass\n  | Fail")
-        s.eval_entry("let r: R = Pass")
-        r = s.eval_entry("case r of\n  | Pass() => ()", check_only=True)
-        assert not r.ok
-        assert len(r.diagnostics) == 1
-        assert r.warnings == []
-
-
-# ---------------------------------------------------------------------------
-# check_only
-# ---------------------------------------------------------------------------
-
-
-class TestCheckOnly:
-    def test_check_only_types_expression_without_eval(self) -> None:
-        agent = CountingAgent("nope")
-        s = open_session(agent_dispatcher=agent)
-        r = s.eval_entry('ask """ask"""', check_only=True)
-        assert r.ok
-        assert r.kind == "expression"
-        assert isinstance(r.value_type, TextType)
-        assert r.value is None
-        assert agent.calls == 0
-
-    def test_check_only_does_not_promote(self) -> None:
-        s = open_session()
-        r = s.eval_entry("let x = 1", check_only=True)
-        assert r.ok
-        assert r.kind == "binding"
-        assert r.name == "x"
-        assert isinstance(r.value_type, IntType)
-        assert r.value is None
-        # Not promoted: a later reference fails.
-        assert s.bindings() == []
-        assert not s.eval_entry("x").ok
-
-    def test_check_only_trailing_binder_reports_bottom_initializer(self) -> None:
-        s = open_session()
-        r = s.eval_entry('let x: int = raise Abort(message = "x")', check_only=True)
-
-        assert r.ok
-        assert r.kind == "binding"
-        assert r.name == "x"
-        assert isinstance(r.value_type, BottomType)
-        assert r.value is None
-
-    def test_check_only_does_not_advance_node_ids(self) -> None:
-        s = open_session()
-        s.eval_entry("check_only", check_only=True)  # statement-ish; ignored result
-        # A real binding after a check_only still works.
-        r = s.eval_entry("let a = 1")
-        assert r.ok
-
-    def test_check_only_declaration_kind(self) -> None:
-        s = open_session()
-        r = s.eval_entry("record P\n  x: int", check_only=True)
-        assert r.ok
-        assert r.kind == "declaration"
-        assert r.name == "P"
-        # Not promoted.
-        assert not s.eval_entry("let p = P(x = 1)").ok
-
-    def test_check_only_type_error_still_fails(self) -> None:
-        s = open_session()
-        s.eval_entry('let t = "x"')
-        r = s.eval_entry("t + 1", check_only=True)
-        assert not r.ok
-        assert r.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -7557,17 +7379,9 @@ class TestTraceLogging:
         s.eval_entry('let x = ask """one"""')
         s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
-        run_ids = {rec["run_id"] for rec in records}
-        # Per-entry TraceStore → a fresh run_id per entry, all in one file.
-        assert len(run_ids) == 2
-
-    def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
-        trace = tmp_path / "repl.log"
-        s = open_session(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
-        r = s.eval_entry('let g = ask """hi"""', check_only=True)
-        assert r.ok
-        assert r.trace_path is None
-        assert not trace.exists()
+        assert sum(rec["kind"] == "run_start" for rec in records) == 2
+        assert sum(rec["kind"] == "run_end" for rec in records) == 2
+        assert all("run_id" not in rec for rec in records)
 
     def test_cancelled_entry_records_run_end(self, tmp_path: Path) -> None:
         import json
@@ -7585,7 +7399,7 @@ class TestTraceLogging:
         assert responses[-1]["reason"]
 
     @pytest.mark.parametrize((("code", "trace_ok")), [(0, True), (255, False)])
-    def test_process_exit_finalizes_trace_and_propagates_status(
+    def test_os_exit_finalizes_trace_and_propagates_status(
         self, tmp_path: Path, code: int, trace_ok: bool
     ) -> None:
         import json
@@ -7597,7 +7411,7 @@ class TestTraceLogging:
         )
 
         with pytest.raises(SystemExit) as raised:
-            session.eval_entry(f"import std/process\nprocess::exit({code})")
+            session.eval_entry(f"import std/os\nos::exit({code})")
 
         assert raised.value.code == code
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -9241,8 +9055,10 @@ class TestImports:
                 copyfile(source, std_dir / source.name)
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/prelude::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            "builtin var default-sandbox: AgentSandbox = Disabled\n"
+            "builtin var parse-error-retries: int = 4\n"
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
         )
@@ -9256,8 +9072,10 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            "import std/prelude::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            "builtin var default-sandbox: AgentSandbox = Disabled\n"
+            "builtin var parse-error-retries: int = 4\n"
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
         )
@@ -9436,22 +9254,12 @@ class TestImports:
         assert not r.ok
         assert r.diagnostics
 
-    def test_check_only_graph_mode(self, tmp_path: Path) -> None:
-        # check_only=True in program context returns a check result without evaluating.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
-        s = repl_session_with_root(tmp_path)
-        r = s.eval_entry("import mylib::*\nadd(1, 2)", check_only=True)
-        assert r.ok, r.diagnostics
-        # check_only does not promote session state.
-        assert s.bindings() == []
-
-    def test_check_only_graph_mode_rejects_invalid_unreachable_import(self, tmp_path: Path) -> None:
+    def test_graph_mode_rejects_invalid_unreachable_import(self, tmp_path: Path) -> None:
         lib = tmp_path / "invalid.agl"
         lib.write_text("def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n")
         s = repl_session_with_root(tmp_path)
 
-        r = s.eval_entry("import invalid\n()", check_only=True)
+        r = s.eval_entry("import invalid\n()")
 
         assert not r.ok
         assert r.error is None
@@ -10238,6 +10046,40 @@ class TestExternRepl:
         assert not result.ok
         assert result.diagnostics
 
+    def test_record_field_default_survives_a_later_entry_rejected_past_lowering(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: rollback of a rejected entry must not drop an earlier
+        entry's accumulated constructor field defaults.
+
+        ``LinkImage.snapshot_state``/``restore_state`` roll back a rejected
+        entry's linker delta (``entry_pipeline.py`` calls ``restore_state``
+        after any entry that fails past lowering, like the companion-import
+        failure above). If the snapshot dropped ``_LinkState.field_defaults``,
+        the record declared before the failing entry would lose its default
+        and a later omission would raise instead of using it.
+        """
+        self._write_extern_lib(
+            tmp_path,
+            "broken",
+            "extern def f() -> int\n",
+            "raise RuntimeError('boom')\n",
+        )
+        session = self._make_session_with_root(tmp_path)
+
+        declared = session.eval_entry("record P\n  x: int = 7")
+        assert declared.ok, declared.diagnostics
+        first = session.eval_entry("P().x")
+        assert first.ok, first.diagnostics
+        assert _int(first.value) == 7
+
+        failed = session.eval_entry("import broken::*\nf()")
+        assert not failed.ok
+
+        later = session.eval_entry("P().x")
+        assert later.ok, later.diagnostics
+        assert _int(later.value) == 7
+
     # -- One extern registry per session: a companion imports exactly once --
 
     def test_companion_imports_exactly_once_across_entries_and_imports(
@@ -10747,16 +10589,16 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord A::Box[T]\n  value: T\n>"
 
-    def test_bare_generic_type_entry_in_check_only_mode(self) -> None:
+    def test_bare_generic_type_entry_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = open_session()
         s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
-        r = s.eval_entry("Option", check_only=True)
+        r = s.eval_entry("Option")
         assert r.ok
         assert r.kind == "type"
         assert (
-            render_entry_result(r, echo=True, check_only=True)
+            render_entry_result(r, echo=True)
             == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
         )
 
@@ -10884,15 +10726,6 @@ class TestBareTypeEntry:
         r = s.eval_entry("int")
         assert r.ok
         assert render_entry_result(r, echo=False) is None
-
-    def test_type_entry_in_check_only_mode(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        s = open_session()
-        r = s.eval_entry("int", check_only=True)
-        assert r.ok
-        assert r.kind == "type"
-        assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
 
     def test_bare_hidden_member_query_is_rejected_not_echoed_as_a_type(
         self, tmp_path: Path
@@ -11285,7 +11118,7 @@ class TestSessionOpen:
         config = second_root / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
-                'AgentClaude("sonnet", "medium")', 'AgentCommand("second-root")'
+                "AgentClaude()", 'AgentCommand("second-root")'
             ),
             encoding="utf-8",
         )
@@ -11372,8 +11205,8 @@ class TestSessionOpen:
             default_result.value.nominal
         ].display_name
         assert default_display.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
-        assert default_result.value.fields["model"] == TextValue("sonnet")
-        assert default_result.value.fields["thinking"] == TextValue("medium")
+        assert default_result.value.fields["model"] == TextValue("")
+        assert default_result.value.fields["thinking"] == TextValue("")
 
     def test_reopened_sessions_keep_their_library_values_after_eviction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -11609,3 +11442,111 @@ class TestExceptionRootAcrossEntries:
         assert plain is not None
         assert plain.base == root.decl_node_id
         assert plain.base != EXCEPTION_BASE.decl_id
+
+
+class TestTempPathsAcrossEntries:
+    """``std/fs`` temporary paths live for the whole REPL session."""
+
+    @pytest.fixture
+    def os_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import tempfile
+
+        directory = tmp_path / "os-temp"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        return directory
+
+    def _session_with_temp_file(self) -> ReplSession:
+        session = open_session()
+        assert session.eval_entry("import std/fs").ok
+        assert session.eval_entry("let t = fs::temp-file()").ok
+        assert session.eval_entry('fs::append(t, "x")').ok
+        assert session.eval_entry("fs::read(t)").ok
+        return session
+
+    def test_a_temp_path_survives_later_entries_and_is_removed_on_close(
+        self, os_temp: Path
+    ) -> None:
+        session = self._session_with_temp_file()
+        assert len(list(os_temp.iterdir())) == 1
+
+        session.close()
+
+        assert list(os_temp.iterdir()) == []
+
+    def test_reset_removes_temp_paths(self, os_temp: Path) -> None:
+        session = self._session_with_temp_file()
+
+        session.reset()
+
+        assert list(os_temp.iterdir()) == []
+        session.close()
+
+    def test_debug_keeps_temp_paths_on_close(self, os_temp: Path) -> None:
+        session = self._session_with_temp_file()
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry("std/config::debug := true").ok
+
+        session.close()
+
+        assert len(list(os_temp.iterdir())) == 1
+
+
+class TestChdirAcrossEntries:
+    """``os::chdir`` mutates ambient ``environ`` and both undo on ``reset``."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_start_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        start = tmp_path / "start"
+        start.mkdir()
+        monkeypatch.chdir(start)
+        # A real ``OLDPWD``/``PWD`` in the test process environment would
+        # make "gone after reset" ambiguous with "restored to the host's own
+        # value"; clear them so the only source is ``os::chdir`` itself.
+        monkeypatch.delenv("OLDPWD", raising=False)
+        monkeypatch.delenv("PWD", raising=False)
+        return start
+
+    def test_reset_restores_the_starting_directory_and_environ(
+        self, tmp_path: Path, _isolated_start_directory: Path
+    ) -> None:
+        start = _isolated_start_directory
+        target = tmp_path / "target"
+        target.mkdir()
+        session = open_session()
+        assert session.eval_entry("import std/env").ok
+        assert session.eval_entry("import std/os").ok
+
+        assert session.eval_entry(f'os::chdir("{target}")').ok
+        assert Path(os.getcwd()) == target
+        after_chdir = session.eval_entry('env::environ.get("OLDPWD")')
+        assert after_chdir.ok
+        assert _text(after_chdir.value) == str(start)
+
+        session.reset()
+
+        assert Path(os.getcwd()) == start
+        assert session.eval_entry("import std/env").ok
+        has_oldpwd = session.eval_entry('env::environ.contains("OLDPWD")')
+        assert has_oldpwd.ok
+        assert has_oldpwd.value == BoolValue(False)
+        has_pwd = session.eval_entry('env::environ.contains("PWD")')
+        assert has_pwd.ok
+        assert has_pwd.value == BoolValue(False)
+        session.close()
+
+    def test_close_restores_the_starting_directory(
+        self, tmp_path: Path, _isolated_start_directory: Path
+    ) -> None:
+        start = _isolated_start_directory
+        target = tmp_path / "target"
+        target.mkdir()
+        session = open_session()
+        assert session.eval_entry("import std/os").ok
+
+        assert session.eval_entry(f'os::chdir("{target}")').ok
+        assert Path(os.getcwd()) == target
+
+        session.close()
+
+        assert Path(os.getcwd()) == start

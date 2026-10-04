@@ -1,3 +1,0 @@
-program def main() -> unit =
-  let d = ask::[dict[int, text]]("counts by id")
-  print d

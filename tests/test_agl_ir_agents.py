@@ -1398,7 +1398,15 @@ def test_find_enum_decode_at_path_through_array() -> None:
 
 def test_find_enum_decode_at_path_through_dict() -> None:
     """_find_enum_decode_at_path: navigate through DictDecode to find EnumDecode."""
-    from agm.agl.ir.contracts import DictDecode, EnumDecode, JsonContractRequest, VariantDecode
+    from agm.agl.ir.contracts import (
+        DictDecode,
+        DictKeyForm,
+        EnumDecode,
+        JsonContractRequest,
+        ScalarDecode,
+        ScalarKind,
+        VariantDecode,
+    )
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
@@ -1419,7 +1427,7 @@ def test_find_enum_decode_at_path_through_dict() -> None:
             ),
         ),
     )
-    dict_dec = DictDecode(value=enum_dec)
+    dict_dec = DictDecode(DictKeyForm.OBJECT_TEXT, ScalarDecode(ScalarKind.TEXT), value=enum_dec)
     contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
@@ -2349,6 +2357,7 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
     main_error.validator = "oneOf"
     main_error.instance = {"$case": "Err"}
     main_error.absolute_path = []
+    main_error.relative_schema_path = []
     main_error.path = []
 
     ve = _classify_enum_failure(main_error, "$", decode)
@@ -2410,6 +2419,7 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
     main_error.validator = "oneOf"
     main_error.instance = {"$case": "Err", "msg": "hello"}
     main_error.absolute_path = []
+    main_error.relative_schema_path = []
     main_error.path = []
 
     ve = _classify_enum_failure(main_error, "$", decode)

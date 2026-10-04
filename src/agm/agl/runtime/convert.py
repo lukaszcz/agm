@@ -39,6 +39,7 @@ from agm.agl.ir.contracts import (
     ArrayDecode,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     RecordDecode,
     RefDecode,
@@ -62,6 +63,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.util.decimal import (
+    JSON_NUMBER_TEXT_PATTERN,
     integral_to_int,
     narrows_to_int,
     parse_json_decimal,
@@ -277,15 +279,10 @@ def decode_value(
             return ArrayValue(
                 [decode_value(elem, e, defs, default_resolver=default_resolver) for e in obj]
             )
-        case DictDecode(value=value_schema):
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected object, got {type(obj).__name__}")
-            entries: dict[str, Value] = {}
-            for k, v in obj.items():
-                if not isinstance(k, str):
-                    raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-                entries[k] = decode_value(value_schema, v, defs, default_resolver=default_resolver)
-            return DictValue(entries=entries)
+        case DictDecode(key_form=key_form, key=key_schema, value=value_schema):
+            return _decode_dict(
+                key_form, key_schema, value_schema, obj, defs, default_resolver=default_resolver
+            )
         case RecordDecode(nominal=nominal, fields=fields):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for record, got {type(obj).__name__}")
@@ -326,6 +323,72 @@ def decode_value(
             return RecordValue(nominal=variant.nominal, fields=payload)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _decode_dict(
+    key_form: DictKeyForm,
+    key_schema: DecodeSchema,
+    value_schema: DecodeSchema,
+    obj: object,
+    defs: Mapping[str, DecodeSchema],
+    *,
+    default_resolver: DefaultResolver | None,
+) -> DictValue:
+    """Decode a dict from the wire shape *key_form* names.
+
+    Two wire keys decoding to equal AgL keys raise ``ValueError``, like any
+    other malformed input.
+    """
+    result = DictValue()
+    pairs: list[tuple[object, object]]
+    if key_form is DictKeyForm.ENTRIES:
+        if not isinstance(obj, list):
+            raise ValueError(f"Expected array of entries, got {type(obj).__name__}")
+        pairs = []
+        for entry in obj:
+            if not isinstance(entry, dict) or "key" not in entry or "value" not in entry:
+                raise ValueError("Dict entry must be an object with 'key' and 'value'")
+            pairs.append((entry["key"], entry["value"]))
+    else:
+        if not isinstance(obj, dict):
+            raise ValueError(f"Expected object, got {type(obj).__name__}")
+        pairs = list(obj.items())
+    for wire_key, wire_value in pairs:
+        if key_form is DictKeyForm.OBJECT_STRINGIFIED:
+            wire_key = _stringified_key_json(key_schema, wire_key, defs)
+        key = decode_value(key_schema, wire_key, defs, default_resolver=default_resolver)
+        value = decode_value(value_schema, wire_value, defs, default_resolver=default_resolver)
+        if not result.insert(key, value):
+            raise ValueError(f"Duplicate dict key {json.dumps(wire_key, default=str)}")
+    return result
+
+
+def _stringified_key_json(
+    key_schema: DecodeSchema, text: object, defs: Mapping[str, DecodeSchema]
+) -> object:
+    """Return the JSON scalar a stringified object key's *text* stands for.
+
+    Number text (int and decimal keys) and ``true``/``false`` (bool keys) parse
+    to their JSON value, which the ordinary scalar decode then judges; an enum
+    key's text is its tag and stays text.
+    """
+    if not isinstance(text, str):
+        raise ValueError(f"Dict key must be string, got {type(text).__name__}")
+    resolved = key_schema
+    if isinstance(resolved, RefDecode):
+        resolved = resolve_decode_ref(resolved.key, defs)
+    if not isinstance(resolved, ScalarDecode):
+        return text
+    if resolved.kind is ScalarKind.BOOL:
+        if text not in ("true", "false"):
+            raise ValueError(f"Expected true or false as a bool key, got {text!r}")
+        return text == "true"
+    if re.fullmatch(JSON_NUMBER_TEXT_PATTERN, text) is None:
+        raise ValueError(f"Expected number text as a key, got {text!r}")
+    try:
+        return parse_json_strict(text)
+    except StrictJsonParseError as exc:
+        raise ValueError(f"Unrepresentable number as a key: {text!r}") from exc
 
 
 def _enum_variant(schema: EnumDecode, tag: str) -> VariantDecode:

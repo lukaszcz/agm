@@ -7,7 +7,14 @@ from decimal import Decimal
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ArrayDecode, DecodeSchema, DictDecode, ScalarDecode, ScalarKind
+from agm.agl.ir.contracts import (
+    ArrayDecode,
+    DecodeSchema,
+    DictDecode,
+    DictKeyForm,
+    ScalarDecode,
+    ScalarKind,
+)
 from agm.agl.ir.ids import NominalId
 from agm.agl.runtime.convert import decode_value
 from agm.agl.runtime.value_decode import (
@@ -235,17 +242,29 @@ class TestArrayDictDecode:
             value_node_to_json(read_value("1"), schema)
 
     def test_dict_of_text(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT))
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
         result = value_node_to_json(read_value('{"a": "x", "b": "y"}'), schema)
         assert result == {"a": "x", "b": "y"}
 
     def test_dict_rejects_non_dict(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT))
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
         with pytest.raises(ValueDecodeError):
             value_node_to_json(read_value("[]"), schema)
 
     def test_dict_rejects_duplicate_key(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.INT))
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.INT),
+        )
         with pytest.raises(ValueDecodeError):
             value_node_to_json(read_value('{"a": 1, "a": 2}'), schema)
 

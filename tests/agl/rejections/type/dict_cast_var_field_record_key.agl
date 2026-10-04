@@ -1,4 +1,7 @@
+record Cell
+  var x: int
+
 program def main() -> unit =
   let j: json = {}
-  let d = j as? dict[int, text]
+  let d = j as dict[Cell, int]
   print d

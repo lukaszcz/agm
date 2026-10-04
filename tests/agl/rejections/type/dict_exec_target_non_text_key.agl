@@ -1,3 +1,0 @@
-program def main() -> unit =
-  let d = exec::[dict[int, text]]("echo {}")
-  print d

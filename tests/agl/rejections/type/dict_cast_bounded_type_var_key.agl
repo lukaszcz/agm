@@ -1,0 +1,5 @@
+def decode-it[K]{Hashable K}(j: json) -> dict[K, int] =
+  j as dict[K, int]
+
+program def main() -> unit =
+  print(decode-it::[int]({}))

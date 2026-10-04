@@ -1,3 +1,0 @@
-program def main() -> unit =
-  let d = "{}" as dict[int, text]
-  print d

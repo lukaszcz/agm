@@ -175,6 +175,10 @@ def int_in_range(n: int) -> bool:
     return magnitude < _int_range_threshold()
 
 
+#: JSON ``number`` grammar (RFC 8259), anchored for ``re.fullmatch`` and JSON Schema ``pattern``.
+JSON_NUMBER_TEXT_PATTERN = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+
+
 def parse_json_decimal(text: str) -> decimal.Decimal:
     """Parse a JSON/TOML number token exactly, as the ``parse_float`` hook of every decoder.
 

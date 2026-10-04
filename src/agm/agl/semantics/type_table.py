@@ -243,7 +243,7 @@ class LeafPolicy:
     dict_key_ok: Callable[[Type, "TypeTable", frozenset[str]], bool] | None
 
 
-def _dict_key_is_hashable(
+def dict_key_is_hashable(
     key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
 ) -> bool:
     """``JSON_CONVERTIBLE``'s dict-key rule: the key must be ``Hashable``.
@@ -257,21 +257,20 @@ def _dict_key_is_hashable(
 def dict_key_is_text_wire_key(
     key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
 ) -> bool:
-    """Return whether *key* has a wire form as a ``dict`` key crossing a decode/extern boundary.
+    """Return whether *key* can be a ``dict`` key crossing the extern/FFI boundary.
 
-    Only a literal ``text`` key has one (an FFI view has no stringified/
-    entries form) — every other key type, a nominal type filling the
-    position included, fails immediately no matter its own arguments.
-    *assume_ok* (see :attr:`LeafPolicy.dict_key_ok`) defers a bare type
-    variable among them instead of failing outright. Shared by
-    :func:`is_extern_crossable`,
+    Only a literal ``text`` key can (an FFI view has no stringified/entries
+    form) — every other key type, a nominal type filling the position
+    included, fails immediately no matter its own arguments. *assume_ok* (see
+    :attr:`LeafPolicy.dict_key_ok`) defers a bare type variable among them
+    instead of failing outright. Shared by :func:`is_extern_crossable` and
     ``semantics.analyses.compute_declaration_flags``'s ``EXTERN_CROSSABLE``
-    leaf policy, and the checker's own program-parameter/agent-output
-    wire-serializability walk — all decode-direction or FFI boundaries. The
-    encode direction (JSON schema/``as json``/trace) instead accepts any
-    ``Hashable`` key (see :func:`is_json_convertible`). *table* is unused: a
-    ``text``/type-variable check needs no lookup; it is only part of the
-    signature to match :attr:`LeafPolicy.dict_key_ok`.
+    leaf policy. JSON encoding accepts any ``Hashable`` key
+    (:func:`is_json_convertible`, encode-only); JSON decoding accepts a
+    ``Hashable`` key that is itself decodable, excluding type variables and
+    exceptions (the checker's ``_wire_type_is_serializable``). *table* is
+    unused: a ``text``/type-variable check needs no lookup; it is only part
+    of the signature to match :attr:`LeafPolicy.dict_key_ok`.
     """
     if isinstance(key, TypeVarType):
         return key.name in assume_ok
@@ -307,7 +306,7 @@ LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
             recurse_containers=True,
             var_fields_bad=False,
             non_data_bad=True,
-            dict_key_ok=_dict_key_is_hashable,
+            dict_key_ok=dict_key_is_hashable,
         ),
         DataProperty.EXTERN_CROSSABLE: LeafPolicy(
             recurse_containers=True,
@@ -2063,7 +2062,7 @@ class TypeTable:
         target = self._defs[ref.decl_id]
         key_params = self._declaration_flags(DataProperty.JSON_CONVERTIBLE).key_params[ref.decl_id]
         for pname, arg in zip(target.type_params, ref.type_args):
-            if pname in key_params and not _dict_key_is_hashable(arg, self, deferred):
+            if pname in key_params and not dict_key_is_hashable(arg, self, deferred):
                 return BadKeyArgument(source, field_name, target, pname, arg)
         return None
 
@@ -2329,7 +2328,7 @@ def _first_bad_dict_key(t: Type, table: TypeTable, assume_ok: frozenset[str]) ->
     phantom or deferred parameter is never wrongly named the culprit.
     """
     if isinstance(t, DictType):
-        if not _dict_key_is_hashable(t.key, table, assume_ok):
+        if not dict_key_is_hashable(t.key, table, assume_ok):
             return t.key
         return _first_bad_dict_key(t.value, table, assume_ok)
     if isinstance(t, (RecordType, EnumType, ExceptionType)):
@@ -2460,7 +2459,7 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             # A hashable key always has a JSON wire form (text/stringified/
             # entries — chosen at encode/schema time by its DictKeyForm).
             return (
-                _dict_key_is_hashable(t.key, table)
+                dict_key_is_hashable(t.key, table)
                 and is_json_convertible(t.key, table)
                 and is_json_convertible(t.value, table)
             )

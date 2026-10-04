@@ -37,6 +37,7 @@ from agm.agl.ir.contracts import (
     CustomContractRequest,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     FieldDecode,
     RecordDecode,
@@ -3229,8 +3230,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
             (ScalarDecode(kind=ScalarKind.DECIMAL), "not a number", "decimal"),
             (ScalarDecode(kind=ScalarKind.BOOL), 1, "bool"),
             (ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list", "array"),
-            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), [1, 2], "object"),
-            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), {1: "val"}, "Dict key"),
             (_R_DECODE, [1, 2], "record"),
             (_R_DECODE, {}, "Missing field"),
             (_E_DECODE, {"$case": "A"}, "string for enum"),
@@ -3248,8 +3247,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
             "decimal-from-text",
             "bool-from-number",
             "array-from-text",
-            "dict-from-array",
-            "dict-with-non-text-key",
             "record-from-array",
             "record-missing-field",
             "plain-enum-from-object",
@@ -3266,6 +3263,18 @@ class TestDecodeValueRejectsMismatchedPayloads:
         from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match=expected):
+            decode_value(decode, payload)
+
+    @pytest.mark.parametrize("payload", [[1, 2], {1: "val"}])
+    def test_text_keyed_dict_rejects_a_non_object_or_non_text_key(self, payload: object) -> None:
+        from agm.agl.runtime.convert import decode_value
+
+        decode = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
+        with pytest.raises(ValueError):
             decode_value(decode, payload)
 
     def test_integral_decimal_to_int_through_parse(self) -> None:
@@ -3421,6 +3430,13 @@ class TestValidationErrorClassification:
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
+    def test_tagged_enum_non_object_instance_is_bad_case(self) -> None:
+        codec = JsonCodec()
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(codec, "42", typ, strict_json=False, table=type_table_for(typedef))
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+
     def test_array_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
         enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
@@ -3517,6 +3533,61 @@ class TestValidationErrorClassification:
         decode = build_decode_schema(rec, type_table_for(rec_def)).root
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
+    def test_bad_entries_form_key_is_classified_inside_the_key(self) -> None:
+        """A mixed-enum entries key with an unknown ``$case`` is a bad-case failure at the key."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(
+            JsonCodec(),
+            '[{"key": {"$case": "Z"}, "value": 1}]',
+            DictType(key=key_type, value=IntType()),
+            table=type_table_for(key_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$[0].key"
+
+    def test_bad_entries_form_value_is_classified_inside_the_value(self) -> None:
+        """An entries-form value that is a mixed enum with an unknown ``$case`` fails there."""
+        value_type, value_def = enum_type("V", {"A": {}, "B": {"x": IntType()}})
+        key_type, key_def = record_type("P", {"x": IntType()})
+        result = _parse_typed(
+            JsonCodec(),
+            '[{"key": {"x": 1}, "value": {"$case": "Z"}}]',
+            DictType(key=key_type, value=value_type),
+            table=type_table_for(key_def, value_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$[0].value"
+
+    def test_bad_stringified_plain_enum_key_is_classified_as_an_unknown_member(self) -> None:
+        """A stringified-object key naming no plain-enum member is a bad-case failure."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {}})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"Z": 1}',
+            DictType(key=key_type, value=IntType()),
+            table=type_table_for(key_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+
+    def test_bad_stringified_key_beneath_a_record_field_is_classified_as_an_unknown_member(
+        self,
+    ) -> None:
+        """The key failure is found through a record field leading to the dict."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {}})
+        rec, rec_def = record_type("R", {"d": DictType(key=key_type, value=IntType())})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"d": {"Z": 1}}',
+            rec,
+            table=type_table_for(key_def, rec_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$.d"
+
     def test_path_descending_past_a_scalar_matches_no_enum(self) -> None:
         """A path that descends past a scalar matches no enum."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
@@ -3561,6 +3632,7 @@ class TestValidationErrorClassification:
         err.validator = "oneOf"
         err.instance = {"$case": "X"}
         err.absolute_path = []
+        err.relative_schema_path = []
         err.path = []
         ve = _classify_enum_failure(err, "$", decode)
         assert ve.category == "bad_case"

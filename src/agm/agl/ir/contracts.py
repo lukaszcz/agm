@@ -112,8 +112,15 @@ class ArrayDecode:
 
 @dataclass(frozen=True, slots=True)
 class DictDecode:
-    """Decode a JSON object as a homogeneous dict, recursing on each value."""
+    """Decode a JSON object or entries array as a dict, recursing on each key and value.
 
+    ``key_form`` (see :func:`dict_key_form`) selects the wire shape: a text-keyed
+    object, an object whose key texts stringify ``key``'s scalar or plain-enum
+    tag, or an array of ``{"key", "value"}`` entries.
+    """
+
+    key_form: "DictKeyForm"
+    key: "DecodeSchema"
     value: "DecodeSchema"
 
 
@@ -279,7 +286,7 @@ class DictEncode:
 
     ``key_form`` is the key's ``DictKeyForm`` (see :func:`dict_key_form`, the
     ONE classifier used by plan building, schema derivation, and the runtime
-    for a growing template's key parameters — decoding never consults it),
+    for a growing template's key parameters),
     filled once when the plan is built
     (``type_schema._emit_encode_body``/``_build_template_encode_plan``)
     — it is ``None`` ONLY when ``key`` is a growing template's own

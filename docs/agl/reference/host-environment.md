@@ -202,7 +202,7 @@ The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
 functions are not valid program-argument types, whether or not the host ever
 supplies a value for the parameter; nor is a type that reaches a
-non-`text`-keyed dict, which does not [decode](types.md#convertibility-to-json).
+dict whose key is not `Hashable`, which does not [decode](types.md#convertibility-to-json).
 A [recursive](types.md#recursive-types) record or enum parameter decodes
 normally, subject to the same finite-schema restriction as an agent output
 type or cast target — see [Generics](generics.md#the-finite-schema-boundary).

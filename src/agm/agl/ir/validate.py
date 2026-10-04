@@ -702,7 +702,8 @@ def _walk_decode_schema(
             )
         case ArrayDecode(elem=elem):
             _walk_decode_schema(elem, defs, ctx)
-        case DictDecode(value=value_schema):
+        case DictDecode(key=key_schema, value=value_schema):
+            _walk_decode_schema(key_schema, defs, ctx)
             _walk_decode_schema(value_schema, defs, ctx)
         case RecordDecode(nominal=nominal, display_name=display_name, fields=fields, name=name):
             _check_nominal_in_table(nominal, ctx)

@@ -14091,12 +14091,22 @@ class TestGenericDictKeyParamDeferral:
         )
         accept_type(source)
 
-    def test_own_type_param_key_instantiated_at_int_rejected_from_json_cast(self) -> None:
+    def test_own_type_param_key_instantiated_at_int_accepted_from_json_cast(self) -> None:
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            'let j: json = {"d": {"1": 1}}\n'
+            "let b = j as Box[int]\n"
+            "b"
+        )
+        accept_type(source)
+
+    def test_own_type_param_key_instantiated_at_array_rejected_from_json_cast(self) -> None:
         err = reject_type(
             "record Box[K]\n"
             "  d: dict[K, int]\n"
             'let j: json = {"d": {"a": 1}}\n'
-            "let b = j as Box[int]\n"
+            "let b = j as Box[array[int]]\n"
             "b"
         )
         assert isinstance(err, AglTypeError)

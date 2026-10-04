@@ -1,0 +1,68 @@
+# Encoding a dict `as json` and decoding the result back (directly, and through
+# its JSON text) is the identity for every key wire form.
+enum Color
+  | Red
+  | @json-name("bleu") Blue
+
+enum Shape
+  | Circle(radius: int)
+  | Square
+
+record Point
+  x: int
+  y: int
+
+record Holder
+  by-int: dict[int, text]
+  by-point: dict[Point, text]
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let d: dict[text, int] = {"a": 1, "b": 2}
+        print(((d as json) as dict[text, int]) == d)
+        print((((d as json) as text) as dict[text, int]) == d)
+    | 2 =>
+        let d: dict[int, text] = {1: "a", -2: "b"}
+        print(((d as json) as dict[int, text]) == d)
+        print((((d as json) as text) as dict[int, text]) == d)
+    | 3 =>
+        let d: dict[decimal, text] = {1.50: "a", -2: "b"}
+        print(((d as json) as dict[decimal, text]) == d)
+        print((((d as json) as text) as dict[decimal, text]) == d)
+    | 4 =>
+        let d: dict[bool, text] = {true: "a", false: "b"}
+        print(((d as json) as dict[bool, text]) == d)
+        print((((d as json) as text) as dict[bool, text]) == d)
+    | 5 =>
+        let d: dict[Color, int] = {Red: 1, Blue: 2}
+        print(((d as json) as dict[Color, int]) == d)
+        print((((d as json) as text) as dict[Color, int]) == d)
+    | 6 =>
+        let d: dict[Shape, text] = {Square: "s", Circle(radius = 1): "c"}
+        print(((d as json) as dict[Shape, text]) == d)
+        print((((d as json) as text) as dict[Shape, text]) == d)
+    | 7 =>
+        let d: dict[Point, text] = {Point(x = 1, y = 2): "p"}
+        print(((d as json) as dict[Point, text]) == d)
+        print((((d as json) as text) as dict[Point, text]) == d)
+    | 8 =>
+        let some-key: Option[int] = Some(value = 1)
+        let none-key: Option[int] = None
+        let d: dict[Option[int], text] = {some-key: "s", none-key: "n"}
+        print(((d as json) as dict[Option[int], text]) == d)
+        print((((d as json) as text) as dict[Option[int], text]) == d)
+    | 9 =>
+        let h = Holder(by-int = {1: "a"}, by-point = {Point(x = 1, y = 2): "p"})
+        print(((h as json) as Holder) == h)
+    | 10 =>
+        let empty-int: dict[int, text] = {}
+        let empty-point: dict[Point, text] = {}
+        print(((empty-int as json) as dict[int, text]) == empty-int)
+        print(((empty-point as json) as dict[Point, text]) == empty-point)
+    | 11 =>
+        let d: dict[json, text] = {(5 as json): "a", ([1] as json): "b"}
+        print(((d as json) as dict[json, text]) == d)
+        print((((d as json) as text) as dict[json, text]) == d)
+    | _ =>
+        print(()) # unreachable in scenarios

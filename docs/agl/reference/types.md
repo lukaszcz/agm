@@ -216,7 +216,7 @@ non-empty dict literal `{k: v, …}`, indexing (`d[k]`), indexed assignment
 the type itself, empty `{}`, `for`, rendering, `copy`/`shallow-copy`, and
 `==` — do not, so `K` may be non-hashable, such as `array[int]`; `==` still
 needs `Eq` on the whole dict type. A dict with a `Hashable` key encodes to
-JSON, but only a `text`-keyed dict decodes from it; see [Convertibility to
+JSON and decodes from it in the same form; see [Convertibility to
 `json`](#convertibility-to-json).
 
 A record or enum-member record may mark an individual field with `var`.
@@ -1352,9 +1352,9 @@ may raise `CastError`.
 | `array[E]` | `text` | fallible — strict JSON or AgL value syntax parse, then element validation |
 | `array[E]` | `json` | fallible — element validation |
 | `dict[K,V]` | identical `dict[K,V]` | total (no-op), for any key type `K` |
-| `dict[text,V]` | `text` | fallible — strict JSON or AgL value syntax parse, then value validation |
-| `dict[text,V]` | `json` | fallible — value validation |
-| `json` | `dict[K,V]` for any `Hashable` `K` | total for conformance — encodes in the key type's [wire form](#convertibility-to-json); only a `text` key decodes back (rows above) |
+| `dict[K,V]` for a `Hashable`, decodable `K` | `text` | fallible — strict JSON or AgL value syntax parse, key decoding per its wire form, then value validation |
+| `dict[K,V]` for a `Hashable`, decodable `K` | `json` | fallible — key decoding per its wire form, then value validation |
+| `json` | `dict[K,V]` for any `Hashable` `K` | total for conformance — encodes in the key type's [wire form](#convertibility-to-json); decodes back from it (rows above) |
 | record `R` | same record `R` | total (no-op) |
 | record `R` | `text` | fallible — strict JSON or AgL value syntax parse, then field validation |
 | record `R` | `json` | fallible — field validation |
@@ -1436,14 +1436,20 @@ program def main() -> unit =
   print(by-point as json)  # [{"key": {"x": 1, "y": 2}, "value": "p"}]
 ```
 
-Only a `text` key decodes. A type that reaches a dict with any other key
-type, at any depth, cannot be cast from `text` or `json` or parsed from
-`text`, decoded from agent or `exec` output or from a program or module
-parameter, or appear in an `extern def` signature or as an extern target type
-argument; each is a static error. A type that reaches a dict with a
-non-`Hashable` key, such as `array[int]`, cannot be cast to `json` either,
-including one reached through type arguments: if `Outer[T]` has a field of
-type `Box[Wrap[T]]` and `Box[K]` a field of type `dict[K, int]`, then
+Decoding reads the same forms: a cast from `text` or `json`, `parse`, and
+agent or `exec` output accept any `Hashable` key type. A stringified number
+key follows the number rules (`"2.0"` fills an `int` key, `"2.5"` does not;
+non-number text fails), a `bool` key is `"true"` or `"false"`, and an enum key
+is a member's effective tag. Two wire keys that decode to equal keys
+(`"1.0"` and `"1.00"`, or a repeated entry key) fail the conversion like any
+malformed input: `CastError` for `as`, `None` for `as?`, `ValueParseError`
+for `parse`, a retry or `AgentParseError` for agent output. A type-variable
+key cannot decode, bounded or not, and neither can an exception key. A type
+that reaches a dict with a non-`Hashable` key, such as `array[int]`, cannot
+be decoded or cast to `json`, and only a `text` key may appear in an
+`extern def` signature or as an extern target type argument; each is a
+static error. The same holds for a key reached through type arguments: if
+`Outer[T]` has a field of type `Box[Wrap[T]]` and `Box[K]` a field of type `dict[K, int]`, then
 `Outer[array[int]]` reaches `dict[Wrap[array[int]], int]`, whose key is not
 `Hashable` when `Wrap[T]` holds a `T`. `as text` renders both.
 
@@ -1523,8 +1529,8 @@ conversion:
   record objects, and a nested `array[array[R]]` or `dict[text, array[R]]`
   converts to the matching nested JSON shape.
 
-For a type with no non-`text`-keyed dict, this encoding is exactly what the
-decode direction (`json as R`, `text as array[R]`, and the other
+Except for an exception-keyed dict (which cannot decode), this encoding is
+exactly what the decode direction (`json as R`, `text as array[R]`, and the other
 record/enum/array/dict rows in the [conversion matrix](#conversion-matrix)
 above) accepts, so a round trip through `json` recovers the original value:
 `(rs as json) as array[R] == rs`.

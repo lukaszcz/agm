@@ -138,6 +138,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     is_standard_agent_enum,
 )
+from agm.util.decimal import JSON_NUMBER_TEXT_PATTERN
 from agm.util.graph import sccs
 
 # A concrete nominal instantiation — a graph node in the instantiation graph
@@ -288,14 +289,6 @@ def _derive_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[st
     return _enum_schema(cast(EnumType, typ), type_table, plan)
 
 
-#: JSON-number grammar an int or decimal key stringifies to: an optional sign, then ``0`` or a
-#: non-zero-leading digit run, an optional fractional part, and an optional exponent. One
-#: pattern for both — decoding validates against the derived schema, and the decode rule
-#: accepts any JSON number text for an int target (e.g. ``"2.0"``), so integrality is enforced
-#: by the decoder rather than the schema.
-_NUMBER_KEY_PATTERN = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
-
-
 def _stringified_key_schema(head: EncodeSchema) -> dict[str, object]:
     """``propertyNames`` constraint matching a stringified key's exact wire text.
 
@@ -308,17 +301,28 @@ def _stringified_key_schema(head: EncodeSchema) -> dict[str, object]:
     if isinstance(head, ScalarEncode):
         if head.kind is ScalarKind.BOOL:
             return {"enum": ["true", "false"]}
-        return {"pattern": _NUMBER_KEY_PATTERN}
+        return {"pattern": JSON_NUMBER_TEXT_PATTERN}
     enum_head = cast(EnumEncode, head)
     return {"enum": [variant.json_name for variant in enum_head.variants]}
+
+
+def _dict_key_head_and_form(
+    key: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, EncodeSchema]
+) -> tuple[EncodeSchema, EncodeSchema, DictKeyForm]:
+    """Return a dict key's emitted encode schema, its resolved head and its ``DictKeyForm``.
+
+    The one classification step shared by schema derivation, decode-plan
+    emission and encode-plan emission, so all agree on every key's wire shape.
+    """
+    key_schema = _emit_encode(key, type_table, plan, memo)
+    key_head = _key_head(key, key_schema, type_table, plan, memo)
+    return key_schema, key_head, dict_key_form(key_head)
 
 
 def _dict_schema(typ: DictType, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Derive a dict type's JSON Schema, branching on its key's ``DictKeyForm``."""
     value_schema = _emit(typ.value, type_table, plan)
-    key_encode_schema = _emit_encode(typ.key, type_table, plan, plan.encode_heads)
-    key_head = _key_head(typ.key, key_encode_schema, type_table, plan, plan.encode_heads)
-    form = dict_key_form(key_head)
+    _, key_head, form = _dict_key_head_and_form(typ.key, type_table, plan, plan.encode_heads)
     if form is DictKeyForm.OBJECT_TEXT:
         return {"type": "object", "additionalProperties": value_schema}
     if form is DictKeyForm.OBJECT_STRINGIFIED:
@@ -737,7 +741,12 @@ def _emit_decode_body(
     if isinstance(typ, ArrayType):
         return ArrayDecode(_emit_decode(typ.elem, type_table, plan, memo))
     if isinstance(typ, DictType):
-        return DictDecode(_emit_decode(typ.value, type_table, plan, memo))
+        _, _, form = _dict_key_head_and_form(typ.key, type_table, plan, plan.encode_heads)
+        return DictDecode(
+            form,
+            _emit_decode(typ.key, type_table, plan, memo),
+            _emit_decode(typ.value, type_table, plan, memo),
+        )
     if isinstance(typ, RecordType):
         return RecordDecode(
             nominal=NominalId(typ.decl_id),
@@ -1158,10 +1167,9 @@ def _emit_encode_body(
     if isinstance(typ, ArrayType):
         return ArrayEncode(_emit_encode(typ.elem, type_table, plan, memo))
     if isinstance(typ, DictType):
-        key_schema = _emit_encode(typ.key, type_table, plan, memo)
+        key_schema, _, form = _dict_key_head_and_form(typ.key, type_table, plan, memo)
         value_schema = _emit_encode(typ.value, type_table, plan, memo)
-        key_head = _key_head(typ.key, key_schema, type_table, plan, memo)
-        return DictEncode(dict_key_form(key_head), key_schema, value_schema)
+        return DictEncode(form, key_schema, value_schema)
     if isinstance(typ, RecordType):
         return RecordEncode(
             nominal=NominalId(typ.decl_id),

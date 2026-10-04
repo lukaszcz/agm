@@ -659,7 +659,11 @@ def test_bottom_json_cast_preserves_the_raised_source(source: str) -> None:
 def test_golden_nested_decode_schema_shape() -> None:
     value = _bound_value('let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n', "x")
     assert isinstance(value, IrConvert)
-    assert value.recipe.decode == DictDecode(ArrayDecode(ScalarDecode(ScalarKind.INT)))
+    assert value.recipe.decode == DictDecode(
+        DictKeyForm.OBJECT_TEXT,
+        ScalarDecode(ScalarKind.TEXT),
+        ArrayDecode(ScalarDecode(ScalarKind.INT)),
+    )
 
 
 def test_golden_decimal_to_int_strategy() -> None:
@@ -699,8 +703,6 @@ def test_decode_scalar_success_branches() -> None:
         (ScalarDecode(ScalarKind.DECIMAL), "x", "Expected decimal, got str 'x'"),
         (ScalarDecode(ScalarKind.BOOL), 1, "Expected bool, got int"),
         (ArrayDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected array, got int"),
-        (DictDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected object, got int"),
-        (DictDecode(ScalarDecode(ScalarKind.INT)), {1: 2}, "Dict key must be string, got int"),
         (
             RecordDecode(
                 _FOO,
@@ -799,6 +801,15 @@ def test_decode_error_branches(schema, obj, message: str) -> None:
         _decode(schema, obj)
 
 
+@pytest.mark.parametrize("obj", [5, {1: 2}])
+def test_decode_text_keyed_dict_rejects_a_non_object_or_non_text_key(obj: object) -> None:
+    schema = DictDecode(
+        DictKeyForm.OBJECT_TEXT, ScalarDecode(ScalarKind.TEXT), ScalarDecode(ScalarKind.INT)
+    )
+    with pytest.raises(ValueError):
+        _decode(schema, obj)
+
+
 def test_decode_nested_record_and_enum_success() -> None:
     rec = _decode(
         RecordDecode(
@@ -828,7 +839,12 @@ def test_decode_nested_record_and_enum_success() -> None:
     assert enum_val == RecordValue(nominal=NominalId(999), fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
     assert lst == ArrayValue([IntValue(1), IntValue(2)])
-    dct = _decode(DictDecode(ScalarDecode(ScalarKind.INT)), {"k": 1})
+    dct = _decode(
+        DictDecode(
+            DictKeyForm.OBJECT_TEXT, ScalarDecode(ScalarKind.TEXT), ScalarDecode(ScalarKind.INT)
+        ),
+        {"k": 1},
+    )
     assert dct == DictValue({"k": IntValue(1)})
     variant_with_field = _decode(
         EnumDecode(

@@ -18,6 +18,7 @@ class ValidationError(Exception):
     instance: object
     path: Sequence[object]
     absolute_path: Sequence[object]
+    relative_schema_path: Sequence[object]
     context: list["ValidationError"]
     json_path: str
     def __init__(self, message: str, **kwargs: object) -> None: ...

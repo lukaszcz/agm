@@ -25,6 +25,7 @@ from agm.agl.ir.contracts import (
     ArrayDecode,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     JsonContractRequest,
     RecordDecode,
@@ -448,12 +449,22 @@ def _find_enum_decode_at_path(
     decode: DecodeSchema,
     path_elements: list[object],
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
+    *,
+    at_key: bool = False,
 ) -> EnumDecode | None:
-    """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path."""
+    """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path.
+
+    *at_key*: the error is a ``propertyNames`` failure, whose path stops at the
+    stringified-key object itself; the enum sought is that dict's key type.
+    """
     decode = _resolve_ref(decode, defs)
-    for elem in path_elements:
+    elements = iter(path_elements)
+    for elem in elements:
         if isinstance(decode, ArrayDecode):
             decode = decode.elem
+        elif isinstance(decode, DictDecode) and decode.key_form is DictKeyForm.ENTRIES:
+            # An entries array: an index, then ``key`` or ``value`` of that entry.
+            decode = decode.key if next(elements, None) == "key" else decode.value
         elif isinstance(decode, DictDecode):
             decode = decode.value
         elif isinstance(decode, RecordDecode):
@@ -470,6 +481,8 @@ def _find_enum_decode_at_path(
         else:
             return None
         decode = _resolve_ref(decode, defs)
+    if at_key and isinstance(decode, DictDecode):
+        decode = _resolve_ref(decode.key, defs)
     return decode if isinstance(decode, EnumDecode) else None
 
 
@@ -525,7 +538,12 @@ def _classify_enum_failure(
     Covers a tagged enum's ``oneOf`` and a plain enum's ``oneOf``/``enum``.
     """
     instance = error.instance
-    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
+    enum_decode = _find_enum_decode_at_path(
+        decode_schema,
+        list(error.absolute_path),
+        defs,
+        at_key="propertyNames" in error.relative_schema_path,
+    )
     if enum_decode is not None and is_plain_enum(enum_decode):
         valid = ", ".join(v.json_name for v in enum_decode.variants)
         return ValidationError(

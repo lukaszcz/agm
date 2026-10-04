@@ -11,7 +11,7 @@ source (.agl)
   → lexer        (INDENT/DEDENT, string and environment interpolation, one NAME token class)
   → parser       (Lark LALR grammar)
   → AST          (frozen dataclasses — the firewall)
-  → scope        (whole-program name resolution)
+  → scope        (whole-program name resolution, user-operator grouping)
   → typecheck    (whole-program checking; selects concrete operations)
   → match compile (exhaustiveness, redundancy, decision DAGs)
   → lower + link (closed, typeless executable program)
@@ -48,7 +48,7 @@ A **program** is the entry module plus its transitive import and re-export depen
 | Lexer | `src/agm/agl/lexer/` |
 | Parser / grammar | `src/agm/agl/parser/`, `src/agm/agl/grammar/` |
 | AST | `src/agm/agl/syntax/` |
-| Scope / name resolution | `src/agm/agl/scope/` |
+| Scope / name resolution | `src/agm/agl/scope/`, `src/agm/agl/infix.py` |
 | Type checking | `src/agm/agl/typecheck/` |
 | Match compilation | `src/agm/agl/matchcompile/` |
 | Semantic foundation (values, types, type table, analyses, exceptions) | `src/agm/agl/semantics/` |

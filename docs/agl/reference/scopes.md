@@ -114,10 +114,8 @@ module root, declaring a binding at that path directly — the same
 declaration-path shorthand available for `def` and the type forms:
 
 ```agl
-scope Config
-  let retries = 3
-  var attempts = 0
-end Config
+let Config::retries = 3
+var Config::attempts = 0
 ```
 
 A `let` or `var` declaration head may be a plain qualifier chain: one or more
@@ -311,15 +309,15 @@ module declares there, or the one type an import or `use` written in that
 scope or an enclosing one provides there; two distinct provided types are
 ambiguous. There is no outward fallback: inside `scope r`, `def Geo::m(self)`
 extends `r::Geo`, never a root `Geo`, and a qualified-only import supplies no
-receiver name. A receiver may be spelled through a type alias: with
-`type Geo = Base`, `def Geo::m(self)` declares the method `Base::m`, reachable
-as both `Base::m` and `Geo::m` (see [Type aliases](types.md#type-aliases)).
-Built-in receiver heads are the exception: `array[E]::name` and
-`dict[K, V]::name` declare methods for those generic receiver types, while
-`text`, `json`, `int`, `decimal`, and `bool` are bare receiver heads; only
-these builtin heads, written directly or through an alias, take type
-arguments in a declaration path, and only on a method. `Point::norm(p)` written bare follows ordinary scope-path rules, while
-`p.norm()` aggregates visible method declarations across modules.
+receiver name. A receiver names its type directly: a path selecting a type
+through a type alias, the module's own or an imported one, is an error (see
+[Type aliases](types.md#type-aliases)). Built-in receiver heads are the
+exception: `array[E]::name` and `dict[K, V]::name` declare methods for those
+generic receiver types, while `text`, `json`, `int`, `decimal`, and `bool` are
+bare receiver heads; only these builtin heads take type arguments in a
+declaration path, and only on a method. `Point::norm(p)` written bare follows
+ordinary scope-path rules, while `p.norm()` aggregates visible method
+declarations across modules.
 
 An enum member's terminal name is an injected bare constructor candidate at
 the enum's own scope path: inside `scope S`, `enum Color = Red | Green` makes
@@ -370,7 +368,10 @@ program def main() -> unit =
 
 `::*` selects every member. Brace tails select relative paths, and `hiding`
 removes members from a glob. `as` adds a renamed bare route while leaving the
-original path reachable. A use in a scope region contributes only to that
+original path reachable. A rename of a type is a type alias of the module's
+own, so nothing may be declared beneath its new name; a rename of a scope
+(`use S as M`) leaves `M` open to the module's own declarations, which stand at
+their written paths. A use in a scope region contributes only to that
 region and its nested regions, as a bare-name convenience: it never adds to
 the region's own qualified surface, so after `scope S` writes
 `use lib::{Geo}`, `S::Geo` names nothing outside `S`.
@@ -381,7 +382,8 @@ module declares `scope X` and an import also provides a scope `X`, exposes
 every `X::p` either side declares. Per member path the module's own
 declaration wins, otherwise the one provided declaration is exposed, and two
 distinct provided declarations make that bare name ambiguous where it is used,
-not at the `use`.
+not at the `use`. A target written through a type alias reaches what the same
+path through its target reaches where the alias is declared.
 
 A use reaches a scope in another module through an existing import route:
 
@@ -413,10 +415,7 @@ a later entry cannot reopen it as `scope A` — the same restriction governs a
 retained `def` or type name against a later `scope` declaration, and vice
 versa.
 
-A retained region stays at the scope path it opened when its entry ran. A
-region written through a type alias opens its target's scope (`scope G` with
-`type G = Base` opens `Base`), and re-pointing the alias later leaves the
-region, its declarations, and its imports and uses at `Base`. An `import` in a
-later region of the same scope path replaces an earlier region import of the
-same module, whichever spelling — alias or target — each region was written
-with.
+A region is at its written path in the REPL as in a file. Opening a region,
+or declaring, beneath a name the session declares as a type alias is rejected
+in whichever entry completes the pair. An `import` in a later region of the
+same scope path replaces an earlier region import of the same module.

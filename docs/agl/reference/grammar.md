@@ -92,7 +92,7 @@ the line directly above it.
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
                 ("as" NAME | "::" tail)? [hiding_clause]
-use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
+use_decl    ::= "use" use_target ("::" tail [hiding_clause] | "as" ref_name)
 export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
 tail          ::= "*" | braces | path_atom ["as" ref_name]
@@ -395,12 +395,12 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from a builtin, a local
-operator declaration, an operator made bare-visible by an import wildcard or
-tail, or a member made bare by a `use` declaration; a plain qualified import
-does not make its fixity available. A chain cannot mix `infixl` and `infixr`
-operators at the same priority: parenthesize one side or assign distinct
-priorities.
+the `+`/`-` level. The operator after `prio` is looked up at the module root
+like any operator name. An operator use takes the fixity that the module
+declaring the selected operator declares for it; see [Operator
+precedence](lexical-structure.md#operator-precedence). A chain cannot mix
+`infixl` and `infixr` operators at the same priority: parenthesize one side or
+assign distinct priorities.
 
 ## Bindings and mutation
 

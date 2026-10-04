@@ -582,27 +582,20 @@ or `is` test spells a superseded member only through an alias declared before
 the redeclaration: after `type OldTint = A::Tint` and `type OldA = A`,
 `OldTint(level)` and `tinted is OldA::Tint` still match. An earlier value also
 matches `_`, renders, and casts to such an alias. An alias keeps the
-declaration it named, permanently: a later redeclaration or import that would
-otherwise select something else there never retargets it. Paths beneath the
-alias are read beneath that declaration, through the current imports, `use`
-declarations, and hiding, exactly as its own spelling would be, and a
-declaration written through the alias lands beneath it.
-
-A declaration written through an alias is keyed by its declared path in the
-REPL too: with `type G = Base`, `def G::h` supersedes an earlier
-`def Base::h` like a redeclaration at the same path, and is displayed as
-`Base::h`. Redeclaring the alias (`type G = Other`) moves no earlier
-declaration: what was declared through `G` stays beneath `Base`, and `G::h`
-now reads beneath `Other`.
+type it named, permanently: a later redeclaration or import that would
+otherwise select something else there never retargets it. A path beneath the
+alias is read as the same path beneath its target as written, in the current
+session: after `type OldB = Base` and a redeclaration of `Base`, `OldB` is
+still the earlier type, while `OldB::h` reads whatever `Base::h` currently is.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in
 effect. Redeclaring a record referenced by an existing enum, or the enum
 declaring a referenced member, does not change that enum's member set, but the
-superseded member is no longer injected as a bare name; redeclaring an enum
+superseded member stops being injected as a bare name; redeclaring an enum
 creates new identities for its inline member records, and a named scope
-nested under a superseded member goes with it: its types can no longer be
-spelled, though values already built from them are unaffected.
+nested under a superseded member goes with it: its types cannot be spelled
+any more, though values already built from them are unaffected.
 
 ## Record types
 
@@ -1013,31 +1006,39 @@ type Issues = array[Issue]
 type Metadata = dict[text, json]
 ```
 
-An alias is another name for the type its target denotes, never a
-declaration of its own: a value of type `Status` *is* a value of type
-`Review`. The target is resolved where the alias is declared — exactly as the
-same type in an annotation there, through that scope region's and module's
-imports and `use` declarations — and means that wherever the alias is used.
-An alias whose target names no type, or that is part of a cycle of aliases,
-is an error at its own declaration, whether or not anything uses it. Alias
-chains resolve transitively.
+An alias is another name for the type its target denotes, never a new type:
+a value of type `Status` *is* a value of type `Review`. The target is
+resolved where the alias is declared — exactly as the same type in an
+annotation there, through that scope region's and module's imports and `use`
+declarations — and means that wherever the alias is used. An alias whose
+target names no type, or that is part of a cycle of aliases, is an error at
+its own declaration, whether or not anything uses it; a cycle is reported at
+its alias declared first. Alias chains resolve transitively.
 
 A spelling through an alias means exactly what the same spelling through its
-target means at the alias's site, in every position — type, value,
-constructor, pattern, `is`, `use` target, import and export items, and
-`hiding`. With `type Geo = Base`:
+target, as written, means where the alias is declared, in every reading
+position — type, value, constructor, pattern, `is`, `use` target, import and
+export items, and `hiding`. With `type Geo = Base`:
 
-- Every path beneath the target is reachable beneath the alias: `Geo::Inner`
-  is `Base::Inner` and `Geo::f()` is `Base::f()`, whether `Base` is declared
-  in the module, imported, or not nameable at all where `Geo` is read. The
-  reading module's own declarations beneath the target are included.
-- An alias declares no scope. Declaring beneath a name the module itself
-  declares as an alias — `def Geo::f()`, `let Geo::v = 1`, `record Geo::Part`,
-  or a `scope Geo` region — is an error, whichever comes first; in the REPL,
-  the entry completing the pair is rejected. Declare beneath the target
-  instead. Beneath the name of an imported alias, a module's own declaration
-  stands at its written path: `Geo::f` then reaches it as well as what the
-  alias reaches beneath its target, and the module's own declaration wins.
+- A path beneath the alias is the same path beneath the target as written,
+  read at the alias's declaration: `Geo::Inner` means what `Base::Inner`
+  means there, through the declaring module's own declarations, imports,
+  `use` declarations, and `hiding` at that site, whether or not `Base` is
+  nameable where `Geo` is read. A reading module's own declarations beneath
+  `Base` are not reached through another module's `Geo`, and a target spelled
+  with a module route (`type Geo = base::Base`) reaches only what that module
+  exports.
+- An anchor narrows what the alias reaches: `::Geo::f` reads only the own
+  module's `Base::f`, and the route `al::Geo::f` only what module `al`
+  exports beneath `Base`.
+- An alias declares no scope, and a declaration is always at its written
+  path. Declaring beneath a name the module itself declares as an alias —
+  `def Geo::f()`, `let Geo::v = 1`, `record Geo::Part`, or a `scope Geo`
+  region — is an error, whichever comes first; in the REPL, the entry
+  completing the pair is rejected. Declare beneath the target instead.
+  Beneath the name of an imported alias, a module's own declaration stands at
+  its written path: `Geo::f` then reaches it as well as what the alias reaches
+  beneath its target, and the module's own declaration wins.
 - A method receiver names its type directly: `def Geo::m(self)` is an error
   whether `Geo` is declared in the module or imported.
 - The alias and its target are one declaration: reaching it directly and
@@ -1083,22 +1084,23 @@ well: after `use lib::{Point as R}`, `R::R(…)` is `lib::Point::Point(…)`.
 
 An alias of an applied generic names that applied type, not the generic type,
 and fixes its type arguments: with `type B = Box[int]`, both `B(value = "s")`
-and a `B::B(…)` pattern on a `Box[text]` value are static errors. A path
-beneath it follows the [segment type-argument
-rule](lexical-structure.md#qualifier-chains) exactly as the written
-application `Box[int]` does: `B::B(value = 1)` is `Box[int]::Box(value = 1)`,
-while `B::helper()` for a static `def Box::helper()` is rejected like
-`Box[int]::helper()`, and so is declaring anything beneath `B`. Aliases
-denoting the same applied type are one declaration; `B` and the generic `Box`
-are distinct, so `hiding Box` leaves `B`. Whether an alias renames a type or
-applies one is decided by what it denotes once every alias in it is
-expanded: with `type Id[T] = T`, `type IB = Id[Base]` is another name for
-`Base` and may declare beneath it, while a written application used as a
-segment (`Id[Base]::m()`) stays under the segment rule. A parameterized alias
-constructor infers only the parameters its target mentions; an explicit type
-application still supplies every declared parameter, so with
-`type Tagged[X] = Point`, `Tagged(x = 1)` and `Tagged::[int](x = 1)` both
-construct a `Point`.
+and a `B::B(…)` pattern on a `Box[text]` value are static errors.
+`B::B(value = 1)` is `Box[int]::Box(value = 1)`. A bare alias segment carries
+no type arguments of its own, so any other path beneath it reads beneath the
+target's head: `B::helper()` for a static `def Box::helper()` is
+`Box::helper()`, while a written application used as a segment
+(`Box[int]::helper()`) stays under the [segment type-argument
+rule](lexical-structure.md#qualifier-chains). Aliases denoting the same
+applied type are one declaration; `B` and the generic `Box` are distinct, so
+`hiding Box` leaves `B`. Whether an alias renames a type or applies one is
+decided by what it denotes once every alias in it is expanded: with
+`type Id[T] = T`, `type IB = Id[Base]` is another name for `Base`, while
+`Id[Base]::m()` stays under the segment rule, and an alias passing a
+parameter through (`Id`) reaches nothing beneath its bare name. A
+parameterized alias constructor infers only the parameters its target
+mentions; an explicit type application still supplies every declared
+parameter, so with `type Tagged[X] = Point`, `Tagged(x = 1)` and
+`Tagged::[int](x = 1)` both construct a `Point`.
 
 An alias of an applied enum injects its members at the alias's type
 arguments: an import item naming `type O = Opt[int]`, or `use O::*`, makes bare
@@ -1108,16 +1110,15 @@ distinct declarations for a bare value spelling, which is then ambiguous; a
 pattern or `is` test still selects among them by its scrutinee's type, and
 candidates constructing one member at the scrutinee's type arguments are one.
 
-An alias of a structural type (`type F = int -> bool`) hosts no paths:
-declaring anything beneath it is an error. Two aliases denoting the same
-structural type are one declaration.
+An alias of a structural type (`type F = int -> bool`) reaches no paths. Two
+aliases denoting the same structural type are one declaration.
 
-An alias of a builtin type is that builtin everywhere: with `type T2 = text`,
-`T2::size` is `text::size`, `def T2::shout(self)` declares a `text` method,
-and `def T2::f()` declares `text::f`; `type Count = int` with
-`def Count::twice(self)` declares an `int` method; and `type Arr[E] = array[E]`
-admits `def Arr[E]::second(self)` exactly as `array[E]` does. The builtin
-alias `path` is `text`, so `Box[path]` and `Box[text]` are one type.
+An alias of a builtin type reads as that builtin: with `type T2 = text`,
+`T2::size` is `text::size`, and with `type Arr[E] = array[E]`, `Arr::map` is
+`array::map`. Declaring through it follows the rules above: a method is
+declared on the builtin directly (`def text::shout(self)`), never through the
+alias. The builtin alias `path` is `text`, so `Box[path]` and `Box[text]` are
+one type.
 
 An `is` test through an alias tests the declaration the alias denotes: with
 `type W = Plain::Wait`, `value is W` is `value is Plain::Wait`, and with
@@ -1185,7 +1186,8 @@ The following are static errors:
    names, or duplicate fields within one inline member.
 3. References to unknown types in records, enums, aliases, or function
    parameter declarations.
-4. Cyclic aliases.
+4. Cyclic aliases, and declarations beneath a name the same module declares
+   as an alias ([Type aliases](#type-aliases)).
 5. An **uninhabitable** record, enum, or exception — see
    [Recursive types](#recursive-types).
 

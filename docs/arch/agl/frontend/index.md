@@ -4,7 +4,7 @@ The frontend turns source text into a fully resolved, type-checked, match-compil
 
 ## Pass Structure
 
-Each pass wraps the previous pass's artifact rather than mutating it: parsing builds an AST that may retain raw infix chains; module-graph assembly resolves those chains with import-visible fixities; scope yields a resolved program, typecheck a checked program, and match compilation the artifact that lowering consumes. AST nodes stay frozen and shared; conclusions live in side tables keyed by node id.
+Each pass wraps the previous pass's artifact rather than mutating it: parsing builds an AST that may retain raw user-operator chains; scope yields a resolved program with those chains grouped, typecheck a checked program, and match compilation the artifact that lowering consumes. AST nodes stay frozen and shared; conclusions live in side tables keyed by node id.
 
 Every pass reports through one diagnostic channel (`agl/diagnostics.py`). Scope and typecheck diagnostics carry a phase tag so callers can distinguish them without matching text. Each pass recurses over the tree, so `agl/recursion.py` converts stack exhaustion on over-deep source into an ordinary diagnostic ([hosting.md](../hosting.md)).
 

@@ -65,8 +65,9 @@ fails, previously completed bindings and function closures remain available.
 binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
 binding at that path rather than in the module root namespace. The prefix is
 an ordinary declaration path, not a module route or a type-argument-applied
-segment; a prefix written through a type alias declares at the target's path
-(`let G::v = 4` with `type G = Base` declares `Base::v`). See
+segment. A binding is declared at its written path; a prefix naming a type
+alias the same module declares is an error ([Type
+aliases](types.md#type-aliases)). See
 [Named scopes](scopes.md#binder-paths) for declaring a binder inside a `scope`
 region.
 

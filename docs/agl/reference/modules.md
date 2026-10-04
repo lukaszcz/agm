@@ -68,14 +68,17 @@ may accompany a plain import or a `::*` tail, but not a positive selection.
 
 Selected and hidden items must name public declarations of every module
 matched by a wildcard; an item naming nothing is an error. An item may be
-written through a type alias the module exports, and then names the alias's
-target declaration: with `type Geo = Base` exported beside a `Base::Inner`,
+written through a type alias the module exports, and then names what the
+module exports at the same path beneath the alias's target: when `al` declares
+`type Geo = Base` and also exports `Base` with its `Base::Inner`,
 `import al::* hiding Geo::Inner` hides `Base::Inner`, and
-`import al::{Geo::Inner}` makes `Geo::Inner` bare. Hiding an alias removes
-the declaration it denotes, so every alias that same import brings in for that
-declaration or type goes with it; an alias of a different type survives
-(`hiding Box` leaves `type IntBox = Box[int]`). An item naming an enum, or an
-alias of an enum, also injects that enum's member names.
+`import al::{Geo::Inner}` makes `Geo::Inner` bare. Hiding an alias removes the
+type it denotes and everything a read beneath the alias reaches through that
+import, under every spelling: with `type HGeo = Base` and a `def Base::j()`
+in `hid`, `import hid::* hiding HGeo` leaves neither `Base` nor `Base::j`. An
+alias of a different type survives (`hiding Box` leaves
+`type IntBox = Box[int]`). An item naming an enum, or an alias of an enum, also
+injects that enum's member names.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -114,8 +117,7 @@ or module root. Its target can be a local scope, a scope or module root reached
 through an import route, or a scope anchored at the current module root.
 
 ```ebnf
-use_decl      ::= "use" use_target ("::" tail | "as" ref_name)
-                  [hiding_clause]
+use_decl      ::= "use" use_target ("::" tail [hiding_clause] | "as" ref_name)
 use_target    ::= ["/"] module_path ["::" scope_path] | "::" scope_path
 scope_path    ::= NAME ("::" NAME)*
 ```
@@ -143,8 +145,12 @@ type, `C::Red` its member — while the original spelling stays available.
 member beneath `Alias`; a whole-target alias must be an identifier because it
 becomes a qualifier segment. A renamed spelling is another name for the same
 declaration, never a declaration of its own, so reaching a declaration through
-a rename and directly is no ambiguity. `hiding` is valid only with a `::*`
-tail. A `use` declaration contributes names
+a rename and directly is no ambiguity. A rename of a type is a type alias of
+the module's own: nothing may be declared beneath its new name
+([Type aliases](types.md#type-aliases)). `hiding` is valid only with a `::*`
+tail, and removes from every spelling what a read beneath each hidden item
+reaches through that use, exactly as an import's `hiding` does. A `use`
+declaration contributes names
 only to its enclosing module or named scope region; it does not make a module
 available. Import the module first when its target is not local.
 
@@ -166,8 +172,9 @@ the module declares `scope X` and an import also provides a scope `X`, exposes
 every member either declares. Per member path the module's own declaration
 wins, else the one imported declaration is exposed, and two distinct imported
 declarations make that bare name ambiguous where it is used. A target written
-through a type alias reaches what the alias's target path reaches there
-(`use Geo::Sub::*` wherever `Geo::Sub::t()` reads). A named scope exposed by an
+through a type alias reaches what the same path through its target reaches
+where the alias is declared (`use Geo::Sub::*` wherever `Geo::Sub::t()`
+reads). A named scope exposed by an
 earlier `use` is already bare and can therefore be the target of a later
 `use`; a `use` reads only the uses written before it. Selection, renaming, and
 hiding determine which nested scope paths the later declaration can target.
@@ -323,14 +330,12 @@ export math/*
 ```
 
 Export items and export `hiding` follow the import rules: an item may be
-written through a type alias and names its target's declaration, and
-`export al hiding Base::Inner` withholds that declaration under every spelling
-the re-export would bring in, `al`'s aliases included (`Geo::Inner` with
-`type Geo = Base`); a path a `hiding` removes reads as hidden under every
-spelling, as do the paths beneath it. A declaration written through an alias
-is exported at its declared path beneath the target (`def Geo::f()` with
-`type Geo = Base` exports `Base::f`), and a scoped export in `scope Geo`
-forwards beneath `Base`.
+written through a type alias and names what the exported module exports at
+that path beneath the alias's target, and `export al hiding Base::Inner`
+withholds that declaration under every spelling the re-export would bring in,
+`al`'s aliases included (`Geo::Inner` with `type Geo = Base`); a path a
+`hiding` removes reads as hidden under every spelling, as do the paths beneath
+it. Every declaration is exported at its written path.
 
 Re-exports preserve the original defining-module identity. Conflicting exposed
 names with different origins are static errors; duplicate paths to the same

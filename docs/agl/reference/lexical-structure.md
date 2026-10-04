@@ -266,9 +266,9 @@ turn ([Names and visibility](scopes.md#names-and-visibility)).
 
 Only a scope path, a type, a type alias, or a module route qualifies. A chain
 whose prefix names a function, a binding, or an injected enum member reports
-an unknown qualifier. A segment naming a type alias stands for its target's
-path ([Type aliases](types.md#type-aliases)). Scope segments never
-suffix-match.
+an unknown qualifier. A path beneath a type alias reads as the same path
+beneath the alias's target, written and read where the alias is declared
+([Type aliases](types.md#type-aliases)). Scope segments never suffix-match.
 
 Every route and chain segment is byte-adjacent through `::`: `foo/bar::thing`
 is a qualifier, while `foo / bar::thing` is division followed by a separate

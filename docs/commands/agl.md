@@ -649,8 +649,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 - **`:info NAME`** reads `NAME` exactly as an entry would: bare, qualified, applied-owner
   (`Slot[int]::Filled`), and alias-qualified spellings select what they select in an
   expression or type, and a hidden, unknown, or ambiguous name reports that error. A declaration
-  is shown by its declared path — scope path and name in its declaring module — whichever
-  spelling reached it: with `type G = Base`, `:info G::h` shows `def Base::h`.
+  is shown by its written path — scope path and name in its declaring module — whichever
+  spelling reached it: with `type G = Base` and `def Base::h`, `:info G::h` shows `def Base::h`.
 - **Engine settings**: import `std/config` and write a qualified target
   (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
   it even if a later expression in the same entry fails; `trace`/`trace-file` writes reconfigure the

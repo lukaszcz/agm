@@ -25,7 +25,7 @@ The same module's `fold_scalar` factors that folding's literal/unary-operator/te
 
 The AST records source structure faithfully so later passes never reconstruct spellings:
 
-- User-operator chains cross the parser unresolved as raw infix-chain nodes; module-graph assembly rewrites them into ordinary applications once import-visible fixities are known ([modules.md](../modules.md)). Scope and later passes see only resolved applications.
+- A chain of builtin operators is grouped at parse; one containing a user operator crosses the parser as a raw infix-chain node, which scope groups by the selected declarations' fixities and rewrites into ordinary applications (`agl/infix.py`, [scope.md](scope.md#operators)). Typecheck and later passes see only grouped applications.
 - A parenthesized built-in symbolic operator, `(+)`, is its own operator-value node carrying the operator; a user operator in parentheses stays an ordinary name reference.
 - Qualified expressions, types, patterns, and `is` tests share one qualifier-chain node with per-segment spans and type arguments.
 - Declarations and scope-region items carry canonical scope paths; enum members record whether they were declared inline or reference an existing record; immutable `let` names, `var` field markers, and assignment-target shapes (name, index, field) are all retained.

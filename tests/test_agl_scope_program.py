@@ -3398,7 +3398,7 @@ class TestExportDecl:
             default_stdlib=False,
         )
 
-        with pytest.raises(AglScopeError):
+        with pytest.raises(HiddenMemberError):
             resolve_program(graph)
 
     def test_scope_hidden_on_one_import_route_remains_a_use_target_on_another(

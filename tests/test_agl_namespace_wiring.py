@@ -1495,7 +1495,7 @@ def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Pat
         },
     )
 
-    with pytest.raises(UnknownQualifierError):
+    with pytest.raises(HiddenMemberError):
         resolve_program(graph)
 
 

@@ -14,15 +14,18 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Protocol
 
+from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.modules.ids import ModuleId, render_route_member
 from agm.agl.scope.lookup import (
     Candidate,
     LookupKind,
     PathSources,
     QualifiedTarget,
+    lookup_hidden,
     lookup_origins,
     lookup_reached,
     lookup_steps,
+    removes_origin,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -418,12 +421,12 @@ class UseReader:
     ) -> Candidate:
         """*candidate* as *decl*, in region *site*, contributes it, exposed *alone* or owned.
 
-        An alias segment stands for its target's path, so a member an alias
-        renaming its target selects that the use exposes *alone* -- no
-        longer spelled beneath the alias -- is the target's own; one an
-        alias applying its target selects stays at the alias's type
-        arguments. Each way it was reached also removes what the use's
-        ``hiding`` names.
+        An alias segment selects a member of its target, read as written
+        where the alias is declared. Exposed *alone* -- spelled by its own
+        name, not beneath the alias -- that member is the target's own when
+        the alias renames its target, and stays at the alias's type
+        arguments when the alias applies it. Each way it was reached also
+        removes what the use's ``hiding`` names.
         """
         target = candidate.target
         declaration = candidate.origin.declaration
@@ -522,7 +525,8 @@ class UseReader:
     def origins(self, site: ScopePath, decl: UseDecl, relative: ScopePath) -> frozenset[QName]:
         """The scopes and types *decl*, written in region *site*, exposes as *relative*.
 
-        A path holding a tail item names what the target's path there names.
+        A path holding a tail item names what the target's path there names;
+        one its ``hiding`` removes -- it or one above it -- is none.
         """
         with self._reading_use(decl):
             target = _use_target(decl)
@@ -532,7 +536,13 @@ class UseReader:
                 for item in decl.tail or ()
             ):
                 paths.append((*target, *relative))
-            return frozenset().union(*(self._use_path_origins(site, decl, path) for path in paths))
+            named: frozenset[QName] = frozenset().union(
+                *(self._use_path_origins(site, decl, path) for path in paths)
+            )
+            hiding = frozenset({self._use_hidden(site, decl)})
+            return frozenset(
+                origin for origin in named if not removes_origin(hiding, origin, self._sources)
+            )
 
     def _use_path_reached(
         self,
@@ -576,18 +586,32 @@ class UseReader:
             self._use_path_reached(site, decl, names, LookupKind.TYPE, owners_within)
         )
 
+    def _hidden(
+        self, site: ScopePath, decl: UseDecl, names: ScopePath, owners_within: int | None = None
+    ) -> HiddenMemberError | None:
+        """*names*, spelled beneath *decl*'s anchor in region *site*, as hidden when removed.
+
+        See :func:`lookup_hidden`, *owners_within* as there; ``None`` for a
+        module route alone.
+        """
+        if _use_route(decl, names) is not None:
+            return None
+        return lookup_hidden(self._sources, _use_chain(decl, names), site, owners_within)
+
     def validate(self, site: ScopePath, decl: UseDecl) -> None:
         """Check that *decl*, written in region *site*, names a qualifier, each item a path beneath.
 
         A single-item rename's target is the declaration it renames. An item
         is a path declared beneath the target: a type the target reaches
-        projects its member table, and an alias inside the item stands for
-        its target's path.
+        projects its member table, and an alias inside the item reads its
+        target as written where the alias is declared. A target or item
+        naming nothing visible is hidden when a ``hiding`` removed it or a
+        prefix, else unknown.
         """
         target = _use_target(decl)
         with self._reading_use(decl):
             if not self._use_renames(site, decl) and not self._names_qualifier(site, decl, target):
-                raise UnknownQualifierError(
+                raise self._hidden(site, decl, target) or UnknownQualifierError(
                     _use_target_spelling(decl), span=decl.span, repair=MissRepair.IMPORT_MODULE
                 )
             for item in (*(decl.tail or ()), *decl.hidden):
@@ -598,4 +622,6 @@ class UseReader:
                     or self._use_path_reached(site, decl, path, LookupKind.VALUE, len(target))
                     or self._pending_at(site, decl, path)
                 ):
-                    raise UnknownMemberError(_use_target_spelling(decl, item_path), span=decl.span)
+                    raise self._hidden(site, decl, path, len(target)) or UnknownMemberError(
+                        _use_target_spelling(decl, item_path), span=decl.span
+                    )

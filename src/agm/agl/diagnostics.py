@@ -324,11 +324,13 @@ class HiddenMemberError(AglTypeError):
     An import or a ``use`` hides it -- directly, or through an alias whose
     target it hides. Scope raises it wherever owner selection fails: values,
     patterns, ``is`` tests, method receivers, and type annotations alike.
-    ``owner`` is the owner as spelled and ``member`` the hidden member's name.
+    ``owner`` is the owner as spelled, empty for a name at the root, and
+    ``member`` the hidden member's name.
     """
 
     def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:
-        super().__init__(f"'{owner}::{member}' is hidden by its import or 'use'.", span=span)
+        spelled = f"{owner}::{member}" if owner else member
+        super().__init__(f"'{spelled}' is hidden by its import or 'use'.", span=span)
         self.owner = owner
         self.member = member
 

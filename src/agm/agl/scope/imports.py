@@ -115,7 +115,9 @@ class ModuleContribution:
     """One imported module's route-keyed declaration and named-scope contribution.
 
     ``path_decls`` and ``alias_decls`` are the import declarations forming
-    each route; ``exports`` is everything the module exports, hidden or not.
+    each route; ``path_hidden`` and ``alias_hidden`` the declarations and
+    scopes a ``hiding`` removed from a route that none of them brings;
+    ``exports`` is everything the module exports, hidden or not.
     """
 
     module: ModuleId
@@ -199,13 +201,14 @@ class ImportEnv:
     Each atom maps to
     every origin it draws from a wildcard's expansion, exactly like
     ``unqualified``: two modules exposing the same bare name is deferred to
-    the name's first use, not raised here. ``unqualified_scope_routes`` and
-    ``decl_bare_scope_routes`` carry the parallel namespace-only contribution
-    for scopes that have no declaration member to put in a bare table.
-    ``decl_hidden`` holds, per tailed declaration, the bare atoms its
-    ``hiding`` or the imported module's export ``hiding`` removed from its
-    tail; ``unqualified_hidden`` holds the declarations a root-position
-    import's ``hiding`` removed.
+    the name's first use, not raised here. ``decl_scope_routes`` carries,
+    per tailed declaration at the root or in a region, the parallel
+    namespace-only contribution for scopes that have no declaration member
+    to put in a bare table.
+    ``decl_hidden`` holds, per tailed declaration, the bare atoms -- of
+    declarations and scopes alike -- its ``hiding`` or the imported module's
+    export ``hiding`` removed from its tail; ``unqualified_hidden`` holds the
+    declarations a root-position import's ``hiding`` removed.
     ``unqualified_decls`` names the declarations contributing each root bare
     atom's origins, as :attr:`ModuleContribution.path_member_decls` does a
     route's members; ``decl_hiding`` holds the declarations each tailed or
@@ -225,8 +228,7 @@ class ImportEnv:
     decl_bare_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
-    unqualified_scope_routes: Mapping[NameAtom, frozenset[BareRoute]] = field(default_factory=dict)
-    decl_bare_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
+    decl_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
     decl_hidden: Mapping[int, frozenset[NameAtom]] = field(default_factory=dict)
@@ -274,22 +276,16 @@ class ImportEnv:
                 for node_id, routes in self.decl_bare_routes.items()
             }
         )
-        unqualified_scope_routes: Mapping[NameAtom, frozenset[BareRoute]] = MappingProxyType(
-            dict(self.unqualified_scope_routes)
-        )
-        decl_bare_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = (
-            MappingProxyType(
-                {
-                    node_id: MappingProxyType(dict(routes))
-                    for node_id, routes in self.decl_bare_scope_routes.items()
-                }
-            )
+        decl_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = MappingProxyType(
+            {
+                node_id: MappingProxyType(dict(routes))
+                for node_id, routes in self.decl_scope_routes.items()
+            }
         )
         object.__setattr__(self, "decl_bare", decl_bare)
         object.__setattr__(self, "unqualified_routes", unqualified_routes)
         object.__setattr__(self, "decl_bare_routes", decl_bare_routes)
-        object.__setattr__(self, "unqualified_scope_routes", unqualified_scope_routes)
-        object.__setattr__(self, "decl_bare_scope_routes", decl_bare_scope_routes)
+        object.__setattr__(self, "decl_scope_routes", decl_scope_routes)
         decl_hidden: Mapping[int, frozenset[NameAtom]] = MappingProxyType(dict(self.decl_hidden))
         object.__setattr__(self, "decl_hidden", decl_hidden)
         scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = MappingProxyType(
@@ -504,7 +500,6 @@ def build_import_env(
     decl_bare: dict[int, dict[NameAtom, set[QName]]] = {}
     root_bare_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_bare_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
-    root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     decl_hidden: dict[int, set[NameAtom]] = {}
     decl_hiding: dict[int, list[ItemDeclaration]] = {}
@@ -580,7 +575,7 @@ def build_import_env(
                 route_member_decls = acc.alias_member_decls.setdefault(decl.alias, {})
                 route_decls = acc.alias_decls.setdefault(decl.alias, set())
                 acc.aliases.add(decl.alias)
-            route_hidden.update(hidden)
+            route_hidden.update(hidden, hidden_scope_paths)
             route_decls.add(decl.node_id)
             reached_withheld = decl_withheld.setdefault(decl.node_id, {})
             for source, qname in module_exports.items():
@@ -597,7 +592,11 @@ def build_import_env(
             for source in visible_scope_paths:
                 scope_origins_by_route[(module, _path(source))] = module_scopes[source]
             exposures = _tail_exposures(decl, selected_exports)
-            removed = [exposed for exposed, source in exposures if source in hidden]
+            scope_exposures = _tail_exposures(decl, selected_scopes)
+            removed = [
+                *(exposed for exposed, source in exposures if source in hidden),
+                *(exposed for exposed, source in scope_exposures if source in hidden_scope_paths),
+            ]
             if removed:
                 decl_hidden.setdefault(decl.node_id, set()).update(removed)
             for exposed, source in exposures:
@@ -613,16 +612,12 @@ def build_import_env(
                 else:
                     root_bare.setdefault(exposed, {}).setdefault(qname, set()).add(decl.node_id)
                     root_bare_routes.setdefault(exposed, set()).add(route)
-            for exposed, source in _tail_exposures(decl, selected_scopes):
+            for exposed, source in scope_exposures:
                 if source in hidden_scope_paths:
                     continue
-                route = (module, _path(source))
-                destination = (
-                    decl_scope_routes.setdefault(decl.node_id, {})
-                    if decl.scope_path
-                    else root_scope_routes
+                decl_scope_routes.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(
+                    (module, _path(source))
                 )
-                destination.setdefault(exposed, set()).add(route)
 
     contributions: dict[ModuleId, ModuleContribution] = {}
     for module, acc in accumulators.items():
@@ -635,9 +630,11 @@ def build_import_env(
             acc.alias_members,
             frozenset(acc.path_scope_paths),
             {alias: frozenset(scope_paths) for alias, scope_paths in acc.alias_scope_paths.items()},
-            frozenset(acc.path_hidden - acc.path_members.keys()),
+            frozenset(acc.path_hidden - acc.path_members.keys() - acc.path_scope_paths),
             {
-                alias: frozenset(hidden - acc.alias_members[alias].keys())
+                alias: frozenset(
+                    hidden - acc.alias_members[alias].keys() - acc.alias_scope_paths[alias]
+                )
                 for alias, hidden in acc.alias_hidden.items()
             },
             _frozen_decls(acc.path_member_decls),
@@ -668,10 +665,7 @@ def build_import_env(
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_bare_routes.items()
         },
-        unqualified_scope_routes={
-            atom: frozenset(routes) for atom, routes in root_scope_routes.items()
-        },
-        decl_bare_scope_routes={
+        decl_scope_routes={
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_scope_routes.items()
         },
@@ -813,16 +807,26 @@ def unqualified_exposures(env: ImportEnv) -> Iterator[Exposure]:
 
 def qualifier_scope_paths(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
-) -> tuple[tuple[ModuleId, frozenset[NameAtom]], ...]:
-    """Return named-scope identities visible through each matching import route."""
-    result: list[tuple[ModuleId, frozenset[NameAtom]]] = []
+) -> tuple[tuple[ModuleId, frozenset[NameAtom], frozenset[int]], ...]:
+    """Return named-scope identities visible through each matching import route.
+
+    Each with the import declarations of those routes.
+    """
+    result: list[tuple[ModuleId, frozenset[NameAtom], frozenset[int]]] = []
     for module in qualifier_candidates(env, qualifier, anchored=anchored):
         contribution = env.contributions[module]
         routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
         scope_paths = frozenset(
             path for route in routes for path in _route_scope_paths(contribution, route)
         )
-        result.append((module, scope_paths))
+        decls = frozenset(
+            node_id
+            for route in routes
+            for node_id in (
+                contribution.path_decls if route is None else contribution.alias_decls[route]
+            )
+        )
+        result.append((module, scope_paths, decls))
     return tuple(result)
 
 

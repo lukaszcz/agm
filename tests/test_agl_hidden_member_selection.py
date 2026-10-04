@@ -17,7 +17,9 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglTypeError, HiddenMemberError
+from agm.agl.scope.symbols import UnknownMemberError, UnknownQualifierError
 from tests.agl.qualifier_support import (
+    Probe,
     Scenario,
     accepted,
     assert_scenario,
@@ -418,6 +420,77 @@ _SCENARIOS |= {
         ("a-re-export-of-a-re-export-hiding", "ex2", "import ex2::*\nimport ex2"),
     )
 }
+
+
+_PURE_SCOPE = (
+    "scope S\n  def a() -> int = 1\n  def b() -> int = 2\n\n  scope T\n    def c() -> int = 3\n"
+    "  end T\nend S\n\ndef g() -> int = 5\n"
+)
+"""A scope declaring no type, a scope within it, and a function beside it."""
+
+_BENEATH_PURE_SCOPE = {
+    "member": ("{r}S::a()", "{r}S::a"),
+    "never-declared": ("{r}S::nope()", "{r}S::nope"),
+    "nested": ("{r}S::T::c()", "{r}S::T::c"),
+    "beneath-never-declared": ("{r}S::nope::x()", "{r}S::nope::x"),
+    "use-glob": ("use {r}S::*", "use {r}S::*"),
+    "use-item": ("use {r}S::{{a}}", "use {r}S::{{a}}"),
+    "use-never-declared-item": ("use {r}S::{{nope}}", "use {r}S::{{nope}}"),
+    "use-rename": ("use {r}S as Q", "use {r}S as Q"),
+    "use-nested": ("use {r}S::T::*", "use {r}S::T::*"),
+}
+"""Each read beneath ``sc``'s scope ``S`` after a route ``{r}``, with its span."""
+
+
+def _beneath_pure_scope_probes(route: str, region: bool) -> dict[str, Probe]:
+    """Every read beneath ``S`` once a ``hiding`` removed it, after *route*, in a *region* or not.
+
+    Each is hidden, in every position, while ``g`` stays and a never-imported
+    qualifier stays unknown.
+    """
+    hiding = "  import sc::* hiding S\n"
+
+    def placed(text: str) -> str:
+        if not region:
+            return text
+        if text.startswith("use "):
+            return f"scope r\n{hiding}  {text}\nend r"
+        return f"scope r\n{hiding}  def v() -> int = {text}\nend r\nr::v()"
+
+    probes = {
+        name: rejected(placed(text.format(r=route)), HiddenMemberError, span.format(r=route))
+        for name, (text, span) in _BENEATH_PURE_SCOPE.items()
+    } | {
+        "kept": accepted(placed(f"{route}g()"), "int"),
+        "unknown-qualifier": rejected(placed("Nope::x()"), UnknownQualifierError, "Nope::x"),
+    }
+    if not region:
+        probes |= type_positions_rejected("type", f"{route}S::Nope", HiddenMemberError)
+    return probes
+
+
+_SCENARIOS |= {
+    f"{name}-hiding-a-scope-declaring-no-type-hides-every-path-beneath-it": Scenario(
+        modules={"sc": _PURE_SCOPE},
+        header=header,
+        probes=_beneath_pure_scope_probes(route, region=not header),
+    )
+    for name, route, header in (
+        ("an-import", "", ("import sc::* hiding S",)),
+        ("a-use", "", ("import sc\nuse sc::* hiding S",)),
+        ("a-route", "sc::", ("import sc hiding S",)),
+        ("a-region-import", "", ()),
+    )
+}
+_SCENARIOS["hiding-every-member-of-a-scope-keeps-it-a-qualifier"] = Scenario(
+    modules={"sc": _PURE_SCOPE},
+    header=("import sc::* hiding S::a, S::b",),
+    probes={
+        "use-glob": accepted("use S::*\n1", "int"),
+        "member": rejected("S::a()", HiddenMemberError, "S::a"),
+        "never-declared": rejected("S::nope()", UnknownMemberError, "S::nope"),
+    },
+)
 
 
 class TestHiddenMemberSelection:

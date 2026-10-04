@@ -740,6 +740,126 @@ _SCENARIOS |= {
     for hidden in (("HGeo", "T2"), ("HGeo",), ("T2",))
 }
 
+_TYPE_WITH_SCOPE = (
+    "record Base\n  x: int\n\nscope Base\n  def <+>(a: int, b: int) -> int = a + b\n"
+    "  def j() -> int = 5\nend Base\n\ntype HGeo = Base\n"
+)
+"""A type, the members its scope region declares, and an alias of it."""
+_OTHER_BASE_SCOPE = "scope Base\n  def k() -> int = 7\nend Base\n"
+"""Another module's scope at the same path."""
+
+_USES_BENEATH = {
+    "glob": "use {q}::*",
+    "item": "use {q}::{{j}}",
+    "renamed-item": "use {q}::{{j as k}}",
+    "rename": "use {q} as B",
+    "hiding-item": "use {q}::* hiding j",
+    "never-declared-item": "use {q}::{{nope}}",
+}
+"""Each ``use`` of a qualifier ``{q}``, by what it names beneath it."""
+
+
+def _uses_beneath_removed_probes(route: str) -> dict[str, Probe]:
+    """Every use of ``hid``'s ``Base`` once a ``hiding`` removed it, spelled after *route*.
+
+    Spelled directly or through the alias, the target is a removed prefix, so
+    each use is hidden -- in a region too -- while an unknown qualifier stays
+    unknown.
+    """
+    return {
+        f"{name}-{spelled.lower()}{where}": rejected(
+            text.format(use=use.format(q=f"{route}{spelled}")),
+            HiddenMemberError,
+            use.format(q=f"{route}{spelled}"),
+        )
+        for spelled in ("Base", "HGeo")
+        for name, use in _USES_BENEATH.items()
+        for where, text in (
+            ("", "{use}"),
+            ("-in-a-region", "scope r\n  {use}\n  def v() -> int = 1\nend r"),
+        )
+    } | {"unknown-qualifier": rejected("use Nope::*", UnknownQualifierError, "use Nope::*")}
+
+
+_SCENARIOS |= (
+    {
+        f"{source}-hiding-{hidden.lower()}-hides-every-use-beneath-it": Scenario(
+            modules={"hid": _TYPE_WITH_SCOPE},
+            header=(header.format(hidden=hidden),),
+            probes=_uses_beneath_removed_probes(route),
+        )
+        for hidden in ("HGeo", "Base")
+        for source, route, header in (
+            ("an-import", "", "import hid::* hiding {hidden}"),
+            ("a-use", "", "import hid\nuse hid::* hiding {hidden}"),
+            ("a-route", "hid::", "import hid hiding {hidden}"),
+        )
+    }
+    | {
+        f"a-region-import-hiding-{hidden.lower()}-hides-a-use-beneath-it-there": Scenario(
+            modules={"hid": _TYPE_WITH_SCOPE},
+            header=(),
+            probes={
+                f"{name}-{spelled.lower()}": rejected(
+                    f"scope r\n  import hid::* hiding {hidden}\n  {use.format(q=spelled)}\nend r",
+                    HiddenMemberError,
+                    use.format(q=spelled),
+                )
+                for spelled in ("Base", "HGeo")
+                for name, use in _USES_BENEATH.items()
+            },
+        )
+        for hidden in ("HGeo", "Base")
+    }
+    | {
+        "a-use-of-a-qualifier-a-hiding-removed-reaches-what-else-is-at-its-path": Scenario(
+            modules={"hid": _TYPE_WITH_SCOPE, "oth": _OTHER_BASE_SCOPE},
+            header=("import hid::* hiding HGeo",),
+            probes={
+                "own-scope": accepted(
+                    "use Base::*\n\nscope Base\n  def own() -> int = 1\nend Base\n\nown()", "int"
+                ),
+                "own-scope-hidden-item": rejected(
+                    "use Base::{j}\n\nscope Base\n  def own() -> int = 1\nend Base",
+                    HiddenMemberError,
+                    "use Base::{j}",
+                ),
+                "another-import": accepted("import oth::*\nuse Base::*\nk()", "int"),
+                "another-import-item": accepted("import oth::*\nuse Base::{k}\nk()", "int"),
+                "another-import-hidden-item": rejected(
+                    "import oth::*\nuse Base::{j}", HiddenMemberError, "use Base::{j}"
+                ),
+                "the-same-module-by-another-import": accepted(
+                    "import hid::{Base::j}\nuse Base::*\nj()", "int"
+                ),
+                "the-same-module-by-another-import-item": accepted(
+                    "import hid::{Base::j}\nuse Base::{j}\nj()", "int"
+                ),
+            },
+        ),
+        "a-use-of-a-kept-qualifier-hides-only-the-members-a-hiding-removed": Scenario(
+            modules={"hid": _TYPE_WITH_SCOPE},
+            header=("import hid::* hiding Base::j",),
+            probes={
+                "glob": accepted("use Base::*\nBase(x = 1).x", "int"),
+                "item": rejected("use Base::{j}", HiddenMemberError, "use Base::{j}"),
+                "renamed-item": rejected(
+                    "use Base::{j as k}", HiddenMemberError, "use Base::{j as k}"
+                ),
+                "item-through-the-alias": rejected(
+                    "use HGeo::{j}", HiddenMemberError, "use HGeo::{j}"
+                ),
+                "hiding-item": rejected(
+                    "use Base::* hiding j", HiddenMemberError, "use Base::* hiding j"
+                ),
+                "never-declared-item": rejected(
+                    "use Base::{nope}", UnknownMemberError, "use Base::{nope}"
+                ),
+            },
+        ),
+    }
+)
+
 
 _PLACED = {"G": ("Base", "h"), "T2": ("text", "s"), "Arr": ("array", "z")}
 """Each alias ``pl`` declares beneath, with its target and the member the items name."""
@@ -1832,10 +1952,8 @@ _SCENARIOS["an-alias-reaches-no-qualifier-a-hiding-at-its-site-removed"] = Scena
     modules={**_MODULES, "ah": "import base::* hiding Base::Inner\ntype Gh = Base\n"},
     header=("import ah::*",),
     probes={
-        "use": rejected("use Gh::Inner::*\n1", UnknownQualifierError, "use Gh::Inner::*"),
-        "use-renamed": rejected(
-            "use Gh::Inner as R\n1", UnknownQualifierError, "use Gh::Inner as R"
-        ),
+        "use": rejected("use Gh::Inner::*\n1", HiddenMemberError, "use Gh::Inner::*"),
+        "use-renamed": rejected("use Gh::Inner as R\n1", HiddenMemberError, "use Gh::Inner as R"),
         "constructed": rejected("Gh::Inner(y = 1)", HiddenMemberError, "Gh::Inner"),
         "sibling": accepted("Gh::f()", "int"),
         "not-an-alias": rejected(

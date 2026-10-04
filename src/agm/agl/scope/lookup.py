@@ -41,6 +41,7 @@ from agm.agl.scope.symbols import (
     UnknownMemberError,
     UnknownQualifierError,
     add_layers,
+    qname_declaration,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import SourceSpan
@@ -63,6 +64,7 @@ __all__ = [
     "Reading",
     "lookup_bare",
     "lookup_declared",
+    "lookup_hidden",
     "lookup_origins",
     "lookup_qualified",
     "lookup_reached",
@@ -70,6 +72,7 @@ __all__ = [
     "lookup_through",
     "is_removed",
     "removes",
+    "removes_origin",
 ]
 
 
@@ -168,6 +171,14 @@ def removes(hiding: Hiding, key: DeclarationKey, names: DeclarationNames) -> boo
         )
         for way in hiding
     )
+
+
+def removes_origin(hiding: Hiding, origin: QName, names: DeclarationNames) -> bool:
+    """Whether *hiding* removes the scope or type *origin* (:func:`removes`).
+
+    A module's root declares nothing, so none removes it.
+    """
+    return bool(origin[1]) and removes(hiding, qname_declaration(origin), names)
 
 
 def _beneath(key: DeclarationKey, above: DeclarationKey) -> bool:
@@ -424,12 +435,12 @@ def lookup_declared(
     A declaration at *path* is what a declaring path (a receiver's) names, so
     no step further out is tried. *written* is the qualifier chain spelling
     the last names of *path*, if any; the types its prefixes select add what
-    their own member tables select, and an alias among them stands for its
-    target's path. Finding nothing is then an owner-table refusal, a hidden
-    member when a ``hiding`` removed *path*, else an unknown member of it. A
-    bare value spelling (no *written*) also reads the enum members injected
-    at the parent step, as :func:`lookup_bare` does. *span* locates a bare
-    spelling's ambiguity.
+    their own member tables select, and an alias among them reads its target
+    as written at the alias's site. Finding nothing is then an owner-table
+    refusal, a hidden member when a ``hiding`` removed *path*, else an
+    unknown member of it. A bare value spelling (no *written*) also reads the
+    enum members injected at the parent step, as :func:`lookup_bare` does.
+    *span* locates a bare spelling's ambiguity.
     """
     names = path[len(path) - (1 if written is None else len(written.segments) + 1) :]
     parent = _step(sources, path[:-1], injects=written is None and kind is LookupKind.VALUE)
@@ -503,10 +514,8 @@ def _reaching(
 
     As :func:`lookup_reached` reads it.
     """
-    names = (*(segment.name for segment in chain.segments), chain.member)
-    anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
-    return walk, walk.reached(kind, len(names) if owners_within is None else owners_within)
+    walk = _chain_walk(sources, chain, scope_path)[1]
+    return walk, walk.reached(kind, owners_within)
 
 
 def lookup_origins(
@@ -516,10 +525,37 @@ def lookup_origins(
 
     Those of every step: a qualifier names each scope it reaches.
     """
+    anchor, walk = _chain_walk(sources, chain, scope_path)
+    return walk.named(anchor.origins)
+
+
+def lookup_hidden(
+    sources: PathSources, chain: QualifierChain, scope_path: ScopePath, owners_within: int | None
+) -> HiddenMemberError | None:
+    """Return *chain*, written in *scope_path*, reaching nothing, as hidden when removed.
+
+    A ``hiding`` removed it when every way reaching a declaration there
+    removes it, or it removed the full path or a written prefix -- the path,
+    or every type it reaches, the full path read as a qualifier
+    (:meth:`_Walk.hides`). ``None`` unless removed; *owners_within* is as
+    :func:`lookup_reached` reads it.
+    """
+    walk = _chain_walk(sources, chain, scope_path)[1]
+    for kind in (LookupKind.TYPE, LookupKind.VALUE):
+        walk.reached(kind, owners_within)
+    refusal = walk.refusal()
+    if isinstance(refusal, HiddenMemberError):
+        return refusal
+    return walk.hidden(chain) if walk.hides(qualifier=True) else None
+
+
+def _chain_walk(
+    sources: PathSources, chain: QualifierChain, scope_path: ScopePath
+) -> tuple[_Anchor, _Walk]:
+    """Where *chain*, written in *scope_path*, is read, and the walk of its full path."""
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
-    return walk.named(chain, anchor.origins)
+    return anchor, _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
 
 
 def lookup_qualified(
@@ -675,17 +711,19 @@ class _Walk:
             next(iter(self._refusals), None),
         )
 
-    def hides(self) -> bool:
+    def hides(self, *, qualifier: bool = False) -> bool:
         """Whether a ``hiding`` removed the walk's full path at any of its steps.
 
         Removing a written prefix -- its path, or every type it reaches --
-        removes every path beneath it.
+        removes every path beneath it. Read as a *qualifier*, the full path is
+        such a prefix too.
         """
         names, sources = self._names, self._sources
+        prefixes = len(names) + 1 if qualifier else len(names)
         return any(
             step.hidden((*step.path, *names[:count]))
             or (
-                count < len(names)
+                count < prefixes
                 and bool(owners := self._owners(step, count))
                 and all(is_removed(owner, sources) for owner in owners)
             )
@@ -693,15 +731,17 @@ class _Walk:
             for count in range(step.start + 1, len(names) + 1)
         )
 
-    def reached(self, kind: LookupKind, owners_within: int) -> tuple[Candidate, ...]:
+    def reached(self, kind: LookupKind, owners_within: int | None) -> tuple[Candidate, ...]:
         """Return what the first step reaching a declaration of *kind* reaches; own ones alone.
 
-        Only a type the first *owners_within* names reach, or an alias,
-        projects its member table. The walk keeps the refusals it meets.
+        Only a type the first *owners_within* names reach (any, for
+        ``None``), or an alias, projects its member table. The walk keeps the
+        refusals it meets.
         """
+        within = len(self._names) if owners_within is None else owners_within
         for step in self._steps:
             reading = self._unremoved(
-                self._reading(step, kind, injects=False, owners_within=owners_within)
+                self._reading(step, kind, injects=False, owners_within=within)
             )
             self._refusals.extend(reading.refusals)
             candidates = reading.candidates
@@ -821,10 +861,8 @@ class _Walk:
             written=(*step.path, *self._names[:count]),
         )
 
-    def named(
-        self, chain: QualifierChain, origins: Callable[[_Step, ScopePath], frozenset[QName]]
-    ) -> frozenset[QName]:
-        """The scopes and types the walk's full path, *chain*, names at every step, by *origins*.
+    def named(self, origins: Callable[[_Step, ScopePath], frozenset[QName]]) -> frozenset[QName]:
+        """The scopes and types the walk's full path names at every step, by *origins*.
 
         A type a written prefix reaches adds what the rest of the path names
         beneath it (:meth:`PathSources.projected_origins`).
@@ -1006,7 +1044,7 @@ def _unknown(
     for length in range(len(chain.segments), 0, -1):
         prefix = replace(chain, segments=chain.segments[: length - 1])
         walk = written(prefix)
-        if walk.named(prefix, origins) or walk.find(LookupKind.TYPE) is not None:
+        if walk.named(origins) or walk.find(LookupKind.TYPE) is not None:
             spelled = replace(chain, segments=chain.segments[:length])
             return UnknownMemberError(
                 render_qualified_name(spelled, names[length]), span=chain.span

@@ -57,6 +57,7 @@ from agm.agl.scope.lookup import (
     lookup_steps,
     lookup_through,
     removes,
+    removes_origin,
 )
 from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
@@ -181,11 +182,6 @@ def _target_spelling(alias: TypeAlias) -> NameT | AppliedT | None:
     if is_nominal_type_expr(target, alias.type_params):
         return target
     return named_builtin_type(target)
-
-
-def _type_qnames(refs: Iterable[BindingRef]) -> Iterator[QName]:
-    """The full paths of *refs* that may name a type; an injected enum member never does."""
-    return (_ref_qname(ref) for ref in refs if ref.contributes_a_type)
 
 
 class SourcesHost(Protocol):
@@ -1355,32 +1351,27 @@ class ModuleSources(SourcesHost):
         for layer, atom in anchored_layers(self._scope_nodes, step, path):
             relative = _bare_path(atom)
             for exposed, refs in layer.bare_contributions.items():
-                found |= self._exposed_origins(
-                    exposed, relative, [_ref_qname(ref) for ref in refs], _type_qnames(refs)
-                )
+                for ref in refs:
+                    qname = _ref_qname(ref)
+                    found |= self._exposed_origin(
+                        exposed,
+                        relative,
+                        qname,
+                        self._region_import_decls(layer, exposed, qname),
+                        typed=ref.contributes_a_type,
+                    )
             for decl in self._uses.visible(layer):
                 found |= self._uses.origins(layer.scope_path, decl, relative)
         env = self._import_env
-        for exposed, qnames in env.unqualified.items():
-            found |= self._exposed_origins(exposed, path, qnames, qnames)
-        scope_routes = (
-            ((), env.unqualified_scope_routes),
-            *(
-                (self._import_decl_scope_paths.get(node_id, ()), routes)
-                for node_id, routes in self._reachable_decl_contributions(
-                    env.decl_bare_scope_routes, step
-                )
-            ),
-        )
-        for anchor, routes in scope_routes:
+        for exposed, qname, decls in unqualified_exposures(env):
+            found |= self._exposed_origin(exposed, path, qname, decls, typed=True)
+        for node_id, routes in self._reachable_decl_contributions(env.decl_scope_routes, step):
+            relative = path[len(self._import_decl_scope_paths.get(node_id, ())) :]
             for exposed, sources in routes.items():
-                rest = relative_under(exposed, path[len(anchor) :])
+                rest = relative_under(exposed, relative)
                 if rest is not None:
-                    found.update(
-                        origin
-                        for module, source in sources
-                        for origin in self._scope_route_origins((module, _route_root(source, rest)))
-                    )
+                    for module, source in sources:
+                        found |= self._kept_scopes((module, _route_root(source, rest)), (node_id,))
         return frozenset(found | self.module_route_origins((path[0],), path[1:], anchored=False))
 
     def routed_origins(self, chain: QualifierChain, path: ScopePath) -> frozenset[QName]:
@@ -1397,34 +1388,59 @@ class ModuleSources(SourcesHost):
                 (module, ()) for module in qualifier_candidates(env, route, anchored=anchored)
             )
         found: set[QName] = set()
-        for _module, members in qualifier_members(env, route, anchored=anchored):
-            for exposed, qname in members.items():
-                found |= self._exposed_origins(exposed, path, (qname,), (qname,))
-        for module, scope_paths in qualifier_scope_paths(env, route, anchored=anchored):
+        for exposed, qname, decls in qualifier_exposures(env, route, anchored=anchored):
+            found |= self._exposed_origin(exposed, path, qname, decls, typed=True)
+        for module, scope_paths, decls in qualifier_scope_paths(env, route, anchored=anchored):
             if any(relative_under(atom, path) is not None for atom in scope_paths):
-                found |= self._scope_route_origins((module, path))
+                found |= self._kept_scopes((module, path), decls)
         return frozenset(found)
 
-    def _exposed_origins(
+    def _kept_scopes(self, route: BareRoute, decls: Iterable[int]) -> frozenset[QName]:
+        """The scopes scope *route* reaches that import declarations *decls* expose.
+
+        None that the ``hiding`` of every one removes (:meth:`_removed`).
+        """
+        return frozenset(
+            origin
+            for origin in self._scope_route_origins(route)
+            if not self._removed(origin, decls, origin)
+        )
+
+    def _exposed_origin(
         self,
         exposed: NameAtom,
         path: ScopePath,
-        declarations: Iterable[QName],
-        types: Iterable[QName],
+        qname: QName,
+        decls: Iterable[int],
+        *,
+        typed: bool,
     ) -> frozenset[QName]:
-        """The scopes and types contributed *exposed* makes *path*: a scope above it, or its type.
+        """The scope or type contributed *exposed*, naming *qname*, makes *path*.
 
-        *declarations* are what *exposed* names; *types* those that may be types.
+        A scope above it, or its type when it is *typed*. None when the
+        ``hiding`` of every import declaration *decls* exposing it removes
+        that scope or type (:meth:`_removed`).
         """
         rest = relative_under(exposed, path)
         if rest is None:
             return frozenset()
+        module, atom = qname
         if rest:
-            return frozenset(
-                (module, _bare_atom(_bare_path(atom)[: -len(rest)]))
-                for module, atom in declarations
-            )
-        return frozenset(qname for qname in types if self._type_owners.is_declared(qname))
+            origin = (module, _bare_atom(_bare_path(atom)[: -len(rest)]))
+        elif typed and self._type_owners.is_declared(qname):
+            origin = qname
+        else:
+            return frozenset()
+        if self._removed(origin, decls, qname):
+            return frozenset()
+        return frozenset({origin})
+
+    def _removed(self, origin: QName, decls: Iterable[int], entry: QName) -> bool:
+        """Whether the ``hiding`` of every import declaration *decls* removes *origin*.
+
+        It or one above it; *decls* reach it beneath export *entry* (:meth:`_hiding`).
+        """
+        return removes_origin(self._hiding(decls, entry), origin, self)
 
     def _imported(
         self, step: ScopePath, path: ScopePath
@@ -1448,17 +1464,7 @@ class ModuleSources(SourcesHost):
         for layer, atom in anchored_layers(self._scope_nodes, step, path):
             for ref, layers in layer.bare_contributions.get(atom, {}).items():
                 qname = _ref_qname(ref)
-                add(
-                    ref,
-                    layers,
-                    (
-                        node_id
-                        for node_id, members in env.decl_bare.items()
-                        if self._import_decl_scope_paths.get(node_id) == layer.scope_path
-                        and qname in members.get(atom, ())
-                    ),
-                    qname,
-                )
+                add(ref, layers, self._region_import_decls(layer, atom, qname), qname)
         for node_id, exposures in self._reachable_decl_contributions(env.decl_tail_beneath, step):
             relative = path[len(self._import_decl_scope_paths.get(node_id, ())) :]
             for exposed, items in exposures.items():
@@ -1488,6 +1494,14 @@ class ModuleSources(SourcesHost):
                 qname,
             )
         return {ref: (layers, frozenset(ways)) for ref, (layers, ways) in reached.items()}
+
+    def _region_import_decls(self, layer: ScopeNode, atom: NameAtom, qname: QName) -> Iterator[int]:
+        """Yield the import declarations of region *layer* exposing *qname* there as *atom*."""
+        for node_id, members in self._import_env.decl_bare.items():
+            if self._import_decl_scope_paths.get(
+                node_id
+            ) == layer.scope_path and qname in members.get(atom, ()):
+                yield node_id
 
     def _hiding(self, decls: Iterable[int], entry: QName) -> Hiding:
         """What each import declaration of *decls* removes from export *entry*; none without any.
@@ -1593,7 +1607,7 @@ class ModuleSources(SourcesHost):
         *declaration* is *qname*'s own or a member's beneath it.
         """
         decls = self._import_env.unqualified_decls.get(exposed, {}).get(qname, ())
-        return removes(self._hiding(decls, qname), _qname_decl_key(declaration), self)
+        return self._removed(declaration, decls, qname)
 
     def _imported_bindings(self, step: ScopePath, path: ScopePath) -> dict[BindingRef, Layers]:
         """Return what import tails anchored at or above *step* bind at full *path*, with layers.

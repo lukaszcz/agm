@@ -916,7 +916,7 @@ class RawInfixOperand:
 
 @dataclass(frozen=True, slots=True)
 class RawInfixChain:
-    """A flat infix chain awaiting parser-layer fixity resolution."""
+    """A flat infix chain with a user operator, grouped by scope once its operators resolve."""
 
     operands: tuple[RawInfixOperand, ...]
     operators: tuple[RawInfixOperator, ...]

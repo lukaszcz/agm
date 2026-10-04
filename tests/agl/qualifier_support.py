@@ -859,7 +859,8 @@ def file_source(source: str) -> tuple[str, int]:
     executable = [item for item in statements if not isinstance(item, (LetDecl, VarDecl))]
     if not executable:
         return source, len(source)
-    start = executable[0].span.start_offset
+    # A statement's own span may begin inside it, after an opening parenthesis.
+    start = source.rfind("\n", 0, executable[0].span.start_offset) + 1
     assert all(
         item.span.end_offset <= start
         for item in items

@@ -246,6 +246,20 @@ class AglError(Exception):
         return replace(primary, related=related)
 
 
+class AglSyntaxError(AglError):
+    """A syntax error: raised by the parser, and by operator grouping and fixity.
+
+    Carries a :class:`~agm.agl.syntax.spans.SourceSpan` pinpointing the
+    offending location in the source (never ``None``, unlike the base
+    ``AglError``).
+    """
+
+    span: SourceSpan
+
+    def __init__(self, message: str, *, span: SourceSpan) -> None:
+        super().__init__(message, span=span)
+
+
 class AglTypeError(AglError):
     """A fatal static type error.
 

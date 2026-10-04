@@ -61,7 +61,7 @@ from lark.lexer import Token
 
 from agm.agl.diagnostics import AglError
 from agm.agl.lexer import LexError, lex_comment_spans, tokenize
-from agm.agl.parser.parser import parse_program_unresolved
+from agm.agl.parser.parser import parse_program
 from agm.agl.syntax.nodes import Program
 
 INDENT_WIDTH = 2
@@ -597,7 +597,7 @@ def _meaning(source: str) -> Program | list[tuple[str, str]] | None:
     the punctuation of non-block field lists.
     """
     try:
-        return parse_program_unresolved(source)
+        return parse_program(source)
     except AglError:
         pass
     try:
@@ -898,7 +898,7 @@ def _looks_like_agl(value: str) -> bool:
     try:
         if not field_lists(list(tokenize(source))):
             return False
-        parse_program_unresolved(source)
+        parse_program(source)
     except AglError:
         return False
     return True

@@ -3169,9 +3169,7 @@ class TestReachableDeclarations:
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
         assert session.eval_entry("import metrics").ok
-        program, next_node_id = parse_program_seeded(
-            "()", start_id=session._next_node_id, resolve_infix=False
-        )
+        program, next_node_id = parse_program_seeded("()", start_id=session._next_node_id)
 
         checked = session._entry_pipeline.resolve_and_check_program(
             program, next_node_id, session._runtime.host_environment()

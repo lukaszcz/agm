@@ -113,6 +113,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.constraints",
                 "agm.agl.diagnostics",
                 "agm.agl.artifact_cache",
+                "agm.agl.infix",
                 "agm.agl.modules",
                 "agm.agl.scope",
                 "agm.agl.semantics",

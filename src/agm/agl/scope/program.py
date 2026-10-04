@@ -37,6 +37,7 @@ from agm.agl.artifact_cache import (
     retained_resolved_modules,
 )
 from agm.agl.attributes import is_param_declaration
+from agm.agl.infix import Fixity
 from agm.agl.modules.ids import (
     ModuleId,
     expand_module_wildcard,
@@ -144,6 +145,8 @@ class ResolvedModule:
         Named-scope export map. Scope identities are separate from declaration
         exports because an empty scope is public without denoting a value.
         Re-exports preserve and merge the scope's original module/path origins.
+    ``source``
+        The parsed ``Program`` this module was resolved from.
     """
 
     module_id: ModuleId
@@ -152,6 +155,7 @@ class ResolvedModule:
     exports: dict[NameAtom, QName]
     scope_exports: dict[NameAtom, ScopeOrigins]
     source_text: str
+    source: Program
 
 
 @dataclass(frozen=True, slots=True)
@@ -1047,7 +1051,7 @@ def _reusable(
     splice or a redeclaration produces a different node and misses.
     """
     cached = cached_modules.get(module_id) if cached_modules is not None else None
-    if cached is not None and cached.resolved.program is loaded.program:
+    if cached is not None and cached.source is loaded.program:
         return cached
     return None
 
@@ -1058,6 +1062,7 @@ def resolve_program(
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
+    entry_repl_session_fixities: Mapping[str, Fixity] | None = None,
     cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
@@ -1078,6 +1083,9 @@ def resolve_program(
         :class:`~agm.agl.scope.symbols.TypeOwner` resolved when it was declared,
         so an alias keeps the target it resolved to then. The entry derives
         its retained constructors from these owners.
+    entry_repl_session_fixities:
+        The fixities prior REPL entries declared, which the entry declares
+        too unless it redeclares them.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -1280,6 +1288,12 @@ def resolve_program(
 
     import_envs: dict[ModuleId, ImportEnv] = {}
 
+    def fixity_of(module_id: ModuleId, name: str) -> Fixity | None:
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver.fixity(name)
+        return resolved_modules[module_id].resolved.fixities.get(name)
+
     def prepare(mid: ModuleId) -> None:
         """Build *mid*'s import environment and resolver over the current exports."""
         loaded = graph.modules[mid]
@@ -1316,6 +1330,7 @@ def resolve_program(
             builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             cross_module_type_owners=cross_module_type_owners,
             site_sources=sources_of,
+            fixity_of=fixity_of,
             all_public_types=all_public_types,
             type_owners=(
                 type_owners.with_retained(mid, retained_type_owners)
@@ -1327,6 +1342,7 @@ def resolve_program(
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=retained_scope_nodes if is_entry else None,
             repl_session_type_paths=retained_type_owners if is_entry else None,
+            repl_session_fixities=entry_repl_session_fixities if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
             ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
@@ -1440,6 +1456,7 @@ def resolve_program(
             exports=export_maps[mid],
             scope_exports=scope_export_maps[mid],
             source_text=graph.modules[mid].source_text,
+            source=graph.modules[mid].program,
         )
 
     resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}

@@ -1,3 +1,4 @@
 builtin def print[T](value: T) -> unit
 
 infixl |> at 5
+def |>(x: int, f: (int) -> int) -> int = f(x)

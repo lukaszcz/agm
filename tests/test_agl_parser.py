@@ -38,9 +38,7 @@ from agm.agl.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
-    parse_program_unresolved,
     parse_type_expr,
-    resolve_infix_chains,
 )
 from agm.agl.parser.transform import AstBuilder
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
@@ -154,14 +152,6 @@ def items(prog: Program) -> tuple[object, ...]:
 def first(prog: Program) -> object:
     """Return the first top-level item."""
     return prog.body.items[0]
-
-
-def raw_infix_program(*operator_names: str) -> Program:
-    """Parse one raw infix chain for parser-layer resolution tests."""
-    source_parts = ["0"]
-    for index, name in enumerate(operator_names, start=1):
-        source_parts.extend((name, str(index)))
-    return parse_program_unresolved(" ".join(source_parts))
 
 
 def _collect_node_ids(obj: object, result: list[int]) -> None:
@@ -1715,40 +1705,31 @@ class TestAttributes:
         ),
         ids=("def", "record", "enum", "exception", "type-alias", "let", "var"),
     )
-    def test_declared_operator_inside_an_attribute_argument_is_resolved(self, target: str) -> None:
-        """An attribute argument is an ordinary expression, so a user infix
-        operator written there is grouped like any other chain."""
-        program = parse(
-            f"infixl <+> at 6\ndef <+>(a: int, b: int) -> int = a + b\n@doc(1 <+> 2)\n{target}"
-        )
+    def test_user_operator_inside_an_attribute_argument_stays_a_raw_chain(
+        self, target: str
+    ) -> None:
+        """An attribute argument is an ordinary expression: a chain applying a
+        user operator there is grouped by scope, like any other."""
+        program = parse(f"@doc(1 <+> 2)\n{target}")
 
         chains: list[object] = []
         walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
+        assert len(chains) == 1
 
-    def test_declared_operator_inside_a_parameter_attribute_argument_is_resolved(self) -> None:
-        program = parse(
-            "infixl <+> at 6\n"
-            "def <+>(a: int, b: int) -> int = a + b\n"
-            "def f(@doc(1 <+> 2) x: int) -> int = x"
-        )
-
+    @pytest.mark.parametrize(
+        "source",
+        ("def f(@doc(1 <+> 2) x: int) -> int = x", "@doc(k = 1 <+> 2)\ndef f(x: int) -> int = x"),
+        ids=("parameter", "keyed"),
+    )
+    def test_user_operator_inside_other_attribute_arguments_stays_a_raw_chain(
+        self, source: str
+    ) -> None:
         chains: list[object] = []
-        walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
-
-    def test_declared_operator_inside_a_keyed_attribute_argument_is_resolved(self) -> None:
-        """A keyed attribute argument's value is grouped the same as a positional one."""
-        program = parse(
-            "infixl <+> at 6\n"
-            "def <+>(a: int, b: int) -> int = a + b\n"
-            "@doc(k = 1 <+> 2)\n"
-            "def f(x: int) -> int = x"
+        walk(
+            parse(source),
+            lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None,
         )
-
-        chains: list[object] = []
-        walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
+        assert len(chains) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2515,99 +2496,39 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError, match="must start with 'at'"):
             parse("infixl |> near 12")
 
-    def test_infix_decl_cannot_redeclare_builtin_operator(self) -> None:
-        with pytest.raises(AglSyntaxError, match="Cannot redeclare"):
-            parse("infixl + at 12")
+    def test_user_operator_chain_stays_raw(self) -> None:
+        expression = first(parse("1 |> 2 |> 3"))
 
-    def test_infix_decl_cannot_be_duplicated(self) -> None:
-        with pytest.raises(AglSyntaxError, match="already declared"):
-            parse("infixl |>\ninfixr |> at 45")
-
-    def test_infix_decl_priority_reference_must_be_known(self) -> None:
-        with pytest.raises(AglSyntaxError, match="Unknown operator"):
-            parse("infixl |> at prio << + 1")
-
-    def test_user_infix_operator_must_be_declared_before_use(self) -> None:
-        with pytest.raises(AglSyntaxError, match="must be declared"):
-            parse("1 |> 2")
-
-    def test_ast_builder_retains_user_infix_chain_before_resolution(self) -> None:
-        program = parse_program_unresolved("infixl |>\n1 |> 2 |> 3")
-
-        expression = program.body.items[1]
         assert isinstance(expression, RawInfixChain)
         assert tuple(operator.name for operator in expression.operators) == ("|>", "|>")
         assert len(expression.operands) == 3
         assert all(isinstance(operand.expr, IntLit) for operand in expression.operands)
 
-    def test_resolution_pass_rewrites_raw_chain(self) -> None:
-        resolved = resolve_infix_chains(
-            raw_infix_program("|>", "|>"),
-            {"|>": (5, InfixAssoc.LEFT, None)},
-        )
+    def test_builtin_chain_over_a_raw_operand_stays_raw(self) -> None:
+        expression = first(parse("(1 |> 2) + 3 * 4"))
 
-        expression = resolved.body.items[0]
-        assert isinstance(expression, Call)
-        assert isinstance(expression.args[0], Call)
-        assert isinstance(expression.callee, VarRef)
-        assert expression.callee.name == "|>"
+        assert isinstance(expression, RawInfixChain)
+        assert tuple(operator.name for operator in expression.operators) == ("+", "*")
+        assert isinstance(expression.operands[0].expr, RawInfixChain)
 
-    def test_resolution_pass_honors_precedence_and_associativity(self) -> None:
-        resolved = resolve_infix_chains(
-            raw_infix_program("|>", "<|", "<|"),
-            {
-                "|>": (5, InfixAssoc.LEFT, None),
-                "<|": (6, InfixAssoc.RIGHT, None),
-            },
-        )
+    def test_builtin_chain_inside_a_raw_operand_is_grouped(self) -> None:
+        expression = first(parse("(1 + 2 * 3) |> 4"))
 
-        expression = resolved.body.items[0]
-        assert isinstance(expression, Call)
-        assert isinstance(expression.callee, VarRef)
-        assert expression.callee.name == "|>"
-        right = expression.args[1]
-        assert isinstance(right, Call)
-        assert isinstance(right.callee, VarRef)
-        assert right.callee.name == "<|"
-        assert isinstance(right.args[1], Call)
+        assert isinstance(expression, RawInfixChain)
+        grouped = expression.operands[0].expr
+        assert isinstance(grouped, BinaryOp)
+        assert grouped.op is BinOp.ADD
 
-    def test_resolution_pass_rejects_undeclared_operator(self) -> None:
+    def test_chained_comparison_is_rejected(self) -> None:
         with pytest.raises(AglSyntaxError):
-            resolve_infix_chains(raw_infix_program("|>"), {})
+            parse("1 == 1 == true")
 
-    def test_resolution_pass_rejects_mixed_associativity_at_one_priority(self) -> None:
-        with pytest.raises(AglSyntaxError):
-            resolve_infix_chains(
-                raw_infix_program("|>", "<|"),
-                {
-                    "|>": (5, InfixAssoc.LEFT, None),
-                    "<|": (5, InfixAssoc.RIGHT, None),
-                },
-            )
+    @pytest.mark.parametrize("source", ("(1 == 1) == true", "true == (1 == 1)"))
+    def test_parenthesized_comparison_is_an_operand(self, source: str) -> None:
+        expression = first(parse(source))
 
-    def test_user_infix_left_associative(self) -> None:
-        e = items(parse("infixl |>\n1 |> 2 |> 3"))[1]
-        assert isinstance(e, Call)
-        left_arg = e.args[0]
-        assert isinstance(left_arg, Call)
-        assert isinstance(left_arg.callee, VarRef)
-        assert left_arg.callee.name == "|>"
-
-    def test_user_infix_right_associative(self) -> None:
-        e = items(parse("infixr <<\n1 << 2 << 3"))[1]
-        assert isinstance(e, Call)
-        right_arg = e.args[1]
-        assert isinstance(right_arg, Call)
-        assert isinstance(right_arg.callee, VarRef)
-        assert right_arg.callee.name == "<<"
-
-    def test_user_infix_relative_priority_groups_with_builtins(self) -> None:
-        e = items(parse("infixl |> at prio > + 1\n1 + 2 |> 3 > 4"))[1]
-        assert isinstance(e, BinaryOp)
-        assert e.op is BinOp.GT
-        assert isinstance(e.left, Call)
-        assert isinstance(e.left.args[0], BinaryOp)
-        assert e.left.args[0].op is BinOp.ADD
+        assert isinstance(expression, BinaryOp)
+        assert expression.op is BinOp.EQ
 
     def test_arithmetic(self) -> None:
         e = first(parse("1 + 2 * 3"))
@@ -4977,7 +4898,7 @@ class TestVerbatimTextLiteral:
             pytest.param("r.ask $ hello", 'r.ask "hello"', id="juxt_dotted_ask"),
             pytest.param("ask::[Review] $ hello", 'ask::[Review] "hello"', id="juxt_typed_ask"),
             pytest.param("session.ask $ hello", 'session.ask "hello"', id="juxt_session_ask"),
-            pytest.param("infixl ++\na ++ $ b", 'infixl ++\na ++ "b"', id="infix_right_operand"),
+            pytest.param("a ++ $ b", 'a ++ "b"', id="infix_right_operand"),
             pytest.param(
                 "if true =>\n  $ a\n| else =>\n  $ b",
                 'if true =>\n  "a"\n| else =>\n  "b"',
@@ -5031,10 +4952,10 @@ class TestVerbatimTextLiteral:
     @pytest.mark.parametrize(
         ("verbatim_source", "quoted_source"),
         (
-            pytest.param("infixr <|\nprint <| ask $ x", 'infixr <|\nprint <| ask "x"', id="plain"),
+            pytest.param("print <| ask $ x", 'print <| ask "x"', id="plain"),
             pytest.param(
-                "infixr <|\nprint <| ag.ask $ Summarize %{subject}",
-                'infixr <|\nprint <| ag.ask("Summarize %{subject}")',
+                "print <| ag.ask $ Summarize %{subject}",
+                'print <| ag.ask("Summarize %{subject}")',
                 id="dotted_member",
             ),
         ),
@@ -5045,9 +4966,9 @@ class TestVerbatimTextLiteral:
         verbatim_call = items(parse_program(verbatim_source))[-1]
         quoted_call = items(parse_program(quoted_source))[-1]
         assert verbatim_call == quoted_call
-        assert isinstance(verbatim_call, Call)
-        assert isinstance(verbatim_call.callee, VarRef)
-        assert verbatim_call.callee.name == "<|"
+        assert isinstance(verbatim_call, RawInfixChain)
+        assert tuple(operator.name for operator in verbatim_call.operators) == ("<|",)
+        assert isinstance(verbatim_call.operands[1].expr, Call)
 
     def test_same_line_swallowing_yields_a_single_branch(self) -> None:
         expr = first(parse("if c => $ a | else => $ b"))

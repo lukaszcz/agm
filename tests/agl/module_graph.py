@@ -119,9 +119,7 @@ def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
     """
     global _std_core_cache, _std_core_next_start_id
     if _std_core_cache is None:
-        priming_program, next_id = parse_program_seeded(
-            "()", start_id=_STD_PRELUDE_SEED_START, resolve_infix=False
-        )
+        priming_program, next_id = parse_program_seeded("()", start_id=_STD_PRELUDE_SEED_START)
         _graph, next_id, new_modules = build_repl_graph(
             priming_program,
             next_id,
@@ -207,7 +205,7 @@ def load_graph(
 def _parse_repl_entry(source: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:
     """Parse one REPL entry as the REPL session does, leaving infix chains to the loader."""
     with spaced_qualifier_collector() as spaced_qualifiers:
-        program, next_node_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+        program, next_node_id = parse_program_seeded(source, start_id=0)
     return program, next_node_id, tuple(spaced_qualifiers)
 
 

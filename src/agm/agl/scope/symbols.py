@@ -31,6 +31,7 @@ from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
+from agm.agl.infix import Fixity
 from agm.agl.modules.ids import (
     ENTRY_ID,
     ModuleId,
@@ -1019,7 +1020,8 @@ class ModuleResolution:
     """Output of the scope resolution pass.
 
     ``program``
-        The original ``Program`` AST node (never mutated).
+        The module's ``Program`` with every operator chain grouped: the parsed
+        one itself when it applies no user operator.
     ``resolution``
         Maps every ``VarRef.node_id`` and every bare-name ``AssignStmt.node_id``
         to the ``BindingRef`` it resolved to. An ``AssignStmt`` with an indexed
@@ -1132,6 +1134,10 @@ class ModuleResolution:
         spelling names, and the enum members injected bare at each step: with
         the tables above, what a later resolution reusing the module reads
         its paths through, as at an alias's declaration.
+    ``fixities``
+        The fixity this module declares for each operator name: what an
+        operator selecting one of the module's declarations of that name
+        groups by.
     """
 
     program: Program
@@ -1173,6 +1179,7 @@ class ModuleResolution:
     injected_constructors: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
+    fixities: dict[str, Fixity] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

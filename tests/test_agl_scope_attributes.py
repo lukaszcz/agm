@@ -266,7 +266,6 @@ class TestAttributeDiagnostics:
         program, _next_id = parse_program_seeded(
             '@doc("the setting")\nbuiltin var setting: int = 1\n',
             start_id=0,
-            resolve_infix=False,
         )
         declaration = program.body.items[0]
         assert isinstance(declaration, BuiltinVarDecl)
@@ -303,7 +302,7 @@ class TestAttributeDiagnostics:
         occurrence: int,
     ) -> None:
         source = (AGL_FIXTURES / fixture).read_text(encoding="utf-8")
-        program, _next_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+        program, _next_id = parse_program_seeded(source, start_id=0)
         attributes: list[Attribute] = []
 
         def collect(node: object) -> None:
@@ -598,7 +597,7 @@ class TestParseOnlyCommandRecognition:
 
     @staticmethod
     def _program(source: str, name: str = "main") -> tuple[FuncDef, ModuleConstants]:
-        program, _next_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+        program, _next_id = parse_program_seeded(source, start_id=0)
         (function,) = (
             item for item in static_function_items(program.body.items) if item.name == name
         )

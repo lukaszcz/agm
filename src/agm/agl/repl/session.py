@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.infix import Fixity
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import ValueDescriptors
@@ -63,7 +64,6 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
-        InfixAssoc,
         Program,
         ScopeRegion,
         TypeAlias,
@@ -454,10 +454,9 @@ class ReplSession:
         # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
-        # Resolved user infix fixity declared in prior promoted entries
-        # (operator name → ``(priority, associativity)``). The module-graph
-        # assembler merges it with each entry's import-visible fixities.
-        self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
+        # The fixities prior promoted entries declared, by operator name: the
+        # session is one module, so each entry declares them too.
+        self._accumulated_infix: dict[str, Fixity] = {}
         self._entry_pipeline = EntryPipeline(self)
 
     def register_codec(self, codec: "OutputCodec") -> None:
@@ -874,9 +873,7 @@ class ReplSession:
         # [1] Parse (seeded so node ids stay globally unique across entries).
         with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
             try:
-                program, next_start_id = parse_program_seeded(
-                    text, start_id=self._next_node_id, resolve_infix=False
-                )
+                program, next_start_id = parse_program_seeded(text, start_id=self._next_node_id)
             except AglSyntaxError as exc:
                 return self._fail_static(exc, list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
@@ -1095,12 +1092,10 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
         promoted_scope_region_paths: frozenset[tuple[str, ...]],
         promoted_use_declaration_ids: frozenset[int],
-        infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
         retired_scopes: frozenset[tuple[str, ...]],
         entry_module_id: ModuleId,
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
-        from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.scope.type_owners import beneath
         from agm.agl.syntax.nodes import (
@@ -1362,16 +1357,11 @@ class ReplSession:
 
         if not partial:
             self._source_log.append(text)
-        promoted_infix = [
-            item
+        self._accumulated_infix.update(
+            (item.name, checked.resolved.fixities[item.name])
             for item in program.body.items
             if isinstance(item, InfixDecl) and item.node_id in promoted_declaration_ids
-        ]
-        if promoted_infix:
-            resolved_infix = resolve_infix_fixity(promoted_infix, infix_ambient)
-            self._accumulated_infix.update(
-                (item.name, resolved_infix[item.name]) for item in promoted_infix
-            )
+        )
         self._next_node_id = next_start_id
         return tuple(installed)
 
@@ -1534,7 +1524,7 @@ class ReplSession:
 
         # An entry echoed here always has at least one item: blank and
         # comment-only entries are filtered by ``has_runnable_statements``.
-        # The resolved program holds the entry with its infix chains resolved.
+        # The resolved program holds the entry with its operator chains grouped.
         last = checked.resolved.program.body.items[-1]
         # A statement item (a scope region, an import, ...) has no type.
         if not isinstance(last, (Binder, Declaration)):
@@ -1575,9 +1565,7 @@ class ReplSession:
 
         host_env = self._runtime.host_environment()
         with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
+            program, next_node_id = parse_program_seeded(text, start_id=self._next_node_id)
         spaced_qualifiers = tuple(spaced_sink)
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
@@ -1599,7 +1587,7 @@ class ReplSession:
         )
         if match_result.compiled is None:
             raise match_issue_error(match_result.issues[0])
-        # The resolved program holds the expression with its infix chains resolved.
+        # The resolved program holds the expression with its operator chains grouped.
         typ = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         from agm.agl.repl.type_display import format_type_for_repl
 
@@ -1726,9 +1714,7 @@ class ReplSession:
         from agm.agl.syntax.types import NameT
 
         with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                name, start_id=self._next_node_id, resolve_infix=False
-            )
+            program, next_node_id = parse_program_seeded(name, start_id=self._next_node_id)
         if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
             return None
         reference = program.body.items[0]

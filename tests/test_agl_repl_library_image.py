@@ -176,9 +176,7 @@ def test_session_operators_do_not_change_imported_function_behavior(tmp_path: Pa
     assert session.eval_entry("infixr <+> at 9\ndef <+>(a: int, b: int) -> int = a - b").ok
 
     assert session.eval_entry("combined()").value == IntValue(10)
-    ambiguous = session.eval_entry("8 <+> 3 <+> 1")
-    assert not ambiguous.ok
-    assert ambiguous.diagnostics
+    assert session.eval_entry("8 <+> 3 <+> 1").value == IntValue(6)
     assert session.eval_entry("combined()").value == IntValue(10)
 
 

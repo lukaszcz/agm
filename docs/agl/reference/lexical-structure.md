@@ -608,23 +608,40 @@ right-associative at the `+`/`-` priority, so it binds tighter than comparisons
 and `|>`: `"a" ++ b == c` is `("a" ++ b) == c`. A chain cannot mix `++` with
 `+` or `-` without parentheses.
 
-User-defined symbolic infix operators are declared with `infixl` or `infixr`:
+User-defined symbolic infix operators are declared with `infixl` or `infixr`
+beside the function that implements them:
 
 ```agl
-infixl |> at 45
-infixr << at prio > + 1
+infixl <+> at 45
+infixr <<< at prio > + 1
+
+def <+>(a: int, b: int) -> int = a * 10 + b
+
+def <<<(a: int, b: int) -> int = a - b
 ```
 
 Priorities are integers where lower numbers bind looser and higher numbers bind
-tighter. A priority can be a literal integer or relative to an existing builtin,
-local operator, operator made bare-visible by an import wildcard or tail, or an
-operator member made bare by `use` (with the `std/prelude` prelude included);
-omitted priority uses the `+`/`-` level. A plain qualified import does not make
-an operator's fixity available. User infix
-use lowers to a normal two-argument function call, so the operator must also be
-declared as a function with the same name. Two visible declarations for one
-operator must agree on fixity, and operators at one priority cannot mix left and
-right associativity in a chain.
+tighter. A priority can be a literal integer or relative to another operator
+(`prio Y + n`); omitted priority uses the `+`/`-` level. `Y` is looked up at
+the module root like any operator name, the module's own infix declarations
+first, in any order; it may be a builtin operator. Relative priorities may not
+form a cycle.
+
+An operator in a chain is a name: it is looked up at its site exactly like a
+function of that name — lexical bindings first, then the scope steps, own
+declarations before imports, two distinct imported declarations ambiguous —
+and reached through the same imports, `use` declarations, re-exports, renames,
+and aliases. User infix use lowers to a two-argument call of the selected
+declaration. Its fixity is the one the selected declaration's module declares
+for that name: an `infixl`/`infixr` declaration applies to the module's own
+declarations of the name, at any scope path, and to its `let`/`var` binders of
+the name; it is never exported on its own. A fixity declaration for a name the
+module does not declare is an error, as is an operator use that selects a
+declaration whose module declares no fixity for it. In the REPL the session is
+one module: an operator's definition comes in the same entry as its fixity
+declaration or an earlier one. Operators at one priority cannot mix left and
+right associativity in a chain, and comparisons do not chain; a parenthesized
+comparison is an ordinary operand (`(a == b) == c`).
 
 **Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
 `* /`. They are left-associative: `x as json as text` = `(x as json) as text`.

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ScopePath
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
+    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -51,7 +51,6 @@ class LoadedCheckedProgram:
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
-    entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
     raw_param_values: "dict[StaticBindingKey, object]"
     retired_member_scopes: "frozenset[ScopePath]"
 
@@ -110,7 +109,6 @@ class EntryPipeline:
                 roots=roots,
                 default_stdlib=self._ctx._default_stdlib,
                 spaced_qualifiers=spaced_qualifiers,
-                session_infix=self._ctx._accumulated_infix,
             )
             resolved_program = self._resolve_program(graph)
             checked_program = check_program(
@@ -129,7 +127,6 @@ class EntryPipeline:
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
-            entry_infix_ambient=graph.entry_infix_ambient,
             raw_param_values=raw_param_values,
             retired_member_scopes=resolved_program.retired_member_scopes,
         )
@@ -185,7 +182,6 @@ class EntryPipeline:
         new_next_id = loaded.new_next_id
         entry_imports = loaded.entry_imports
         entry_uses = loaded.entry_uses
-        entry_infix_ambient = loaded.entry_infix_ambient
         raw_param_values = loaded.raw_param_values
         retired_member_scopes = loaded.retired_member_scopes
         entry_cm = checked_program.modules[checked_program.entry_id]
@@ -250,7 +246,6 @@ class EntryPipeline:
             module_adjacency=module_adjacency,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
-            entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
             raw_param_values=raw_param_values,
             retired_member_scopes=retired_member_scopes,
@@ -312,7 +307,6 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
-            session_infix=self._ctx._accumulated_infix,
         )
         return self._resolve_program(graph)
 
@@ -345,6 +339,7 @@ class EntryPipeline:
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
+            entry_repl_session_fixities=self._ctx._accumulated_infix,
             cached_modules=self._ctx._retained_resolved_modules,
         )
 
@@ -531,7 +526,6 @@ class EntryPipeline:
         module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
         entry_uses: tuple[ImportDecl | ScopeRegion, ...],
-        entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
         raw_param_values: Mapping["StaticBindingKey", object],
         retired_member_scopes: "frozenset[ScopePath]",
@@ -802,7 +796,6 @@ class EntryPipeline:
                 promoted_declaration_ids=promoted_declaration_ids,
                 promoted_scope_region_paths=promoted_scope_region_paths,
                 promoted_use_declaration_ids=promoted_use_declaration_ids,
-                infix_ambient=entry_infix_ambient,
                 retired_scopes=retired_member_scopes,
                 entry_module_id=checked_program.entry_id,
             )

@@ -1,4 +1,4 @@
-"""AglSyntaxError: parse-layer error with SourceSpan and friendly message.
+"""Parse-layer ``AglSyntaxError`` construction with SourceSpan and friendly message.
 
 This module maps Lark's ``UnexpectedToken`` (the only error the LALR parser
 raises over the AgL lexer) and lexer ``LexError`` to ``AglSyntaxError``
@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, Sequence
 
 from lark import Tree
 
-from agm.agl.diagnostics import AglError, dollar_spacing_hint, piping_hint
+from agm.agl.diagnostics import AglSyntaxError as AglSyntaxError
+from agm.agl.diagnostics import dollar_spacing_hint, piping_hint
 from agm.agl.lexer.operators import OPERAND_END_TYPES, scanner_token_type
 from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.tokens import NAME, VERBATIM_END, VERBATIM_START
@@ -106,20 +107,6 @@ _INLINE_BODY_OPENERS: frozenset[str] = frozenset({"let", "var"})
 # Tokens that end a `try` body.  Arriving at one while `catch` is still
 # expected means the `try` has no `catch` clause of its own.
 _TRY_BODY_ENDERS: frozenset[str] = frozenset({"_NEWLINE", "_DEDENT", "$END"})
-
-
-class AglSyntaxError(AglError):
-    """A syntax error produced by the parser layer.
-
-    Carries a :class:`~agm.agl.syntax.spans.SourceSpan` pinpointing the
-    offending location in the source (never ``None``, unlike the base
-    ``AglError``).
-    """
-
-    span: SourceSpan
-
-    def __init__(self, message: str, *, span: SourceSpan) -> None:
-        super().__init__(message, span=span)
 
 
 def _end_of_source_span(source_text: str) -> SourceSpan:

@@ -2,8 +2,7 @@
 
 Public API
 ----------
-- :func:`parse_program` — parse and resolve AgL source text into a ``syntax.Program`` AST.
-- :func:`parse_program_unresolved` — expose the raw AST before parser-layer infix resolution.
+- :func:`parse_program` — parse AgL source text into a ``syntax.Program`` AST.
 - :func:`wrap_inline_program` — synthesize an inline-source ``program def main`` AST.
 - :class:`AglSyntaxError` — span-aware parse error raised on lex/parse failure.
 
@@ -22,15 +21,9 @@ from agm.agl.parser.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
-    parse_program_unresolved,
     parse_repl_transcript,
     parse_type_expr,
     parse_type_expr_seeded,
-)
-from agm.agl.parser.transform import (
-    build_infix_operator_table,
-    resolve_infix_chains,
-    resolve_infix_fixity,
 )
 from agm.agl.parser.wrap import wrap_inline_program
 
@@ -41,12 +34,8 @@ __all__ = [
     "is_incomplete_source",
     "parse_program",
     "parse_program_seeded",
-    "parse_program_unresolved",
     "parse_repl_transcript",
     "parse_type_expr",
     "parse_type_expr_seeded",
-    "build_infix_operator_table",
-    "resolve_infix_chains",
-    "resolve_infix_fixity",
     "wrap_inline_program",
 ]

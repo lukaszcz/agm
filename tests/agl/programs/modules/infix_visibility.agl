@@ -1,9 +1,8 @@
-# Cross-module fixity follows bare visibility: the prelude supplies |>, an
-# A wildcard import supplies %>, and a selective import tail supplies ~>.
+# A cross-module operator takes the fixity of its defining module: the prelude
+# supplies |>, a wildcard import supplies %>, and a selective import tail ~>.
 import flow/pipe::*
 import flow/compose::~>
 
-def |>(x: int, f: (int) -> int) -> int = f(x)
 def inc(x: int) -> int = x + 1
 
 program def main(value: int) -> unit =

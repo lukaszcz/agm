@@ -7982,10 +7982,10 @@ class TestInfixDecl:
 
     def test_infixl_usable_in_subsequent_entry(self) -> None:
         # ``infixl`` declared in one entry must make the operator usable in a
-        # later entry (the fixity persists across entries for parsing).
+        # later entry (the fixity persists across entries).
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        assert s.eval_entry("infixl +++ at 5").ok
         r = s.eval_entry("1 +++ 2")
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -7993,8 +7993,8 @@ class TestInfixDecl:
 
     def test_infixr_usable_in_subsequent_entry(self) -> None:
         s = open_session(default_stdlib=False)
-        s.eval_entry("infixr << at 40")
         s.eval_entry('def <<(x: text, y: text) -> text = "(%{x}%{y})"')
+        assert s.eval_entry("infixr << at 40").ok
         r = s.eval_entry('"a" << "b" << "c"')
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -8004,8 +8004,8 @@ class TestInfixDecl:
         # A relative priority (``at prio > + 1``) declared in one entry must
         # keep binding correctly when the operator is used in a later entry.
         s = open_session(default_stdlib=False)
-        s.eval_entry("infixl |> at prio > + 1")
         s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
+        assert s.eval_entry("infixl |> at prio > + 1").ok
         r = s.eval_entry("1 + 2 |> 3 > 20")
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -8017,8 +8017,8 @@ class TestInfixDecl:
         # Redeclaring an infix operator in a later entry updates its fixity
         # (mirrors how ``let``/``record`` redefinitions shadow in the REPL).
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        assert s.eval_entry("infixl +++ at 5").ok
         # Redeclare with a different priority; the operator is still usable.
         r_decl = s.eval_entry("infixl +++ at 7")
         assert r_decl.ok, r_decl.diagnostics
@@ -8030,10 +8030,10 @@ class TestInfixDecl:
         # A relative priority may reference a user operator declared in an earlier
         # entry; the reference resolves against the accumulated fixity.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
-        s.eval_entry("infixl *** at prio +++ + 1")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         s.eval_entry("def ***(x: int, y: int) -> int = x * y")
+        assert s.eval_entry("infixl +++ at 5").ok
+        assert s.eval_entry("infixl *** at prio +++ + 1").ok
         # ``+++`` binds at 5, ``***`` at 6 (tighter), so ``1 +++ 2 *** 3``
         # groups as ``1 +++ (2 *** 3)`` = 1 + (2*3) = 7.
         r = s.eval_entry("1 +++ 2 *** 3")
@@ -8086,9 +8086,12 @@ class TestInfixDecl:
             cwd=root,
         )
 
-        declared = s.eval_entry("import operators::*\ninfixl +++ at prio %% + 1")
+        declared = s.eval_entry(
+            "import operators::*\n"
+            "def +++(x: int, y: int) -> int = x * 100 + y\n"
+            "infixl +++ at prio %% + 1"
+        )
         assert declared.ok, declared.diagnostics
-        assert s.eval_entry("def +++(x: int, y: int) -> int = x * 100 + y").ok
 
         result = s.eval_entry("1 %% 2 +++ 3")
 
@@ -8096,12 +8099,14 @@ class TestInfixDecl:
         assert result.value is not None
         assert _int(result.value) == 213
 
-    def test_session_fixity_conflicts_with_a_bare_visible_import(self, tmp_path: Path) -> None:
+    def test_session_operator_beats_a_bare_visible_import(self, tmp_path: Path) -> None:
         from agm.agl.modules.roots import assemble_roots
 
         root = tmp_path / "modules"
         root.mkdir()
-        (root / "operators.agl").write_text("infixr %% at 5\n")
+        (root / "operators.agl").write_text(
+            "infixr %% at 5\ndef %%(x: int, y: int) -> int = x * y\n"
+        )
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
@@ -8112,17 +8117,18 @@ class TestInfixDecl:
             cwd=root,
         )
 
-        assert s.eval_entry("infixl %% at 5").ok
         assert s.eval_entry("def %%(x: int, y: int) -> int = x + y").ok
-        result = s.eval_entry("import operators::*\n1 %% 2")
+        assert s.eval_entry("infixl %% at 5").ok
+        result = s.eval_entry("import operators::*\n1 %% 2 %% 3")
 
-        assert not result.ok
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 6
 
     def test_infix_decl_survives_reset(self) -> None:
         # ``:reset`` clears ALL session state, including accumulated fixity.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
-        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y\ninfixl +++ at 5")
+        assert s.eval_entry("1 +++ 2").ok
         s.reset()
         r = s.eval_entry("1 +++ 2")
         assert not r.ok  # fixity gone after reset
@@ -8130,8 +8136,8 @@ class TestInfixDecl:
     def test_type_of_uses_accumulated_infix(self) -> None:
         # ``:type`` parses with the session's accumulated fixity too.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.eval_entry("infixl +++ at 5")
         assert s.type_of("1 +++ 2") == "int"
 
 

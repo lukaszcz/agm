@@ -427,7 +427,7 @@ def make_repl_graph_from_files(
     root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
     with spaced_qualifier_collector() as spaced_qualifiers:
-        program, next_node_id = parse_program_seeded(entry_source, start_id=0, resolve_infix=False)
+        program, next_node_id = parse_program_seeded(entry_source, start_id=0)
     graph, _next_id, _new_modules = build_repl_graph(
         program,
         next_node_id,

@@ -53,6 +53,7 @@ from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import (
     AglError,
+    AglSyntaxError,
     CycleAlias,
     HiddenMemberError,
     alias_cycle_error,
@@ -60,6 +61,14 @@ from agm.agl.diagnostics import (
     static_root_message,
     type_name_not_a_value,
     unknown_type,
+)
+from agm.agl.infix import (
+    BUILTIN_FIXITIES,
+    Fixity,
+    declared_priority,
+    group_infix,
+    reject_builtin_redeclaration,
+    replace_infix_chains,
 )
 from agm.agl.modules.ids import (
     RESERVED_ID,
@@ -208,6 +217,8 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     QualifierSegment,
     Raise,
+    RawInfixChain,
+    RawInfixOperator,
     RecordDef,
     RecordUpdate,
     Return,
@@ -550,6 +561,7 @@ class _Resolver(ModuleSources):
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef],
         cross_module_type_owners: Mapping[QName, ReceiverOwner],
         site_sources: Callable[[ModuleId], ModuleSources],
+        fixity_of: Callable[[ModuleId, str], Fixity | None],
         *,
         ambient_type_names: frozenset[str] = frozenset(),
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
@@ -558,6 +570,7 @@ class _Resolver(ModuleSources):
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
+        repl_session_fixities: Mapping[str, Fixity] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -576,6 +589,21 @@ class _Resolver(ModuleSources):
         self._import_env: ImportEnv = import_env
         # What reads beneath an alias read where the alias is declared.
         self._site_sources = site_sources
+        # The fixity a module gives its declarations of an operator name.
+        self._fixity_of = fixity_of
+        # This module's own fixity declarations, the first for each name, over
+        # those earlier REPL entries retain; each fixity resolved on demand.
+        self._infix_decls: dict[str, InfixDecl] = {}
+        for item in program.body.items:
+            if isinstance(item, InfixDecl):
+                self._infix_decls.setdefault(item.name, item)
+        self._repl_session_fixities = dict(repl_session_fixities or {})
+        self._fixities: dict[str, Fixity] = {}
+        self._fixities_in_progress: set[str] = set()
+        # Every name a lexical binder of this module binds.
+        self._binder_names: set[str] = set()
+        # Each operator chain's grouping, by chain node id.
+        self._infix_groupings: dict[int, Expr] = {}
         # Declaration metadata used to build cross-module references.
         self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = decl_info
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
@@ -910,8 +938,8 @@ class _Resolver(ModuleSources):
 
     def resolve(self) -> ModuleResolution:
         """Resolve the collected program's bodies; the third phase."""
-        program = self._program
         root = self._root_scope
+        fixities = self._own_fixities()
         self._reject_alias_cycles()
         self._reject_declaring_beneath_type_renames()
         # A tail or ``hiding`` item written through an alias must name a
@@ -923,9 +951,15 @@ class _Resolver(ModuleSources):
                 {named for items in exposures.values() for named in items}, key=_item_order
             ):
                 self._named_by(named)
-        self._resolve_root_items(program.body.items)
+        self._resolve_root_items(self._program.body.items)
+        self._reject_fixities_declaring_nothing()
         self._validate_function_names()
         self._validate_non_method_type_params()
+        program = (
+            replace_infix_chains(self._program, self._infix_groupings)
+            if self._infix_groupings
+            else self._program
+        )
         # Receiver classification follows the ordered lexical walk, so attribute
         # recognition runs only after every method declaration is known.
         attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
@@ -967,7 +1001,124 @@ class _Resolver(ModuleSources):
             injected_constructors={
                 key: tuple(refs) for key, refs in self._injected_constructors.items()
             },
+            fixities=fixities,
         )
+
+    # ------------------------------------------------------------------
+    # Fixity
+    # ------------------------------------------------------------------
+
+    def fixity(self, name: str) -> Fixity | None:
+        """The fixity this module gives its declarations named *name*, if it declares one."""
+        decl = self._infix_decls.get(name)
+        if decl is None:
+            return self._repl_session_fixities.get(name)
+        found = self._fixities.get(name)
+        if found is not None:
+            return found
+        if name in self._fixities_in_progress:
+            raise AglSyntaxError(
+                f"The priority of operator '{name}' depends on itself.", span=decl.span
+            )
+        self._fixities_in_progress.add(name)
+        fixity = (declared_priority(decl, partial(self._priority_base, decl)), decl.assoc)
+        self._fixities_in_progress.discard(name)
+        self._fixities[name] = fixity
+        return fixity
+
+    def _priority_base(self, decl: InfixDecl, name: str) -> Fixity:
+        """The fixity of operator *name*, which *decl* takes its priority relative to.
+
+        *name* reads as an operator written at the module root, except that
+        this module's own fixity declarations come first, in any order.
+        """
+        if name in self._infix_decls:
+            return cast(Fixity, self.fixity(name))
+        builtin = BUILTIN_FIXITIES.get(name)
+        if builtin is not None:
+            return builtin
+        found = self._bare_value_target(name, decl.span, layer=self._root_scope)
+        if isinstance(found, AglError):
+            raise found
+        # A bare value always selects a binding.
+        ref = None if found is None else cast(BindingRef, self._value_binding(found, decl.span))
+        fixity = None if ref is None else self._fixity_of(ref.module_id, ref.name)
+        if fixity is None:
+            raise AglSyntaxError(
+                f"Unknown operator '{name}' in priority reference.", span=decl.span
+            )
+        return fixity
+
+    def _own_fixities(self) -> dict[str, Fixity]:
+        """Every fixity this module declares, rejecting a declaration no operator may take."""
+        declared: set[str] = set()
+        for item in self._program.body.items:
+            if not isinstance(item, InfixDecl):
+                continue
+            reject_builtin_redeclaration(item)
+            if item.name in declared:
+                raise AglSyntaxError(
+                    f"Infix operator '{item.name}' is already declared.", span=item.span
+                )
+            declared.add(item.name)
+        return {name: cast(Fixity, self.fixity(name)) for name in self._infix_decls}
+
+    def _reject_fixities_declaring_nothing(self) -> None:
+        """Reject a fixity declared for a name this module declares nowhere.
+
+        A REPL entry's module is the session: what earlier entries retain
+        declares a name too.
+        """
+        declared = {name for _module, _path, name in self._declarations}
+        declared.update(self._binder_names)
+        retained = list(self._repl_session_scope_nodes.values())
+        if self._repl_session_scope is not None:
+            retained.append(self._repl_session_scope)
+        for layer in retained:
+            for bound in (layer.bindings, layer.members):
+                declared.update(
+                    name for name, ref in bound.items() if ref.module_id == self._module_id
+                )
+        for name, decl in self._infix_decls.items():
+            if name not in declared:
+                raise AglSyntaxError(
+                    f"Infix operator '{name}' is declared, but this module declares no "
+                    f"'{name}' it applies to.",
+                    span=decl.span,
+                )
+
+    def _resolve_infix_chain(self, chain: RawInfixChain) -> None:
+        """Resolve *chain*'s operands and operators in source order, then group it.
+
+        An operator takes the fixity the module of the declaration it selects
+        gives it.
+        """
+        self._resolve_expr(chain.operands[0].expr)
+        fixities: list[Fixity] = []
+        for operator, operand in zip(chain.operators, chain.operands[1:], strict=True):
+            fixities.append(self._operator_fixity(operator))
+            self._resolve_expr(operand.expr)
+        self._infix_groupings[chain.node_id] = group_infix(
+            chain.operands, chain.operators, fixities
+        )
+
+    def _operator_fixity(self, operator: RawInfixOperator) -> Fixity:
+        """Resolve *operator* as the callee of the call it groups into; return its fixity."""
+        builtin = BUILTIN_FIXITIES.get(operator.name)
+        if builtin is not None:
+            return builtin
+        callee = VarRef(name=operator.name, span=operator.span, node_id=operator.callee_node_id)
+        self._resolve_callee(callee, operator.node_id)
+        # A bare value always selects a binding.
+        ref = self._resolution[callee.node_id]
+        fixity = self._fixity_of(ref.module_id, ref.name)
+        if fixity is None:
+            raise AglSyntaxError(
+                f"Operator '{operator.name}' must be declared with infixl or infixr "
+                "where it is defined.",
+                span=operator.span,
+            )
+        return fixity
 
     # ------------------------------------------------------------------
     # Pre-passes
@@ -1960,7 +2111,8 @@ class _Resolver(ModuleSources):
         scope.define(name, ref)
 
     def _check_not_reserved(self, name: str, span: SourceSpan) -> None:
-        """Raise if *name* is a built-in contextual name."""
+        """Raise if lexical binder name *name* is a built-in contextual name; else record it."""
+        self._binder_names.add(name)
         if name in _RESERVED_NAMES:
             raise AglScopeError(
                 f"'{name}' is a reserved contextual keyword and cannot be "
@@ -2061,7 +2213,7 @@ class _Resolver(ModuleSources):
             if isinstance(item, (ImportDecl, ExportDecl, InfixDecl)):
                 # The program module-system pass processes imports/exports; a
                 # region-scoped import's contribution is resolved with the
-                # headers, and infix declarations with the parse.
+                # headers, and infix declarations before the walk.
                 continue
             # Named declarations (def/record/enum/exception/type, and a
             # scoped let/var binder) validate their own whole subtree,
@@ -2427,9 +2579,11 @@ class _Resolver(ModuleSources):
         else:
             self._resolve_expr(expr)
 
-    def _resolve_expr(self, expr: Expr) -> None:
+    def _resolve_expr(self, expr: Expr | RawInfixChain) -> None:
         """Recursively resolve all names in *expr*."""
         match expr:
+            case RawInfixChain():
+                self._resolve_infix_chain(expr)
             case VarRef():
                 self._resolve_varref(expr)
             case Call():
@@ -3039,15 +3193,7 @@ class _Resolver(ModuleSources):
         """
         callee = node.callee
         if isinstance(callee, VarRef):
-            self._resolve_varref(callee, is_call_target=True)
-            ref = self._resolution.get(callee.node_id)
-            static_kind = self._builtin_static_kind(ref)
-            if static_kind is not None:
-                self._builtin_static_calls[node.node_id] = static_kind
-            elif ref is not None and self._is_builtin_function_ref(ref) and not ref.is_method:
-                kind = builtin_call_kind(ref.name)
-                if kind is not None:
-                    self._builtin_calls[node.node_id] = kind
+            self._resolve_callee(callee, node.node_id)
         elif isinstance(callee, FieldAccess):
             self._resolve_field_access(callee)
             # Member selection is type-directed, so scope cannot yet know
@@ -3062,6 +3208,18 @@ class _Resolver(ModuleSources):
         for arg in (*node.args, *(named.value for named in node.named_args)):
             if not isinstance(arg, Placeholder):
                 self._resolve_expr(arg)
+
+    def _resolve_callee(self, callee: VarRef, call_node_id: int) -> None:
+        """Resolve *callee* of the call *call_node_id*, classifying a built-in callee."""
+        self._resolve_varref(callee, is_call_target=True)
+        ref = self._resolution.get(callee.node_id)
+        static_kind = self._builtin_static_kind(ref)
+        if static_kind is not None:
+            self._builtin_static_calls[call_node_id] = static_kind
+        elif ref is not None and self._is_builtin_function_ref(ref) and not ref.is_method:
+            kind = builtin_call_kind(ref.name)
+            if kind is not None:
+                self._builtin_calls[call_node_id] = kind
 
     def _resolve_field_access(self, expr: FieldAccess) -> None:
         """Resolve a field-access expression by resolving its object as a value.

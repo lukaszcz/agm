@@ -215,7 +215,6 @@ def _resolve_package_modules(
             path=None,
             cached={},
             roots=roots,
-            preflight_reexport_cycles=True,
         )
         resolved = resolve_program(graph)
     except AglError as exc:

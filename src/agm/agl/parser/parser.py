@@ -6,12 +6,10 @@ The module-level ``_PARSER`` is built once at import time from
 grammar-hash-keyed temp file so repeated process starts (every ``agm exec`` /
 ``agm repl`` invocation) reload them instead of rebuilding from scratch.
 
-``parse_program(text)`` is the normal public entry point. It feeds the source
-string to ``_PARSER``, passes the resulting Lark tree to ``AstBuilder`` to
-produce a raw ``syntax.Program``, then resolves its infix chains before
-returning it. ``parse_program_unresolved(text)`` exposes the preceding
-parser-stage boundary for code that must supply its own operator table; callers
-must resolve that result before passing it to scope. Lark's ``UnexpectedToken``
+``parse_program(text)`` is the public entry point. It feeds the source
+string to ``_PARSER`` and passes the resulting Lark tree to ``AstBuilder``,
+which groups every chain of builtin operators; a chain applying a user
+operator stays a ``RawInfixChain`` for scope to group. Lark's ``UnexpectedToken``
 and ``LexError``s are wrapped into ``AglSyntaxError``.
 """
 
@@ -19,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace as dc_replace
-from typing import Mapping, NoReturn, cast
+from typing import NoReturn, cast
 
 from lark import Lark, Tree
 from lark.exceptions import UnexpectedToken, VisitError
@@ -31,7 +29,7 @@ from agm.agl.lexer.lexer import build_parser
 from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.tokens import VERBATIM_END, VERBATIM_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
-from agm.agl.parser.transform import AstBuilder, resolve_program_infix
+from agm.agl.parser.transform import AstBuilder
 from agm.agl.syntax.spans import SourceId
 
 
@@ -150,48 +148,30 @@ def _transform_tree(
     return result, builder.next_node_id
 
 
-def _parse_to_unresolved_program(
+def _parse_to_program(
     text: str,
     *,
     start_id: int,
     source: SourceId | None = None,
     allow_late_uses: bool = False,
 ) -> tuple[syntax.Program, int]:
-    """Build a raw ``Program`` from *text* and report the next unused node id.
+    """Parse *text*, reporting the next unused node id.
 
-    This is the boundary between Lark/AstBuilder parsing and parser-layer infix
-    resolution. Its result may contain ``RawInfixChain`` nodes and must not be
-    passed to scope until ``resolve_infix_chains`` has rewritten them.
+    Shared body for :func:`parse_program`, :func:`parse_program_seeded` and
+    :func:`parse_repl_transcript`. Node ids are assigned starting at
+    *start_id*; the returned ``int`` is the first id NOT consumed (the seed for
+    a subsequent incremental parse), read from the builder's counter rather
+    than assuming the root holds the maximum.
+
+    When *source* is supplied, every ``SourceSpan`` the builder constructs is
+    stamped with that ``SourceId``; the same id is also stamped on any
+    ``AglSyntaxError`` raised during parsing.
     """
     tree = _parse_tree(_PARSER, text, source=source)
     result, next_id = _transform_tree(
         tree, start_id=start_id, source=source, allow_late_uses=allow_late_uses
     )
     return cast(syntax.Program, result), next_id
-
-
-def _parse_to_program(
-    text: str,
-    *,
-    start_id: int,
-    source: SourceId | None = None,
-    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
-    resolve_infix: bool = True,
-) -> tuple[syntax.Program, int]:
-    """Parse and resolve *text*, reporting the next unused node id.
-
-    Shared body for :func:`parse_program` and :func:`parse_program_seeded`.
-    Node ids are assigned starting at *start_id*; the returned ``int`` is the
-    first id NOT consumed (the seed for a subsequent incremental parse), read
-    from the builder's counter rather than assuming the root holds the maximum.
-
-    When *source* is supplied, every ``SourceSpan`` the builder constructs is
-    stamped with that ``SourceId``; the same id is also stamped on any
-    ``AglSyntaxError`` raised during parsing. *ambient_infix* supplies fixities
-    declared in a prior context, such as earlier REPL entries.
-    """
-    result, next_id = _parse_to_unresolved_program(text, start_id=start_id, source=source)
-    return (resolve_program_infix(result, ambient_infix) if resolve_infix else result), next_id
 
 
 # Single-entry memo for is_incomplete_source: (last_text, last_result).
@@ -282,29 +262,11 @@ def _ends_with_bodyless_declaration(tree: Tree) -> bool:
     )
 
 
-def parse_program_unresolved(
-    text: str,
-    *,
-    start_id: int = 0,
-    source: SourceId | None = None,
-) -> syntax.Program:
-    """Parse *text* into an AST before parser-layer infix resolution.
-
-    The returned program may contain ``RawInfixChain`` nodes. It is a parser
-    seam for callers that supply an operator table; resolve it with
-    ``resolve_infix_chains`` before scope resolution. Most callers should
-    use :func:`parse_program`, which performs that resolution automatically.
-    """
-    program, _next_id = _parse_to_unresolved_program(text, start_id=start_id, source=source)
-    return program
-
-
 def parse_program(
     text: str,
     *,
     start_id: int = 0,
     source: SourceId | None = None,
-    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> syntax.Program:
     """Parse *text* as an AgL program and return a ``syntax.Program`` AST.
 
@@ -322,16 +284,11 @@ def parse_program(
         ``SourceSpan`` in the resulting AST.  When ``None`` (the default),
         spans carry ``UNKNOWN_SOURCE`` (label ``"<agl>"``).  Pass this from
         the module loader so that multi-file diagnostics identify the origin file.
-    ambient_infix:
-        Already-resolved user infix fixity carried over from earlier REPL
-        entries (name → ``(priority, associativity)``). Merged into the operator
-        table so an operator declared in a prior entry parses correctly here.
-        ``None`` (the default) for a standalone whole-program parse.
 
     Returns
     -------
     syntax.Program
-        The root AST node of the parsed and infix-resolved program.
+        The root AST node of the parsed program.
 
     Raises
     ------
@@ -340,9 +297,7 @@ def parse_program(
         carrying 1-based line/column information.  If *source* was supplied,
         the error span is stamped with that ``SourceId``.
     """
-    program, _next_id = _parse_to_program(
-        text, start_id=start_id, source=source, ambient_infix=ambient_infix
-    )
+    program, _next_id = _parse_to_program(text, start_id=start_id, source=source)
     return program
 
 
@@ -350,11 +305,10 @@ def parse_repl_transcript(text: str) -> syntax.Program:
     """Parse a saved REPL transcript for top-level entry boundary discovery.
 
     Header ordering is deferred because each top-level item is subsequently
-    parsed as an independent REPL entry before it can be evaluated. The result
-    is unresolved for the same reason: only the item spans are consumed.
+    parsed as an independent REPL entry before it can be evaluated.
     """
 
-    program, _next_id = _parse_to_unresolved_program(text, start_id=0, allow_late_uses=True)
+    program, _next_id = _parse_to_program(text, start_id=0, allow_late_uses=True)
     return program
 
 
@@ -363,8 +317,6 @@ def parse_program_seeded(
     *,
     start_id: int,
     source: SourceId | None = None,
-    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
-    resolve_infix: bool = True,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* with node ids starting at *start_id* for incremental use.
 
@@ -382,11 +334,6 @@ def parse_program_seeded(
     source:
         Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on every span.
         See :func:`parse_program` for details.
-    ambient_infix:
-        Already-resolved user infix fixity carried over from earlier REPL
-        entries (name → ``(priority, associativity)``). Merged into the operator
-        table so an operator declared in a prior entry parses correctly in this
-        one. ``None`` for a standalone whole-program parse.
 
     Returns
     -------
@@ -398,13 +345,7 @@ def parse_program_seeded(
     AglSyntaxError
         On any lex or parse error.
     """
-    return _parse_to_program(
-        text,
-        start_id=start_id,
-        source=source,
-        ambient_infix=ambient_infix,
-        resolve_infix=resolve_infix,
-    )
+    return _parse_to_program(text, start_id=start_id, source=source)
 
 
 def parse_type_expr(

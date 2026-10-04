@@ -111,6 +111,7 @@ from agm.agl.semantics.types import (
     TypeTemplateMatch,
     TypeVarType,
     UnitType,
+    contains_inference_var,
     contains_type_var,
     free_type_vars,
     is_assignable,
@@ -616,6 +617,9 @@ class TypeTable:
         # invalidated (cleared) whenever a declaration is added, removed, or
         # overwritten.
         self._declaration_flags_cache: dict[DataProperty, DeclarationFlags] = {}
+        # Concrete nominal types whose successful Hashable checks may be used
+        # by retained REPL code. Merged with declaration state across entries.
+        self._hashable_proofs: set[RecordType | EnumType | ExceptionType] = set()
         # Member declaration id -> the enums declaring or referencing it, in
         # registration order. A referenced member belongs to several enums, so
         # this is multi-valued. Whole-table, rebuilt on any registration change.
@@ -1648,11 +1652,26 @@ class TypeTable:
         (:func:`_constraint_kind_to_data_property`); see
         :meth:`_nominal_satisfies_property` for the shared declaration-flag walk.
         """
-        return self._nominal_satisfies_property(
+        result = self._nominal_satisfies_property(
             handle,
             _constraint_kind_to_data_property(kind),
             lambda arg: satisfies(arg, kind, self, bounds),
         )
+        # Only registered declarations can acquire later exception descendants.
+        if (
+            result
+            and kind is ConstraintKind.HASHABLE
+            and handle.decl_id in self._defs
+            and not contains_type_var(handle)
+            and not contains_inference_var(handle)
+        ):
+            self._hashable_proofs.add(handle)
+        return result
+
+    @property
+    def hashable_proofs(self) -> frozenset[RecordType | EnumType | ExceptionType]:
+        """Concrete nominal Hashable checks already relied on by checked code."""
+        return frozenset(self._hashable_proofs)
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
@@ -2234,6 +2253,7 @@ class TypeTable:
         # table from its accumulated one on every entry, so a declaration
         # orphaned once must stay orphaned for the rest of the session.
         self._orphaned |= other._orphaned
+        self._hashable_proofs.update(other._hashable_proofs)
         for decl_id, methods in other._methods.items():
             for candidates in methods.values():
                 for method in candidates.values():

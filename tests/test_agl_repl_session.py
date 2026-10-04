@@ -293,6 +293,19 @@ class TestPersistence:
         assert is_result.ok, is_result.diagnostics
         assert is_result.value == BoolValue(True)
 
+    def test_non_hashable_descendant_cannot_revoke_retained_hashable_exception(self) -> None:
+        session = ReplSession(default_stdlib=False)
+        assert session.eval_entry("exception Base extends Exception").ok
+        assert session.eval_entry("def key(e: Base) -> dict[Base, int] = {e: 1}").ok
+
+        descendant = session.eval_entry("exception Bad extends Base\n  xs: array[int]")
+
+        assert not descendant.ok
+        assert descendant.diagnostics
+        assert session.eval_entry('key(Base(message = "base"))').ok
+        assert session.eval_entry("exception Good extends Base\n  code: int").ok
+        assert session.eval_entry('key(Good(message = "good", code = 1))').ok
+
     def test_json_cast_encodes_a_later_entrys_subtype_by_its_own_fields(self) -> None:
         session = open_session()
         assert session.eval_entry(

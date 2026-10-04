@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.program import ResolvedProgram
     from agm.agl.scope.symbols import ScopePath
+    from agm.agl.semantics.type_table import TypeDef, TypeTable
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion
@@ -53,6 +54,23 @@ class LoadedCheckedProgram:
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
     raw_param_values: "dict[StaticBindingKey, object]"
     retired_member_scopes: "frozenset[ScopePath]"
+
+
+def _hashability_downgrade(previous: TypeTable, current: TypeTable) -> TypeDef | None:
+    """Find a retained concrete Hashable proof invalidated by a new subtype."""
+    from agm.agl.constraints import ConstraintKind
+    from agm.agl.semantics.type_table import satisfies
+
+    if not any(
+        typedef.kind == "exception" and typedef.decl_node_id not in previous.defs
+        for typedef in current.entries()
+    ):
+        return None
+    for proof in sorted(previous.hashable_proofs, key=repr):
+        typedef = previous.defs[proof.decl_id]
+        if not satisfies(proof, ConstraintKind.HASHABLE, current, {}):
+            return typedef
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +206,15 @@ class EntryPipeline:
 
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [*tab_warnings, *checked_program.warnings]
+
+        downgrade = _hashability_downgrade(
+            self._ctx._type_env.type_table, entry_cm.type_env.type_table
+        )
+        if downgrade is not None:
+            message = (
+                f"This entry would make previously Hashable type '{downgrade.name}' non-Hashable."
+            )
+            return self._ctx._fail([Diagnostic(message=message, line=1)], warnings)
 
         from agm.agl.matchcompile import (
             cached_module_sites,

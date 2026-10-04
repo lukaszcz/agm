@@ -3460,6 +3460,13 @@ class TestSatisfiesHashable:
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700104)
         assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is True
 
+    def test_unregistered_exception_hashability_is_not_retained_as_a_proof(self) -> None:
+        table = TypeTable()
+        exc = ExceptionType(name="Unregistered", module_id=ENTRY_ID, decl_id=700104)
+
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is True
+        assert not table.hashable_proofs
+
     def test_exception_with_function_field_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
         handler_type = FunctionType(params=(), result=IntType())

@@ -652,9 +652,18 @@ class TestDictKeyForms:
 
 
 class TestHostDictKeys:
-    def test_native_table_keeps_its_text_keys(self) -> None:
+    def test_native_table_keys_read_as_strings_of_the_key_slot(self) -> None:
         schema, defs = _dict_plan("int")
         assert host_data_to_json({"1": 5}, schema, defs) == {"1": 5}
+        assert host_data_to_json({"2.0": 5}, schema, defs) == {"2.0": 5}
+        schema, defs = _dict_plan("Color")
+        assert host_data_to_json({"Red": 5}, schema, defs) == {"Red": 5}
+
+    def test_native_table_keys_equal_after_decoding_fail_the_decode(self) -> None:
+        schema, defs = _dict_plan("int")
+        wire = host_data_to_json({"1": 1, "1.0": 2}, schema, defs)
+        with pytest.raises(ValueError):
+            decode_value(schema, wire, defs)
 
     def test_native_entries_array_reads_key_and_value_slots(self) -> None:
         schema, defs = _dict_plan("Point")

@@ -598,6 +598,7 @@ class TestConfigStringsReadAlikeAtEveryDepth:
 _DICT_TYPES = (
     "enum Color\n  | Red\n  | Tint(level: int)\n\n"
     "enum Plain\n  | A\n  | B\n\n"
+    'enum Tagged\n  | @json-name("bleu") Blue\n  | Green\n\n'
     "record Point\n  x: int\n  y: int\n\n"
 )
 
@@ -608,12 +609,14 @@ _DICT_PROGRAM = (
     "  by-color: dict[Color, int] = {},\n"
     "  by-point: dict[Point, text] = {},\n"
     "  by-json: dict[json, int] = {},\n"
+    "  by-tag: dict[Tagged, int] = {},\n"
     ") -> unit =\n"
     "  print by-int\n"
     "  print by-plain\n"
     "  print by-color\n"
     "  print by-point\n"
     "  print by-json\n"
+    "  print by-tag\n"
 )
 
 _DICT_PARAM_PROGRAM = (
@@ -654,6 +657,10 @@ class TestDictParametersFromHostInputs:
             ('by-point = { "Point(x = 1, y = 2)" = "a" }', '{Point(x = 1, y = 2): "a"}'),
             ("by-point = '{Point(x = 1, y = 2): \"a\"}'", '{Point(x = 1, y = 2): "a"}'),
             ("by-json = '{\"s\": 1}'", '{"s": 1}'),
+            ('by-json = { "s" = 1 }', '{"s": 1}'),
+            ('by-int = { "2.0" = "a" }', '{2: "a"}'),
+            ("by-tag = { Blue = 1 }", "{Tagged::Blue: 1}"),
+            ("by-tag = { bleu = 1 }", "{Tagged::Blue: 1}"),
         ],
     )
     def test_toml_config_decodes_every_key_form(

@@ -25,7 +25,7 @@ every string nested in it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Literal, assert_never, cast
 
@@ -205,8 +205,9 @@ def _convert_json(node: ValueNode) -> object:
     if isinstance(node, ArrayNode):
         return [_convert_json(item) for item in node.items]
     if isinstance(node, DictNode):
-        return _convert_dict_entries(
-            node, lambda key: cast(str, _convert_scalar(key, ScalarKind.TEXT)), _convert_json
+        return _object_of(
+            (cast(str, _convert_scalar(e.key, ScalarKind.TEXT)), _convert_json(e.value), e.start)
+            for e in node.entries
         )
     raise ValueDecodeError("a constructor is not valid inside json", node.start)
 
@@ -219,27 +220,28 @@ def _convert_dict(
     defs: DefsMap,
 ) -> object:
     """Convert a dict *node* into the JSON wire shape *key_form* names."""
+    return _dict_wire(
+        key_form,
+        (
+            (
+                value_node_to_json(entry.key, key_schema, defs),
+                value_node_to_json(entry.value, value_schema, defs),
+                entry.start,
+            )
+            for entry in node.entries
+        ),
+    )
 
-    def convert_value(value: ValueNode) -> object:
-        return value_node_to_json(value, value_schema, defs)
 
-    def convert_key(key: ValueNode) -> object:
-        return value_node_to_json(key, key_schema, defs)
-
+def _dict_wire(key_form: DictKeyForm, pairs: Iterable[tuple[object, object, int | None]]) -> object:
+    """Lay converted ``(key, value, offset)`` *pairs* out in the wire shape *key_form* names."""
     match key_form:
         case DictKeyForm.OBJECT_TEXT:
-            return _convert_dict_entries(
-                node, lambda key: cast(str, convert_key(key)), convert_value
-            )
+            return _object_of((cast(str, key), value, at) for key, value, at in pairs)
         case DictKeyForm.OBJECT_STRINGIFIED:
-            return _convert_dict_entries(
-                node, lambda key: _stringified_wire_key(convert_key(key)), convert_value
-            )
+            return _object_of((_stringified_wire_key(key), value, at) for key, value, at in pairs)
         case DictKeyForm.ENTRIES:
-            return [
-                {"key": convert_key(entry.key), "value": convert_value(entry.value)}
-                for entry in node.entries
-            ]
+            return [{"key": key, "value": value} for key, value, _ in pairs]
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -255,18 +257,13 @@ def _stringified_wire_key(key: object) -> str:
     return dumps_exact(cast(JsonShaped, key), indent=None)
 
 
-def _convert_dict_entries(
-    node: DictNode,
-    wire_key: Callable[[ValueNode], str],
-    convert_value: Callable[[ValueNode], object],
-) -> dict[str, object]:
-    """Build an object from *node*'s entries, rejecting two entries with one wire key."""
+def _object_of(pairs: Iterable[tuple[str, object, int | None]]) -> dict[str, object]:
+    """Build an object from ``(wire key, value, offset)`` *pairs*, rejecting a repeated key."""
     result: dict[str, object] = {}
-    for entry in node.entries:
-        key = wire_key(entry.key)
+    for key, value, at in pairs:
         if key in result:
-            raise ValueDecodeError(f"duplicate dict key {key!r}", entry.start)
-        result[key] = convert_value(entry.value)
+            raise ValueDecodeError(f"duplicate dict key {key!r}", at)
+        result[key] = value
     return result
 
 
@@ -562,20 +559,22 @@ def _host_entry_to_json(item: object, schema: DictDecode, defs: DefsMap) -> obje
 def _host_table_to_json(data: Mapping[str, object], schema: DecodeSchema, defs: DefsMap) -> object:
     """Read each entry of the table *data* as host data for the slot *schema* gives its key.
 
-    A table in an entries-form dict slot becomes the entries array, each table
-    key read as host text for the dict's key slot.
+    A table in a dict slot is laid out in the key's wire form, each table key
+    read as a native string of the key slot is.
     """
     match schema:
-        case DictDecode(key_form=DictKeyForm.ENTRIES, key=key_schema, value=item_schema):
-            return [
-                {
-                    "key": host_param_text_to_json(key, key_schema, defs),
-                    "value": host_data_to_json(item, item_schema, defs),
-                }
-                for key, item in data.items()
-            ]
-        case DictDecode(value=item_schema):
-            return {key: host_data_to_json(item, item_schema, defs) for key, item in data.items()}
+        case DictDecode(key_form=key_form, key=key_schema, value=item_schema):
+            return _dict_wire(
+                key_form,
+                (
+                    (
+                        host_data_to_json(key, key_schema, defs),
+                        host_data_to_json(item, item_schema, defs),
+                        None,
+                    )
+                    for key, item in data.items()
+                ),
+            )
         case RecordDecode(fields=record_fields):
             fields = record_fields
         case EnumDecode(variants=variants):

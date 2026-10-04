@@ -3627,6 +3627,16 @@ class TestFuncDef:
         assert checked.function_signatures["is-even"].result == BoolType()
         assert checked.function_signatures["is-odd"].result == BoolType()
 
+    def test_mutual_recursion_infers_dict_key_hashability_after_candidate_resolution(self) -> None:
+        checked = accept_type(
+            "def f(flag: bool) = if flag => {g(false): 1} else => {1: 2}\n"
+            "def g(flag: bool) = if flag => f(false)[1] else => 1\n"
+            "f"
+        )
+
+        assert checked.function_signatures["f"].result == DictType(IntType(), IntType())
+        assert checked.function_signatures["g"].result == IntType()
+
     def test_unannotated_mutual_recursion_without_evidence_requires_annotations(self) -> None:
         err = reject_type("def first() = second()\ndef second() = first()\nfirst")
 

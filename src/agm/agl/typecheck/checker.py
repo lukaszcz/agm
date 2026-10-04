@@ -5748,6 +5748,13 @@ class _Checker:
         block to state *kind* (or an implication of it, e.g. ``Hashable``
         implies ``Eq``).
         """
+        if self._candidate is not None and contains_inference_var(
+            self._active_inference_engine().zonk(typ)
+        ):
+            # Candidate return inference may not know a recursive callee's
+            # result yet. The definitive body pass rechecks this constraint
+            # after candidate signatures have been resolved.
+            return
         if not satisfies(typ, kind, self._env.type_table, self._current_bounds):
             raise AglTypeError(
                 f"{subject} needs '{kind.value}' on '{typ!r}'.",

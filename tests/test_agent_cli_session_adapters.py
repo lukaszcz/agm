@@ -25,6 +25,7 @@ from agm.agent.session.cli_adapters import (
     PiCliSessionBackend,
     open_cli_session,
 )
+from agm.agent.session.protocol import BackendSettings
 from agm.agent.spec import (
     AGENT_SPECS,
     AgentClaude,
@@ -1518,10 +1519,12 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
 
     backend = ClaudeCliSessionBackend.open(
         AgentClaude("m", "t"),
-        get_sandbox_context=session_sandbox_context(home),
-        permission_mode=PermissionMode.UNRESTRICTED,
-        sandbox=SandboxLimits(),
-        env={"FIXED": "at-open"},
+        BackendSettings(
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env={"FIXED": "at-open"},
+        ),
     )
 
     backend.ask(SessionAskRequest("first"))
@@ -1538,6 +1541,4 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
     assert transport.envs[0] == transport.envs[1] == transport.envs[2]
     assert transport.envs[0] is not None and transport.envs[0]["FIXED"] == "at-open"
     assert isinstance(child, ClaudeCliSessionBackend)
-    assert child._permission_mode == PermissionMode.UNRESTRICTED
-    assert child._sandbox == SandboxLimits()
-    assert child._env == {"FIXED": "at-open"}
+    assert child._settings == backend._settings

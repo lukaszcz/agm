@@ -70,9 +70,12 @@ __all__ = [
     "lookup_reached",
     "lookup_steps",
     "lookup_through",
+    "hidden_member",
     "is_removed",
     "removes",
     "removes_origin",
+    "unknown_member",
+    "unknown_qualifier",
 ]
 
 
@@ -453,8 +456,8 @@ def lookup_declared(
     if refusal is not None:
         return refusal
     if step.hidden(path):
-        return HiddenMemberError(render_qualifier_path(written), path[-1], span=written.span)
-    return UnknownMemberError(render_qualified_name(written, path[-1]), span=written.span)
+        return hidden_member(written, path[-1])
+    return unknown_member(written, path[-1])
 
 
 def _nowhere(_path: ScopePath) -> bool:
@@ -514,7 +517,7 @@ def _reaching(
 
     As :func:`lookup_reached` reads it.
     """
-    walk = _chain_walk(sources, chain, scope_path)[1]
+    walk = _chain_walk(sources, chain, scope_path, chain.span)[1]
     return walk, walk.reached(kind, owners_within)
 
 
@@ -525,7 +528,7 @@ def lookup_origins(
 
     Those of every step: a qualifier names each scope it reaches.
     """
-    anchor, walk = _chain_walk(sources, chain, scope_path)
+    anchor, walk = _chain_walk(sources, chain, scope_path, chain.span)
     return walk.named(anchor.origins)
 
 
@@ -540,7 +543,7 @@ def lookup_hidden(
     (:meth:`_Walk.hides`). ``None`` unless removed; *owners_within* is as
     :func:`lookup_reached` reads it.
     """
-    walk = _chain_walk(sources, chain, scope_path)[1]
+    walk = _chain_walk(sources, chain, scope_path, chain.span)[1]
     for kind in (LookupKind.TYPE, LookupKind.VALUE):
         walk.reached(kind, owners_within)
     refusal = walk.refusal()
@@ -550,31 +553,32 @@ def lookup_hidden(
 
 
 def _chain_walk(
-    sources: PathSources, chain: QualifierChain, scope_path: ScopePath
+    sources: PathSources, chain: QualifierChain, scope_path: ScopePath, span: SourceSpan
 ) -> tuple[_Anchor, _Walk]:
-    """Where *chain*, written in *scope_path*, is read, and the walk of its full path."""
+    """Where *chain*, written in *scope_path*, is read, and the walk of its full path.
+
+    *span* locates a ``::name`` miss.
+    """
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path)
-    return anchor, _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, chain.span)
+    return anchor, _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span)
 
 
 def lookup_qualified(
     sources: PathSources,
     chain: QualifierChain,
-    member: str,
     scope_path: ScopePath,
     kind: LookupKind,
     *,
     span: SourceSpan,
 ) -> QualifiedTarget | Misfit | AglError:
-    """Return what *chain*``::``*member*, written in *scope_path*, selects, or why nothing.
+    """Return what *chain*, written in *scope_path*, selects, or why nothing.
 
     Finding nothing of *kind* but a declaration of another kind is a
     :class:`Misfit`. *span* locates a ``::name`` miss.
     """
-    names = (*(segment.name for segment in chain.segments), member)
-    anchor = _anchor(sources, chain, scope_path)
-    walk = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span)
+    anchor, walk = _chain_walk(sources, chain, scope_path, span)
+    names = walk.names
     found = walk.find(kind)
     if found is not None:
         return found
@@ -582,15 +586,13 @@ def lookup_qualified(
     if refusal is not None:
         return refusal
     for other in _OTHER_KINDS[kind]:
-        misfit = _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span).find(
-            other
-        )
+        misfit = _chain_walk(sources, chain, scope_path, span)[1].find(other)
         if isinstance(misfit, QualifiedTarget):
             return Misfit(misfit)
         if misfit is not None:
             return misfit
     if not chain.segments:
-        return UnknownMemberError(render_qualified_name(chain, member), span=span)
+        return unknown_member(chain, chain.member, span)
     if walk.hides():
         return walk.hidden(chain)
 
@@ -599,6 +601,23 @@ def lookup_qualified(
         return _Walk(sources, scope_path, anchor.steps, anchor.route, prefix, spelled, span)
 
     return _unknown(chain, names, anchor.origins, written)
+
+
+def unknown_member(
+    chain: QualifierChain, member: str, span: SourceSpan | None = None
+) -> UnknownMemberError:
+    """Return the verdict for ``chain::member``, as written, selecting no member."""
+    return UnknownMemberError(render_qualified_name(chain, member), span=span or chain.span)
+
+
+def unknown_qualifier(chain: QualifierChain) -> UnknownQualifierError:
+    """Return the verdict for *chain*, as written, naming nothing that qualifies."""
+    return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
+
+
+def hidden_member(chain: QualifierChain, member: str) -> HiddenMemberError:
+    """Return the refusal of *member* beneath *chain*, as written, as hidden."""
+    return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
 
 
 def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
@@ -876,9 +895,14 @@ class _Walk:
                     found |= sources.projected_origins(key, names[count:])
         return frozenset(found)
 
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The names of the walk's full path."""
+        return self._names
+
     def hidden(self, chain: QualifierChain) -> HiddenMemberError:
         """The refusal of the walk's spelling, *chain*, as hidden."""
-        return HiddenMemberError(render_qualifier_path(chain), self._names[-1], span=chain.span)
+        return hidden_member(chain, self._names[-1])
 
     def _applied(
         self, chain: QualifierChain, key: DeclarationKey, index: int

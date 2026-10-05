@@ -29,7 +29,6 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     JsonContractRequest,
     RecordDecode,
-    RefDecode,
     TextContractRequest,
     is_plain_enum,
 )
@@ -41,6 +40,7 @@ from agm.agl.runtime.convert import (
     agl_validator_class,
     decode_value,
     parse_json_strict,
+    resolve_decode,
 )
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.type_table import TypeTable
@@ -494,20 +494,6 @@ def _path_sort_key(error: JsonschemaValidationError) -> str:
     return "/".join(str(p) for p in error.path)
 
 
-def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
-    """Resolve a ``RefDecode`` node through *defs*; return *decode* unchanged otherwise.
-
-    Shared by the classification walkers below, which navigate a finite JSON
-    error PATH (not the value graph) — resolving a ref as encountered always
-    terminates, so no visited-set is needed here (contrast
-    ``ir/validate.py::_check_decode_nominals``, which walks the whole decode
-    plan and does track visited ``defs`` keys).
-    """
-    while isinstance(decode, RefDecode):
-        decode = defs[decode.key]
-    return decode
-
-
 def _coerce_decode_defs(defs: DecodeDefsInput | None) -> Mapping[str, DecodeSchema]:
     """Normalize parse-time decode defs from either contract storage shape."""
     if defs is None:
@@ -529,7 +515,7 @@ def _find_enum_decode_at_path(
     *at_key*: the error is a ``propertyNames`` failure, whose path stops at the
     stringified-key object itself; the enum sought is that dict's key type.
     """
-    decode = _resolve_ref(decode, defs)
+    decode = resolve_decode(decode, defs)
     elements = iter(path_elements)
     for elem in elements:
         if isinstance(decode, ArrayDecode):
@@ -552,15 +538,15 @@ def _find_enum_decode_at_path(
             decode = field_decode
         else:
             return None
-        decode = _resolve_ref(decode, defs)
+        decode = resolve_decode(decode, defs)
     if at_key and isinstance(decode, DictDecode):
-        decode = _resolve_ref(decode.key, defs)
+        decode = resolve_decode(decode.key, defs)
     return decode if isinstance(decode, EnumDecode) else None
 
 
 def _plain_enum_tags(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> tuple[str, ...]:
     """Return *decode*'s member tags when it is a plain enum, else none."""
-    resolved = _resolve_ref(decode, defs)
+    resolved = resolve_decode(decode, defs)
     if isinstance(resolved, EnumDecode) and is_plain_enum(resolved):
         return tuple(variant.json_name for variant in resolved.variants)
     return ()

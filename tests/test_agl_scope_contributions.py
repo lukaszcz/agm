@@ -145,7 +145,7 @@ def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
     )
 
     assert set(qualifier_member_decls(env, ("config",), "debug")) == {(module, "debug")}
-    assert "debug" not in env.contributions[module].alias_members["settings"]
+    assert "debug" not in env.contributions[module].routes["settings"].members
 
 
 def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:

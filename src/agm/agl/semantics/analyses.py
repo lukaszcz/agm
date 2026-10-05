@@ -88,6 +88,7 @@ per-concrete-type reachability query built on top of it.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from heapq import heappop, heappush
 from itertools import count
@@ -188,7 +189,7 @@ class _InhabitationSolver:
         defs = table.defs
         self._table = table
         self._defs = defs
-        self._relevant = _compute_relevant_params(defs, through_containers=False)
+        self._relevant = compute_relevant_params(defs, through_containers=False)
         components = sccs(
             _inhabitation_references(table), key=lambda decl_id: decl_id_sort_key(defs, decl_id)
         )
@@ -370,7 +371,8 @@ class DeclarationFlags:
     """Whole-table "bad" fixpoint result (see :func:`compute_declaration_flags`).
 
     ``flagged`` — declarations struck by the policy's evidence.
-    ``relevant_params`` — for every declaration, the subset of its own type
+    Relevance (:meth:`~agm.agl.semantics.type_table.TypeTable.relevant_params_by_decl`)
+    is the subset of each declaration's own type
     parameters whose instantiation can affect a concrete reference's answer:
     a parameter is relevant if it appears directly in a field (including
     nested in ``array``/``dict``/function-parameter/result position), or is
@@ -400,7 +402,6 @@ class DeclarationFlags:
     """
 
     flagged: frozenset[DeclId]
-    relevant_params: Mapping[DeclId, frozenset[str]]
     key_params: Mapping[DeclId, frozenset[str]]
 
 
@@ -437,14 +438,19 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
     defs = table.defs
     field_flagged = set(table.host_minted_declaration_ids()) if policy.non_data_bad else set()
     flagged = set(field_flagged)
-    relevant = _compute_relevant_params(defs, through_containers=True)
+    relevant = table.relevant_params_by_decl()
     key_params: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
+    own_params_of = {decl_id: frozenset(typedef.type_params) for decl_id, typedef in defs.items()}
+    templates_of = {
+        decl_id: tuple(t for _fname, t in field_templates(typedef, defs))
+        for decl_id, typedef in defs.items()
+    }
     changed = True
     while changed:
         changed = False
         for decl_id, typedef in defs.items():
-            own_params = frozenset(typedef.type_params)
-            templates = tuple(t for _fname, t in field_templates(typedef, defs))
+            own_params = own_params_of[decl_id]
+            templates = templates_of[decl_id]
             own_var_field_bad = policy.var_fields_bad and (
                 bool(typedef.mutable_fields)
                 or (
@@ -487,7 +493,6 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
                     changed = True
     return DeclarationFlags(
         flagged=frozenset(flagged),
-        relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
         key_params={decl_id: frozenset(params) for decl_id, params in key_params.items()},
     )
 
@@ -541,7 +546,7 @@ def _template_is_flagged(
     t: Type,
     policy: LeafPolicy,
     flagged: set[DeclId],
-    relevant: Mapping[DeclId, set[str]],
+    relevant: Mapping[DeclId, AbstractSet[str]],
     key_params: Mapping[DeclId, set[str]],
     own_params: frozenset[str],
     defs: Mapping[DeclId, TypeDef],
@@ -613,7 +618,7 @@ def _template_is_flagged(
 def _template_relevant_params(
     t: Type,
     own_params: frozenset[str],
-    relevant: Mapping[DeclId, set[str]],
+    relevant: Mapping[DeclId, AbstractSet[str]],
     defs: Mapping[DeclId, TypeDef],
     *,
     through_containers: bool,
@@ -674,7 +679,7 @@ def _template_key_params(
     policy: LeafPolicy,
     own_params: frozenset[str],
     key_params: Mapping[DeclId, set[str]],
-    relevant: Mapping[DeclId, set[str]],
+    relevant: Mapping[DeclId, AbstractSet[str]],
     defs: Mapping[DeclId, TypeDef],
     table: TypeTable,
 ) -> set[str]:
@@ -788,14 +793,10 @@ class FiniteClosure:
     :meth:`~agm.agl.semantics.type_table.TypeTable.has_finite_schema` to
     extend a concrete type's own reachable declarations without re-deriving
     the reference graph.
-    ``relevant_params`` — for each declaration, the subset of its own type
-    parameters whose concrete instantiation can affect the reachable schema.
-    Phantom parameters are intentionally absent.
     """
 
     infinite: frozenset[DeclId]
     successors: Mapping[DeclId, frozenset[DeclId]]
-    relevant_params: Mapping[DeclId, frozenset[str]]
 
 
 def compute_finite_closure(table: TypeTable) -> FiniteClosure:
@@ -819,7 +820,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     inhabitation-checked recursion that is already unconditionally legal.
     """
     defs = table.defs
-    relevant = _compute_relevant_params(defs, through_containers=True)
+    relevant = table.relevant_params_by_decl()
     edges = _reference_edges(defs, relevant)
     successors: dict[DeclId, frozenset[DeclId]] = {
         decl_id: frozenset(edge.target for edge in refs) for decl_id, refs in edges.items()
@@ -836,7 +837,6 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     return FiniteClosure(
         infinite=frozenset(infinite),
         successors=successors,
-        relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
     )
 
 
@@ -928,7 +928,7 @@ def nominal_references_for_schema(
             assert_never(unreachable)
 
 
-def _compute_relevant_params(
+def compute_relevant_params(
     defs: Mapping[DeclId, TypeDef], *, through_containers: bool
 ) -> dict[DeclId, set[str]]:
     """Return every declaration's parameters that can reach one of its fields.
@@ -937,13 +937,15 @@ def _compute_relevant_params(
     affect schema reachability; without it, inhabitation.
     """
     relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
+    templates = {decl_id: field_templates(typedef, defs) for decl_id, typedef in defs.items()}
+    own = {decl_id: frozenset(typedef.type_params) for decl_id, typedef in defs.items()}
     changed = True
     while changed:
         changed = False
-        for decl_id, typedef in defs.items():
-            own_params = frozenset(typedef.type_params)
+        for decl_id in defs:
+            own_params = own[decl_id]
             gained: set[str] = set()
-            for _fname, template in field_templates(typedef, defs):
+            for _fname, template in templates[decl_id]:
                 gained |= _template_relevant_params(
                     template, own_params, relevant, defs, through_containers=through_containers
                 )
@@ -955,15 +957,14 @@ def _compute_relevant_params(
 
 def _reference_edges(
     defs: Mapping[DeclId, TypeDef],
-    relevant_params: Mapping[DeclId, set[str]],
+    relevant_params: Mapping[DeclId, frozenset[str]],
 ) -> dict[DeclId, tuple[_RefEdge, ...]]:
     """Return every declaration's schema-relevant outgoing reference edge."""
-    frozen_relevant = {decl_id: frozenset(params) for decl_id, params in relevant_params.items()}
     result: dict[DeclId, tuple[_RefEdge, ...]] = {}
     for decl_id, typedef in defs.items():
         found: list[_RefEdge] = []
         for _fname, template in field_templates(typedef, defs):
-            for ref in nominal_references_for_schema(template, defs, frozen_relevant):
+            for ref in nominal_references_for_schema(template, defs, relevant_params):
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
                 found.append(_RefEdge(target=ref.decl_id, arg_templates=arg_templates))
         if typedef.kind == "exception" and typedef.base is not None:
@@ -976,7 +977,7 @@ def _scc_has_growing_cycle(
     members: frozenset[DeclId],
     edges: Mapping[DeclId, tuple[_RefEdge, ...]],
     defs: Mapping[DeclId, TypeDef],
-    relevant_params: Mapping[DeclId, set[str]],
+    relevant_params: Mapping[DeclId, AbstractSet[str]],
 ) -> bool:
     """Return ``True`` if *members*'s parameter-dependency graph has a growing cycle."""
     adjacency: dict[ParamKey, list[ParamKey]] = {}
@@ -1024,7 +1025,7 @@ def _param_occurrences(
     *,
     growing: bool,
     defs: Mapping[DeclId, TypeDef],
-    relevant_params: Mapping[DeclId, set[str]],
+    relevant_params: Mapping[DeclId, AbstractSet[str]],
 ) -> dict[str, bool]:
     """Return type-variable occurrences in *t* that affect schema identity.
 

@@ -168,7 +168,7 @@ def test_production_session_host_selects_and_rejects_transports(
 
     spawned: list[list[str]] = []
 
-    def spawn(agent: AgentPi, command: list[str], operation: str, **_kwargs: object) -> object:
+    def spawn(agent: AgentPi, command: list[str], operation: str, *_args: object) -> object:
         spawned.append(command)
         return object()
 

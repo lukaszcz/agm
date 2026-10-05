@@ -19,6 +19,7 @@ caller, which classifies and labels it (``eval.ir_interpreter``).
 from __future__ import annotations
 
 import decimal
+from collections.abc import Callable
 from typing import TypeVar, assert_never, cast
 
 from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
@@ -108,49 +109,38 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
             assert_never(unreachable)
 
 
-def add(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Addition: INT or DECIMAL."""
+def _binary(
+    kind: ArithKind,
+    left: Value,
+    right: Value,
+    int_op: Callable[[int, int], int],
+    decimal_op: Callable[[decimal.Decimal, decimal.Decimal], decimal.Decimal],
+) -> Value:
+    """Apply *int_op* or *decimal_op* to two operands of *kind*."""
     match kind:
         case ArithKind.INT:
-            left = cast(IntValue, left)
-            right = cast(IntValue, right)
-            return IntValue(left.value + right.value)
+            return IntValue(int_op(cast(IntValue, left).value, cast(IntValue, right).value))
         case ArithKind.DECIMAL:
-            left = cast(DecimalValue, left)
-            right = cast(DecimalValue, right)
-            return DecimalValue(left.value + right.value)
+            return DecimalValue(
+                decimal_op(cast(DecimalValue, left).value, cast(DecimalValue, right).value)
+            )
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def add(kind: ArithKind, left: Value, right: Value) -> Value:
+    """Addition: INT or DECIMAL."""
+    return _binary(kind, left, right, int.__add__, decimal.Decimal.__add__)
 
 
 def sub(kind: ArithKind, left: Value, right: Value) -> Value:
     """Subtraction: INT or DECIMAL."""
-    match kind:
-        case ArithKind.INT:
-            left = cast(IntValue, left)
-            right = cast(IntValue, right)
-            return IntValue(left.value - right.value)
-        case ArithKind.DECIMAL:
-            left = cast(DecimalValue, left)
-            right = cast(DecimalValue, right)
-            return DecimalValue(left.value - right.value)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
+    return _binary(kind, left, right, int.__sub__, decimal.Decimal.__sub__)
 
 
 def mul(kind: ArithKind, left: Value, right: Value) -> Value:
     """Multiplication: INT or DECIMAL."""
-    match kind:
-        case ArithKind.INT:
-            left = cast(IntValue, left)
-            right = cast(IntValue, right)
-            return IntValue(left.value * right.value)
-        case ArithKind.DECIMAL:
-            left = cast(DecimalValue, left)
-            right = cast(DecimalValue, right)
-            return DecimalValue(left.value * right.value)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
+    return _binary(kind, left, right, int.__mul__, decimal.Decimal.__mul__)
 
 
 def div(left: DecimalValue, right: DecimalValue) -> Value:

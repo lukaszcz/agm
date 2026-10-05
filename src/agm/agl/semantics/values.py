@@ -398,7 +398,7 @@ class DictValue:
             }
         object.__setattr__(self, "_tokens", tokens)
 
-    def aligned_values(self, other: "DictValue") -> list[tuple[Value, Value]] | None:
+    def aligned_values(self, other: "DictValue") -> Iterable[tuple[Value, Value]] | None:
         """Pair this dict's values with *other*'s by key, or ``None`` if their key sets differ.
 
         When both dicts share a representation, compares key sets directly
@@ -413,13 +413,13 @@ class DictValue:
         if self._tokens is None and other._tokens is None:
             if self._text.keys() != other._text.keys():
                 return None
-            return [(value, other._text[key_str]) for key_str, value in self._text.items()]
+            return ((value, other._text[key_str]) for key_str, value in self._text.items())
         if self._tokens is not None and other._tokens is not None:
             if self._tokens.keys() != other._tokens.keys():
                 return None
-            return [
+            return (
                 (value, other._tokens[token][1]) for token, (_key, value) in self._tokens.items()
-            ]
+            )
         pairs: list[tuple[Value, Value]] = []
         for key, value in self.items():
             matched = other.lookup(key)
@@ -700,23 +700,6 @@ class ContractValue:
 # Broad runtime value union
 # ---------------------------------------------------------------------------
 
-Value: TypeAlias = (
-    TextValue
-    | IntValue
-    | DecimalValue
-    | BoolValue
-    | JsonValue
-    | ArrayValue
-    | DictValue
-    | RecordValue
-    | ExceptionValue
-    | UnitValue
-    | ConstructorValue
-    | IrClosureValue
-    | IteratorValue
-    | ContractValue
-)
-
 # Every value a program can observe: an iterator is internal to loop lowering.
 ObservableValue: TypeAlias = (
     TextValue
@@ -733,6 +716,8 @@ ObservableValue: TypeAlias = (
     | IrClosureValue
     | ContractValue
 )
+
+Value: TypeAlias = ObservableValue | IteratorValue
 
 # ---------------------------------------------------------------------------
 # Frame and cell model

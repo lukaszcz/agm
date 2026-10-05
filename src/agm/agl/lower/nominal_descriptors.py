@@ -26,9 +26,8 @@ from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 __all__ = [
     "enum_descriptor",
     "exception_descriptor",
-    "json_field_names",
+    "nominal_descriptor",
     "record_descriptor",
-    "variant_descriptors",
 ]
 
 
@@ -158,3 +157,33 @@ def record_descriptor(
         field_defaults=field_defaults.get(nominal, ()),
         bears_name_path=bears_name_path,
     )
+
+
+def nominal_descriptor(
+    typedef: TypeDef,
+    handle: RecordType | EnumType | ExceptionType,
+    type_table: TypeTable,
+    *,
+    bears_name_path: bool,
+    field_defaults: Mapping[NominalId, tuple[IrExpr | None, ...]],
+) -> NominalDescriptor:
+    """Build the descriptor matching *handle*'s kind (record, enum, or exception)."""
+    match handle:
+        case RecordType():
+            return record_descriptor(
+                typedef,
+                handle,
+                type_table,
+                bears_name_path=bears_name_path,
+                field_defaults=field_defaults,
+            )
+        case EnumType():
+            return enum_descriptor(typedef, handle, type_table, bears_name_path=bears_name_path)
+        case _:
+            return exception_descriptor(
+                typedef,
+                handle,
+                type_table,
+                bears_name_path=bears_name_path,
+                field_defaults=field_defaults,
+            )

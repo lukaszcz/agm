@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Literal, TypeVar
 
 from agm.agl.ir.ids import NominalId
@@ -284,20 +284,9 @@ class DictKeyForm(enum.Enum):
 class DictEncode:
     """Encode a dict by recursively encoding each key and value.
 
-    ``key_form`` is the key's ``DictKeyForm`` (see :func:`dict_key_form`, the
-    ONE classifier used by plan building, schema derivation, and the runtime
-    for a growing template's key parameters),
-    filled once when the plan is built
-    (``type_schema._emit_encode_body``/``_build_template_encode_plan``)
-    — it is ``None`` ONLY when ``key`` is a growing template's own
-    :class:`TypeParameterEncode`, whose concrete key type is not known until
-    the schema is resolved (substituted or followed through a ``$defs``
-    reference) at each call site; there ``runtime.serialize``'s
-    ``_encode_dict`` applies the classifier itself, after resolving the key
-    schema (``_resolve``), at encode time.
+    The wire shape is :func:`dict_key_form` of the key schema resolved at encode time.
     """
 
-    key_form: "DictKeyForm | None"
     key: "EncodeSchema"
     value: "EncodeSchema"
 
@@ -411,19 +400,21 @@ class EncodePlan:
 
     root: EncodeSchema
     definitions: "tuple[EncodeDefinition, ...]" = ()
+    definitions_by_key: "dict[str, EncodeDefinition]" = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        self.definitions_by_key.update((d.key, d) for d in self.definitions)
 
 
 def dict_key_form(schema: EncodeSchema) -> DictKeyForm:
     """Classify a dict key's wire shape from its own, already-RESOLVED encode schema.
 
     *schema* must already be resolved past any ``TypeParameterEncode``/
-    ``RefEncode`` indirection. The main site is plan-build time —
-    ``type_schema``'s own schema-derivation walk and its encode-plan builders
-    (``_emit_encode_body``/``_build_template_encode_plan``), which fill
-    ``DictEncode.key_form`` once; ``runtime.serialize``'s ``_encode_dict``
-    calls this only for a growing template's own key type-parameter, whose
-    concrete shape is not known until encode time. This is the ONE
-    classifier either site consults; see ``DictKeyForm``.
+    ``RefEncode`` indirection. The ONE classifier, consulted by schema
+    derivation and decode-plan emission (``type_schema``) and by the runtime
+    encoder; see ``DictKeyForm``.
     """
     if isinstance(schema, ScalarEncode):
         if schema.kind is ScalarKind.TEXT:
@@ -431,7 +422,7 @@ def dict_key_form(schema: EncodeSchema) -> DictKeyForm:
         if schema.kind is ScalarKind.JSON:
             return DictKeyForm.ENTRIES
         return DictKeyForm.OBJECT_STRINGIFIED
-    if isinstance(schema, EnumEncode) and all(not variant.fields for variant in schema.variants):
+    if isinstance(schema, EnumEncode) and is_plain_enum(schema):
         return DictKeyForm.OBJECT_STRINGIFIED
     return DictKeyForm.ENTRIES
 

@@ -25,6 +25,7 @@ from agm.agent.session import (
     create_agl_session_host,
     rpc,
 )
+from agm.agent.session.protocol import BackendSettings
 from agm.agent.session.rpc import PiRpcSessionBackend
 from agm.agent.spec import AgentPi, PermissionMode, SessionTransport
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
@@ -187,10 +188,12 @@ class RpcStub:
 def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
     return PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
+        BackendSettings(
+            idle_timeout=timeout,
+            get_sandbox_context=unavailable_sandbox_context,
+            env=dict(os.environ),
+        ),
         name="named",
-        idle_timeout=timeout,
-        get_sandbox_context=unavailable_sandbox_context,
-        env=dict(os.environ),
     )
 
 
@@ -899,8 +902,7 @@ def test_close_and_close_all_terminate_children(
     service = SessionService(
         lambda _request: PiRpcSessionBackend.open(
             AgentPi("", "", ""),
-            get_sandbox_context=unavailable_sandbox_context,
-            env=dict(os.environ),
+            BackendSettings(get_sandbox_context=unavailable_sandbox_context, env=dict(os.environ)),
         )
     )
     handle = service.open(AgentPi("", "", ""), SessionTransport.RPC, env={})
@@ -1021,10 +1023,12 @@ def test_open_spawns_the_rpc_child_wrapped_under_sandbox_mode(
 
     backend = PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
-        get_sandbox_context=session_sandbox_context(home),
-        permission_mode=PermissionMode.UNRESTRICTED,
-        sandbox=SandboxLimits(),
-        env=dict(os.environ),
+        BackendSettings(
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env=dict(os.environ),
+        ),
         name="named",
     )
 
@@ -1043,8 +1047,7 @@ def test_open_spawns_the_rpc_child_under_the_environment_given_at_open(
     fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
     backend = PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
-        get_sandbox_context=unavailable_sandbox_context,
-        env=fixed_env,
+        BackendSettings(get_sandbox_context=unavailable_sandbox_context, env=fixed_env),
     )
 
     started = stub.wait_for("starts.jsonl")
@@ -1062,8 +1065,7 @@ def test_fork_spawns_the_replacement_under_the_same_environment(
     fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
     backend = PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
-        get_sandbox_context=unavailable_sandbox_context,
-        env=fixed_env,
+        BackendSettings(get_sandbox_context=unavailable_sandbox_context, env=fixed_env),
     )
 
     stub.wait_for("starts.jsonl")
@@ -1093,10 +1095,12 @@ def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
         SessionService(
             lambda request: PiRpcSessionBackend.open(
                 request.agent,
-                get_sandbox_context=session_sandbox_context(home),
-                permission_mode=request.permission_mode,
-                sandbox=request.sandbox,
-                env=request.env,
+                BackendSettings(
+                    get_sandbox_context=session_sandbox_context(home),
+                    permission_mode=request.permission_mode,
+                    sandbox=request.sandbox,
+                    env=request.env,
+                ),
             )
         )
     )
@@ -1135,10 +1139,12 @@ def test_open_prepare_failure_unavailable_becomes_a_session_host_error(
     with pytest.raises(SessionHostError) as raised:
         PiRpcSessionBackend.open(
             AgentPi("provider", "model", "high"),
-            get_sandbox_context=session_sandbox_context(home),
-            permission_mode=PermissionMode.UNRESTRICTED,
-            sandbox=SandboxLimits(),
-            env={},
+            BackendSettings(
+                get_sandbox_context=session_sandbox_context(home),
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+                env={},
+            ),
         )
     assert raised.value.operation == "open"
     assert "is not installed or not in PATH" in str(raised.value)
@@ -1161,10 +1167,12 @@ def test_open_prepare_failure_no_settings_becomes_a_session_host_error(
     with pytest.raises(SessionHostError) as raised:
         PiRpcSessionBackend.open(
             AgentPi("provider", "model", "high"),
-            get_sandbox_context=session_sandbox_context(home),
-            permission_mode=PermissionMode.UNRESTRICTED,
-            sandbox=SandboxLimits(),
-            env=dict(os.environ),
+            BackendSettings(
+                get_sandbox_context=session_sandbox_context(home),
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+                env=dict(os.environ),
+            ),
         )
     assert raised.value.operation == "open"
     assert "no sandbox settings file found" in str(raised.value)
@@ -1194,10 +1202,12 @@ def test_close_and_fork_replacement_close_the_prepared_sandbox_command(
 
     backend = PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
-        get_sandbox_context=session_sandbox_context(home),
-        permission_mode=PermissionMode.UNRESTRICTED,
-        sandbox=SandboxLimits(),
-        env=dict(os.environ),
+        BackendSettings(
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env=dict(os.environ),
+        ),
     )
 
     assert closed == []  # Nothing closed yet: the child is still alive.
@@ -1241,10 +1251,12 @@ def test_spawn_closes_the_prepared_command_when_popen_itself_fails(
     with pytest.raises(SessionHostError) as raised:
         PiRpcSessionBackend.open(
             AgentPi("provider", "model", "high"),
-            get_sandbox_context=session_sandbox_context(home),
-            permission_mode=PermissionMode.UNRESTRICTED,
-            sandbox=SandboxLimits(),
-            env=dict(os.environ),
+            BackendSettings(
+                get_sandbox_context=session_sandbox_context(home),
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+                env=dict(os.environ),
+            ),
         )
     assert raised.value.operation == "open"
     assert closed == [False]
@@ -1276,10 +1288,12 @@ def test_close_still_releases_the_prepared_command_when_stop_process_raises(
 
     backend = PiRpcSessionBackend.open(
         AgentPi("provider", "model", "high"),
-        get_sandbox_context=session_sandbox_context(home),
-        permission_mode=PermissionMode.UNRESTRICTED,
-        sandbox=SandboxLimits(),
-        env=dict(os.environ),
+        BackendSettings(
+            get_sandbox_context=session_sandbox_context(home),
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+            env=dict(os.environ),
+        ),
     )
 
     with pytest.raises(FileNotFoundError):

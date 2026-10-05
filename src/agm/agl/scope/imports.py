@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TypeAlias
 
@@ -111,64 +111,61 @@ def _frozen_routes(
 
 
 @dataclass(frozen=True, slots=True)
+class RouteSurface:
+    """What one import route -- an alias, or the module path -- brings from a module.
+
+    ``decls`` are the import declarations forming the route, ``member_decls``
+    those contributing each member; ``hidden`` holds the declarations and
+    scopes a ``hiding`` removed from the route that none of them brings.
+    """
+
+    members: Mapping[NameAtom, QName] = field(default_factory=dict)
+    scope_paths: frozenset[NameAtom] = frozenset()
+    member_decls: Mapping[NameAtom, frozenset[int]] = field(default_factory=dict)
+    decls: frozenset[int] = frozenset()
+    hidden: frozenset[NameAtom] = frozenset()
+
+
+_NO_SURFACE = RouteSurface()
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleContribution:
     """One imported module's route-keyed declaration and named-scope contribution.
 
-    ``path_decls`` and ``alias_decls`` are the import declarations forming
-    each route; ``path_hidden`` and ``alias_hidden`` the declarations and
-    scopes a ``hiding`` removed from a route that none of them brings;
-    ``exports`` is everything the module exports, hidden or not.
+    ``routes`` maps each alias, and ``None`` for the module path, to what it
+    brings; ``exports`` is everything the module exports, hidden or not.
     """
 
     module: ModuleId
     members: Mapping[NameAtom, QName]
     path_enabled: bool
     aliases: frozenset[str]
-    path_members: Mapping[NameAtom, QName] = field(default_factory=dict)
-    alias_members: Mapping[str, Mapping[NameAtom, QName]] = field(default_factory=dict)
-    path_scope_paths: frozenset[NameAtom] = frozenset()
-    alias_scope_paths: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
-    path_hidden: frozenset[NameAtom] = frozenset()
-    alias_hidden: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
-    path_member_decls: Mapping[NameAtom, frozenset[int]] = field(default_factory=dict)
-    alias_member_decls: Mapping[str, Mapping[NameAtom, frozenset[int]]] = field(
-        default_factory=dict
-    )
-    path_decls: frozenset[int] = frozenset()
-    alias_decls: Mapping[str, frozenset[int]] = field(default_factory=dict)
+    routes: Mapping[str | None, RouteSurface] = field(default_factory=dict)
     exports: Mapping[NameAtom, QName] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         members: Mapping[NameAtom, QName] = MappingProxyType(
             {atom: self.members[atom] for atom in sorted(self.members, key=_path_sort_key)}
         )
-        path_members: Mapping[NameAtom, QName] = MappingProxyType(
+        ordered: list[str | None] = [None] if None in self.routes else []
+        ordered.extend(sorted(route for route in self.routes if route is not None))
+        routes: Mapping[str | None, RouteSurface] = MappingProxyType(
             {
-                atom: self.path_members[atom]
-                for atom in sorted(self.path_members, key=_path_sort_key)
-            }
-        )
-        alias_members: Mapping[str, Mapping[NameAtom, QName]] = MappingProxyType(
-            {
-                alias: MappingProxyType(
-                    {
-                        atom: self.alias_members[alias][atom]
-                        for atom in sorted(self.alias_members[alias], key=_path_sort_key)
-                    }
+                route: replace(
+                    self.routes[route],
+                    members=MappingProxyType(
+                        {
+                            atom: self.routes[route].members[atom]
+                            for atom in sorted(self.routes[route].members, key=_path_sort_key)
+                        }
+                    ),
                 )
-                for alias in sorted(self.alias_members)
-            }
-        )
-        alias_scope_paths: Mapping[str, frozenset[NameAtom]] = MappingProxyType(
-            {
-                alias: frozenset(self.alias_scope_paths[alias])
-                for alias in sorted(self.alias_scope_paths)
+                for route in ordered
             }
         )
         object.__setattr__(self, "members", members)
-        object.__setattr__(self, "path_members", path_members)
-        object.__setattr__(self, "alias_members", alias_members)
-        object.__setattr__(self, "alias_scope_paths", alias_scope_paths)
+        object.__setattr__(self, "routes", routes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,20 +310,29 @@ EMPTY_IMPORT_ENV = ImportEnv(contributions={}, unqualified={})
 
 
 @dataclass(slots=True)
+class _RouteAccumulator:
+    members: dict[NameAtom, QName] = field(default_factory=dict)
+    scope_paths: set[NameAtom] = field(default_factory=set)
+    member_decls: dict[NameAtom, set[int]] = field(default_factory=dict)
+    decls: set[int] = field(default_factory=set)
+    hidden: set[NameAtom] = field(default_factory=set)
+
+    def freeze(self) -> RouteSurface:
+        """The surface accumulated; hidden atoms the route brings anyway are not hidden."""
+        return RouteSurface(
+            self.members,
+            frozenset(self.scope_paths),
+            _frozen_decls(self.member_decls),
+            frozenset(self.decls),
+            frozenset(self.hidden - self.members.keys() - self.scope_paths),
+        )
+
+
+@dataclass(slots=True)
 class _ContributionAccumulator:
-    members: dict[NameAtom, QName]
-    path_enabled: bool
-    aliases: set[str]
-    path_members: dict[NameAtom, QName]
-    alias_members: dict[str, dict[NameAtom, QName]]
-    path_scope_paths: set[NameAtom]
-    alias_scope_paths: dict[str, set[NameAtom]]
-    path_hidden: set[NameAtom]
-    alias_hidden: dict[str, set[NameAtom]]
-    path_member_decls: dict[NameAtom, set[int]]
-    alias_member_decls: dict[str, dict[NameAtom, set[int]]]
-    path_decls: set[int]
-    alias_decls: dict[str, set[int]]
+    members: dict[NameAtom, QName] = field(default_factory=dict)
+    path_enabled: bool = False
+    routes: dict[str | None, _RouteAccumulator] = field(default_factory=dict)
 
 
 def matching_atoms(surface: Iterable[NameAtom], prefix: PathAtom) -> tuple[NameAtom, ...]:
@@ -555,40 +561,24 @@ def build_import_env(
             hidden_scope_paths = set(hidden_scopes)
             if not decl.scope_path:
                 root_hidden.update(module_exports[source] for source in hidden_exports)
-            acc = accumulators.setdefault(
-                module,
-                _ContributionAccumulator(
-                    {}, False, set(), {}, {}, set(), {}, set(), {}, {}, {}, set(), {}
-                ),
-            )
+            acc = accumulators.setdefault(module, _ContributionAccumulator())
             if decl.alias is None:
-                route_members = acc.path_members
-                route_scope_paths = acc.path_scope_paths
-                route_hidden = acc.path_hidden
-                route_member_decls = acc.path_member_decls
-                route_decls = acc.path_decls
                 acc.path_enabled = True
-            else:
-                route_members = acc.alias_members.setdefault(decl.alias, {})
-                route_scope_paths = acc.alias_scope_paths.setdefault(decl.alias, set())
-                route_hidden = acc.alias_hidden.setdefault(decl.alias, set())
-                route_member_decls = acc.alias_member_decls.setdefault(decl.alias, {})
-                route_decls = acc.alias_decls.setdefault(decl.alias, set())
-                acc.aliases.add(decl.alias)
-            route_hidden.update(hidden, hidden_scope_paths)
-            route_decls.add(decl.node_id)
+            brought = acc.routes.setdefault(decl.alias, _RouteAccumulator())
+            brought.hidden.update(hidden, hidden_scope_paths)
+            brought.decls.add(decl.node_id)
             reached_withheld = decl_withheld.setdefault(decl.node_id, {})
             for source, qname in module_exports.items():
                 if source not in hidden:
                     acc.members[source] = qname
-                    route_members[source] = qname
-                    route_member_decls.setdefault(source, set()).add(decl.node_id)
+                    brought.members[source] = qname
+                    brought.member_decls.setdefault(source, set()).add(decl.node_id)
                     kept = module_withheld.get(source, frozenset())
                     reached_withheld[qname] = reached_withheld.get(qname, kept) & kept
             visible_scope_paths = tuple(
                 source for source in module_scopes if source not in hidden_scope_paths
             )
-            route_scope_paths.update(visible_scope_paths)
+            brought.scope_paths.update(visible_scope_paths)
             for source in visible_scope_paths:
                 scope_origins_by_route[(module, _path(source))] = module_scopes[source]
             exposures = _tail_exposures(decl, selected_exports)
@@ -625,22 +615,8 @@ def build_import_env(
             module,
             acc.members,
             acc.path_enabled,
-            frozenset(acc.aliases),
-            acc.path_members,
-            acc.alias_members,
-            frozenset(acc.path_scope_paths),
-            {alias: frozenset(scope_paths) for alias, scope_paths in acc.alias_scope_paths.items()},
-            frozenset(acc.path_hidden - acc.path_members.keys() - acc.path_scope_paths),
-            {
-                alias: frozenset(
-                    hidden - acc.alias_members[alias].keys() - acc.alias_scope_paths[alias]
-                )
-                for alias, hidden in acc.alias_hidden.items()
-            },
-            _frozen_decls(acc.path_member_decls),
-            {alias: _frozen_decls(decls) for alias, decls in acc.alias_member_decls.items()},
-            frozenset(acc.path_decls),
-            _frozen_decls(acc.alias_decls),
+            frozenset(route for route in acc.routes if route is not None),
+            {route: surface.freeze() for route, surface in acc.routes.items()},
             exports[module],
         )
     return ImportEnv(
@@ -708,14 +684,7 @@ def _matching_contribution_routes(
 ) -> tuple[str | None, ...]:
     """Return matching alias names, using ``None`` for the module-path route."""
     routes: list[str | None] = []
-    if (
-        not anchored
-        and len(qualifier) == 1
-        and (
-            qualifier[0] in contribution.alias_members
-            or qualifier[0] in contribution.alias_scope_paths
-        )
-    ):
+    if not anchored and len(qualifier) == 1 and qualifier[0] in contribution.routes:
         routes.append(qualifier[0])
     path_matches = (
         qualifier == contribution.module.segments
@@ -730,36 +699,30 @@ def _matching_contribution_routes(
     return tuple(routes)
 
 
-def _route_members(contribution: ModuleContribution, route: str | None) -> Mapping[NameAtom, QName]:
-    """Project one import route's declaration surface; ``None`` selects the path route."""
-    return contribution.path_members if route is None else contribution.alias_members.get(route, {})
-
-
-def _route_scope_paths(contribution: ModuleContribution, route: str | None) -> frozenset[NameAtom]:
-    """Project one import route's named-scope surface; ``None`` selects the path route."""
-    return (
-        contribution.path_scope_paths
-        if route is None
-        else contribution.alias_scope_paths.get(route, frozenset())
-    )
+def _qualifier_routes(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool
+) -> Iterator[tuple[ModuleId, tuple[RouteSurface, ...]]]:
+    """Yield each module *qualifier* names with the surfaces of its matching import routes."""
+    for module in qualifier_candidates(env, qualifier, anchored=anchored):
+        contribution = env.contributions[module]
+        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
+        yield module, tuple(contribution.routes.get(route, _NO_SURFACE) for route in routes)
 
 
 def qualifier_members(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
 ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
     """Return each imported route's public members without choosing a route."""
-    members: list[tuple[ModuleId, Mapping[NameAtom, QName]]] = []
-    for module in qualifier_candidates(env, qualifier, anchored=anchored):
-        contribution = env.contributions[module]
-        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        merged = {
-            atom: qname
-            for route in routes
-            for atom, qname in _route_members(contribution, route).items()
-        }
-        if routes:
-            members.append((module, MappingProxyType(merged)))
-    return tuple(members)
+    return tuple(
+        (
+            module,
+            MappingProxyType(
+                {atom: qname for surface in surfaces for atom, qname in surface.members.items()}
+            ),
+        )
+        for module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
+        if surfaces
+    )
 
 
 def qualifier_member_decls(
@@ -770,17 +733,11 @@ def qualifier_member_decls(
     Each with the import declarations contributing it on those routes.
     """
     found: dict[QName, frozenset[int]] = {}
-    for module in qualifier_candidates(env, qualifier, anchored=anchored):
-        contribution = env.contributions[module]
-        for route in _matching_contribution_routes(contribution, qualifier, anchored=anchored):
-            qname = _route_members(contribution, route).get(member)
+    for _module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored):
+        for surface in surfaces:
+            qname = surface.members.get(member)
             if qname is not None:
-                decls = (
-                    contribution.path_member_decls
-                    if route is None
-                    else contribution.alias_member_decls[route]
-                )
-                found[qname] = found.get(qname, frozenset()) | decls[member]
+                found[qname] = found.get(qname, frozenset()) | surface.member_decls[member]
     return found
 
 
@@ -812,22 +769,14 @@ def qualifier_scope_paths(
 
     Each with the import declarations of those routes.
     """
-    result: list[tuple[ModuleId, frozenset[NameAtom], frozenset[int]]] = []
-    for module in qualifier_candidates(env, qualifier, anchored=anchored):
-        contribution = env.contributions[module]
-        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        scope_paths = frozenset(
-            path for route in routes for path in _route_scope_paths(contribution, route)
+    return tuple(
+        (
+            module,
+            frozenset(path for surface in surfaces for path in surface.scope_paths),
+            frozenset(node_id for surface in surfaces for node_id in surface.decls),
         )
-        decls = frozenset(
-            node_id
-            for route in routes
-            for node_id in (
-                contribution.path_decls if route is None else contribution.alias_decls[route]
-            )
-        )
-        result.append((module, scope_paths, decls))
-    return tuple(result)
+        for module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
+    )
 
 
 def qualifier_hides(
@@ -835,18 +784,7 @@ def qualifier_hides(
 ) -> bool:
     """Whether a ``hiding`` removed *member* from every route *qualifier* names that had it."""
     return any(
-        member in _route_hidden(env.contributions[module], route)
-        for module in qualifier_candidates(env, qualifier, anchored=anchored)
-        for route in _matching_contribution_routes(
-            env.contributions[module], qualifier, anchored=anchored
-        )
-    )
-
-
-def _route_hidden(contribution: ModuleContribution, route: str | None) -> frozenset[NameAtom]:
-    """Project one import route's hidden members; ``None`` selects the path route."""
-    return (
-        contribution.path_hidden
-        if route is None
-        else contribution.alias_hidden.get(route, frozenset())
+        member in surface.hidden
+        for _module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
+        for surface in surfaces
     )

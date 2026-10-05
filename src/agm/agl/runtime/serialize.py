@@ -28,7 +28,7 @@ Entry points:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from math import isfinite
@@ -151,9 +151,7 @@ def encode_value(
     value and :class:`AglNonDataValue` on an exception field with no JSON
     form (a runtime subtype's field no static cast site examined).
     """
-    return _encode(
-        plan.root, value, {d.key: d for d in plan.definitions}, (), None, exception_field_encodes
-    )
+    return _encode(plan.root, value, plan.definitions_by_key, (), None, exception_field_encodes)
 
 
 def encode_scalar(value: Value) -> JsonShaped:
@@ -242,12 +240,11 @@ def _encode_resolved(
                 ]
             finally:
                 active.discard(id(value))
-        case DictEncode(key_form=key_form, key=key_schema, value=value_schema):
+        case DictEncode(key=key_schema, value=value_schema):
             value = cast(DictValue, value)
             active = enter_value(id(value), active)
             try:
                 return _encode_dict(
-                    key_form,
                     key_schema,
                     value_schema,
                     value,
@@ -292,7 +289,7 @@ def _encode_resolved(
                 active.discard(id(value))
         case EnumEncode():
             value = cast(RecordValue, value)
-            variant, member_fields = _variant_for_encode(schema, value)
+            variant = _variant_for_encode(schema, value)
             if is_plain_enum(schema):
                 return variant.json_name
             active = enter_value(id(value), active)
@@ -302,7 +299,7 @@ def _encode_resolved(
                     {
                         fenc.json_name: _encode(
                             fenc.schema,
-                            member_fields[fenc.name],
+                            value.fields[fenc.name],
                             definitions,
                             arguments,
                             active,
@@ -319,7 +316,6 @@ def _encode_resolved(
 
 
 def _encode_dict(
-    key_form: "DictKeyForm | None",
     key_schema: EncodeSchema,
     value_schema: EncodeSchema,
     value: DictValue,
@@ -328,16 +324,12 @@ def _encode_dict(
     active: "set[int] | None",
     exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
 ) -> object:
-    """Encode a dict per its key's ``DictKeyForm`` (see ``ir.contracts.DictKeyForm``).
+    """Encode a dict per its resolved key's ``DictKeyForm`` (see ``ir.contracts.DictKeyForm``).
 
-    *key_form* is the plan-stored form (see :class:`DictEncode`), ``None``
-    only for a growing template's own key parameter — there the key's
-    concrete shape is resolved here, once per dict, and classified directly.
-    Every key uses this SAME resolution (``resolved_key_schema``/
-    ``resolved_key_arguments``), rather than re-resolving per key.
+    The key schema is resolved, and classified, once per dict.
     """
     resolved_key_schema, resolved_key_arguments = _resolve(key_schema, definitions, arguments)
-    form = key_form if key_form is not None else dict_key_form(resolved_key_schema)
+    form = dict_key_form(resolved_key_schema)
     if form is DictKeyForm.OBJECT_TEXT:
         return {
             key: _encode(
@@ -347,9 +339,16 @@ def _encode_dict(
         }
     if form is DictKeyForm.OBJECT_STRINGIFIED:
         return {
-            _stringify_key(resolved_key_schema, key_value): _encode(
-                value_schema, item, definitions, arguments, active, exception_field_encodes
-            )
+            stringified_key_text(
+                _encode_resolved(
+                    resolved_key_schema,
+                    key_value,
+                    definitions,
+                    resolved_key_arguments,
+                    active,
+                    exception_field_encodes,
+                )
+            ): _encode(value_schema, item, definitions, arguments, active, exception_field_encodes)
             for key_value, item in value.items()
         }
     return [
@@ -387,7 +386,7 @@ def _encode_exception_field(
     return _encode(
         field_encode.plan.root,
         value,
-        {d.key: d for d in field_encode.plan.definitions},
+        field_encode.plan.definitions_by_key,
         (),
         active,
         exception_field_encodes,
@@ -447,29 +446,26 @@ def report_exception_fields(
     :func:`_walk_tags`) since it has no compiled encode schema to read either
     from. Casts go through :func:`encode_value`, which raises instead.
     """
-    tags = _walk_tags(nominals)
+    tags: WalkTags | None = None
     fields: dict[str, object] = {}
     for field_encode in exception_field_encodes[value.nominal]:
         field_value = value.fields[field_encode.field_name]
         try:
-            fields[field_encode.json_name] = (
-                value_to_json_obj(field_value, tags=tags)
-                if field_encode.plan is None
-                else _encode_exception_field(
+            if field_encode.plan is None:
+                tags = tags or _walk_tags(nominals)
+                fields[field_encode.json_name] = value_to_json_obj(field_value, tags=tags)
+            else:
+                fields[field_encode.json_name] = _encode_exception_field(
                     field_encode, field_value, None, exception_field_encodes
                 )
-            )
         except (AglCyclicValue, AglNonDataValue) as field_exc:
             fields[field_encode.json_name] = degraded_marker(field_exc)
     return fields
 
 
-def _variant_for_encode(
-    schema: EnumEncode, value: RecordValue
-) -> tuple[VariantEncode, dict[str, Value]]:
+def _variant_for_encode(schema: EnumEncode, value: RecordValue) -> VariantEncode:
     """Select the member record carried by an enum-typed static slot."""
-    variant = next(v for v in schema.variants if v.nominal == value.nominal)
-    return variant, value.fields
+    return next(v for v in schema.variants if v.nominal == value.nominal)
 
 
 def _bound_argument(index: int, arguments: tuple[EncodeSchema, ...]) -> EncodeSchema:
@@ -477,19 +473,19 @@ def _bound_argument(index: int, arguments: tuple[EncodeSchema, ...]) -> EncodeSc
     return arguments[index]
 
 
-def _stringify_key(schema: "_ResolvedEncodeSchema", value: Value) -> str:
-    """Render a resolved ``OBJECT_STRINGIFIED`` key's value as its JSON object-key text.
+def stringified_key_text(key: object) -> str:
+    """Return the object-key text of an encoded stringified key.
 
-    *schema* is already resolved to its concrete shape (see :func:`_resolve`): a
-    scalar int/decimal/bool, or an all-nullary enum (the only shapes :func:`dict_key_form`
-    selects this form for). A scalar stringifies through the SAME regular scalar
-    encoding ``as json`` uses (:func:`encode_scalar`/:func:`dumps_exact`), so a
-    stringified key's text always matches its value's own JSON rendering exactly.
+    An enum key is already its tag; a scalar key is its JSON scalar text,
+    exactly as ``as json`` writes it.
     """
-    if isinstance(schema, EnumEncode):
-        variant, _fields = _variant_for_encode(schema, cast(RecordValue, value))
-        return variant.json_name
-    return dumps_exact(encode_scalar(value), indent=None)
+    if isinstance(key, str):
+        return key
+    if isinstance(key, bool):
+        return "true" if key else "false"
+    if isinstance(key, int):
+        return str(key)
+    return dumps_exact(cast(JsonShaped, key), indent=None)
 
 
 def _substitute_arguments(
@@ -515,9 +511,8 @@ def _substitute_arguments(
             )
         case ArrayEncode(elem=elem):
             return ArrayEncode(_substitute_arguments(elem, arguments))
-        case DictEncode(key_form=key_form, key=key_schema, value=value_schema):
+        case DictEncode(key=key_schema, value=value_schema):
             return DictEncode(
-                key_form,
                 _substitute_arguments(key_schema, arguments),
                 _substitute_arguments(value_schema, arguments),
             )
@@ -555,6 +550,15 @@ def _substitute_fields(
 def _resolve_encode_ref(key: str, definitions: dict[str, EncodeDefinition]) -> EncodeDefinition:
     """Resolve a plan reference to the definition whose body is not itself a reference."""
     return resolve_schema_ref(key, definitions, forwarded_encode_key)
+
+
+def _walk_dict[T](
+    value: DictValue, walk: Callable[[Value], T]
+) -> dict[str, T] | list[dict[str, T]]:
+    """Walk a dict untyped: an object when text-keyed or empty, else key/value entries."""
+    if value.is_text_keyed() or len(value) == 0:
+        return {key: walk(item) for key, item in value.text_items()}
+    return [{"key": walk(key), "value": walk(item)} for key, item in value.items()]
 
 
 def value_to_json_obj(
@@ -616,15 +620,10 @@ def value_to_json_obj(
     if isinstance(value, DictValue):
         active = enter_value(id(value), active)
         try:
-            if value.is_text_keyed() or len(value) == 0:
-                return {k: value_to_json_obj(v, active, tags=tags) for k, v in value.text_items()}
-            return [
-                {
-                    "key": value_to_json_obj(k, active, tags=tags),
-                    "value": value_to_json_obj(v, active, tags=tags),
-                }
-                for k, v in value.items()
-            ]
+            return cast(
+                JsonShaped,
+                _walk_dict(value, lambda item: value_to_json_obj(item, active, tags=tags)),
+            )
         finally:
             active.discard(id(value))
     if isinstance(value, (RecordValue, ExceptionValue)):
@@ -702,18 +701,9 @@ def _trace_value(
         if active is None:
             return CYCLIC_VALUE_MARKER
         try:
-            if value.is_text_keyed() or len(value) == 0:
-                return {
-                    key: _trace_value(item, enum_members, builtin_nominals, active)
-                    for key, item in value.text_items()
-                }
-            return [
-                {
-                    "key": _trace_value(key, enum_members, builtin_nominals, active),
-                    "value": _trace_value(item, enum_members, builtin_nominals, active),
-                }
-                for key, item in value.items()
-            ]
+            return _walk_dict(
+                value, lambda item: _trace_value(item, enum_members, builtin_nominals, active)
+            )
         finally:
             active.discard(id(value))
     if isinstance(value, (RecordValue, ExceptionValue)):

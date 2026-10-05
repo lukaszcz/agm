@@ -19,6 +19,7 @@ from agm.agent.runner import (
     result_stderr_tail,
 )
 from agm.agent.session.protocol import (
+    BackendSettings,
     SandboxFixture,
     SessionAgentError,
     SessionAskError,
@@ -89,54 +90,34 @@ def open_cli_session(
     get_sandbox_context: Callable[[], SandboxContext],
 ) -> SessionBackend:
     """Open the CLI session backend for *request*'s agent variant."""
+    settings = BackendSettings(
+        idle_timeout=idle_timeout,
+        get_sandbox_context=get_sandbox_context,
+        permission_mode=request.permission_mode,
+        sandbox=request.sandbox,
+        env=request.env,
+    )
     name = request.name
     single_prompt = request.single_prompt
     match request.agent:
         case AgentCommand() as command:
             return AgentCommandSessionBackend.open(
                 command,
+                settings,
                 ephemeral=request.ephemeral,
                 name=name,
                 single_prompt=single_prompt,
-                idle_timeout=idle_timeout,
-                get_sandbox_context=get_sandbox_context,
-                permission_mode=request.permission_mode,
-                sandbox=request.sandbox,
-                env=request.env,
             )
         case AgentClaude() as claude:
             return ClaudeCliSessionBackend.open(
-                claude,
-                name=name,
-                single_prompt=single_prompt,
-                idle_timeout=idle_timeout,
-                get_sandbox_context=get_sandbox_context,
-                permission_mode=request.permission_mode,
-                sandbox=request.sandbox,
-                env=request.env,
+                claude, settings, name=name, single_prompt=single_prompt
             )
         case AgentCodex() as codex:
             return CodexCliSessionBackend.open(
-                codex,
-                name=name,
-                single_prompt=single_prompt,
-                idle_timeout=idle_timeout,
-                get_sandbox_context=get_sandbox_context,
-                permission_mode=request.permission_mode,
-                sandbox=request.sandbox,
-                env=request.env,
+                codex, settings, name=name, single_prompt=single_prompt
             )
         case AgentPi() as pi:
-            return PiCliSessionBackend.open(
-                pi,
-                name=name,
-                single_prompt=single_prompt,
-                idle_timeout=idle_timeout,
-                get_sandbox_context=get_sandbox_context,
-                permission_mode=request.permission_mode,
-                sandbox=request.sandbox,
-                env=request.env,
-            )
+            return PiCliSessionBackend.open(pi, settings, name=name, single_prompt=single_prompt)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -145,19 +126,6 @@ class _CliPromptBackend(SandboxFixture):
     """Shared prepared-runner boundary for CLI session implementations."""
 
     continues_conversation = True
-
-    def __init__(
-        self,
-        *,
-        idle_timeout: float | None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode,
-        sandbox: SandboxLimits | None,
-        env: dict[str, str],
-    ) -> None:
-        super().__init__(permission_mode=permission_mode, sandbox=sandbox, env=env)
-        self._idle_timeout = idle_timeout
-        self._get_sandbox_context = get_sandbox_context
 
     @property
     def operations(self) -> SessionOperations:
@@ -192,14 +160,14 @@ class _CliPromptBackend(SandboxFixture):
                     prompt,
                     runner=command,
                     temp_files=temp_files,
-                    env=self._env,
+                    env=self._settings.env,
                     delivery=delivery,
                     session_id=session_id,
-                    sandbox=sandbox_run_for(sandbox, self._get_sandbox_context),
+                    sandbox=sandbox_run_for(sandbox, self._settings.get_sandbox_context),
                 )
                 result = runner.run_prepared_prompt_result(
                     prepared,
-                    idle_timeout=self._idle_timeout,
+                    idle_timeout=self._settings.idle_timeout,
                     stdout_callback=stdout_callback,
                     stdout_to_file=stdout_to_file,
                     stderr_callback=(
@@ -285,35 +253,20 @@ class AgentCommandSessionBackend(_CliPromptBackend):
     def __init__(
         self,
         session: _CommandSession,
-        *,
-        idle_timeout: float | None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode,
-        sandbox: SandboxLimits | None,
-        env: dict[str, str],
+        settings: BackendSettings,
     ) -> None:
-        super().__init__(
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
-        )
+        super().__init__(settings)
         self._session = session
 
     @classmethod
     def open(
         cls,
         agent: AgentCommand,
+        settings: BackendSettings,
         *,
         name: str = "",
         single_prompt: bool = False,
         ephemeral: bool = False,
-        idle_timeout: float | None = None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode = PermissionMode.NONE,
-        sandbox: SandboxLimits | None = None,
-        env: dict[str, str],
     ) -> Self:
         """Validate *agent*'s command and open a session over it."""
         if name:
@@ -334,11 +287,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             )
         backend = cls(
             _CommandSession(command=command, session_id=str(uuid4())),
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
+            settings,
         )
         backend.continues_conversation = targets_session_id
         return backend
@@ -350,8 +299,8 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             self._session.command,
             delivery=PromptDelivery.FILE,
             session_id=self._session.session_id,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
+            permission_mode=self._settings.permission_mode,
+            sandbox=self._settings.sandbox,
             output_callback=request.output_callback,
         )
 
@@ -366,50 +315,33 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
     def __init__(
         self,
         session: _SessionIdCliState[_SessionAgentT],
-        *,
-        idle_timeout: float | None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode,
-        sandbox: SandboxLimits | None,
-        env: dict[str, str],
+        settings: BackendSettings,
     ) -> None:
-        super().__init__(
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
-        )
+        super().__init__(settings)
         self._session: _SessionIdCliState[_SessionAgentT] = session
 
     @classmethod
     def open(
         cls,
         agent: _SessionAgentT,
+        settings: BackendSettings,
         *,
         name: str = "",
         single_prompt: bool = False,
-        idle_timeout: float | None = None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode = PermissionMode.NONE,
-        sandbox: SandboxLimits | None = None,
-        env: dict[str, str],
     ) -> Self:
         """Allocate the id used by the backend's first prompt."""
         return cls(
             _SessionIdCliState(agent, str(uuid4()), name, single_prompt),
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
+            settings,
         )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start or resume this backend's transcript for one prompt."""
         session = self._session
         stream_output = request.output_callback is not None
-        command = self._prompt_command(session, self._permission_mode, stream_output=stream_output)
+        command = self._prompt_command(
+            session, self._settings.permission_mode, stream_output=stream_output
+        )
         stdout_stream = None
         if request.output_callback is not None and isinstance(session.agent, AgentClaude):
             stdout_stream = ClaudeOutputStream(request.output_callback)
@@ -420,8 +352,8 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
                 request.prompt,
                 command,
                 delivery=PromptDelivery.FILE,
-                permission_mode=self._permission_mode,
-                sandbox=self._sandbox,
+                permission_mode=self._settings.permission_mode,
+                sandbox=self._settings.sandbox,
                 output_callback=request.output_callback,
                 stdout_callback=None if stdout_stream is None else stdout_stream.feed,
                 stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
@@ -451,11 +383,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         """Return a backend for an already-created native fork of this transcript."""
         return type(self)(
             _SessionIdCliState(self._session.agent, session_id, "", False, started=True),
-            idle_timeout=self._idle_timeout,
-            get_sandbox_context=self._get_sandbox_context,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
-            env=self._env,
+            self._settings,
         )
 
     def _unstarted_fork(self) -> Self:
@@ -465,11 +393,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
             _SessionIdCliState(
                 session.agent, str(uuid4()), "", session.single_prompt, started=False
             ),
-            idle_timeout=self._idle_timeout,
-            get_sandbox_context=self._get_sandbox_context,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
-            env=self._env,
+            self._settings,
         )
 
 
@@ -517,11 +441,11 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
                 session.session_id,
                 resume=True,
                 json_output=True,
-                permission_mode=self._permission_mode,
+                permission_mode=self._settings.permission_mode,
             ),
             delivery=PromptDelivery.LITERAL,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
+            permission_mode=self._settings.permission_mode,
+            sandbox=self._settings.sandbox,
         )
         _require_claude_compaction_confirmation(response.content)
         session.started = True
@@ -538,11 +462,11 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
                 resume=True,
                 fork=True,
                 json_output=True,
-                permission_mode=self._permission_mode,
+                permission_mode=self._settings.permission_mode,
             ),
             delivery=PromptDelivery.NONE,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
+            permission_mode=self._settings.permission_mode,
+            sandbox=self._settings.sandbox,
         )
         return self._forked(_require_claude_session_id(response.content))
 
@@ -556,45 +480,26 @@ class CodexCliSessionBackend(_CliPromptBackend):
     def __init__(
         self,
         session: _CodexSession,
-        *,
-        idle_timeout: float | None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode,
-        sandbox: SandboxLimits | None,
-        env: dict[str, str],
+        settings: BackendSettings,
     ) -> None:
-        super().__init__(
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
-        )
+        super().__init__(settings)
         self._session = session
 
     @classmethod
     def open(
         cls,
         agent: AgentCodex,
+        settings: BackendSettings,
         *,
         name: str = "",
         single_prompt: bool = False,
-        idle_timeout: float | None = None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode = PermissionMode.NONE,
-        sandbox: SandboxLimits | None = None,
-        env: dict[str, str],
     ) -> Self:
         """Allocate a deferred Codex session without starting a thread."""
         if name:
             raise SessionHostError("Codex CLI sessions do not support names", "open")
         return cls(
             _CodexSession(agent, single_prompt),
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
+            settings,
         )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
@@ -615,12 +520,12 @@ class CodexCliSessionBackend(_CliPromptBackend):
             response = self._run_prompt(
                 request.prompt,
                 session.agent.argv(
-                    permission_mode=self._permission_mode, json_output=stream_output
+                    permission_mode=self._settings.permission_mode, json_output=stream_output
                 ),
                 delivery=PromptDelivery.STDIN,
                 stdout_to_file=True,
-                permission_mode=self._permission_mode,
-                sandbox=self._sandbox,
+                permission_mode=self._settings.permission_mode,
+                sandbox=self._settings.sandbox,
                 output_callback=request.output_callback,
                 stdout_callback=None if stdout_stream is None else stdout_stream.feed,
                 stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
@@ -651,13 +556,13 @@ class CodexCliSessionBackend(_CliPromptBackend):
                 request.prompt,
                 session.agent.session_argv(
                     session.session_id,
-                    permission_mode=self._permission_mode,
+                    permission_mode=self._settings.permission_mode,
                     json_output=json_output if request.output_callback is not None else None,
                 ),
                 delivery=PromptDelivery.STDIN,
                 stdout_to_file=True,
-                permission_mode=self._permission_mode,
-                sandbox=self._sandbox,
+                permission_mode=self._settings.permission_mode,
+                sandbox=self._settings.sandbox,
                 output_callback=request.output_callback,
                 stdout_callback=None if stdout_stream is None else stdout_stream.feed,
                 stdout_finalizer=None if stdout_stream is None else stdout_stream.finish,
@@ -723,11 +628,13 @@ class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
         self._run_prompt(
             "",
             session.agent.session_argv(
-                child_id, fork_from=session.session_id, permission_mode=self._permission_mode
+                child_id,
+                fork_from=session.session_id,
+                permission_mode=self._settings.permission_mode,
             ),
             delivery=PromptDelivery.NONE,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
+            permission_mode=self._settings.permission_mode,
+            sandbox=self._settings.sandbox,
         )
         return self._forked(child_id)
 

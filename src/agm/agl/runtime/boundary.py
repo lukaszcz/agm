@@ -5,7 +5,15 @@ from __future__ import annotations
 import contextvars
 import decimal
 import operator
-from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
+from collections.abc import (
+    Callable,
+    ItemsView,
+    Iterable,
+    Iterator,
+    MutableMapping,
+    MutableSequence,
+    ValuesView,
+)
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
@@ -787,6 +795,42 @@ def store_dict_entry(target: DictValue, key: object, value: object) -> None:
     target.insert(decode_dict_key(key), _decode_written_value(value))
 
 
+_ABSENT = object()
+
+
+class _DictItemsView(ItemsView[object, object]):
+    """``items()`` of an :class:`AglDictView`: encodes each entry once, without re-lookup."""
+
+    __slots__ = ("_view",)
+
+    def __init__(self, view: "AglDictView") -> None:
+        super().__init__(view)
+        self._view = view
+
+    def __iter__(self) -> Iterator[tuple[object, object]]:
+        view = self._view
+        for key, value in view._value.items():
+            yield (
+                encode_boundary_value(key, view._descriptors),
+                encode_boundary_value(value, view._descriptors),
+            )
+
+
+class _DictValuesView(ValuesView[object]):
+    """``values()`` of an :class:`AglDictView`: encodes each value once, without re-lookup."""
+
+    __slots__ = ("_view",)
+
+    def __init__(self, view: "AglDictView") -> None:
+        super().__init__(view)
+        self._view = view
+
+    def __iter__(self) -> Iterator[object]:
+        view = self._view
+        for value in view._value.values():
+            yield encode_boundary_value(value, view._descriptors)
+
+
 class AglDictView(MutableMapping[object, object]):
     """A mutable, lazy Python view over one AgL dict value of any key type.
 
@@ -816,6 +860,21 @@ class AglDictView(MutableMapping[object, object]):
     def __iter__(self) -> Iterator[object]:
         for key in self._value.keys():
             yield encode_boundary_value(key, self._descriptors)
+
+    def items(self) -> ItemsView[object, object]:
+        return _DictItemsView(self)
+
+    def values(self) -> ValuesView[object]:
+        return _DictValuesView(self)
+
+    def pop(self, key: object, default: object = _ABSENT, /) -> object:
+        """Remove *key* in one step; return *default* if given, else raise ``KeyError``."""
+        found = self._value.remove(decode_dict_key(key))
+        if found is None:
+            if default is _ABSENT:
+                raise KeyError(key)
+            return default
+        return encode_boundary_value(found, self._descriptors)
 
     def __len__(self) -> int:
         return len(self._value)

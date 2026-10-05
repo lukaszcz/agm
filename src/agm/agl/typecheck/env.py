@@ -48,6 +48,7 @@ from agm.agl.scope.symbols import (
     OwnerMemberSelection,
     ScopePath,
     TypeSelection,
+    qname_declaration,
 )
 from agm.agl.scope.type_names import (
     owner_type_expr,
@@ -1614,19 +1615,13 @@ class TypeEnvironment:
         derived._owner_declarations = {**self._owner_declarations, **entries}
         return derived
 
-    @staticmethod
-    def _qname_decl_key(qname: QName) -> DeclKey:
-        atom = qname[1]
-        path = (atom,) if isinstance(atom, str) else atom
-        return (qname[0], path[:-1], path[-1])
-
     def _is_program_alias_key(self, key: DeclKey) -> bool:
         """Whether *key* is a declared alias this program can lazily resolve."""
         return self._program_aliases is not None and key in self._program_aliases.keys
 
     def _is_program_type_candidate(self, qname: QName) -> bool:
         """Return whether a program-qualified name denotes any type-namespace declaration."""
-        key = self._qname_decl_key(qname)
+        key = qname_declaration(qname)
         return self._in_program_type_tables(key) or self._is_program_alias_key(key)
 
     def _ensure_program_alias_resolved(self, key: DeclKey) -> Type | None:
@@ -2322,14 +2317,14 @@ class TypeEnvironment:
                         EnumOwnerFormKind.OPEN_IMPORT,
                         exposed_name,
                         None,
-                        self._qname_decl_key(type_qnames[0]),
+                        qname_declaration(type_qnames[0]),
                     )
                 )
         for contribution in self._import_env.contributions.values():
             for exposed_name, qname in contribution.members.items():
                 if not isinstance(exposed_name, str) or not self._is_program_type_candidate(qname):
                     continue
-                _, source_scope_path, source_name = self._qname_decl_key(qname)
+                _, source_scope_path, source_name = qname_declaration(qname)
                 template = self.declared_type_template(
                     qname[0], source_name, scope_path=source_scope_path
                 )
@@ -2429,6 +2424,9 @@ class TypeEnvironment:
                 tuple(name.split("::")), retired_member_scopes
             )
 
+        def kept[V](items: Mapping[str, V]) -> dict[str, V]:
+            return {name: value for name, value in items.items() if not retired(name)}
+
         incoming_type_names = {
             name
             for name in (
@@ -2443,32 +2441,14 @@ class TypeEnvironment:
             self.unregister_name(name)
         if merge_type_table:
             self._type_table.merge_from(other._type_table)
-        for name, typ in other._types.items():
-            if retired(name):
-                continue
-            if name not in BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
-                self._types[name] = typ
-        self._alias_targets.update(
-            {name: expr for name, expr in other._alias_targets.items() if not retired(name)}
-        )
-        self._resolved_aliases.update(
-            {
-                name: aliasdef
-                for name, aliasdef in other._resolved_aliases.items()
-                if not retired(name)
-            }
-        )
+        self._types.update(kept(dict(other.non_builtin_type_items())))
+        self._alias_targets.update(kept(other._alias_targets))
+        self._resolved_aliases.update(kept(other._resolved_aliases))
         self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
-        self._generic_types.update(
-            {name: gdef for name, gdef in other._generic_types.items() if not retired(name)}
-        )
-        self._alias_type_params.update(
-            {name: params for name, params in other._alias_type_params.items() if not retired(name)}
-        )
-        self._alias_spans.update(
-            {name: span for name, span in other._alias_spans.items() if not retired(name)}
-        )
+        self._generic_types.update(kept(other._generic_types))
+        self._alias_type_params.update(kept(other._alias_type_params))
+        self._alias_spans.update(kept(other._alias_spans))
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
 

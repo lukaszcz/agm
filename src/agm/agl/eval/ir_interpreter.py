@@ -206,6 +206,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
     from agm.agl.runtime.sessions import SessionHost
+    from agm.agl.semantics.types import Type
     from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
@@ -288,9 +289,7 @@ def _call_custom_codec_parse(
     ]
     accepts_varargs = any(param.kind.name == "VAR_POSITIONAL" for param in params.values())
     if accepts_varargs or len(positional) >= 2:
-        from agm.agl.runtime.contract import _target_type_for_request
-
-        return parse(raw, _target_type_for_request(request), **accepted_kwargs)
+        return parse(raw, cast("Type", request.target_type), **accepted_kwargs)
     return parse(raw, **accepted_kwargs)
 
 

@@ -100,7 +100,6 @@ from agm.agl.syntax.types import (
     render_type_expr,
 )
 from agm.agl.value_syntax.lexical import scalar_text
-from agm.util.decimal import exact_decimal
 
 __all__ = ["FoldFailure", "ModuleConstants", "Scalar", "constant_key", "fold_scalar"]
 
@@ -112,9 +111,15 @@ Scalar = str | int | decimal.Decimal | bool
 _SCALAR_TYPE_EXPRS = (TextT, IntT, DecimalT, BoolT)
 
 
-def _scalar_fold_annotation_ok(annotation: TypeExpr | None) -> bool:
-    """Whether a binding's declared type still permits folding its initializer as a scalar."""
-    return annotation is None or isinstance(annotation, _SCALAR_TYPE_EXPRS)
+def _annotation_failure(ref: VarRef, annotation: TypeExpr | None) -> FoldFailure | None:
+    """The failure for folding through *ref*'s *annotation*, or ``None`` when it permits it."""
+    if annotation is None or isinstance(annotation, _SCALAR_TYPE_EXPRS):
+        return None
+    return FoldFailure(
+        f"{_spelling(ref)!r} is annotated {render_type_expr(annotation)!r}, not a "
+        "text, int, decimal, or bool constant",
+        ref.span,
+    )
 
 
 #: A binding's declaration path: its scope path, then its name.
@@ -205,18 +210,8 @@ class _BoolKey:
 
 
 @dataclass(frozen=True, slots=True)
-class _NumKey:
-    value: decimal.Decimal
-
-
-@dataclass(frozen=True, slots=True)
 class _NullKey:
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class _TextKey:
-    value: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,12 +282,8 @@ def constant_key(
         if resolved is None:
             return FoldFailure(f"{_spelling(ref)!r} names no constant", ref.span)
         target, annotation = resolved
-        if annotation is not None and not _scalar_fold_annotation_ok(annotation):
-            return FoldFailure(
-                f"{_spelling(ref)!r} is annotated {render_type_expr(annotation)!r}, not a "
-                "text, int, decimal, or bool constant",
-                ref.span,
-            )
+        if (failure := _annotation_failure(ref, annotation)) is not None:
+            return failure
         return fold_scalar(target, resolve_ref=resolve_ref)
 
     if isinstance(expr, NullLit):
@@ -312,11 +303,9 @@ def constant_key(
     folded = fold_scalar(expr, resolve_ref=resolve_ref)
     if isinstance(folded, FoldFailure):
         return None
-    if isinstance(folded, bool):
-        return _BoolKey(folded)
-    if isinstance(folded, str):
-        return _TextKey(folded)
-    return _NumKey(folded if isinstance(folded, decimal.Decimal) else exact_decimal(folded))
+    # ``True == 1``, so a bool needs its own key; text, int, and decimal already
+    # compare and hash by value (an int equals the decimal of the same value).
+    return _BoolKey(folded) if isinstance(folded, bool) else folded
 
 
 def _call_key(
@@ -408,12 +397,8 @@ class ModuleConstants:
                 return FoldFailure(f"{_spelling(expr)!r} is defined in terms of itself", expr.span)
             binding = self._bindings[key]
             annotation = binding.type_ann
-            if annotation is not None and not _scalar_fold_annotation_ok(annotation):
-                return FoldFailure(
-                    f"{_spelling(expr)!r} is annotated {render_type_expr(annotation)!r}, "
-                    "not a text, int, decimal, or bool constant",
-                    expr.span,
-                )
+            if (failure := _annotation_failure(expr, annotation)) is not None:
+                return failure
             return fold_scalar(binding.value, resolve_ref=self._resolver(key[0], (*pending, key)))
 
         return resolve

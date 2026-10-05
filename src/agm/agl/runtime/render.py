@@ -20,6 +20,7 @@ renders in one-line value syntax.  A record or exception renders its nominal's
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import assert_never, cast
 
 from agm.agl.ir.program import ValueDescriptors
@@ -181,10 +182,17 @@ def _render(
         active = enter_value(id(value), active)
         try:
             items = []
-            for key, child in value.items():
+            keyed: Iterable[tuple[str | Value, Value]] = (
+                value.text_items() if value.is_text_keyed() else value.items()
+            )
+            for key, child in keyed:
                 # A key is immutable data, so it needs no cycle guard, and it
                 # stays on one line even in pretty output.
-                rendered_key = render_key_value_syntax(key, descriptors)
+                rendered_key = (
+                    quote_text(key)
+                    if isinstance(key, str)
+                    else render_key_value_syntax(key, descriptors)
+                )
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )

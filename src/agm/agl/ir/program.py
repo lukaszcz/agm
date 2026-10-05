@@ -19,9 +19,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
-from types import MappingProxyType
 
-from agm.agl.constraints import ConstraintBounds
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import (
@@ -294,12 +292,7 @@ FunctionImpl = IrFunctionBody | ExternFunctionBody
 
 @dataclass(frozen=True, slots=True)
 class FunctionDescriptor:
-    """Descriptor for any callable — ordinary function or extern def.
-
-    ``bounds`` carries a generic declaration's constraint block (type-parameter
-    name to its closed constraint kinds); empty for a non-generic or
-    unconstrained function.
-    """
+    """Descriptor for any callable — ordinary function or extern def."""
 
     function_id: FunctionId
     function_symbol: SymbolId
@@ -309,7 +302,6 @@ class FunctionDescriptor:
     param_labels: tuple[str, ...] = ()
     result_label: str = "?"
     is_synthetic_main: bool = False
-    bounds: ConstraintBounds = MappingProxyType({})
 
     @property
     def is_extern(self) -> bool:

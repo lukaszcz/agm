@@ -3643,14 +3643,14 @@ class TestValidationErrorClassification:
         found = _find_enum_decode_at_path(plan.root, [], defs)
         assert found is defs["Tree"]
 
-    def test_resolve_decode_ref_follows_a_multi_hop_defs_chain(self) -> None:
+    def test_resolve_decode_follows_a_multi_hop_defs_chain(self) -> None:
         """A ``$defs`` entry that is itself a reference forwards to the next hop."""
         from agm.agl.ir.contracts import RefDecode, ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import resolve_decode_ref
+        from agm.agl.runtime.convert import resolve_decode
 
         body = ScalarDecode(ScalarKind.INT)
         defs = {"A": RefDecode("B"), "B": body}
-        assert resolve_decode_ref("A", defs) is body
+        assert resolve_decode(RefDecode("A"), defs) is body
 
     def test_oneof_failure_without_an_enum_at_the_path_is_a_bad_case(self) -> None:
         """A oneOf failure with no enum at the failing path still reports a bad ``$case``."""

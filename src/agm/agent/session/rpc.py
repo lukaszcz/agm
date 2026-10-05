@@ -18,6 +18,7 @@ from typing import IO, Literal, Protocol, Self, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent.session.protocol import (
+    BackendSettings,
     SandboxFixture,
     SessionAskError,
     SessionAskRequest,
@@ -28,7 +29,7 @@ from agm.agent.session.protocol import (
     SessionOperations,
     SessionStats,
 )
-from agm.agent.spec import AgentPi, PermissionMode
+from agm.agent.spec import AgentPi
 from agm.agent.transport import (
     AgentCallInfo,
     AgentOutputCallback,
@@ -37,11 +38,11 @@ from agm.agent.transport import (
 )
 from agm.core.process import CapturedOutput, stop_process
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
-from agm.sandbox.prepare import SandboxContext, sandbox_run_for
+from agm.sandbox.prepare import sandbox_run_for
 from agm.sandbox.profile import profile_name
-from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
-from agm.util.decimal import decimal_in_range, parse_json_decimal, reject_json_constant
-from agm.util.unicode import json_object_unique, loads_json
+from agm.sandbox.request import PreparedSandboxCommand
+from agm.util.decimal import decimal_in_range, parse_json_decimal
+from agm.util.unicode import loads_exact_json
 
 _RpcOperation = Literal[
     "prompt",
@@ -131,47 +132,27 @@ class PiRpcSessionBackend(SandboxFixture):
     def __init__(
         self,
         child: _RpcChild,
-        *,
-        idle_timeout: float | None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode = PermissionMode.NONE,
-        sandbox: SandboxLimits | None = None,
-        env: dict[str, str],
+        settings: BackendSettings,
     ) -> None:
-        super().__init__(permission_mode=permission_mode, sandbox=sandbox, env=env)
-        self._get_sandbox_context = get_sandbox_context
-        self._idle_timeout = idle_timeout
+        super().__init__(settings)
         self._child: _RpcChild | None = child
 
     @classmethod
     def open(
         cls,
         agent: AgentPi,
+        settings: BackendSettings,
         *,
         name: str = "",
-        idle_timeout: float | None = None,
-        get_sandbox_context: Callable[[], SandboxContext],
-        permission_mode: PermissionMode = PermissionMode.NONE,
-        sandbox: SandboxLimits | None = None,
-        env: dict[str, str],
     ) -> Self:
         """Start Pi in RPC mode using *agent*'s settings."""
         child = _spawn(
             agent,
-            agent.rpc_argv(name=name, permission_mode=permission_mode),
+            agent.rpc_argv(name=name, permission_mode=settings.permission_mode),
             "open",
-            get_sandbox_context=get_sandbox_context,
-            sandbox=sandbox,
-            env=env,
+            settings,
         )
-        return cls(
-            child,
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
-            permission_mode=permission_mode,
-            sandbox=sandbox,
-            env=env,
-        )
+        return cls(child, settings)
 
     continues_conversation = True
 
@@ -208,7 +189,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
                 sandboxed=child.prepared is not None,
-                permission_mode=self._permission_mode.value,
+                permission_mode=self._settings.permission_mode.value,
             ),
         )
 
@@ -235,24 +216,15 @@ class PiRpcSessionBackend(SandboxFixture):
         parent_id = self._parse_operation_response(parent_state, "get_state", _required_session_id)
         source = self._live_child("clone")
         parent_command = source.agent.rpc_argv(
-            session_id=parent_id, permission_mode=self._permission_mode
+            session_id=parent_id, permission_mode=self._settings.permission_mode
         )
         replacement = _spawn(
             source.agent,
             parent_command,
             SessionOperation.FORK.value,
-            get_sandbox_context=self._get_sandbox_context,
-            sandbox=self._sandbox,
-            env=self._env,
+            self._settings,
         )
-        replacement_backend = PiRpcSessionBackend(
-            replacement,
-            idle_timeout=self._idle_timeout,
-            get_sandbox_context=self._get_sandbox_context,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
-            env=self._env,
-        )
+        replacement_backend = PiRpcSessionBackend(replacement, self._settings)
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
             replacement_backend._parse_operation_response(
@@ -286,14 +258,7 @@ class PiRpcSessionBackend(SandboxFixture):
             raise
 
         self._child = replacement
-        return PiRpcSessionBackend(
-            source,
-            idle_timeout=self._idle_timeout,
-            get_sandbox_context=self._get_sandbox_context,
-            permission_mode=self._permission_mode,
-            sandbox=self._sandbox,
-            env=self._env,
-        )
+        return PiRpcSessionBackend(source, self._settings)
 
     def set_name(self, name: str) -> None:
         """Set Pi's display name for the active session."""
@@ -322,7 +287,7 @@ class PiRpcSessionBackend(SandboxFixture):
     ) -> None:
         """Write one command, mapping every stdin failure to the session model."""
         try:
-            _write_command(child, command, self._idle_timeout)
+            _write_command(child, command, self._settings.idle_timeout)
         except KeyboardInterrupt:
             self.close()
             raise
@@ -368,7 +333,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 event = self._next_event(child)
                 ui_cancellation = _extension_ui_cancellation(event)
                 if ui_cancellation is not None:
-                    _write_command(child, ui_cancellation, self._idle_timeout)
+                    _write_command(child, ui_cancellation, self._settings.idle_timeout)
                 delta = _event_text_delta(event)
                 authoritative_text = _event_assistant_text(event)
                 if output_callback is not None:
@@ -494,13 +459,7 @@ class PiRpcSessionBackend(SandboxFixture):
     def _next_event(self, child: _RpcChild) -> dict[str, object]:
         line = self._next_line(child)
         try:
-            # object_pairs_hook rejects a duplicate key.
-            decoded: object = loads_json(
-                line,
-                parse_constant=reject_json_constant,
-                parse_float=parse_json_decimal,
-                object_pairs_hook=json_object_unique,
-            )
+            decoded: object = loads_exact_json(line)
         except ValueError as exc:
             raise _RpcProtocolError("Pi RPC returned malformed JSONL") from exc
         if not isinstance(decoded, dict):
@@ -512,7 +471,11 @@ class PiRpcSessionBackend(SandboxFixture):
         return event
 
     def _next_line(self, child: _RpcChild) -> str:
-        deadline = None if self._idle_timeout is None else time.monotonic() + self._idle_timeout
+        deadline = (
+            None
+            if self._settings.idle_timeout is None
+            else time.monotonic() + self._settings.idle_timeout
+        )
         while True:
             buffer = child.stdout_buffer
             newline = buffer.find(b"\n")
@@ -584,7 +547,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
                 sandboxed=child.prepared is not None,
-                permission_mode=self._permission_mode.value,
+                permission_mode=self._settings.permission_mode.value,
             ),
         )
 
@@ -704,12 +667,10 @@ def _spawn(
     agent: AgentPi,
     command: list[str],
     operation: str,
-    *,
-    get_sandbox_context: Callable[[], SandboxContext],
-    sandbox: SandboxLimits | None,
-    env: dict[str, str],
+    settings: BackendSettings,
 ) -> _RpcChild:
-    sandbox_run = sandbox_run_for(sandbox, get_sandbox_context)
+    env = settings.env
+    sandbox_run = sandbox_run_for(settings.sandbox, settings.get_sandbox_context)
     prepared: PreparedSandboxCommand | None = None
     argv = command
     if sandbox_run is not None:

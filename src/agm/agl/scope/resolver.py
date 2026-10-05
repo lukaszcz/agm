@@ -47,10 +47,10 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
+from itertools import takewhile
 from typing import TYPE_CHECKING, TypeVar, assert_never, cast
 
 from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
-from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import (
     AglError,
     AglSyntaxError,
@@ -93,6 +93,8 @@ from agm.agl.scope.lookup import (
     lookup_declared,
     lookup_qualified,
     lookup_steps,
+    unknown_member,
+    unknown_qualifier,
 )
 from agm.agl.scope.sources import (
     ModuleSources,
@@ -140,6 +142,7 @@ from agm.agl.scope.symbols import (
     undefined_name_message,
 )
 from agm.agl.scope.symbols import declaration_qname as _key_qname
+from agm.agl.scope.symbols import qname_declaration as _qname_decl_key
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import (
@@ -253,7 +256,6 @@ from agm.agl.syntax.types import (
     TextT,
     TypeExpr,
     render_qualified_name,
-    render_qualifier_path,
     render_type_expr,
 )
 from agm.agl.syntax.visitor import SyntaxNode, walk
@@ -365,21 +367,6 @@ def _nested_misplacement(item: Item) -> AglScopeError | None:
     else:
         return None
     return AglScopeError(message, span=item.span)
-
-
-def _constraints_related(a: ConstraintKind, b: ConstraintKind) -> bool:
-    """True if *a* and *b* are the same kind or one implies the other."""
-    return a in close_constraints(frozenset({b})) or b in close_constraints(frozenset({a}))
-
-
-def _unknown_member(chain: QualifierChain, member: str) -> UnknownMemberError:
-    """Return the one verdict for ``chain::member``, as written, selecting no member."""
-    return UnknownMemberError(render_qualified_name(chain, member), span=chain.span)
-
-
-def _unknown_qualifier(chain: QualifierChain) -> UnknownQualifierError:
-    """Return the one verdict for *chain*, as written, naming nothing that qualifies."""
-    return UnknownQualifierError(render_qualifier_path(chain), span=chain.span)
 
 
 def _item_order(named: ItemDeclaration) -> PathAtom:
@@ -624,7 +611,7 @@ class _Resolver(ModuleSources):
                     (declaration_module_id, declaration.node_id)
                 ] = constructor
             elif isinstance(declaration, EnumDef):
-                path = (atom,) if isinstance(atom, str) else atom
+                path = _bare_path(atom)
                 for member in declaration.members:
                     if not isinstance(member, VariantDef):
                         continue
@@ -868,7 +855,7 @@ class _Resolver(ModuleSources):
         retained: list[ScopePath] = []
         with uses.view(every_use=True):
             # The root's enclosing layers hold what earlier REPL entries wrote there.
-            for layer in (*self._scope_nodes.values(), *self._layer_chain(self._root_scope)[1:]):
+            for layer in (*self._scope_nodes.values(), *list(self._root_scope.enclosing())[1:]):
                 site = layer.scope_path
                 for decl in uses.visible(layer):
                     for name in uses.type_renames(site, decl):
@@ -1128,9 +1115,7 @@ class _Resolver(ModuleSources):
         """Return local, imported, and retained declaration identities."""
         reachable = set(self._declarations)
         for contribution in self._import_env.contributions.values():
-            for module_id, atom in contribution.members.values():
-                path = _bare_path(atom)
-                reachable.add((module_id, path[:-1], path[-1]))
+            reachable.update(_qname_decl_key(qname) for qname in contribution.members.values())
         retained_nodes = (*self._repl_session_scope_nodes.values(), self._repl_session_scope)
         for node in retained_nodes:
             if node is None:
@@ -1685,9 +1670,8 @@ class _Resolver(ModuleSources):
         A constrained name must be one of *decl*'s type parameters
         (``type_params``, which for a method already includes its receiver's,
         see ``_receiver_type_params`` in the parser). Two constraints on the
-        same parameter are rejected whenever they are the same kind or one
-        implies the other (``close_constraints``), which also covers an exact
-        duplicate.
+        same parameter are rejected: every two kinds are the same or one
+        implies the other (:func:`~agm.agl.constraints.close_constraints`).
         """
         if not decl.constraints:
             return
@@ -1697,22 +1681,21 @@ class _Resolver(ModuleSources):
                 f"'{decl.name}' has no type parameters to constrain.",
                 span=decl.constraints[0].span,
             )
-        seen: dict[str, set[ConstraintKind]] = {}
+        constrained: set[str] = set()
         for constraint in decl.constraints:
             if constraint.param not in type_params:
                 raise AglScopeError(
                     f"'{constraint.param}' is not a type parameter of '{decl.name}'.",
                     span=constraint.span,
                 )
-            prior_kinds = seen.setdefault(constraint.param, set())
-            if any(_constraints_related(constraint.kind, kind) for kind in prior_kinds):
+            if constraint.param in constrained:
                 raise AglScopeError(
                     f"Constraint '{constraint.kind.value} {constraint.param}' on "
                     f"'{decl.name}' is redundant with an existing constraint on "
                     f"'{constraint.param}'.",
                     span=constraint.span,
                 )
-            prior_kinds.add(constraint.kind)
+            constrained.add(constraint.param)
 
     def _canonical_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
         """Intern *ref* as its member declaration's canonical metadata.
@@ -2308,9 +2291,7 @@ class _Resolver(ModuleSources):
 
     def _replaced_uses(self) -> dict[int, frozenset[int]]:
         """Each retained use this REPL entry replaces, with the uses replacing it."""
-        return self._uses.replacements(
-            (*self._scope_nodes.values(), *self._layer_chain(self._root_scope))
-        )
+        return self._uses.replacements((*self._scope_nodes.values(), *self._root_scope.enclosing()))
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in the member layer of the scope path it opens."""
@@ -2838,7 +2819,7 @@ class _Resolver(ModuleSources):
     @staticmethod
     def _unknown_static_error(node: VarRef, qualifier: QualifierChain) -> UnknownMemberError:
         """Build the diagnostic for a prelude owner that lacks the requested static."""
-        return UnknownMemberError(render_qualified_name(qualifier, node.name), span=node.span)
+        return unknown_member(qualifier, node.name, node.span)
 
     #: Built-in names that genuinely require direct call syntax and may never
     #: be referenced as a first-class value, each mapped to why: ``resource``
@@ -2934,7 +2915,7 @@ class _Resolver(ModuleSources):
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
             if chain.anchor is None and chain.segments and chain.segments[0].name in type_param_set:
-                raise _unknown_qualifier(chain)
+                raise unknown_qualifier(chain)
             if isinstance(node, (NameT, AppliedT, VariantRef)):
                 self._record_type_selection(chain.node_id, self._type_name_target(node))
 
@@ -3007,7 +2988,6 @@ class _Resolver(ModuleSources):
         found = lookup_qualified(
             self,
             chain,
-            member,
             self._named_scope_path(),
             kind,
             span=span,
@@ -3054,17 +3034,15 @@ class _Resolver(ModuleSources):
 
     def _named_scope_path(self, start: ScopeNode | None = None) -> ScopePath:
         """Return the path of the nearest named scope enclosing *start*, else the current layer."""
-        layer: ScopeNode | None = self._scope if start is None else start
-        while layer is not None and not layer.scope_path:
-            layer = layer.parent
-        return () if layer is None else layer.scope_path
+        layers = (self._scope if start is None else start).enclosing()
+        return next((layer.scope_path for layer in layers if layer.scope_path), ())
 
     def _lexical_layers(self, start: ScopeNode) -> Iterator[ScopeNode]:
         """Yield *start* and the block and function layers enclosing it, innermost first."""
-        layer: ScopeNode | None = start
-        while layer is not None and layer is not self._root_scope and not layer.scope_path:
-            yield layer
-            layer = layer.parent
+        root = self._root_scope
+        return takewhile(
+            lambda layer: layer is not root and not layer.scope_path, start.enclosing()
+        )
 
     def _spaced_qualifier_repair(
         self, advisory: SpacedQualifier | None, failure_span: SourceSpan
@@ -3088,7 +3066,6 @@ class _Resolver(ModuleSources):
                 failure_span,
                 anchored=advisory.anchored,
             ),
-            advisory.member,
             self._named_scope_path(),
             LookupKind.TYPE if advisory.type_qualified else LookupKind.VALUE,
             span=failure_span,
@@ -3433,7 +3410,7 @@ class _Resolver(ModuleSources):
                 return ()
             raise type_name_not_a_value(render_qualified_name(chain, name), chain.span)
         if ref.scope_path:
-            raise _unknown_member(chain, name)
+            raise unknown_member(chain, name)
         raise AglScopeError(
             f"'{render_qualified_name(chain, name)}' names no constructor.", span=chain.span
         )

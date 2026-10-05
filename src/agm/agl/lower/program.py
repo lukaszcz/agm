@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from typing import cast
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode, ParamDecoder
@@ -36,16 +35,11 @@ from agm.agl.lower.lowerer import (
     reserved_fallback_superseded,
     reserved_field_defaults,
 )
-from agm.agl.lower.nominal_descriptors import (
-    enum_descriptor,
-    exception_descriptor,
-    record_descriptor,
-)
+from agm.agl.lower.nominal_descriptors import nominal_descriptor
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeDef, TypeTable
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     FuncDef,
@@ -86,14 +80,9 @@ def _descriptor_for_skipped_identity(
     validation, so it is added here with ``bears_name_path=False``.
     """
     typedef = type_table.typedef_of(nominal.value)
-    handle = typedef.handle()
-    if isinstance(handle, RecordType):
-        return record_descriptor(
-            typedef, handle, type_table, bears_name_path=False, field_defaults=field_defaults
-        )
-    return exception_descriptor(
+    return nominal_descriptor(
         typedef,
-        cast(ExceptionType, handle),
+        typedef.handle(),
         type_table,
         bears_name_path=False,
         field_defaults=field_defaults,
@@ -452,28 +441,13 @@ def lower_program(
         )
         if (reserved_defaults := reserved_field_defaults(typedef)) is not None:
             link.field_defaults[nominal] = reserved_defaults
-        handle = typedef.handle()
-        match handle:
-            case RecordType():
-                link.nominals[nominal] = record_descriptor(
-                    typedef,
-                    handle,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
-            case EnumType():
-                link.nominals[nominal] = enum_descriptor(
-                    typedef, handle, type_table, bears_name_path=bears_name_path
-                )
-            case _:
-                link.nominals[nominal] = exception_descriptor(
-                    typedef,
-                    handle,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
+        link.nominals[nominal] = nominal_descriptor(
+            typedef,
+            typedef.handle(),
+            type_table,
+            bears_name_path=bears_name_path,
+            field_defaults=link.field_defaults,
+        )
 
     _add_builtin_nominals(link.nominals, type_table, link.field_defaults)
 
@@ -494,18 +468,13 @@ def lower_program(
             bears_name_path = (
                 generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
             )
-            if isinstance(typ, RecordType):
-                link.nominals[nominal] = record_descriptor(
-                    generic_typedef,
-                    typ,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
-            else:
-                link.nominals[nominal] = enum_descriptor(
-                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
-                )
+            link.nominals[nominal] = nominal_descriptor(
+                generic_typedef,
+                typ,
+                type_table,
+                bears_name_path=bears_name_path,
+                field_defaults=link.field_defaults,
+            )
 
     _add_missing_enum_member_descriptors(link.nominals, type_table, link.field_defaults)
     _add_missing_exception_base_descriptors(link.nominals, type_table, link.field_defaults)

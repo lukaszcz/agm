@@ -30,10 +30,10 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
 from types import MappingProxyType
-from typing import TYPE_CHECKING, assert_never, cast
+from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -47,7 +47,6 @@ from agm.agl.ir.contracts import (
     ScalarKind,
     VariantDecode,
     is_plain_enum,
-    resolve_schema_ref,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.arithmetic import checked_decimal
@@ -67,9 +66,8 @@ from agm.util.decimal import (
     integral_to_int,
     narrows_to_int,
     parse_json_decimal,
-    reject_json_constant,
 )
-from agm.util.unicode import json_object_unique, loads_json
+from agm.util.unicode import loads_exact_json
 
 if TYPE_CHECKING:
     from jsonschema import TypeChecker
@@ -191,15 +189,7 @@ def parse_json_strict(text: str) -> object:
         # json.JSONDecoder.decode (used by json.loads) calls raw_decode and then
         # verifies that only whitespace follows the first value — so trailing junk
         # such as "42 extra" is already rejected with JSONDecodeError.
-        #
-        # parse_constant rejects NaN/Infinity/-Infinity even when nested
-        # inside containers like [NaN].
-        obj: object = loads_json(
-            stripped,
-            parse_float=parse_json_decimal,
-            parse_constant=reject_json_constant,
-            object_pairs_hook=json_object_unique,
-        )
+        obj = loads_exact_json(stripped)
     except ValueError as exc:
         raise StrictJsonParseError(f"JSON parse error: {exc}") from exc
 
@@ -273,8 +263,8 @@ def decode_value(
     real, eventually non-ref bodies.
     """
     match schema:
-        case RefDecode(key=key):
-            resolved = resolve_decode_ref(key, defs)
+        case RefDecode():
+            resolved = resolve_decode(schema, defs)
             return decode_value(resolved, obj, defs, default_resolver=default_resolver)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
@@ -345,22 +335,28 @@ def _decode_dict(
     other malformed input.
     """
     result = DictValue()
-    pairs: list[tuple[object, object]]
+    pairs: Iterable[tuple[object, object]]
     if key_form is DictKeyForm.ENTRIES:
         if not isinstance(obj, list):
             raise ValueError(f"Expected array of entries, got {type(obj).__name__}")
-        pairs = []
+        entries: list[tuple[object, object]] = []
         for entry in obj:
             if not isinstance(entry, dict) or "key" not in entry or "value" not in entry:
                 raise ValueError("Dict entry must be an object with 'key' and 'value'")
-            pairs.append((entry["key"], entry["value"]))
+            entries.append((entry["key"], entry["value"]))
+        pairs = entries
     else:
         if not isinstance(obj, dict):
             raise ValueError(f"Expected object, got {type(obj).__name__}")
-        pairs = list(obj.items())
+        pairs = obj.items()
+    stringified_kind = (
+        _stringified_scalar_kind(key_schema, defs)
+        if key_form is DictKeyForm.OBJECT_STRINGIFIED
+        else None
+    )
     for wire_key, wire_value in pairs:
         if key_form is DictKeyForm.OBJECT_STRINGIFIED:
-            wire_key = _stringified_key_json(key_schema, wire_key, defs)
+            wire_key = _stringified_key_json(stringified_kind, wire_key)
         key = decode_value(key_schema, wire_key, defs, default_resolver=default_resolver)
         value = decode_value(value_schema, wire_value, defs, default_resolver=default_resolver)
         if not result.insert(key, value):
@@ -368,31 +364,36 @@ def _decode_dict(
     return result
 
 
-def _stringified_key_json(
-    key_schema: DecodeSchema, text: object, defs: Mapping[str, DecodeSchema]
-) -> object:
+def _stringified_scalar_kind(
+    key_schema: DecodeSchema, defs: Mapping[str, DecodeSchema]
+) -> ScalarKind | None:
+    """Return the scalar kind of a stringified key slot, ``None`` for an enum key."""
+    resolved = resolve_decode(key_schema, defs)
+    return resolved.kind if isinstance(resolved, ScalarDecode) else None
+
+
+def _stringified_key_json(kind: ScalarKind | None, text: object) -> object:
     """Return the JSON scalar a stringified object key's *text* stands for.
 
     Number text (int and decimal keys) and ``true``/``false`` (bool keys) parse
     to their JSON value, which the ordinary scalar decode then judges; an enum
-    key's text is its tag and stays text.
+    key's text (*kind* ``None``) is its tag and stays text.
     """
     if not isinstance(text, str):
         raise ValueError(f"Dict key must be string, got {type(text).__name__}")
-    resolved = key_schema
-    if isinstance(resolved, RefDecode):
-        resolved = resolve_decode_ref(resolved.key, defs)
-    if not isinstance(resolved, ScalarDecode):
+    if kind is None:
         return text
-    if resolved.kind is ScalarKind.BOOL:
+    if kind is ScalarKind.BOOL:
         if text not in ("true", "false"):
             raise ValueError(f"Expected true or false as a bool key, got {text!r}")
         return text == "true"
     if re.fullmatch(JSON_NUMBER_TEXT_PATTERN, text) is None:
         raise ValueError(f"Expected number text as a key, got {text!r}")
     try:
-        return parse_json_strict(text)
-    except StrictJsonParseError as exc:
+        if text.lstrip("-").isdigit():
+            return int(text)
+        return parse_json_decimal(text)
+    except ValueError as exc:
         raise ValueError(f"Unrepresentable number as a key: {text!r}") from exc
 
 
@@ -407,22 +408,15 @@ def _enum_variant(schema: EnumDecode, tag: str) -> VariantDecode:
     return variant
 
 
-#: A ``DecodeSchema`` known not to be a ``RefDecode`` -- what
-#: :func:`resolve_decode_ref` (and :func:`~agm.agl.runtime.value_decode._resolve`)
-#: return, having already followed every ``$defs`` reference.
+#: A ``DecodeSchema`` known not to be a ``RefDecode`` -- what :func:`resolve_decode` returns.
 type ResolvedDecode = ScalarDecode | ArrayDecode | DictDecode | RecordDecode | EnumDecode
 
 
-def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> ResolvedDecode:
-    """Resolve a ``RefDecode`` key to its non-ref body."""
-    resolved = resolve_schema_ref(
-        key,
-        defs,
-        lambda schema: schema.key if isinstance(schema, RefDecode) else None,
-    )
-    # resolve_schema_ref stops exactly when forwarded_key returns None, i.e.
-    # when resolved is not itself a RefDecode.
-    return cast(ResolvedDecode, resolved)
+def resolve_decode(schema: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> ResolvedDecode:
+    """Follow ``RefDecode`` nodes through *defs* to the first non-ref body."""
+    while isinstance(schema, RefDecode):
+        schema = defs[schema.key]
+    return schema
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

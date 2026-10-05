@@ -2858,15 +2858,7 @@ class AstBuilder(Transformer):
             segment=syntax.QualifierSegment(
                 name=str(name_tok),
                 type_args=type_args,
-                span=SourceSpan(
-                    start_line=type_start.start_line,
-                    start_col=type_start.start_col,
-                    end_line=type_end.end_line,
-                    end_col=type_end.end_col,
-                    start_offset=type_start.start_offset,
-                    end_offset=type_end.end_offset,
-                    source=type_start.source,
-                ),
+                span=span_covering(type_start, type_end),
                 node_id=self._next_id(),
             )
         )

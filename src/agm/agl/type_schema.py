@@ -311,8 +311,8 @@ def _dict_key_head_and_form(
 ) -> tuple[EncodeSchema, EncodeSchema, DictKeyForm]:
     """Return a dict key's emitted encode schema, its resolved head and its ``DictKeyForm``.
 
-    The one classification step shared by schema derivation, decode-plan
-    emission and encode-plan emission, so all agree on every key's wire shape.
+    The one classification step shared by schema derivation and decode-plan
+    emission, so both agree on every key's wire shape.
     """
     key_schema = _emit_encode(key, type_table, plan, memo)
     key_head = _key_head(key, key_schema, type_table, plan, memo)
@@ -1009,27 +1009,7 @@ def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
         if isinstance(current, DictType):
             key_schema = emit(current.key, parameters)
             value_schema = emit(current.value, parameters)
-            # A dict key must be ``Hashable``, so a key handle's own fields
-            # can hold no ``DictType`` anywhere in their structure; building
-            # the key's definition below can therefore never re-enter this
-            # arm on the SAME handle, so ``ensure_definition`` always runs to
-            # completion (never short-circuits on its in-progress guard)
-            # before returning here, and this reads the key's resolved body
-            # straight out of ``definitions`` rather than re-deriving its
-            # shape from declaration data. A key reached only through a
-            # PHANTOM type argument (see ``ensure_definition``) never gets
-            # here at all: its enclosing argument is dropped before ``emit``
-            # is ever called on it.
-            key_form = (
-                None
-                if isinstance(key_schema, TypeParameterEncode)
-                else dict_key_form(
-                    definitions[NominalId(cast("RecordType | EnumType", current.key).decl_id)].body
-                    if isinstance(key_schema, RefEncode)
-                    else key_schema
-                )
-            )
-            return DictEncode(key_form, key_schema, value_schema)
+            return DictEncode(key_schema, value_schema)
         if isinstance(current, TypeVarType):
             return TypeParameterEncode(parameters[current.name])
         if isinstance(current, ExceptionType):
@@ -1167,9 +1147,10 @@ def _emit_encode_body(
     if isinstance(typ, ArrayType):
         return ArrayEncode(_emit_encode(typ.elem, type_table, plan, memo))
     if isinstance(typ, DictType):
-        key_schema, _, form = _dict_key_head_and_form(typ.key, type_table, plan, memo)
-        value_schema = _emit_encode(typ.value, type_table, plan, memo)
-        return DictEncode(form, key_schema, value_schema)
+        return DictEncode(
+            _emit_encode(typ.key, type_table, plan, memo),
+            _emit_encode(typ.value, type_table, plan, memo),
+        )
     if isinstance(typ, RecordType):
         return RecordEncode(
             nominal=NominalId(typ.decl_id),

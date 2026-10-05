@@ -12,7 +12,7 @@ from agm.agl.constraints import (
     CONSTRAINT_SPELLINGS,
     ConstraintKind,
     close_constraints,
-    constraints_by_strength,
+    strongest_constraint,
 )
 
 
@@ -63,8 +63,7 @@ def test_unmet_bound_reports_strongest_kind_under_any_hash_seed(hash_seed: str) 
     assert "Hashable" in done.stdout
 
 
-def test_constraints_by_strength_lists_hashable_before_eq() -> None:
+def test_strongest_constraint_prefers_hashable_over_eq() -> None:
     both = close_constraints(frozenset({ConstraintKind.HASHABLE}))
-    assert constraints_by_strength(both) == (ConstraintKind.HASHABLE, ConstraintKind.EQ)
-    assert constraints_by_strength(frozenset({ConstraintKind.EQ})) == (ConstraintKind.EQ,)
-    assert constraints_by_strength(frozenset()) == ()
+    assert strongest_constraint(both) is ConstraintKind.HASHABLE
+    assert strongest_constraint(frozenset({ConstraintKind.EQ})) is ConstraintKind.EQ

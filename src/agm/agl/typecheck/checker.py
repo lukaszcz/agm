@@ -47,7 +47,7 @@ from types import MappingProxyType
 from typing import Literal, Protocol, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.constraints import ConstraintBounds, ConstraintKind, constraints_by_strength
+from agm.agl.constraints import ConstraintBounds, ConstraintKind, strongest_constraint
 from agm.agl.diagnostics import (
     Diagnostic,
     dollar_spacing_hint,
@@ -114,6 +114,7 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeTemplate,
     TypeVarType,
     UnitType,
     contains_inference_var,
@@ -477,8 +478,7 @@ class PendingBoundObligation:
     """
 
     bounds: ConstraintBounds
-    type_arg_names: tuple[str, ...]
-    type_arg_values: tuple[Type, ...]
+    type_args: Mapping[str, Type]
     caller_bounds: ConstraintBounds
     span: SourceSpan
     subject: str
@@ -2208,8 +2208,7 @@ class _Checker:
         self._active_region().finalization_obligations.append(
             PendingBoundObligation(
                 bounds=bounds,
-                type_arg_names=tuple(bounds),
-                type_arg_values=tuple(values),
+                type_args=dict(zip(bounds, values, strict=True)),
                 caller_bounds=self._current_bounds,
                 span=span,
                 subject=subject,
@@ -2220,16 +2219,16 @@ class _Checker:
         self, region: _InferenceRegion, obligation: PendingBoundObligation
     ) -> None:
         """Check one instantiation's bounds against its final, zonked type arguments."""
-        for name, typ in zip(obligation.type_arg_names, obligation.type_arg_values, strict=True):
+        for name, typ in obligation.type_args.items():
             zonked = region.engine.zonk(typ)
-            for kind in constraints_by_strength(obligation.bounds[name]):
-                if not satisfies(zonked, kind, self._env.type_table, obligation.caller_bounds):
-                    raise AglTypeError(
-                        f"'{obligation.subject}' needs '{kind.value}' for type '{zonked!r}' "
-                        f"(type argument '{name}')."
-                        f"{_bound_failure_hint(zonked, kind)}",
-                        span=obligation.span,
-                    )
+            kind = strongest_constraint(obligation.bounds[name])
+            if not satisfies(zonked, kind, self._env.type_table, obligation.caller_bounds):
+                raise AglTypeError(
+                    f"'{obligation.subject}' needs '{kind.value}' for type '{zonked!r}' "
+                    f"(type argument '{name}')."
+                    f"{_bound_failure_hint(zonked, kind)}",
+                    span=obligation.span,
+                )
 
     def _register_extern_call_obligation(
         self,
@@ -4824,6 +4823,13 @@ class _Checker:
         # annotation like any other underconstrained group.
         return engine.fresh(subject)
 
+    def _candidate_defers(self, *types: Type) -> bool:
+        """Whether candidate mode must defer a check because some *type* is still unresolved."""
+        if self._candidate is None:
+            return False
+        zonk = self._candidate.session.engine.zonk
+        return any(contains_inference_var(zonk(typ)) for typ in types)
+
     def _candidate_operation_can_defer(
         self,
         types: Sequence[Type],
@@ -5178,7 +5184,7 @@ class _Checker:
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.operand,)):
-            if self._candidate is not None and contains_inference_var(t):
+            if self._candidate_defers(t):
                 return t
             # Reject operations on bare type variables.
             if isinstance(t, TypeVarType):
@@ -5201,7 +5207,7 @@ class _Checker:
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.expr,)):
-            if self._candidate is not None and contains_inference_var(expr_type):
+            if self._candidate_defers(expr_type):
                 return BoolType()
             # Reject operations on bare type variables.
             if isinstance(expr_type, TypeVarType):
@@ -5632,7 +5638,7 @@ class _Checker:
         type_args: tuple[TypeExpr, ...] | None = None,
     ) -> Type | _SelectedBuiltinMethod:
         obj_type = self._check_expr(node.obj, expected=None)
-        if self._candidate is not None and contains_inference_var(obj_type):
+        if self._candidate_defers(obj_type):
             return self._active_inference_engine().fresh("member result")
         try:
             if isinstance(obj_type, TypeVarType):
@@ -5686,7 +5692,7 @@ class _Checker:
     def _check_record_update(self, node: RecordUpdate, expected: Type | None = None) -> Type:
         """Check ``target with field = value, ...``; the result type is the target's type."""
         obj_type = self._check_expr(node.target, expected=expected)
-        if self._candidate is not None and contains_inference_var(obj_type):
+        if self._candidate_defers(obj_type):
             # The result has the target's type even before the target type is
             # solved; field checks are deferred to the definitive pass.
             for update in node.updates:
@@ -5748,9 +5754,7 @@ class _Checker:
         block to state *kind* (or an implication of it, e.g. ``Hashable``
         implies ``Eq``).
         """
-        if self._candidate is not None and contains_inference_var(
-            self._active_inference_engine().zonk(typ)
-        ):
+        if self._candidate_defers(typ):
             # Candidate return inference may not know a recursive callee's
             # result yet. The definitive body pass rechecks this constraint
             # after candidate signatures have been resolved.
@@ -5778,7 +5782,7 @@ class _Checker:
         obj_expr: Expr | None = None,
         binding_node_ids: Sequence[int] = (),
     ) -> Type:
-        if self._candidate is not None and contains_inference_var(obj_type):
+        if self._candidate_defers(obj_type):
             self._check_expr(index, expected=None)
             return self._active_inference_engine().fresh("index result")
         # reject operations on bare type variables.
@@ -6433,7 +6437,9 @@ class _Checker:
         matching = {
             candidate: record_type.decl_id
             for candidate in self._pattern_constructor_candidates(pattern)
-            if self._constructs_record(candidate, record_type)
+            if self._template_constructs_record(
+                constructed_template(self._env, candidate), record_type
+            )
         }
         return self._unique_constructor_candidate(
             pattern.name,
@@ -6443,9 +6449,8 @@ class _Checker:
             subject="Constructor pattern",
         )
 
-    def _constructs_record(self, candidate: ConstructorRef, record_type: RecordType) -> bool:
-        """Whether *candidate* constructs *record_type*'s declaration at arguments matching it."""
-        template = constructed_template(self._env, candidate)
+    def _template_constructs_record(self, template: TypeTemplate, record_type: RecordType) -> bool:
+        """Whether *template* constructs *record_type*'s declaration at arguments matching it."""
         return (
             isinstance(template.template, RecordType)
             and template.template.decl_id == record_type.decl_id
@@ -6456,11 +6461,16 @@ class _Checker:
         self, enum_type: EnumType, candidate: ConstructorRef
     ) -> RecordType | None:
         """Return the member of *enum_type* that *candidate* constructs, through any alias."""
-        constructed = constructed_template(self._env, candidate).template
+        template = constructed_template(self._env, candidate)
+        constructed = template.template
         if not isinstance(constructed, RecordType):
             return None
         member = self._env.type_table.enum_member_by_decl(enum_type, constructed.decl_id)
-        return member if member is not None and self._constructs_record(candidate, member) else None
+        return (
+            member
+            if member is not None and self._template_constructs_record(template, member)
+            else None
+        )
 
     def _validate_enum_constructor_qualification(
         self,
@@ -6866,9 +6876,7 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None:
-        if self._candidate is not None and (
-            contains_inference_var(value_type) or contains_inference_var(target_type)
-        ):
+        if self._candidate_defers(value_type, target_type):
             # Candidate return inference is definition-local: a use-site
             # assignability check (an annotation or a callee's parameter slot)
             # must not pin a still-flexible provisional result. Exact unification

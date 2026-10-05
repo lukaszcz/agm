@@ -145,11 +145,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import RecipeCastKind, compile_recipe
-from agm.agl.lower.nominal_descriptors import (
-    enum_descriptor,
-    exception_descriptor,
-    record_descriptor,
-)
+from agm.agl.lower.nominal_descriptors import nominal_descriptor
 from agm.agl.matchcompile import (
     BoolConstructor,
     CompiledMatchSite,
@@ -364,25 +360,20 @@ def _add_builtin_nominals(
         if reserved_fallback_superseded(name, type_table):
             continue
         nominal = NominalId(require_reserved_nominal_id(name))
-        if isinstance(typ, RecordType):
-            nominals[nominal] = record_descriptor(
-                type_table.typedef_of(typ.decl_id),
-                typ,
-                type_table,
-                bears_name_path=True,
-                field_defaults=field_defaults,
-            )
-            continue
         if isinstance(typ, ExceptionType):
             continue
-        nominals[nominal] = enum_descriptor(
-            type_table.typedef_of(typ.decl_id), typ, type_table, bears_name_path=True
+        nominals[nominal] = nominal_descriptor(
+            type_table.typedef_of(typ.decl_id),
+            typ,
+            type_table,
+            bears_name_path=True,
+            field_defaults=field_defaults,
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
         if reserved_fallback_superseded(exc_name, type_table):
             continue
-        descriptor = exception_descriptor(
+        descriptor = nominal_descriptor(
             type_table.exception_def(exc_type),
             exc_type,
             type_table,
@@ -1223,7 +1214,6 @@ class _Lowerer:
             param_labels=param_labels,
             result_label=result_label,
             is_synthetic_main=funcdef.is_synthetic,
-            bounds=sig.bounds,
         )
         self._link.functions[fn_id] = desc
 
@@ -1259,7 +1249,6 @@ class _Lowerer:
             ),
             param_labels=param_labels,
             result_label=result_label,
-            bounds=signature.bounds,
         )
         self._link.functions[fn_id] = desc
 

@@ -20,7 +20,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import CodeType, MappingProxyType, ModuleType
@@ -961,14 +961,17 @@ def _array(values: Sequence[object]) -> AglArrayView:
     )
 
 
-def _dict(values: dict[object, object]) -> AglDictView:
+def _dict(values: Mapping[object, object] | Iterable[tuple[object, object]]) -> AglDictView:
     """Construct the companion representation of a new AgL dict.
 
-    Bound as ``agl.dict``; keys are any key :func:`decode_dict_key` accepts
+    Bound as ``agl.dict``; takes a mapping or an iterable of ``(key, value)``
+    pairs. Keys are any key :func:`decode_dict_key` accepts, and each pair is
+    stored by AgL equality, so a later pair replaces an equal earlier key
     (see :func:`_array` for where the view's descriptors come from).
     """
     entries = DictValue()
-    for key, value in values.items():
+    pairs = values.items() if isinstance(values, Mapping) else values
+    for key, value in pairs:
         store_dict_entry(entries, key, value)
     return AglDictView(entries, current_descriptors())
 

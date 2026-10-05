@@ -18,7 +18,7 @@ __all__ = [
     "ConstraintBounds",
     "ConstraintKind",
     "close_constraints",
-    "constraints_by_strength",
+    "strongest_constraint",
 ]
 
 
@@ -54,10 +54,10 @@ def close_constraints(kinds: frozenset[ConstraintKind]) -> frozenset[ConstraintK
 _STRENGTH_ORDER = (ConstraintKind.HASHABLE, ConstraintKind.EQ)
 
 
-def constraints_by_strength(kinds: frozenset[ConstraintKind]) -> tuple[ConstraintKind, ...]:
-    """Return *kinds* strongest first, so iteration never depends on hash order.
+def strongest_constraint(kinds: frozenset[ConstraintKind]) -> ConstraintKind:
+    """Return the strongest kind in the non-empty *kinds*.
 
-    A diagnostic that names the first unmet kind of an implication-closed set
-    thereby names the one whose absence is the real obstacle.
+    It implies every other kind of an implication-closed set, so checking it
+    alone decides the set and a diagnostic names the real obstacle.
     """
-    return tuple(kind for kind in _STRENGTH_ORDER if kind in kinds)
+    return next(kind for kind in _STRENGTH_ORDER if kind in kinds)

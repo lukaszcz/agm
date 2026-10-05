@@ -438,9 +438,7 @@ class UseReader:
             if not self._sources.applies(owner):
                 member = self._type_owners.owner_member(owner, key[2])
         if member is not None:
-            target = QualifiedTarget(
-                (member.owner_module_id, member.owner_path, member.owner_name), None, member
-            )
+            target = QualifiedTarget(member.key, None, member)
             declaration = member.qname
         layer = ContributionLayer.USE
         removed = self._use_hidden(site, decl)

@@ -13,7 +13,6 @@ from agm.agl.ir import contracts
 from agm.agl.ir.contracts import (
     ArrayEncode,
     DictEncode,
-    DictKeyForm,
     EncodeDefinition,
     EncodePlan,
     EnumEncode,
@@ -204,11 +203,7 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
         _NO_EXCEPTIONS,
     ) == [1, 2]
     assert encode_value(
-        EncodePlan(
-            DictEncode(
-                DictKeyForm.OBJECT_TEXT, ScalarEncode(ScalarKind.TEXT), ScalarEncode(ScalarKind.INT)
-            )
-        ),
+        EncodePlan(DictEncode(ScalarEncode(ScalarKind.TEXT), ScalarEncode(ScalarKind.INT))),
         DictValue({"n": IntValue(3)}),
         _NO_EXCEPTIONS,
     ) == {"n": 3}
@@ -253,6 +248,19 @@ def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
     assert encode_value(plan, value, _NO_EXCEPTIONS) == {"first": 1, "second": [2, 3]}
 
 
+def test_encode_plan_follows_forwarding_definitions_to_their_body() -> None:
+    """A definition whose body is a bare reference forwards to the referenced body."""
+    plan = EncodePlan(
+        root=RefEncode("Alias"),
+        definitions=(
+            EncodeDefinition("Alias", 0, RefEncode("Target")),
+            EncodeDefinition("Target", 0, ArrayEncode(ScalarEncode(ScalarKind.INT))),
+        ),
+    )
+
+    assert encode_value(plan, ArrayValue([IntValue(1)]), _NO_EXCEPTIONS) == [1]
+
+
 def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> None:
     """An argument is rewritten out of the caller's parameter space before it binds."""
     outer = NominalId(1)
@@ -266,9 +274,7 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
     cases = (
         (ArrayEncode(TypeParameterEncode(0)), ArrayValue([IntValue(4)]), [4]),
         (
-            DictEncode(
-                DictKeyForm.OBJECT_TEXT, ScalarEncode(ScalarKind.TEXT), TypeParameterEncode(0)
-            ),
+            DictEncode(ScalarEncode(ScalarKind.TEXT), TypeParameterEncode(0)),
             DictValue({"n": IntValue(5)}),
             {"n": 5},
         ),
@@ -559,7 +565,6 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                             "by-name",
                             "by-name",
                             DictEncode(
-                                DictKeyForm.OBJECT_TEXT,
                                 ScalarEncode(ScalarKind.TEXT),
                                 ScalarEncode(ScalarKind.INT),
                             ),
@@ -955,20 +960,11 @@ class TestDictKeyFormJsonSchemaCrossCheck:
         ]
 
 
-def test_finite_encode_plan_fills_dict_key_form_once() -> None:
-    """A finite plan's ``DictEncode`` stores its key's ``DictKeyForm`` at build time,
-    not re-derived at encode time."""
-    plan = build_encode_plan(DictType(key=IntType(), value=TextType()), type_table_for())
-
-    assert isinstance(plan.root, DictEncode)
-    assert plan.root.key_form is DictKeyForm.OBJECT_STRINGIFIED
-
-
 def test_dict_key_resolves_through_a_ref_encode_before_choosing_its_wire_form() -> None:
     """A dict key stored via ``$defs`` (``RefEncode``) resolves to its concrete shape first."""
     point = NominalId(1)
     plan = EncodePlan(
-        root=DictEncode(DictKeyForm.ENTRIES, RefEncode("Point"), ScalarEncode(ScalarKind.TEXT)),
+        root=DictEncode(RefEncode("Point"), ScalarEncode(ScalarKind.TEXT)),
         definitions=(
             EncodeDefinition(
                 "Point",
@@ -1020,7 +1016,7 @@ def test_growing_polymorphic_recursive_json_cast_own_key_parameter_uses_entries_
 
 
 def test_growing_polymorphic_recursive_json_cast_stringifies_its_own_key_parameter() -> None:
-    """A growing template's own type-parameter key (``DictEncode.key_form is None``) still
+    """A growing template's own type-parameter key still
     stringifies correctly once resolved at a depth where it instantiates to a scalar."""
     result = evaluate_ir(
         "record Pair[A, B]\n"
@@ -1041,8 +1037,7 @@ def test_growing_polymorphic_recursive_json_cast_stringifies_its_own_key_paramet
 
 def test_growing_template_stringifies_an_all_nullary_enum_key_with_json_name() -> None:
     """A growing template's dict field keyed by a fixed (non-parameter) all-nullary
-    enum stringifies by each member's effective JSON tag, both in the actual encoded
-    output and in the ``DictEncode.key_form`` the template plan stores for it."""
+    enum stringifies by each member's effective JSON tag, in the encoded output."""
     red_id = next_decl_id()
     blue_id = next_decl_id()
     red_member = RecordType(name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_id=red_id)
@@ -1108,7 +1103,6 @@ def test_growing_template_stringifies_an_all_nullary_enum_key_with_json_name() -
     single_variant = next(v for v in perfect_definition.body.variants if v.name == "Single")
     dict_encode = single_variant.fields[0].schema
     assert isinstance(dict_encode, DictEncode)
-    assert dict_encode.key_form is DictKeyForm.OBJECT_STRINGIFIED
 
     value = DictValue()
     value.insert(RecordValue(NominalId(red_id), {}), IntValue(1))

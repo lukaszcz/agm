@@ -16,9 +16,7 @@ if TYPE_CHECKING:
     from agm.sandbox.request import SandboxLimits
 
 from agm.agent.session.protocol import (
-    SessionAgentError as AgentSessionAgentError,
-)
-from agm.agent.session.protocol import (
+    BackendSettings,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -28,6 +26,9 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionOperations,
     SessionStats,
+)
+from agm.agent.session.protocol import (
+    SessionAgentError as AgentSessionAgentError,
 )
 from agm.agent.spec import PermissionMode, SessionTransport
 from agm.agent.transport import AgentOutputCallback
@@ -389,12 +390,14 @@ def create_agl_session_host(
             raise SessionHostError("RPC transport is only supported by AgentPi", "open")
         return PiRpcSessionBackend.open(
             request.agent,
+            BackendSettings(
+                get_sandbox_context=get_sandbox_context,
+                env=request.env,
+                idle_timeout=idle_timeout,
+                permission_mode=request.permission_mode,
+                sandbox=request.sandbox,
+            ),
             name=request.name,
-            permission_mode=request.permission_mode,
-            sandbox=request.sandbox,
-            env=request.env,
-            idle_timeout=idle_timeout,
-            get_sandbox_context=get_sandbox_context,
         )
 
     return AglSessionHost(SessionService(backend_for))

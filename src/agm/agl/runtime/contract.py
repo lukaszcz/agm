@@ -174,11 +174,6 @@ def _call_make_contract(
     return codec.make_contract(type_ref, type_table)
 
 
-def _target_type_for_request(request: CustomContractRequest) -> Type:
-    """Return the checked target type for legacy custom-codec parse hooks."""
-    return cast(Type, request.target_type)
-
-
 def materialize_contract(
     spec: OutputContractSpec,
     codecs: Mapping[str, OutputCodec],

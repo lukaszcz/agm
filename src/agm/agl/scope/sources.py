@@ -52,6 +52,7 @@ from agm.agl.scope.lookup import (
     LookupKind,
     QualifiedTarget,
     Reading,
+    hidden_member,
     lookup_origins,
     lookup_qualified,
     lookup_steps,
@@ -223,6 +224,11 @@ class SourcesHost(Protocol):
         ...
 
 
+def _within(chain: QualifierChain, path: ScopePath, owners_within: int) -> int:
+    """Return *owners_within* re-based from *path*, a tail of *chain*'s full path, to all of it."""
+    return len(chain.segments) + 1 - len(path) + max(owners_within, 0)
+
+
 class ModuleSources(SourcesHost):
     """The one lookup's reads for one module, by full path (:class:`PathSources`)."""
 
@@ -232,6 +238,12 @@ class ModuleSources(SourcesHost):
         # Every enum this module reads by the names of its members, built on
         # first use.
         self._enum_member_index: dict[str, dict[QName, ConstructorRef]] | None = None
+        # (region path, exposed atom, exposed declaration) -> the import declarations of the
+        # region exposing it, in order; built on first use (:meth:`_region_import_decls`).
+        self._region_decls: dict[tuple[ScopePath | None, NameAtom, QName], list[int]] | None = None
+        # Each import declaration's region path and the atoms its ``hiding`` removes there,
+        # built on first use (:meth:`_hidden_at`).
+        self._region_hidden: list[tuple[ScopePath, frozenset[NameAtom]]] | None = None
         # Import declaration id -> the declarations its ``hiding`` removes, by identity.
         self._hidden_by: dict[int, frozenset[DeclarationKey]] = {}
         # The paths beneath this module's aliases being read (:meth:`_reading_through`).
@@ -246,6 +258,9 @@ class ModuleSources(SourcesHost):
         self._kept_contributions: dict[tuple[ScopePath, ScopePath, LookupKind], Reading] = {}
         self._kept_own_types: dict[ScopePath, Reading] = {}
         self._kept_hidden: dict[tuple[ScopePath, ScopePath], bool] = {}
+        self._kept_imports: dict[
+            tuple[ScopePath, ScopePath], dict[BindingRef, tuple[Layers, Hiding]]
+        ] = {}
         # Alias -> the steps its target is read at here (:meth:`target_steps`).
         self._target_steps: dict[QName, tuple[ScopePath, ...] | None] = {}
 
@@ -464,7 +479,7 @@ class ModuleSources(SourcesHost):
 
     def _own_root_value(self, name: str) -> QualifiedTarget | None:
         """This module's own root value *name*, or the root constructor it declares so."""
-        ref = self._own_level_value(self._layer_chain(self._root_scope), name)
+        ref = self._own_level_value(tuple(self._root_scope.enclosing()), name)
         if ref is None:
             return None
         key = (self._module_id, (), name)
@@ -595,7 +610,7 @@ class ModuleSources(SourcesHost):
                 if isinstance(atom, str)
             )
         else:
-            ref = self._level_value(self._layer_chain(self._root_scope), member)
+            ref = self._level_value(tuple(self._root_scope.enclosing()), member)
             layer = ContributionLayer.DECLARED
             constructors = tuple(
                 candidate
@@ -680,7 +695,6 @@ class ModuleSources(SourcesHost):
         found = lookup_qualified(
             self,
             self._probe_chain(qualifier, member, span, anchored=anchored),
-            member,
             site,
             LookupKind.VALUE,
             span=span,
@@ -934,7 +948,7 @@ class ModuleSources(SourcesHost):
         """
         anchor, route = reach
         spelled = replace(member_chain(spelling, path), anchor=anchor, span=span)
-        within = len(spelled.segments) + 1 - len(path) + max(owners_within, 0)
+        within = _within(spelled, path, owners_within)
         refusals: tuple[AglError, ...] = ()
         with self._reading_through((alias, path, kind, within), every_use=False) as reads:
             for step in steps if reads else ():
@@ -959,7 +973,7 @@ class ModuleSources(SourcesHost):
     ) -> tuple[AglError, ...]:
         """*read*'s refusals of *path* read for *chain*: a hidden path as *chain* spells it."""
         return tuple(
-            self._hidden_beneath(chain, path) if isinstance(refusal, HiddenMemberError) else refusal
+            hidden_member(chain, path[-1]) if isinstance(refusal, HiddenMemberError) else refusal
             for refusal in read.refusals
         )
 
@@ -1007,7 +1021,7 @@ class ModuleSources(SourcesHost):
         read when *every_use* (:meth:`_reading_through`).
         """
         chain = replace(member_chain(spelling, path), span=span)
-        within = len(chain.segments) + 1 - len(path) + max(owners_within, 0)
+        within = _within(chain, path, owners_within)
         with self._reading_through((alias, path, kind, within), every_use=every_use) as reads:
             if not reads:
                 return Reading()
@@ -1090,9 +1104,9 @@ class ModuleSources(SourcesHost):
         for step in steps:
             prefix = (*step, *names)
             found = {
-                written[len(prefix) :]: origin
+                rest: origin
                 for atom, origin in exports.items()
-                if (written := _bare_path(atom))[: len(prefix)] == prefix
+                if (rest := relative_under(atom, prefix)) is not None
             }
             if found:
                 return found
@@ -1141,11 +1155,6 @@ class ModuleSources(SourcesHost):
             for reached in (qname, *self.reached_beneath(qname))
         )
 
-    @staticmethod
-    def _hidden_beneath(chain: QualifierChain, path: ScopePath) -> HiddenMemberError:
-        """The refusal of *path*, which *chain* spells beneath an alias, as hidden."""
-        return HiddenMemberError(render_qualifier_path(chain), path[-1], span=chain.span)
-
     def inline_arity(self, owner: DeclarationKey, member: str, written: str) -> int | None:
         """The arity of type *owner*, spelled *written*, when it owns *member* inline."""
         reached = self._type_owners.owner(_key_qname(owner))
@@ -1171,7 +1180,7 @@ class ModuleSources(SourcesHost):
         an alias's target is (:meth:`read_through`).
         """
         spelled = replace(member_chain(applied.spelling, rest), span=chain.span)
-        within = len(spelled.segments) + 1 - len(rest) + max(owners_within, 0)
+        within = _within(spelled, rest, owners_within)
         read = lookup_through(self, spelled, site, kind, owners_within=within)
         return Reading(read.candidates, self._respelled(read, chain, rest))
 
@@ -1211,21 +1220,20 @@ class ModuleSources(SourcesHost):
 
     def _hidden_at(self, step: ScopePath, path: ScopePath) -> bool:
         """Read :meth:`hidden_at`."""
-        for layer in self._layer_chain(self._scope_nodes[step]):
-            atom = _bare_atom(path[len(layer.scope_path) :])
+        for layer, atom in anchored_layers(self._scope_nodes, step, path):
             if any(
                 atom_under_prefix(atom, _item_path(item))
                 for decl in self._uses.visible(layer)
                 for item in decl.hidden
             ):
                 return True
-        env = self._import_env
-        for node_id in {*env.decl_hidden, *env.decl_hiding}:
-            anchor = self._import_decl_scope_paths.get(node_id, ())
-            relative = path[len(anchor) :]
-            if step[: len(anchor)] == anchor and _bare_atom(relative) in env.decl_hidden.get(
-                node_id, ()
-            ):
+        if self._region_hidden is None:
+            self._region_hidden = [
+                (self._import_decl_scope_paths.get(node_id, ()), hidden)
+                for node_id, hidden in self._import_env.decl_hidden.items()
+            ]
+        for anchor, hidden in self._region_hidden:
+            if step[: len(anchor)] == anchor and _bare_atom(path[len(anchor) :]) in hidden:
                 return True
         return (
             len(path) > 1 and self._route_hides((path[0],), path[1:], anchored=False)
@@ -1335,7 +1343,7 @@ class ModuleSources(SourcesHost):
         table = self._type_owners.owner((module_id, _bare_atom(path))) if path else None
         member = None if table is None else table.members.get(name)
         if member is not None:
-            return (member.owner_module_id, member.owner_path, member.owner_name)
+            return member.key
         return _qname_decl_key(self._type_owners.identity(self._named(key)))
 
     def denotes(self, key: DeclarationKey) -> object:
@@ -1369,7 +1377,7 @@ class ModuleSources(SourcesHost):
             for decl in self._uses.visible(layer):
                 found |= self._uses.origins(layer.scope_path, decl, relative)
         env = self._import_env
-        for exposed, qname, decls in unqualified_exposures(env):
+        for exposed, qname, decls in self._exposed(None).get(path[0], ()):
             found |= self._exposed_origin(exposed, path, qname, decls, typed=True)
         for node_id, routes in self._reachable_decl_contributions(env.decl_scope_routes, step):
             relative = path[len(self._import_decl_scope_paths.get(node_id, ())) :]
@@ -1394,7 +1402,7 @@ class ModuleSources(SourcesHost):
                 (module, ()) for module in qualifier_candidates(env, route, anchored=anchored)
             )
         found: set[QName] = set()
-        for exposed, qname, decls in qualifier_exposures(env, route, anchored=anchored):
+        for exposed, qname, decls in self._exposed((route, anchored)).get(path[0], ()):
             found |= self._exposed_origin(exposed, path, qname, decls, typed=True)
         for module, scope_paths, decls in qualifier_scope_paths(env, route, anchored=anchored):
             if any(relative_under(atom, path) is not None for atom in scope_paths):
@@ -1447,6 +1455,12 @@ class ModuleSources(SourcesHost):
         It or one above it; *decls* reach it beneath export *entry* (:meth:`_hiding`).
         """
         return removes_origin(self._hiding(decls, entry), origin, self)
+
+    def _kept_imported(
+        self, step: ScopePath, path: ScopePath
+    ) -> dict[BindingRef, tuple[Layers, Hiding]]:
+        """Read :meth:`_imported`, kept like :meth:`contributed_at`."""
+        return self._kept(self._kept_imports, (step, path), lambda: self._imported(step, path))
 
     def _imported(
         self, step: ScopePath, path: ScopePath
@@ -1503,11 +1517,15 @@ class ModuleSources(SourcesHost):
 
     def _region_import_decls(self, layer: ScopeNode, atom: NameAtom, qname: QName) -> Iterator[int]:
         """Yield the import declarations of region *layer* exposing *qname* there as *atom*."""
-        for node_id, members in self._import_env.decl_bare.items():
-            if self._import_decl_scope_paths.get(
-                node_id
-            ) == layer.scope_path and qname in members.get(atom, ()):
-                yield node_id
+        index = self._region_decls
+        if index is None:
+            index = self._region_decls = {}
+            for node_id, members in self._import_env.decl_bare.items():
+                region = self._import_decl_scope_paths.get(node_id)
+                for exposed, qnames in members.items():
+                    for exposing in qnames:
+                        index.setdefault((region, exposed, exposing), []).append(node_id)
+        return iter(index.get((layer.scope_path, atom, qname), ()))
 
     def _hiding(self, decls: Iterable[int], entry: QName) -> Hiding:
         """What each import declaration of *decls* removes from export *entry*; none without any.
@@ -1676,11 +1694,7 @@ class ModuleSources(SourcesHost):
         if ref.module_id != self._module_id:
             return QualifiedTarget(key, ref, self._cross_module_constructor(_ref_qname(ref)))
         constructor = next(
-            (
-                candidate
-                for candidate in constructors
-                if (candidate.owner_module_id, candidate.owner_path, candidate.owner_name) == key
-            ),
+            (candidate for candidate in constructors if candidate.key == key),
             None,
         )
         return QualifiedTarget(key, ref, constructor)
@@ -1708,15 +1722,6 @@ class ModuleSources(SourcesHost):
             is_variant_member=True,
         )
 
-    @staticmethod
-    def _layer_chain(layer: ScopeNode | None) -> tuple[ScopeNode, ...]:
-        """Return *layer* and every layer enclosing it, innermost first."""
-        chain: list[ScopeNode] = []
-        while layer is not None:
-            chain.append(layer)
-            layer = layer.parent
-        return tuple(chain)
-
     def _own_level_value(self, level: tuple[ScopeNode, ...], name: str) -> BindingRef | None:
         """Return this module's own value binding *name* at *level*.
 
@@ -1739,7 +1744,7 @@ class ModuleSources(SourcesHost):
         """Build a ``BindingRef`` for the declaration *qname* names in its owning module."""
         owning_module, src_name = qname
         info = self._decl_info[qname]
-        path = (src_name,) if isinstance(src_name, str) else src_name
+        path = _bare_path(src_name)
         return BindingRef(
             name=path[-1],
             # Only ``var``/``builtin var`` bindings are mutable across a module
@@ -1787,7 +1792,7 @@ class ModuleSources(SourcesHost):
                 (ref.module_id, ref.scope_path, ref.name) == key
                 and not removes(hiding, key, self)
                 and not removes(hiding, member_key, self)
-                for ref, (_layers, hiding) in self._imported(step, (*step, key[2])).items()
+                for ref, (_layers, hiding) in self._kept_imported(step, (*step, key[2])).items()
             ):
                 yield member
 

@@ -149,10 +149,14 @@ def decimal_in_range(value: decimal.Decimal) -> bool:
         return False
     if value.is_zero():
         return True
-    stripped = strip_trailing_zeros(value)
+    # Stripping trailing zeros never changes ``adjusted()`` and only raises the exponent,
+    # so strip only when the literal exponent alone fails the Etiny test.
+    if value.adjusted() > AGL_DECIMAL_CONTEXT.Emax:
+        return False
     # Finite: only NaN and infinity carry a letter exponent.
-    exponent = cast(int, stripped.as_tuple().exponent)
-    return stripped.adjusted() <= AGL_DECIMAL_CONTEXT.Emax and exponent >= _ETINY
+    if cast(int, value.as_tuple().exponent) >= _ETINY:
+        return True
+    return cast(int, strip_trailing_zeros(value).as_tuple().exponent) >= _ETINY
 
 
 def int_in_range(n: int) -> bool:

@@ -936,50 +936,10 @@ def test_validate_walks_a_dict_encode_plans_key_and_value() -> None:
     recipe = ToJsonRecipe(
         source_label="dict[int, text]",
         target_label="json",
-        encode=DictEncode(
-            DictKeyForm.OBJECT_STRINGIFIED, RefEncode("missing"), ScalarEncode(ScalarKind.TEXT)
-        ),
+        encode=DictEncode(RefEncode("missing"), ScalarEncode(ScalarKind.TEXT)),
     )
     with pytest.raises(InvalidIrError):
         validate_ir(_convert_program(recipe), deep=True)
-
-
-def test_validate_rejects_dict_encode_key_form_mismatched_with_its_key() -> None:
-    """``DictEncode.key_form`` must be ``None`` exactly when its key is its own
-    growing template's ``TypeParameterEncode`` — nothing else in the walk would
-    otherwise flag either direction of a builder filling the wrong branch."""
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-
-    # key_form left unset even though the key is a concrete, classifiable schema:
-    # nothing else in the walk ever inspects a bare ScalarEncode key.
-    unset_recipe = ToJsonRecipe(
-        source_label="dict[int, text]",
-        target_label="json",
-        encode=DictEncode(None, ScalarEncode(ScalarKind.INT), ScalarEncode(ScalarKind.TEXT)),
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(_convert_program(unset_recipe), deep=True)
-
-    # key_form set even though the key is the definition's own in-arity
-    # TypeParameterEncode: the arity check alone accepts this index.
-    set_recipe = ToJsonRecipe(
-        source_label="dict[T, text]",
-        target_label="json",
-        encode=RefEncode("Wrapper", arguments=(ScalarEncode(ScalarKind.INT),)),
-        encode_definitions=(
-            EncodeDefinition(
-                "Wrapper",
-                1,
-                DictEncode(
-                    DictKeyForm.OBJECT_STRINGIFIED,
-                    TypeParameterEncode(0),
-                    ScalarEncode(ScalarKind.TEXT),
-                ),
-            ),
-        ),
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(_convert_program(set_recipe), deep=True)
 
 
 def test_validate_rejects_to_json_with_malformed_encode_plan() -> None:

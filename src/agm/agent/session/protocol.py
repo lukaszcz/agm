@@ -10,6 +10,7 @@ from typing import Protocol
 
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
 from agm.agent.transport import AgentCallInfo, AgentOutputCallback, AgentTransportError
+from agm.sandbox.prepare import SandboxContext
 from agm.sandbox.request import SandboxLimits
 
 
@@ -136,19 +137,24 @@ class SessionBackend(Protocol):
         """Release the backend's resources."""
 
 
-class SandboxFixture:
-    """Sandboxing and environment fixed once, at ``open``, for a backend's whole lifetime.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendSettings:
+    """Settings fixed once, at ``open``, for a backend's whole lifetime.
 
     Every process a session spawns -- its first prompt and every later native
-    call (fork's replacement, compaction, ...) -- reuses the same
-    ``permission_mode``/``sandbox``/``env``; there is no per-call override.
-    Shared by every session backend family (CLI, RPC) so "fix at open" and
-    "carry into a freshly spawned sibling" are each written once.
+    call (fork's replacement, compaction, ...) -- reuses the same settings;
+    there is no per-call override.
     """
 
-    def __init__(
-        self, *, permission_mode: PermissionMode, sandbox: SandboxLimits | None, env: dict[str, str]
-    ) -> None:
-        self._permission_mode = permission_mode
-        self._sandbox = sandbox
-        self._env = env
+    get_sandbox_context: Callable[[], SandboxContext]
+    env: dict[str, str]
+    idle_timeout: float | None = None
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: SandboxLimits | None = None
+
+
+class SandboxFixture:
+    """Holds the :class:`BackendSettings` shared by every session backend family (CLI, RPC)."""
+
+    def __init__(self, settings: BackendSettings) -> None:
+        self._settings = settings

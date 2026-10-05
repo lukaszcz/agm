@@ -588,11 +588,7 @@ def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count
                 _walk_encode_schema(argument, walk, parameter_count)
         case ArrayEncode(elem=elem):
             _walk_encode_schema(elem, walk, parameter_count)
-        case DictEncode(key_form=key_form, key=key_schema, value=value_schema):
-            if (key_form is None) != isinstance(key_schema, TypeParameterEncode):
-                raise InvalidIrError(
-                    "DictEncode.key_form must be None iff its key is a TypeParameterEncode"
-                )
+        case DictEncode(key=key_schema, value=value_schema):
             _walk_encode_schema(key_schema, walk, parameter_count)
             _walk_encode_schema(value_schema, walk, parameter_count)
         case RecordEncode(nominal=nominal, fields=fields):

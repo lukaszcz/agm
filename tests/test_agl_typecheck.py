@@ -627,7 +627,7 @@ class TestComparableTypes:
         tv = TypeVarType("T")
         assert not comparable_types(tv, tv, _EMPTY_TABLE, bounds={})
         eq_bounds = {"T": frozenset({ConstraintKind.EQ})}
-        hashable_bounds = {"T": frozenset({ConstraintKind.HASHABLE})}
+        hashable_bounds = {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}
         assert comparable_types(tv, tv, _EMPTY_TABLE, bounds=eq_bounds)
         assert comparable_types(tv, tv, _EMPTY_TABLE, bounds=hashable_bounds)
 

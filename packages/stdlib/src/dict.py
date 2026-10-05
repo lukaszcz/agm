@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import NoReturn
 
 from agl import array, nominals, option_none, option_some
@@ -23,24 +24,31 @@ def size(values: object) -> int:
     return len(values)
 
 
+_ABSENT = object()
+
+
 def get(values: object, key: object) -> object:
-    if key not in values:
+    found = values.get(key, _ABSENT)
+    if found is _ABSENT:
         _key_error(key)
-    return values[key]
+    return found
 
 
 def get_option(values: object, key: object) -> object:
-    return option_some(values[key]) if key in values else option_none()
+    found = values.get(key, _ABSENT)
+    return option_none() if found is _ABSENT else option_some(found)
 
 
 def remove(values: object, key: object) -> object:
-    if key not in values:
+    found = values.pop(key, _ABSENT)
+    if found is _ABSENT:
         _key_error(key)
-    return values.pop(key)
+    return found
 
 
 def remove_option(values: object, key: object) -> object:
-    return option_some(values.pop(key)) if key in values else option_none()
+    found = values.pop(key, _ABSENT)
+    return option_none() if found is _ABSENT else option_some(found)
 
 
 def set(values: object, key: object, value: object) -> None:
@@ -68,11 +76,7 @@ def entries(values_: object) -> object:
 
 
 def merge(values: object, other: object) -> object:
-    merged = agl_dict({})
-    for source in (values, other):
-        for key, value in source.items():
-            merged[key] = value
-    return merged
+    return agl_dict(chain(values.items(), other.items()))
 
 
 def merge_in_place(values: object, other: object) -> None:
@@ -80,18 +84,11 @@ def merge_in_place(values: object, other: object) -> None:
 
 
 def map_values(values: object, function: object) -> object:
-    result = agl_dict({})
-    for key, value in values.items():
-        result[key] = function(value)
-    return result
+    return agl_dict((key, function(value)) for key, value in values.items())
 
 
 def select(values: object, predicate: object) -> object:
-    result = agl_dict({})
-    for key, value in values.items():
-        if predicate(key, value):
-            result[key] = value
-    return result
+    return agl_dict((key, value) for key, value in values.items() if predicate(key, value))
 
 
 def select_in_place(values: object, predicate: object) -> None:

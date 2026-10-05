@@ -28,6 +28,7 @@ from agm.agl.scope.symbols import (
     TypeOwner,
     TypeSelection,
     TypeTarget,
+    declaration_qname,
     dedupe_constructor_candidates,
     passes_parameters,
 )
@@ -139,17 +140,6 @@ class AliasSelection(NamedTuple):
     target: QName | None
     stands_for: TypeExpr
     through: tuple[QName, NameT | AppliedT] | None
-
-
-class AliasChain(NamedTuple):
-    """What a type path's alias chain (:meth:`TypeOwnerIndex.chain`) reads.
-
-    ``identity`` is the declaration it names (:meth:`TypeOwnerIndex.identity`);
-    ``cyclic`` whether it leads back to the path.
-    """
-
-    identity: QName
-    cyclic: bool
 
 
 class TypeOwnerIndex:
@@ -412,23 +402,10 @@ class TypeOwnerIndex:
 
     def cyclic(self, qname: QName) -> bool:
         """Whether alias *qname*'s chain (:meth:`_alias_chain`) leads back to *qname*."""
-        return self.chain(qname).cyclic
-
-    def chain(self, qname: QName) -> AliasChain:
-        """Return what type path *qname*'s alias chain (:meth:`_alias_chain`) reads, in one walk."""
-        named, named_found = qname, False
         last = None
-        for current, last in self._alias_chain(qname):
-            if named_found:
-                continue
-            if last.alias is None:
-                named = current
-            else:
-                named, named_found = current, not last.renames
-        return AliasChain(
-            named,
-            last is not None and last.target is not None and last.target.qname == qname,
-        )
+        for _current, last in self._alias_chain(qname):
+            pass
+        return last is not None and last.target is not None and last.target.qname == qname
 
     def identity(self, qname: QName) -> QName:
         """Return the declaration type path *qname* names: a renaming alias's is its target's.
@@ -437,7 +414,12 @@ class TypeOwnerIndex:
         (:attr:`TypeOwner.renames`) is another name for it, along the chain
         (:meth:`_alias_chain`); any other alias is a type of its own.
         """
-        return self.chain(qname).identity
+        named = qname
+        for current, owner in self._alias_chain(qname):
+            named = current
+            if owner.alias is not None and not owner.renames:
+                break
+        return named
 
     def denotation(self, qname: QName) -> Denoted | None:
         """The type the alias *qname* names (:meth:`identity`) denotes, unless renaming its target.
@@ -758,20 +740,14 @@ class TypeOwnerIndex:
         selects instead).
         """
         if isinstance(selection, DeclarationSelection):
-            module_id, path, name = selection.key
-            qname = (module_id, _atom((*path, name)))
+            qname = declaration_qname(selection.key)
             return qname if self.is_declared(qname) else None
         member = self.owner_member(selection.owner, selection.member)
-        return (
-            None
-            if member is None
-            else (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
-        )
+        return None if member is None else member.qname
 
     def owner_member(self, owner: DeclarationKey, name: str) -> ConstructorRef | None:
         """Return the member type *owner* selects as *name*: an alias's is its target's member."""
-        module_id, path, owner_name = owner
-        table = self.owner((module_id, _atom((*path, owner_name))))
+        table = self.owner(declaration_qname(owner))
         return None if table is None else table.members.get(name)
 
     def _enum_members(

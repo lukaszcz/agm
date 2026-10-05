@@ -39,7 +39,6 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     FieldDecode,
     RecordDecode,
-    RefDecode,
     ScalarDecode,
     ScalarKind,
     VariantDecode,
@@ -47,13 +46,12 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.runtime.convert import (
-    ResolvedDecode,
     StrictJsonParseError,
     decode_value,
     parse_json_strict,
-    resolve_decode_ref,
+    resolve_decode,
 )
-from agm.agl.runtime.serialize import JsonShaped, dumps_exact
+from agm.agl.runtime.serialize import JsonShaped, stringified_key_text
 from agm.agl.semantics.arguments import (
     ArgumentBindingError,
     ArgumentBindingErrorKind,
@@ -104,13 +102,6 @@ class ValueDecodeError(ValueError):
         super().__init__(text)
 
 
-def _resolve(schema: DecodeSchema, defs: DefsMap) -> ResolvedDecode:
-    """Resolve a possible ``RefDecode`` root to its non-reference body."""
-    if not isinstance(schema, RefDecode):
-        return schema
-    return resolve_decode_ref(schema.key, defs)
-
-
 def _node_kind(node: ValueNode) -> str:
     """A short, human-facing description of *node*'s own shape, for error messages."""
     match node:
@@ -150,7 +141,7 @@ def value_node_to_json(
 
     :raises ValueDecodeError: on any type/shape mismatch.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     match resolved:
         case ScalarDecode(kind=kind):
             return _convert_scalar(node, kind)
@@ -239,22 +230,13 @@ def _dict_wire(key_form: DictKeyForm, pairs: Iterable[tuple[object, object, int 
         case DictKeyForm.OBJECT_TEXT:
             return _object_of((cast(str, key), value, at) for key, value, at in pairs)
         case DictKeyForm.OBJECT_STRINGIFIED:
-            return _object_of((_stringified_wire_key(key), value, at) for key, value, at in pairs)
+            return _object_of(
+                (stringified_key_text(cast(JsonShaped, key)), value, at) for key, value, at in pairs
+            )
         case DictKeyForm.ENTRIES:
             return [{"key": key, "value": value} for key, value, _ in pairs]
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
-
-
-def _stringified_wire_key(key: object) -> str:
-    """Return the object-key text of a converted stringified key.
-
-    An enum key is already its tag; a scalar key is its JSON scalar text,
-    exactly as ``as json`` writes it.
-    """
-    if isinstance(key, str):
-        return key
-    return dumps_exact(cast(JsonShaped, key), indent=None)
 
 
 def _object_of(pairs: Iterable[tuple[str, object, int | None]]) -> dict[str, object]:
@@ -428,7 +410,7 @@ def _some_variant(schema: DecodeSchema, defs: DefsMap) -> VariantDecode:
     pass anything else -- so its shape is looked up directly rather than
     re-checked here.
     """
-    resolved = cast(EnumDecode, _resolve(schema, defs))
+    resolved = cast(EnumDecode, resolve_decode(schema, defs))
     return next(v for v in resolved.variants if v.name == "Some")
 
 
@@ -466,7 +448,7 @@ def host_text_to_json(
     fits nowhere is returned as parsed, for the caller's own decode to reject
     with its precise message.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.TEXT:
         return text
     if isinstance(resolved, EnumDecode) and resolved.host_agent:
@@ -512,7 +494,7 @@ def host_param_text_to_json(text: str, schema: DecodeSchema, defs: DefsMap = _EM
     :func:`host_text_to_json` with the ``Agent`` command fallback, plus one
     reading of its own: a plain enum also takes a member's bare JSON name.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if (
         isinstance(resolved, EnumDecode)
         and is_plain_enum(resolved)
@@ -530,7 +512,7 @@ def host_data_to_json(value: object, schema: DecodeSchema, defs: DefsMap = _EMPT
     (:func:`host_param_text_to_json`). A ``json`` slot keeps its data as is,
     and data matching no slot is returned unchanged for validation to reject.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.JSON:
         return value
     if isinstance(value, str):

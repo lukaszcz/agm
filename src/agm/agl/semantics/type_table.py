@@ -77,7 +77,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
-from agm.agl.constraints import ConstraintBounds, ConstraintKind, close_constraints
+from agm.agl.constraints import ConstraintBounds, ConstraintKind
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
@@ -245,6 +245,11 @@ class LeafPolicy:
     dict_key_ok: Callable[[Type, "TypeTable", frozenset[str]], bool] | None
 
 
+#: ``Hashable`` with its implication (``Eq``) already applied.
+_HASHABLE_CLOSED = frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})
+_NO_BOUNDS: ConstraintBounds = MappingProxyType({})
+
+
 def dict_key_is_hashable(
     key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
 ) -> bool:
@@ -252,7 +257,7 @@ def dict_key_is_hashable(
 
     *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`.
     """
-    bounds = {p: frozenset({ConstraintKind.HASHABLE}) for p in assume_ok}
+    bounds = {p: _HASHABLE_CLOSED for p in assume_ok} if assume_ok else _NO_BOUNDS
     return satisfies(key, ConstraintKind.HASHABLE, table, bounds)
 
 
@@ -309,6 +314,11 @@ LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
 )
 
 
+_KIND_PROPERTIES: Mapping[ConstraintKind, DataProperty] = MappingProxyType(
+    {ConstraintKind.EQ: DataProperty.EQ, ConstraintKind.HASHABLE: DataProperty.HASHABLE}
+)
+
+
 def _constraint_kind_to_data_property(kind: ConstraintKind) -> DataProperty:
     """Map a language-level constraint kind onto its declaration-flags property.
 
@@ -316,10 +326,7 @@ def _constraint_kind_to_data_property(kind: ConstraintKind) -> DataProperty:
     a :class:`DataProperty`; ``JSON_CONVERTIBLE`` and ``EXTERN_KEYABLE``
     have no language-level constraint spelling.
     """
-    return {
-        ConstraintKind.EQ: DataProperty.EQ,
-        ConstraintKind.HASHABLE: DataProperty.HASHABLE,
-    }[kind]
+    return _KIND_PROPERTIES[kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,6 +634,8 @@ class TypeTable:
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
         # cached and invalidated the same way as ``_declaration_flags_cache``.
         self._finite_closure: FiniteClosure | None = None
+        # Whole-table relevant type parameters, shared by both fixpoints.
+        self._relevant_params: Mapping[DeclId, frozenset[str]] | None = None
         # Exception declaration id -> its direct children's ids, built in one
         # pass over ``_defs``. Whole-table, rebuilt on any registration
         # change; feeds :meth:`exception_descendants`.
@@ -703,6 +712,7 @@ class TypeTable:
             self._declaration_flags_cache = {}
             self._member_enum_owners = None
             self._finite_closure = None
+            self._relevant_params = None
             self._exception_children = None
             return
         if self_validation_enabled() and existing != typedef:
@@ -1067,6 +1077,7 @@ class TypeTable:
         self._declaration_flags_cache = {}
         self._member_enum_owners = None
         self._finite_closure = None
+        self._relevant_params = None
         self._exception_children = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -1661,6 +1672,7 @@ class TypeTable:
         if (
             result
             and kind is ConstraintKind.HASHABLE
+            and handle not in self._hashable_proofs
             and handle.decl_id in self._defs
             and not contains_type_var(handle)
             and not contains_inference_var(handle)
@@ -1742,7 +1754,7 @@ class TypeTable:
         if isinstance(handle, ExceptionType):
             return True
         typedef = self._defs[handle.decl_id]
-        relevant = flags.relevant_params[handle.decl_id]
+        relevant = self.relevant_params_by_decl()[handle.decl_id]
         if not all(
             structural(arg)
             for pname, arg in zip(typedef.type_params, handle.type_args)
@@ -1797,11 +1809,9 @@ class TypeTable:
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
+        relevant_params = self.relevant_params_by_decl()
         result_id = bfs_first(
-            (
-                ref.decl_id
-                for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
-            ),
+            (ref.decl_id for ref in nominal_references_for_schema(t, self._defs, relevant_params)),
             lambda decl_id: caps.successors[decl_id],
             lambda decl_id: decl_id if decl_id in caps.infinite else None,
             key=self._decl_id_sort_key,
@@ -1816,7 +1826,7 @@ class TypeTable:
         positions as the same node. Relevant arguments are canonicalized
         recursively so phantom differences nested inside them are erased too.
         """
-        return self._canonical_schema_type(t, self._finite_closure_result().relevant_params)
+        return self._canonical_schema_type(t, self.relevant_params_by_decl())
 
     def schema_relevant_params(self, decl_id: DeclId) -> frozenset[str]:
         """Return the subset of *decl_id*'s own type parameters that affect its schema.
@@ -1827,7 +1837,7 @@ class TypeTable:
         an encode-plan template only takes one parameter per relevant name (see
         ``type_schema.build_encode_plan``'s growing-template builder).
         """
-        return self._finite_closure_result().relevant_params[decl_id]
+        return self.relevant_params_by_decl()[decl_id]
 
     def _canonical_schema_type(
         self, t: Type, relevant_params: Mapping[DeclId, frozenset[str]]
@@ -1891,12 +1901,10 @@ class TypeTable:
 
     def schema_relevant_type_args(self, t: RecordType | EnumType) -> tuple[Type, ...]:
         """Return the canonical type arguments that should appear in schema identity labels."""
-        caps = self._finite_closure_result()
-        canonical = cast(
-            "RecordType | EnumType", self._canonical_schema_type(t, caps.relevant_params)
-        )
+        relevant_params = self.relevant_params_by_decl()
+        canonical = cast("RecordType | EnumType", self._canonical_schema_type(t, relevant_params))
         typedef = self._defs[t.decl_id]
-        relevant = caps.relevant_params[t.decl_id]
+        relevant = relevant_params[t.decl_id]
         return tuple(
             arg for pname, arg in zip(typedef.type_params, canonical.type_args) if pname in relevant
         )
@@ -1907,10 +1915,10 @@ class TypeTable:
         """Return nominal references that can affect *t*'s finite schema."""
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
-        caps = self._finite_closure_result()
+        relevant_params = self.relevant_params_by_decl()
         result: list[RecordType | EnumType | ExceptionType] = []
-        for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params):
-            canonical = self._canonical_schema_type(ref, caps.relevant_params)
+        for ref in nominal_references_for_schema(t, self._defs, relevant_params):
+            canonical = self._canonical_schema_type(ref, relevant_params)
             result.append(cast(RecordType | EnumType | ExceptionType, canonical))
         return tuple(result)
 
@@ -2210,6 +2218,22 @@ class TypeTable:
         """Resolve *decl_id* against this table for :func:`decl_id_sort_key`."""
         return decl_id_sort_key(self._defs, decl_id)
 
+    def relevant_params_by_decl(self) -> Mapping[DeclId, frozenset[str]]:
+        """Return each declaration's own type parameters that can reach a field.
+
+        Phantom parameters are absent.
+        """
+        if self._relevant_params is None:
+            from agm.agl.semantics.analyses import compute_relevant_params
+
+            self._relevant_params = {
+                decl_id: frozenset(params)
+                for decl_id, params in compute_relevant_params(
+                    self._defs, through_containers=True
+                ).items()
+            }
+        return self._relevant_params
+
     def _finite_closure_result(self) -> "FiniteClosure":
         if self._finite_closure is None:
             from agm.agl.semantics.analyses import compute_finite_closure
@@ -2367,11 +2391,12 @@ def satisfies(
     argument — satisfy *kind* when ``bounds`` is ``None`` (open-world mode:
     the bound is deferred to wherever the type is actually instantiated),
     and otherwise only a type variable does, and only when ``bounds`` states
-    *kind* (or, for ``Eq``, ``Hashable``, which implies it) for its name.
+    *kind* for its name (``bounds`` are implication-closed, see
+    :func:`~agm.agl.constraints.close_constraints`).
     """
     match t:
         case TypeVarType():
-            return bounds is None or kind in close_constraints(bounds.get(t.name, frozenset()))
+            return bounds is None or kind in bounds.get(t.name, frozenset())
         case BottomType() | InferenceVarType():
             return bounds is None
         case FunctionType() | UnitType():

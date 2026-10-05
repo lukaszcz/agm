@@ -10,6 +10,7 @@ from agm.agl.scope.imports import (
     ModuleContribution,
     NameAtom,
     QName,
+    RouteSurface,
     SingleTarget,
     build_import_env,
     qualifier_member_decls,
@@ -135,16 +136,22 @@ def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> N
                 {"shared": qname},
                 False,
                 frozenset({"Facade"}),
-                alias_members={"Facade": {"shared": qname}},
-                alias_member_decls={"Facade": {"shared": frozenset()}},
+                routes={
+                    "Facade": RouteSurface(
+                        members={"shared": qname}, member_decls={"shared": frozenset()}
+                    )
+                },
             ),
             right: ModuleContribution(
                 right,
                 {"shared": qname},
                 False,
                 frozenset({"Facade"}),
-                alias_members={"Facade": {"shared": qname}},
-                alias_member_decls={"Facade": {"shared": frozenset()}},
+                routes={
+                    "Facade": RouteSurface(
+                        members={"shared": qname}, member_decls={"shared": frozenset()}
+                    )
+                },
             ),
         },
         unqualified={},

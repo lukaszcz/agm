@@ -601,9 +601,8 @@ class _Reaching:
 def _is_beneath_any(qname: QName, removed: Collection[QName]) -> bool:
     """Whether *qname* is one of *removed* or lies beneath one."""
     module, atom = qname
-    path = _path(atom)
-    return any(
-        other[0] == module and path[: len(_path(other[1]))] == _path(other[1]) for other in removed
+    return beneath(
+        _path(atom), (_path(other) for other_module, other in removed if other_module == module)
     )
 
 
@@ -776,7 +775,7 @@ def _compute_reexport_additions(
 
     def beneath_any(origin: QName, removed: Collection[QName]) -> bool:
         """Whether *origin*'s declaration is or lies beneath one of *removed*."""
-        return _is_beneath_any(denotations.identity(origin), removed)
+        return bool(removed) and _is_beneath_any(denotations.identity(origin), removed)
 
     def withheld_through(prefix: PathAtom) -> frozenset[QName]:
         """What the target withholds beneath the exported alias a prefix of *prefix* spells."""

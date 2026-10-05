@@ -14,6 +14,7 @@ from agm.agent.session import (
     SessionService,
 )
 from agm.agent.session.cli_adapters import AgentCommandSessionBackend, open_cli_session
+from agm.agent.session.protocol import BackendSettings
 from agm.agent.spec import AgentCommand, SessionTransport
 from agm.core.process import CapturedOutput, ProcessCaptureResult
 from agm.util.interp import InterpolationError
@@ -22,7 +23,9 @@ from tests._agl_helpers import unavailable_sandbox_context
 
 def _open(command: str, *, name: str = "") -> AgentCommandSessionBackend:
     return AgentCommandSessionBackend.open(
-        AgentCommand(command), name=name, env={}, get_sandbox_context=unavailable_sandbox_context
+        AgentCommand(command),
+        BackendSettings(env={}, get_sandbox_context=unavailable_sandbox_context),
+        name=name,
     )
 
 
@@ -205,8 +208,7 @@ def test_ask_runs_the_process_under_the_environment_fixed_at_open(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     backend = AgentCommandSessionBackend.open(
         AgentCommand("runner --session %{SESSION_ID}"),
-        get_sandbox_context=unavailable_sandbox_context,
-        env={"ONLY": "this"},
+        BackendSettings(get_sandbox_context=unavailable_sandbox_context, env={"ONLY": "this"}),
     )
 
     backend.ask(SessionAskRequest(prompt="question"))

@@ -325,7 +325,9 @@ unhashable Python object (a list, dict, live record view) or one with no AgL
 key form raises `TypeError`. A missing key raises `KeyError`.
 
 Keys a companion writes must have the dict's key type; like written values,
-they are not checked. `agl.dict({...})` builds a dict from any such keys.
+they are not checked. `agl.dict` builds a dict from any such keys, given as
+a Python `dict` or an iterable of `(key, value)` pairs; a later pair replaces
+an earlier key that is AgL-equal.
 
 ## Callbacks
 

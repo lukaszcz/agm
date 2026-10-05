@@ -55,17 +55,6 @@ def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     return home / ".agm"
 
 
-def _unique_paths(paths: list[Path]) -> list[Path]:
-    unique_paths: list[Path] = []
-    seen: set[Path] = set()
-    for path in paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        unique_paths.append(path)
-    return unique_paths
-
-
 def agm_path_candidates(
     *, home: Path, relative_path: Path, env: Mapping[str, str] | None = None
 ) -> list[Path]:
@@ -75,4 +64,4 @@ def agm_path_candidates(
     if install_prefix is not None:
         candidates.append(install_prefix / ".agm" / relative_path)
     candidates.append(agm_home_dir(home=home, env=env) / relative_path)
-    return _unique_paths(candidates)
+    return list({path: None for path in candidates})

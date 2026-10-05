@@ -463,9 +463,14 @@ class ConstructorRef:
         )
 
     @property
+    def key(self) -> DeclarationKey:
+        """This reference's declaration identity."""
+        return self.owner_module_id, self.owner_path, self.owner_name
+
+    @property
     def qname(self) -> QName:
         """This reference's declaration path, as a :data:`QName`."""
-        return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name))
+        return declaration_qname(self.key)
 
     @property
     def selected_qname(self) -> QName:
@@ -858,6 +863,13 @@ class ScopeNode:
             scope = scope.parent
         return None
 
+    def enclosing(self) -> Iterator["ScopeNode"]:
+        """Yield this layer and every layer enclosing it, innermost first."""
+        layer: ScopeNode | None = self
+        while layer is not None:
+            yield layer
+            layer = layer.parent
+
     def entry_copy(self) -> "ScopeNode":
         """Copy this layer into a REPL entry's own image.
 
@@ -908,12 +920,7 @@ def anchored_layers(
     scope_nodes: Mapping[ScopePath, ScopeNode], step: ScopePath, path: ScopePath
 ) -> Iterator[tuple[ScopeNode, BareAtom]]:
     """Yield each layer anchored at or above *step*, outermost first, with *path* relative to it."""
-    layer: ScopeNode | None = scope_nodes[step]
-    chain: list[ScopeNode] = []
-    while layer is not None:
-        chain.append(layer)
-        layer = layer.parent
-    for anchored in reversed(chain):
+    for anchored in reversed(tuple(scope_nodes[step].enclosing())):
         yield anchored, to_bare_atom(path[len(anchored.scope_path) :])
 
 

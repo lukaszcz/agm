@@ -621,3 +621,25 @@ def test_dict_view_writes_decide_key_identity_by_agl_equality() -> None:
 
     assert len(value) == 1
     assert value.lookup(IntValue(1)) == TextValue("b")
+
+
+def test_dict_view_items_values_and_pop_use_agl_equality() -> None:
+    view = AglDictView(_token_dict((IntValue(1), TextValue("a"))), _NO_DESCRIPTORS)
+    view[Decimal("2")] = "b"
+
+    assert list(view.items()) == [(1, "a"), (Decimal("2"), "b")]
+    assert list(view.values()) == ["a", "b"]
+    assert view.pop(Decimal("2.0")) == "b"
+    assert view.pop(Decimal("2"), "gone") == "gone"
+    assert view.pop(1, None) == "a"
+    with pytest.raises(KeyError):
+        view.pop(1)
+    assert len(view) == 0
+
+
+def test_agl_dict_builds_from_pairs_merging_agl_equal_keys() -> None:
+    from agm.agl.runtime.externs import _dict
+
+    assert dict(_dict({"a": 1}).items()) == {"a": 1}
+    built = _dict([(1, "x"), (Decimal("1"), "y"), (True, "z"), (1, "w")])
+    assert list(built.items()) == [(1, "w"), (Decimal("1"), "y"), (True, "z")]

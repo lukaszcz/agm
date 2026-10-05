@@ -3171,10 +3171,9 @@ class TestSatisfiesEq:
         bounds = {"T": frozenset({ConstraintKind.EQ})}
         assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
 
-    def test_type_variable_bounded_hashable_satisfies_eq(self) -> None:
-        # Hashable implies Eq.
+    def test_type_variable_with_closed_hashable_bound_satisfies_eq(self) -> None:
         table = TypeTable()
-        bounds = {"T": frozenset({ConstraintKind.HASHABLE})}
+        bounds = {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}
         assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
 
     def test_type_variable_bound_only_applies_to_its_own_name(self) -> None:
@@ -3825,7 +3824,7 @@ class TestHashableImpliesEq:
             (InferenceVarType(), {}),
             (TypeVarType("T"), {}),
             (TypeVarType("T"), {"T": frozenset({ConstraintKind.EQ})}),
-            (TypeVarType("T"), {"T": frozenset({ConstraintKind.HASHABLE})}),
+            (TypeVarType("T"), {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}),
             (RecordType(name="Point", module_id=ENTRY_ID, decl_id=701011), {}),
             (RecordType(name="Counter", module_id=ENTRY_ID, decl_id=701012), {}),
             (ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=701013), {}),
@@ -3846,7 +3845,7 @@ class TestHashableImpliesEq:
                 RecordType(
                     name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=701014
                 ),
-                {"T": frozenset({ConstraintKind.HASHABLE})},
+                {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})},
             ),
             (
                 RecordType(

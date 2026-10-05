@@ -810,7 +810,7 @@ def test_sandboxed_prepared_run_wraps_a_non_file_delivery_argv(
         assert argv is not None
         srt_index = argv.index("srt")
         tail = argv[srt_index + 4 :]
-        assert tail[0:2] == ["codex", "exec"]
+        assert tail[0:3] == ["codex", "--no-daemon", "exec"]
         assert "--dangerously-bypass-approvals-and-sandbox" in tail
         assert tail[-1] == "-"
         assert not any(part.startswith("@") for part in tail)

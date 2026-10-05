@@ -12,6 +12,8 @@ SRT joins command arguments into a shell string, so its backend quotes the prepa
 
 Interactive agent chats request the PTY relay through the shared runner; `ask` and `exec` use captured streams. All AgL sandbox consumers share the host's lazy sandbox context.
 
+Shared preparation disables Codex's host daemon for sandboxed executable argv, keeping agent execution within the sandbox across CLI runs, agent calls, sessions, and chats.
+
 ## Backends
 
 `backend.py` defines the `SandboxBackend` protocol (availability, settings resolution, argv wrapping, command formatting, env adjustment) and a `default_backend()` registry seam for future methods. `srt.py::SrtBackend` is the shipped implementation, delegating isolation to the external `srt` tool: settings resolution/merging, git write-access patching, bwrap-artifact cleanup tracking, and a Node fetch-proxy env default.

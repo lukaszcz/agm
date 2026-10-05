@@ -1629,3 +1629,34 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
     assert child._permission_mode == PermissionMode.UNRESTRICTED
     assert child._sandbox == SandboxLimits()
     assert child._env == {"FIXED": "at-open"}
+
+
+def test_sandboxed_codex_disables_the_daemon_on_creation_resume_and_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    created = CaptureOutcome(
+        '{"type":"thread.started","thread_id":"first"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}'
+    )
+    transport = CaptureTransport([created, CaptureOutcome("resumed"), created])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend(get_sandbox_context=session_sandbox_context(home))
+    _open(
+        backend,
+        AgentCodex("m", "t"),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+    )
+
+    assert backend.ask(SessionAskRequest("first")).content == "answer"
+    assert backend.ask(SessionAskRequest("second")).content == "resumed"
+    backend.reset()
+    assert backend.ask(SessionAskRequest("after reset")).content == "answer"
+
+    for argv, _stdin in transport.calls:
+        _sandbox_wrapped_argv_prefix(argv, home)
+        assert argv[argv.index("codex") + 1] == "--no-daemon"
+        assert argv.count("--no-daemon") == 1

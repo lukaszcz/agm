@@ -1,0 +1,48 @@
+# Enum members are injected bare by every contribution that reaches their
+# enum: a renamed root import tail, a `use` item, a region import and the
+# module's own enum. A hidden member stays reachable through the route.
+import colors::{Color as Hue}
+import shapes
+import modes
+import modes::* hiding Mode::Dark
+use shapes::Shape
+
+enum Size
+  | Small
+  | Large
+
+scope Inner
+  import colors::Color
+
+  def label(c: Color) -> text =
+    case c of
+      | Red => "inner-red"
+      | _ => "inner-other"
+end Inner
+
+def hue-name(h: Hue) -> text =
+  case h of
+    | Red => "red"
+    | Blue => "blue"
+
+def shape-name(s: Shape) -> text =
+  case s of
+    | Circle => "circle"
+    | Square => "square"
+
+def size-name(s: Size) -> text =
+  case s of
+    | Small => "small"
+    | Large => "large"
+
+program def main(pick: int) -> unit =
+  let h: Hue = if pick == 0 => Red else => Blue
+  let s: Shape = if pick == 0 => Circle else => Square
+  let z: Size = if pick == 0 => Small else => Large
+  let m: modes::Mode = if pick == 0 => Light else => modes::Mode::Dark
+  print(hue-name(h))
+  print(shape-name(s))
+  print(size-name(z))
+  print(Inner::label(if pick == 0 => Red else => Blue))
+  print("%{h is Red} %{s is Circle} %{z is Small} %{m is Light}")
+  print(if m is modes::Mode::Dark => "dark" else => "light")

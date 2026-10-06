@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "first_members",
+      "module_roots": ["program_modules/modules/enum_member_injection_surfaces"],
+      "params": {"pick": 0},
+      "expect": {"stdout": "red\ncircle\nsmall\ninner-red\ntrue true true true\nlight\n"}
+    },
+    {
+      "name": "second_members",
+      "module_roots": ["program_modules/modules/enum_member_injection_surfaces"],
+      "params": {"pick": 1},
+      "expect": {"stdout": "blue\nsquare\nlarge\ninner-other\nfalse false false false\ndark\n"}
+    }
+  ]
+}

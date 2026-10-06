@@ -1,0 +1,5 @@
+enum Opt[T]
+  | Nothing
+  | Just(value: T)
+
+type IntOpt = Opt[int]

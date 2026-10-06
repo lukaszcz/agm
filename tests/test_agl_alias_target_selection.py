@@ -12,20 +12,32 @@ spells that member's full path.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import pytest
 
-from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
+from agm.agl.diagnostics import HiddenMemberError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousQualificationError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
+from tests.agl.module_graph import resolve_entry
 from tests.agl.qualifier_support import (
     Part,
     Phase,
+    Probe,
+    Scenario,
     accepted,
     assert_repl_verdicts,
+    assert_scenario,
     assert_verdicts,
     info,
     probe_table,
     rejected,
+    scenario_params,
     verdict_parts,
 )
 
@@ -344,3 +356,305 @@ class TestAliasMembersBesideSameSpelledImports:
             ),
             part=part,
         )
+
+
+_DECOY = 'scope S\n  record T\n    x: int\n  def T::f() -> text = ""\nend S\n'
+_INNER = (
+    "  scope S\n    record T\n      x: int\n    def T::f() -> int = 1\n  end S\n  type A = S::T\n"
+)
+_REGION = f"scope R\n{_INNER}end R\n"
+_NESTED_LIB = f"{_DECOY}\n{_REGION}"
+"""A root ``S::T`` beside ``R``'s ``S::T``, which ``R``'s alias ``A`` names as ``S::T``."""
+
+
+def _reads(prefix: str, tag: str) -> dict[str, Probe]:
+    """What ``prefix`` then ``R::A`` reads: ``R``'s ``S::T``, never the root's."""
+    return {
+        f"{tag}-static": accepted(f"{prefix}R::A::f()", "int"),
+        f"{tag}-constructor": accepted(f"{prefix}R::A(x = 1).x", "int"),
+    }
+
+
+_SCENARIOS: dict[str, Scenario] = {
+    f"alias-in-a-region-reached-through-{name}": Scenario(
+        modules={"lib": _NESTED_LIB}, header=(header,), probes=_reads(prefix, "read")
+    )
+    for name, (header, prefix) in {
+        "a-route": ("import lib", "lib::"),
+        "an-anchored-route": ("import lib", "/lib::"),
+        "a-wildcard": ("import lib::*", ""),
+        "an-item": ("import lib::{R}", ""),
+    }.items()
+} | {
+    "alias-in-a-region-reached-through-the-current-module": Scenario(
+        header=(_DECOY, _REGION), probes=_reads("::", "anchored") | _reads("", "plain")
+    ),
+    "alias-reached-through-region-steps": Scenario(
+        header=(_DECOY, f"scope Q\n{_INNER}  scope W\n    def p() = A::f()\n  end W\nend Q"),
+        probes={
+            "from-the-region": accepted("scope Q\n  def p() = A::f()\nend Q\n\nQ::p()", "int"),
+            "from-a-nested-region": accepted("Q::W::p()", "int"),
+            "qualified": accepted("Q::A::f()", "int"),
+            "anchored": accepted("::Q::A::f()", "int"),
+        },
+    ),
+}
+
+
+_TOP = "record Top\n  x: int\ndef Top::f() -> int = 1\n"
+_ROUTED = {
+    "lib": _TOP,
+    "dec/lib": 'record Top\n  x: int\ndef Top::f() -> text = ""\n',
+    "rt": "import lib\ntype A = lib::Top\n\nscope P\n  type B = lib::Top\nend P\n",
+}
+
+_SCENARIOS |= {
+    "alias-led-by-a-module-route": Scenario(
+        modules={"lib": _TOP},
+        header=("import lib",),
+        probes={
+            "own": accepted("type A = lib::Top\nA::f()", "int"),
+            "own-in-a-region": accepted("scope P\n  type B = lib::Top\nend P\n\nP::B::f()", "int"),
+        },
+    ),
+    "alias-led-by-a-module-route-reads-it-where-declared": Scenario(
+        modules=_ROUTED,
+        header=("import rt", "import dec/lib"),
+        probes={
+            "route": accepted("rt::A::f()", "int"),
+            "anchored-route": accepted("/rt::A::f()", "int"),
+            "region": accepted("rt::P::B::f()", "int"),
+            "constructor": accepted("rt::A(x = 1).x", "int"),
+            "decoy": accepted("lib::Top::f()", "text"),
+        },
+    ),
+    "alias-led-by-a-module-route-reached-through-an-import": Scenario(
+        modules=_ROUTED,
+        header=("import rt::*", "import dec/lib"),
+        probes={"wildcard": accepted("A::f()", "int"), "region": accepted("P::B::f()", "int")},
+    ),
+}
+
+_BOTH = {
+    "geo": "record Pt\n  x: int\ndef Pt::f() -> int = 1\n",
+    "al": (
+        'scope geo\n  record Pt\n    x: int\n  def Pt::f() -> text = ""\n'
+        "end geo\n\ntype A = geo::Pt\n"
+    ),
+}
+"""A module ``geo`` imported as ``geo`` and a scope ``geo``, which ``A``'s target names."""
+
+_SCENARIOS |= {
+    "alias-whose-head-is-both-a-route-and-a-scope": Scenario(
+        modules=_BOTH,
+        header=("import geo\nimport al", "import al::*"),
+        probes={
+            "own-scope-wins-in-the-module": accepted("al::A::f()", "text"),
+            "through-an-import": accepted("A::f()", "text"),
+        },
+    ),
+    "own-alias-whose-head-is-both-a-route-and-a-scope": Scenario(
+        modules={"geo": _BOTH["geo"]},
+        header=("import geo", _BOTH["al"]),
+        probes={
+            "alias": accepted("A::f()", "text"),
+            "own-scope-beats-the-route": accepted("geo::Pt::f()", "text"),
+            "the-scope": accepted('def Pt::f() -> text = ""\nPt::f()', "text"),
+        },
+    ),
+}
+
+
+_ROUTE_BEHIND_SCOPE = {
+    "geo": _BOTH["geo"],
+    "al": "import geo\n\nscope geo\n  def other() -> int = 0\nend geo\n\ntype A = geo::Pt\n",
+}
+"""``A``'s target head ``geo`` is a route and a scope, which holds no ``Pt``."""
+
+_SCENARIOS |= {
+    "alias-whose-head-is-a-route-and-a-scope-holding-nothing-of-the-target": Scenario(
+        modules=_ROUTE_BEHIND_SCOPE,
+        header=(
+            'import al\n\nscope geo\n  record Pt\n    x: int\n  def Pt::f() -> text = ""\nend geo',
+        ),
+        probes={
+            "route": accepted("al::A::f()", "int"),
+            "constructor": accepted("al::A(x = 1).x", "int"),
+            "entry-scope": accepted("geo::Pt::f()", "text"),
+        },
+    ),
+    "own-alias-whose-head-is-a-route-and-a-scope-holding-nothing-of-the-target": Scenario(
+        modules={"geo": _BOTH["geo"]},
+        header=("import geo", "scope geo\n  def other() -> int = 0\nend geo", "type A = geo::Pt"),
+        probes={
+            "alias": accepted("A::f()", "int"),
+            "scope-member": accepted("geo::other()", "int"),
+            "route-member": accepted("geo::Pt::f()", "int"),
+        },
+    ),
+}
+
+_REEXPORTS = {
+    "m": "record T\n  x: int\ndef T::f() -> int = 1\ndef T::g() -> int = 2\ntype A = T\n",
+    "rx": "import m::*\nexport m::{A, T::f}\n",
+    "ry": "import m::*\nexport m::{A}\n",
+}
+"""``m`` declares ``A`` of ``T``; ``rx`` re-exports ``A`` and ``T::f``, ``ry`` only ``A``."""
+
+_SCENARIOS |= {
+    "alias-reexported-is-read-through-a-route-as-far-as-its-module-exports": Scenario(
+        modules=_REEXPORTS,
+        header=("import rx\nimport ry",),
+        probes={
+            "route": accepted("rx::A::f()", "int"),
+            "anchored-route": accepted("/rx::A::f()", "int"),
+            "not-exported": rejected("rx::A::g()", UnknownMemberError, "rx::A::g"),
+            "alias-only": rejected("ry::A::f()", UnknownMemberError, "ry::A::f"),
+            "constructor": accepted("rx::A(x = 1).x", "int"),
+        },
+    ),
+    "alias-reexported-is-read-through-an-import-as-the-importer-reads-its-target": Scenario(
+        modules=_REEXPORTS,
+        header=("import rx::*",),
+        probes={
+            "exported": accepted("A::f()", "int"),
+            "beyond-the-exports": accepted("A::g()", "int"),
+            "type": accepted("fn(a: A) => a.x", "m::T -> int"),
+        },
+    ),
+    "item-beneath-an-alias-imports-that-path": Scenario(
+        modules=_REEXPORTS,
+        header=("import m::{A::f}",),
+        probes={
+            "item": accepted("A::f()", "int"),
+            "other": rejected("A::g()", UnknownQualifierError, "A::g"),
+            "target": rejected("T::f()", UnknownQualifierError, "T::f"),
+        },
+    ),
+    "item-beneath-a-reexported-alias-imports-what-its-module-exports": Scenario(
+        modules=_REEXPORTS,
+        header=("import rx::{A::f}", "import ry::{A}"),
+        probes={
+            "exported": accepted("A::f()", "int"),
+            "alias": accepted("fn(a: A) => a.x", "m::T -> int"),
+        },
+    ),
+    "item-beneath-an-alias-its-module-does-not-export-is-rejected": Scenario(
+        modules=_REEXPORTS,
+        header=("import ry::{A::f}",),
+        probes={"item": rejected("A::f()", UnknownMemberError, "import ry::{A::f}")},
+        legal=frozenset({(2,)}),
+    ),
+}
+
+
+_OWN_SC = "scope Sc\n" + textwrap.indent(f"{_DECOY}\n{_REGION}", "  ") + "end Sc"
+
+_SCENARIOS |= (
+    {
+        f"hidden-{what}-beneath-an-alias-reached-through-a-wildcard": Scenario(
+            modules={"lib": _NESTED_LIB},
+            header=(f"import lib::* hiding {hidden}",),
+            probes={"static": rejected("R::A::f()", HiddenMemberError, "R::A::f")},
+        )
+        for what, hidden in {
+            "target-member": "R::S::T::f",
+            "path": "R::A::f",
+            "target-type": "R::S::T",
+        }.items()
+    }
+    | {
+        "hidden-target-type-beneath-an-alias-hides-its-constructor": Scenario(
+            modules={"lib": _NESTED_LIB},
+            header=("import lib::* hiding R::S::T",),
+            probes={"constructor": rejected("R::A(x = 1).x", HiddenMemberError, "R::A")},
+        ),
+    }
+    | {
+        f"hidden-{what}-beneath-an-alias-reached-through-a-use": Scenario(
+            header=(f"use Sc::* hiding {hidden}", _OWN_SC),
+            legal=frozenset({(3,), (2, 1)}),
+            probes={
+                "use": rejected("R::A::f()", HiddenMemberError, "R::A::f"),
+                "scope": accepted("Sc::R::A::f()", "int"),
+                "anchored": accepted("::Sc::R::A::f()", "int"),
+            },
+        )
+        for what, hidden in {"target-member": "R::S::T::f", "path": "R::A::f"}.items()
+    }
+)
+
+_CYCLIC = {
+    "ca": "import cb::*\ntype Ta = Tb\n",
+    "cb": "import ca::*\ntype Tb = Ta\n",
+    "ra": "import rb\ntype Ta = rb::Tb\n",
+    "rb": "import ra\ntype Tb = ra::Ta\n",
+}
+"""Aliases of each other across modules, which reading beneath either reaches nothing of."""
+
+_SCENARIOS |= {
+    "alias-leading-back-to-itself-in-a-module-is-a-cycle": Scenario(
+        header=("scope P\n  type B = Q::C\nend P\n\nscope Q\n  type C = P::B\nend Q",),
+        probes={
+            "path": rejected("P::B::f()", AglScopeError, "type B = Q::C"),
+            "other-member": rejected("Q::C::f()", AglScopeError, "type B = Q::C"),
+        },
+        legal=frozenset({(2,)}),
+    ),
+}
+
+
+class TestPathBeneathAnAliasIsReadThroughItsTarget:
+    """A path beneath an alias reads its target as written where the alias is declared.
+
+    However the alias was reached -- ``::``, a module route, an import or the
+    enclosing regions -- the target's own spelling decides, not the reader's.
+    """
+
+    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
+    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize(
+        ("header", "probes"),
+        [
+            pytest.param("import ca::*", {"wildcard": "Ta::f()"}, id="wildcard"),
+            pytest.param("import ra", {"route": "ra::Ta::f()"}, id="route"),
+            pytest.param("import ra", {"anchored-route": "/ra::Ta::f()"}, id="anchored-route"),
+        ],
+    )
+    def test_alias_leading_back_to_itself_across_modules_reaches_nothing(
+        self, tmp_path: Path, header: str, probes: dict[str, str]
+    ) -> None:
+        """Aliases of each other across modules end the read at the first revisit."""
+        assert_verdicts(
+            tmp_path,
+            _CYCLIC,
+            (header,),
+            {key: rejected(text, UnknownMemberError, text[:-2]) for key, text in probes.items()},
+            part="file",
+        )
+
+    @pytest.mark.xfail(strict=True, reason="a hidden path beneath an alias reads the decoy root")
+    @pytest.mark.parametrize("hidden", ["R::S::T::f", "R::A::f"])
+    def test_hidden_path_beneath_an_alias_is_not_read_from_the_decoy(
+        self, tmp_path: Path, hidden: str
+    ) -> None:
+        decoy = 'scope S\n  record T\n    x: int\nend S\n\ndef S::T::f() -> text = ""\n'
+        assert_verdicts(
+            tmp_path,
+            {"lib": decoy + _REGION},
+            (f"import lib hiding {hidden}",),
+            {
+                key: rejected(text, HiddenMemberError, text[:-2])
+                for key, text in {
+                    "route": "lib::R::A::f()",
+                    "anchored-route": "/lib::R::A::f()",
+                }.items()
+            },
+            part="file",
+        )
+
+    def test_root_re_entrant_alias_target_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry("type A = A::B\nA::f()")

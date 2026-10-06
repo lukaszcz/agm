@@ -21,6 +21,7 @@ from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousQualificationError,
+    TypeArgumentsError,
     UnknownMemberError,
     UnknownQualifierError,
 )
@@ -35,6 +36,7 @@ from tests.agl.qualifier_support import (
     assert_scenario,
     assert_verdicts,
     info,
+    inline_verdict,
     probe_table,
     rejected,
     scenario_params,
@@ -603,6 +605,149 @@ _SCENARIOS |= {
     ),
 }
 
+_SELF_NESTED = "record T\n  x: int\ndef T::f() -> int = 1\ntype A = T\ntype T::M = A\n"
+"""``A`` is ``T``, and ``T`` owns a member ``M`` that is ``A`` again."""
+_SELF_NESTED_REGION = (
+    "scope P\n  record T\n    x: int\n  def T::f() -> int = 1\n  def T::g() -> int = 2\n"
+    "  type A = T\n  type T::B = A\nend P\n"
+)
+_SIBLING_NESTED = (
+    "record T\n  x: int\nrecord T::N\n  y: int\ndef T::N::f() -> int = 1\ntype A = T\n"
+    "type T::M = A::N\n"
+)
+_PING_PONG = {
+    "pa": "import pb::*\nrecord T\n  x: int\ndef T::f() -> int = 1\ntype A = T\ntype T::Up = U\n",
+    "pb": "import pa::*\ntype U = A\n",
+}
+"""Aliases of each other across modules, one reading the other beneath a different path."""
+
+_SCENARIOS |= {
+    "alias-reentered-beneath-a-different-path-is-not-a-cycle": Scenario(
+        header=(_SELF_NESTED,),
+        probes={
+            "once": accepted("A::M::f()", "int"),
+            "twice": accepted("A::M::M::f()", "int"),
+            "target-twice": accepted("T::M::M::f()", "int"),
+            "anchored": accepted("::A::M::f()", "int"),
+            "constructor": accepted("A::M::M(x = 1).x", "int"),
+        },
+    ),
+    "alias-reentered-beneath-a-different-path-through-a-route": Scenario(
+        modules={"lib": _SELF_NESTED},
+        header=("import lib",),
+        probes={
+            "once": accepted("lib::A::M::f()", "int"),
+            "twice": accepted("lib::A::M::M::f()", "int"),
+        },
+    ),
+    "alias-reentered-beneath-a-different-path-through-a-wildcard": Scenario(
+        modules={"lib": _SELF_NESTED},
+        header=("import lib::*",),
+        probes={"once": accepted("A::M::f()", "int"), "twice": accepted("A::M::M::f()", "int")},
+    ),
+    "alias-reentered-beneath-a-different-path-in-a-region": Scenario(
+        header=(_SELF_NESTED_REGION,),
+        probes={
+            "once": accepted("P::A::B::f()", "int"),
+            "twice": accepted("P::A::B::B::g()", "int"),
+            "anchored": accepted("::P::A::B::f()", "int"),
+        },
+    ),
+    "alias-reentered-beneath-a-different-path-across-modules": Scenario(
+        modules=_PING_PONG,
+        header=("import pa::*",),
+        probes={"once": accepted("A::Up::f()", "int"), "twice": accepted("A::Up::Up::f()", "int")},
+    ),
+    "alias-whose-nested-member-is-another-member-of-its-target": Scenario(
+        header=(_SIBLING_NESTED,),
+        probes={
+            "alias": accepted("A::M::f()", "int"),
+            "anchored": accepted("::A::M::f()", "int"),
+            "target": accepted("T::M::f()", "int"),
+        },
+    ),
+}
+
+_ROOT_METHOD = "record T\n  x: int\ndef T::f() -> int = 1\n"
+_TEXT_SCOPE = 'scope Sc\n\n  scope T\n    def f() -> text = ""\n  end T\nend Sc\n'
+_HIDING_USE = (
+    f"{_ROOT_METHOD}{_TEXT_SCOPE}scope R\n  use Sc::* hiding T::f\n  type A = T\n"
+    "  def direct() -> int = T::f()\nend R\n"
+)
+_APPLIED = (
+    f"{_ROOT_METHOD}{_TEXT_SCOPE}type Id[X] = X\nscope R\n  use Sc::* hiding T::f\n"
+    "  def applied() -> int = Id[T]::f()\nend R\n"
+)
+_HIDING_IMPORT = (
+    f"{_ROOT_METHOD}scope R\n  import m::* hiding T::f\n  type A = T\n"
+    "  def direct() -> int = T::f()\nend R\n"
+)
+
+_SCENARIOS |= {
+    "alias-target-selected-past-a-scope-whose-member-is-hidden": Scenario(
+        header=(_HIDING_USE,),
+        probes={
+            "alias": accepted("R::A::f()", "int"),
+            "direct": accepted("R::direct()", "int"),
+            "anchored": accepted("::R::A::f()", "int"),
+            "constructor": accepted("R::A(x = 1).x", "int"),
+        },
+        legal=frozenset({(2,), (1, 1)}),
+    ),
+    "type-arguments-applied-past-a-scope-whose-member-is-hidden": Scenario(
+        header=(_APPLIED,),
+        probes={"applied": rejected("R::applied()", TypeArgumentsError, "Id[T]")},
+        legal=frozenset({(2,)}),
+    ),
+    "alias-target-selected-past-an-import-whose-member-is-hidden": Scenario(
+        modules={"m": 'scope T\n  def f() -> text = ""\nend T\n'},
+        header=(_HIDING_IMPORT,),
+        probes={
+            "alias": accepted("R::A::f()", "int"),
+            "direct": accepted("R::direct()", "int"),
+            "anchored": accepted("::R::A::f()", "int"),
+        },
+    ),
+}
+
+_ALIAS_PARALLEL = (
+    "scope lib\n\n  scope R\n\n    scope S\n      record T\n        x: int\n"
+    '      def T::f() -> text = ""\n    end S\n  end R\nend lib'
+)
+
+_SCENARIOS |= {
+    "alias-reached-through-a-route-ignores-the-readers-scope-of-that-name": Scenario(
+        modules={"lib": _REGION},
+        header=("import lib", _ALIAS_PARALLEL),
+        probes={
+            "route": accepted("lib::R::A::f()", "int"),
+            "constructor": accepted("lib::R::A(x = 1).x", "int"),
+            "own-scope": accepted("::lib::R::S::T::f()", "text"),
+        },
+    ),
+    "alias-reached-through-a-route-ignores-a-wildcards-scope-of-that-name": Scenario(
+        modules={"lib": _REGION, "o": f"{_ALIAS_PARALLEL}\n"},
+        header=("import lib\nimport o::*",),
+        probes={"route": accepted("lib::R::A::f()", "int")},
+    ),
+}
+
+_HIDDEN_TARGET_MEMBER = "import lib hiding R::S::T::f"
+_SCENARIOS |= {
+    f"hidden-target-member-beneath-an-alias-reached-through-{name}": Scenario(
+        modules={"lib": _NESTED_LIB},
+        header=(_HIDDEN_TARGET_MEMBER, use),
+        probes={"static": rejected(probe, HiddenMemberError, probe[:-2])},
+    )
+    for name, (use, probe) in {
+        "a-use-of-the-region": ("use lib::R", "R::A::f()"),
+        "a-use-of-the-region-as": ("use lib::R as Q", "Q::A::f()"),
+        "a-use-of-the-alias-as": ("use lib::R::A as B", "B::f()"),
+        "a-wildcard-use-of-the-region": ("use lib::R::*", "A::f()"),
+        "a-use-of-the-module-as": ("use lib as L", "L::R::A::f()"),
+    }.items()
+}
+
 
 class TestPathBeneathAnAliasIsReadThroughItsTarget:
     """A path beneath an alias reads its target as written where the alias is declared.
@@ -635,7 +780,6 @@ class TestPathBeneathAnAliasIsReadThroughItsTarget:
             part="file",
         )
 
-    @pytest.mark.xfail(strict=True, reason="a hidden path beneath an alias reads the decoy root")
     @pytest.mark.parametrize("hidden", ["R::S::T::f", "R::A::f"])
     def test_hidden_path_beneath_an_alias_is_not_read_from_the_decoy(
         self, tmp_path: Path, hidden: str
@@ -658,3 +802,47 @@ class TestPathBeneathAnAliasIsReadThroughItsTarget:
     def test_root_re_entrant_alias_target_is_rejected(self) -> None:
         with pytest.raises(AglScopeError):
             resolve_entry("type A = A::B\nA::f()")
+
+    def test_re_entrant_alias_target_is_rejected(self) -> None:
+        """A scope error, not a crash."""
+        with pytest.raises(AglScopeError):
+            resolve_entry("scope P\n  type B = Q::C::D\nend P\n\nscope Q\n  type C = P::B\nend Q")
+
+    def test_target_beneath_its_own_alias_is_read_at_an_outer_step(self, tmp_path: Path) -> None:
+        """Beneath the alias itself the target reaches nothing, so an outer step selects it."""
+        assert_verdicts(
+            tmp_path,
+            {},
+            (
+                "record A\n  x: int\nrecord A::B\n  y: int\ndef A::B::f() -> int = 1\n\n"
+                "scope P\n  type A = A::B\nend P\n",
+            ),
+            {
+                "outer": accepted("P::A::f()", "int"),
+                "type": accepted("def g(a: P::A) -> int = 1\ng(A::B(y = 2))", "int"),
+            },
+        )
+
+    @pytest.mark.parametrize("probe", ["ga::Ta::f()", "/ga::Ta::f()"])
+    def test_aliases_growing_each_others_targets_across_modules_reach_nothing(
+        self, tmp_path: Path, probe: str
+    ) -> None:
+        """Each alias's target passes beneath the other, never terminating: no crash."""
+        phase, error, _, _ = inline_verdict(
+            tmp_path,
+            {
+                "ga": "import gb\ntype Ta = gb::Tb::X\n",
+                "gb": "import ga\ntype Tb = ga::Ta::Y\n",
+                "entry": f"import ga\n{probe}",
+            },
+        )
+        assert (phase, error) == ("scope", UnknownMemberError)
+
+    def test_use_hiding_a_path_beneath_a_hidden_alias_is_rejected(self, tmp_path: Path) -> None:
+        assert_verdicts(
+            tmp_path,
+            {"lib": _NESTED_LIB},
+            (_HIDDEN_TARGET_MEMBER, "use lib::R::* hiding A::f"),
+            {"use": rejected("R::A::g()", HiddenMemberError, "use lib::R::* hiding A::f")},
+            part="file",
+        )

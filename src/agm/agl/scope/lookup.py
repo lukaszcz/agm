@@ -69,9 +69,12 @@ __all__ = [
     "Candidate",
     "LookupKind",
     "Misfit",
+    "Own",
     "PathSources",
     "QualifiedTarget",
     "Reading",
+    "Route",
+    "Via",
     "lookup_bare",
     "lookup_declared",
     "lookup_hidden",
@@ -140,17 +143,37 @@ class Misfit:
 
 
 @dataclass(frozen=True, slots=True)
+class Own:
+    """The reach of ``::``: this module's own declarations alone."""
+
+
+@dataclass(frozen=True, slots=True)
+class Route:
+    """The reach of a module route: what that module alone exports."""
+
+    route: tuple[str, ...]
+    anchored: bool
+
+
+type Via = Own | Route
+"""How a candidate was reached when not through a region step."""
+
+
+@dataclass(frozen=True, slots=True)
 class Candidate:
     """A declaration one source reaches, with the layer and origin that made it visible.
 
     ``hiding`` is what the ways that reached it hide; a path its owner table
-    selects beneath it is reached the same ways.
+    selects beneath it is reached the same ways. ``via`` is the ``::`` or
+    module route that reached it, ``None`` for a region step; the paths
+    beneath an alias it reaches are read through it.
     """
 
     target: QualifiedTarget
     layer: ContributionLayer
     origin: QualificationOrigin
     hiding: Hiding = NOT_HIDDEN
+    via: Via | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +213,8 @@ class PathSources(DeclarationNames, Protocol):
         """What contributions anchored at or above *step* reach at full *path*."""
         ...
 
-    def routed_at(self, chain: QualifierChain, path: ScopePath, kind: LookupKind) -> Reading:
-        """What *chain*'s leading module route alone reaches at *path* beneath it."""
+    def routed_at(self, route: Route, path: ScopePath, kind: LookupKind) -> Reading:
+        """What module *route* alone reaches at *path* beneath it."""
         ...
 
     def projected(
@@ -203,16 +226,14 @@ class PathSources(DeclarationNames, Protocol):
         kind: LookupKind,
         *,
         owners_within: int,
-        written: ScopePath,
+        via: Via | None,
     ) -> Reading:
         """What type *owner*, made visible by *layer*, selects for *rest* in a position of *kind*.
 
-        *rest* is the tail of *chain*'s names after the owner's, and
-        *written* the owner's full path as read. The owner's own member table
-        decides; beneath an alias, *rest* is read as its target as written,
-        where the alias is declared, read (:func:`lookup_through`) -- or,
-        when *chain* reached the owner through ``::`` or a module route, as
-        that anchor or route reads the target's paths there. Only a type
+        *rest* is the tail of *chain*'s names after the owner's, and *via*
+        how the owner was reached. The owner's own member table decides;
+        beneath an alias, *rest* is read as its target as written, where the
+        alias is declared (:func:`lookup_through`), through *via*. Only a type
         *chain*'s first *owners_within* names reach, or an alias, projects
         its member table there.
         """
@@ -286,8 +307,8 @@ class PathSources(DeclarationNames, Protocol):
         """
         ...
 
-    def routed_origins(self, chain: QualifierChain, path: ScopePath) -> frozenset[Origin]:
-        """The scopes and types *chain*'s leading module route reaches as *path* beneath it."""
+    def routed_origins(self, route: Route, path: ScopePath) -> frozenset[Origin]:
+        """The scopes and types module *route* reaches as *path* beneath it."""
         ...
 
     def projected_origins(self, alias: DeclarationKey, rest: ScopePath) -> frozenset[Origin]:
@@ -410,7 +431,8 @@ def lookup_reached(
     removes are none, unless *keep_removed*: then the step's removed ones
     follow, with their ``hiding``.
     """
-    return _reaching(sources, chain, scope_path, kind, owners_within, keep_removed)[1]
+    walk = _chain_walk(sources, chain, scope_path, chain.span)
+    return walk.reached(kind, owners_within, keep_removed=keep_removed)
 
 
 def lookup_through(
@@ -420,32 +442,24 @@ def lookup_through(
     kind: LookupKind,
     *,
     owners_within: int,
+    via: Via | None = None,
+    target: int | None = None,
 ) -> Reading:
-    """What *chain*, written in *scope_path*, reaches of *kind* (:func:`lookup_reached`).
+    """What *chain*, an alias's target and the path beneath it, written in *scope_path*, reaches.
 
+    The declarations of *kind* the step where the target is selected reaches
+    (:func:`lookup_reached`); an outer step is read only when that one reaches
+    nothing, not when it reaches hidden ones -- at the step selecting the
+    first *target* names, the target, that is the last read. *via* reads every step through
+    the ``::`` or module route that reached the alias (:func:`_anchor`).
     Reaching nothing is the walk's refusal, if any.
     """
-    walk, candidates = _reaching(sources, chain, scope_path, kind, owners_within, False)
+    walk = _chain_walk(sources, chain, scope_path, chain.span, via)
+    candidates = walk.reached(kind, owners_within, sealed=target)
     if candidates:
         return Reading(candidates)
     refusal = walk.refusal()
     return Reading(refusals=() if refusal is None else (refusal,))
-
-
-def _reaching(
-    sources: PathSources,
-    chain: QualifierChain,
-    scope_path: ScopePath,
-    kind: LookupKind,
-    owners_within: int | None,
-    keep_removed: bool,
-) -> tuple[_Walk, tuple[Candidate, ...]]:
-    """The walk of *chain*, written in *scope_path*, and what it reaches.
-
-    As :func:`lookup_reached` reads it.
-    """
-    walk = _chain_walk(sources, chain, scope_path, chain.span)
-    return walk, walk.reached(kind, owners_within, keep_removed=keep_removed)
 
 
 def lookup_reached_origins(
@@ -471,14 +485,18 @@ def lookup_hidden(
 
 
 def _chain_walk(
-    sources: PathSources, chain: QualifierChain, scope_path: ScopePath, span: SourceSpan
+    sources: PathSources,
+    chain: QualifierChain,
+    scope_path: ScopePath,
+    span: SourceSpan,
+    via: Via | None = None,
 ) -> _Walk:
-    """The walk of *chain*'s full path, written in *scope_path*.
+    """The walk of *chain*'s full path, written in *scope_path*, read through *via*.
 
     *span* locates a ``::name`` miss.
     """
     names = (*(segment.name for segment in chain.segments), chain.member)
-    anchor = _anchor(sources, chain, scope_path)
+    anchor = _anchor(sources, chain, scope_path, via)
     return _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span)
 
 
@@ -535,31 +553,63 @@ def hidden_member(chain: QualifierChain, member: str) -> HiddenMemberError:
     return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
 
 
-def _anchor(sources: PathSources, chain: QualifierChain | None, scope_path: ScopePath) -> _Anchor:
-    """Return where *chain*, written in *scope_path*, is read."""
+def read_steps(own: bool, scope_path: ScopePath) -> tuple[ScopePath, ...]:
+    """The steps a chain written in *scope_path* is read at: ``::`` (*own*) reads the root alone."""
+    return ((),) if own else lookup_steps(scope_path)
+
+
+def _anchor(
+    sources: PathSources,
+    chain: QualifierChain | None,
+    scope_path: ScopePath,
+    via: Via | None = None,
+) -> _Anchor:
+    """Return where *chain*, written in *scope_path*, is read.
+
+    A chain leading with a module route reads that route alone, as written.
+    Otherwise *via* -- how the alias whose target *chain* spells was
+    reached -- reads every step through it, ``::`` limiting them to the root.
+    """
     if chain is not None and chain.routed:
-        routed = chain
-        return _Anchor(
-            (
-                _Step(
-                    (),
-                    lambda path, kind: sources.routed_at(routed, path[1:], kind),
-                    lambda path: sources.routed_at(routed, path[1:], LookupKind.TYPE),
-                    lambda path: sources.routed_origins(routed, path[1:]),
-                    1,
-                ),
-            ),
-            chain.leading_route,
+        route = Route(chain.leading_route, chain.anchored)
+        return _Anchor((_via_step(sources, (), route, start=1),), route.route)
+    own = chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE
+    if own and via is None:
+        via = Own()
+    if via is None:
+        return _Anchor(tuple(_step(sources, step) for step in lookup_steps(scope_path)))
+    return _Anchor(
+        tuple(_via_step(sources, step, via) for step in read_steps(own, scope_path)),
+        via.route if isinstance(via, Route) else (),
+    )
+
+
+def _via_step(sources: PathSources, step: ScopePath, via: Via, *, start: int = 0) -> _Step:
+    """Return *step* reading only what *via* reaches at full paths beneath it.
+
+    The first *start* written names are the route itself, which full paths omit.
+    Every candidate read carries *via*.
+    """
+
+    def read(path: ScopePath, kind: LookupKind) -> Reading:
+        reading = (
+            sources.own_at(path, kind)
+            if isinstance(via, Own)
+            else sources.routed_at(via, path[start:], kind)
         )
-    if chain is not None and chain.anchor is QualifierAnchor.CURRENT_MODULE:
-        own = _Step(
-            (),
-            sources.own_at,
-            lambda path: sources.own_at(path, LookupKind.TYPE),
-            sources.own_origins,
+        return Reading(
+            tuple(replace(candidate, via=via) for candidate in reading.candidates), reading.refusals
         )
-        return _Anchor((own,))
-    return _Anchor(tuple(_step(sources, step) for step in lookup_steps(scope_path)))
+
+    return _Step(
+        step,
+        read,
+        lambda path: read(path, LookupKind.TYPE),
+        sources.own_origins
+        if isinstance(via, Own)
+        else lambda path: sources.routed_origins(via, path[start:]),
+        start,
+    )
 
 
 def _step(
@@ -686,7 +736,12 @@ class _Walk:
         return _Walk(self._sources, self._site, self._steps, self._route, prefix, names, self._span)
 
     def reached(
-        self, kind: LookupKind, owners_within: int | None, *, keep_removed: bool = False
+        self,
+        kind: LookupKind,
+        owners_within: int | None,
+        *,
+        keep_removed: bool = False,
+        sealed: int | None = None,
     ) -> tuple[Candidate, ...]:
         """Return what the first step reaching a declaration of *kind* reaches; own ones alone.
 
@@ -694,6 +749,8 @@ class _Walk:
         ``None``), or an alias, projects its member table. The walk keeps the
         refusals it meets. With *keep_removed*, the removed declarations of
         that step follow, or are all it reaches when every step's are removed.
+        When *sealed*, a step reaching only removed ones that holds the types the
+        first *sealed* names reach is the last read.
         """
         within = len(self._names) if owners_within is None else owners_within
         removed: tuple[Candidate, ...] = ()
@@ -710,6 +767,8 @@ class _Walk:
                     if candidate.layer is ContributionLayer.DECLARED
                 )
                 return own or (*candidates, *(dropped if keep_removed else ()))
+            if dropped and sealed is not None and self._owners(step, sealed):
+                break
             removed = removed or dropped
         return removed if keep_removed else ()
 
@@ -771,7 +830,7 @@ class _Walk:
                 key = owner.target.key
                 if key is not None and (count <= owners_within or self._sources.aliases(key)):
                     reading += _reached_as(
-                        self._beneath(step, owner, key, count, chain, kind, owners_within),
+                        self._beneath(owner, key, count, chain, kind, owners_within),
                         owner,
                         self._sources,
                     )
@@ -788,7 +847,6 @@ class _Walk:
 
     def _beneath(
         self,
-        step: _Step,
         owner: Candidate,
         key: DeclarationKey,
         count: int,
@@ -796,7 +854,7 @@ class _Walk:
         kind: LookupKind,
         owners_within: int,
     ) -> Reading:
-        """What type *key*, which *owner* reached at *step* as the first *count* names, selects.
+        """What type *key*, which *owner* reached as the first *count* names, selects.
 
         Its own member table selects for the rest of the names
         (:meth:`PathSources.projected`); an applied segment's, the type it
@@ -817,7 +875,7 @@ class _Walk:
             chain,
             kind,
             owners_within=within,
-            written=(*step.path, *self._names[:count]),
+            via=owner.via,
         )
 
     def origins(self) -> frozenset[Origin]:

@@ -51,7 +51,6 @@ __all__ = [
     "qualifier_members",
     "qualifier_scope_paths",
     "unqualified_exposures",
-    "exposure_hidden",
 ]
 
 PathAtom: TypeAlias = tuple[str, ...]
@@ -734,25 +733,6 @@ def qualifier_members(
         )
         for module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
         if surfaces
-    )
-
-
-def exposure_hidden(env: ImportEnv, ways: Iterable[ImportWay], qname: QName) -> bool:
-    """Whether every way of *ways* hides or withholds declaration *qname* itself.
-
-    Scope decides removal by identity (:func:`~agm.agl.scope.hiding.removes`),
-    which needs the type owners the type environment lacks. This reads the
-    items exactly as written: *qname* must be an item's own declaration or
-    one an export ``hiding`` withheld -- not one beneath a hidden scope or
-    type, nor one an alias denotes. It errs only by keeping an exposure scope
-    removes. An alias of a hidden declaration (``type HC = Color`` beside
-    ``hiding Color``) stays an exposure, so an enum-owner form may still
-    spell a witness through it, which scope rejects.
-    """
-    return bool(ways) and all(
-        qname in {item.declaration for item in env.decl_hiding.get(way.node_id, ())}
-        or qname in way.withheld
-        for way in ways
     )
 
 

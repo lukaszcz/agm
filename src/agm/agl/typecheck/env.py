@@ -34,12 +34,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
-    EMPTY_IMPORT_ENV,
     ImportEnv,
-    QName,
-    contribution_routes,
-    exposure_hidden,
-    qualifier_member_ways,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -49,7 +44,6 @@ from agm.agl.scope.symbols import (
     OwnerMemberSelection,
     ScopePath,
     TypeSelection,
-    qname_declaration,
 )
 from agm.agl.scope.type_names import (
     owner_type_expr,
@@ -76,8 +70,6 @@ from agm.agl.semantics.types import (
     CastSpec,
     DecimalType,
     DictType,
-    EnumOwnerForm,
-    EnumOwnerFormKind,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -1012,7 +1004,7 @@ class TypeEnvironment:
 
     Program context
     ---------------
-    When ``program_type_table``, ``import_env``, and ``module_id`` are supplied,
+    When ``program_type_table`` and ``module_id`` are supplied,
     the environment becomes module-aware:
 
     - ``program_type_table`` maps each ``DeclKey`` ``(ModuleId, scope_path,
@@ -1023,9 +1015,6 @@ class TypeEnvironment:
       templates for applied nominal types and parameterized aliases; during
       program type-table construction, ``program_aliases`` lets transparent
       cross-module aliases resolve lazily before their sorted body-resolution turn.
-    - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
-      produced by program scope resolution. Used to enumerate the enum owner
-      spellings this module can write (``enum_owner_forms``).
     - ``module_id`` is the owning module of the current env: a selected
       declaration of this module resolves against its own local tables.
     - ``owner_declarations`` is scope's selection for every named type
@@ -1048,12 +1037,10 @@ class TypeEnvironment:
         program_generic_table: Mapping[DeclKey, GenericTypeDef] | None = None,
         program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
         program_aliases: ProgramAliasResolution | None = None,
-        import_env: ImportEnv = EMPTY_IMPORT_ENV,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
         owner_declarations: Mapping[int, TypeSelection] | None = None,
-        declared_segments: frozenset[str] = frozenset(),
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1115,17 +1102,12 @@ class TypeEnvironment:
             {} if program_alias_table is None else program_alias_table
         )
         self._program_aliases: ProgramAliasResolution | None = program_aliases
-        self._import_env: ImportEnv = import_env
         self._module_id: ModuleId = module_id
         # Scope's recorded selection for every type name and every
         # ``owner::member`` path (see ``ModuleResolution.owner_declarations``).
         self._owner_declarations: Mapping[int, TypeSelection] = (
             {} if owner_declarations is None else owner_declarations
         )
-        # Segments of the paths this module declares: a route spelling whose
-        # head is one of them must be ``/``-anchored to select the import.
-        self._declared_segments = declared_segments
-        self._sealed = False
         # Mutation journal, recording from begin_facts() until end_facts() takes
         # it; seal() leaves it in place, where no further mutator can reach it,
         # so own_facts() keeps answering from it. rewind_from,
@@ -1137,13 +1119,6 @@ class TypeEnvironment:
         # once the body-check window opens.
         self._journal: list[EnvironmentFact] = []
         self._journaling = False
-        # Memos for the enum owner-form enumeration and its variant-level
-        # counterpart.  Both rescan the whole type namespace (and, for imports,
-        # every contribution route), and match compilation asks for them once
-        # per case.  They are populated only once ``seal`` has frozen the
-        # declaration namespace, so a still-mutating environment never serves
-        # a stale answer.
-        self._sealed_enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -1185,15 +1160,12 @@ class TypeEnvironment:
     def seal(self) -> None:
         """Freeze this environment as checked output.
 
-        Validates the environment first when self-validation is enabled; sealing
-        itself — the functional state that enables namespace memoization —
-        always happens, regardless of the flag. No journaled mutator runs on a
-        sealed environment, so what :meth:`own_facts` reports can no longer
-        change.
+        Validates the environment when self-validation is enabled. No journaled
+        mutator runs on a sealed environment, so what :meth:`own_facts` reports
+        can no longer change.
         """
         if self_validation_enabled():
             self.assert_closed()
-        self._sealed = True
 
     # --- Mutation journal ---
 
@@ -1619,11 +1591,6 @@ class TypeEnvironment:
     def _is_program_alias_key(self, key: DeclKey) -> bool:
         """Whether *key* is a declared alias this program can lazily resolve."""
         return self._program_aliases is not None and key in self._program_aliases.keys
-
-    def _is_program_type_candidate(self, qname: QName) -> bool:
-        """Return whether a program-qualified name denotes any type-namespace declaration."""
-        key = qname_declaration(qname)
-        return self._in_program_type_tables(key) or self._is_program_alias_key(key)
 
     def _ensure_program_alias_resolved(self, key: DeclKey) -> Type | None:
         """Resolve a program alias lazily while retaining its declaration path."""
@@ -2230,155 +2197,6 @@ class TypeEnvironment:
             type_vars=frozenset(type_params),
         )
         return TypeTemplate(template, type_params)
-
-    def _own_source_type_names(self) -> frozenset[str]:
-        names = {name for name, _typ in self.non_builtin_type_items()}
-        names.update(self._alias_targets, self._generic_types)
-        names.update(
-            _join_scoped_type_name(scope_path, name)
-            for module_id, scope_path, name in self._program_alias_table
-            if module_id == self._module_id
-        )
-        names.update(
-            _join_scoped_type_name(scope_path, name)
-            for module_id, scope_path, name in (
-                *self._program_generic_table,
-                *self._program_type_table,
-            )
-            if module_id == self._module_id
-        )
-        return frozenset(names)
-
-    def _own_enum_owner_form(
-        self, kind: Literal[EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF], owner_name: str
-    ) -> EnumOwnerForm:
-        """Build the owner form of *owner_name*, a type this module declares."""
-        expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
-        key = (self._module_id, (), owner_name)
-        return self._enum_owner_form(kind, owner_name, expected_qualifier, key)
-
-    def _enum_owner_form(
-        self,
-        kind: EnumOwnerFormKind,
-        owner_name: str,
-        expected_qualifier: tuple[str, ...] | None,
-        key: DeclKey,
-        *,
-        qualifier_anchored: bool = False,
-    ) -> EnumOwnerForm:
-        source_module_id, source_scope_path, source_name = key
-        return EnumOwnerForm(
-            owner_name,
-            expected_qualifier,
-            kind=kind,
-            source_module_id=source_module_id,
-            source_name=source_name,
-            type_template=self.declared_type_template(
-                source_module_id, source_name, scope_path=source_scope_path
-            ),
-            qualifier_anchored=qualifier_anchored,
-        )
-
-    def _route_spelled_elsewhere(self, head: str) -> bool:
-        """Whether an own path or a bare imported name also spells module route *head*.
-
-        Such an owner spelling could select another declaration, so a witness
-        spells the owner through a longer route instead: over-qualifying is
-        harmless. A bare imported name that every import exposing it hides spells
-        nothing (:func:`exposure_hidden`).
-        """
-        env = self._import_env
-        return head in self._declared_segments or any(
-            not exposure_hidden(env, ways, qname)
-            for qname, ways in env.unqualified_ways.get(head, {}).items()
-        )
-
-    def _name_spelled_elsewhere(self, head: str) -> bool:
-        """Whether an own path or a module route also spells bare imported name *head*.
-
-        As for :meth:`_route_spelled_elsewhere`.
-        """
-        return head in self._declared_segments or (head,) in self._import_env.suffix_routes
-
-    def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
-        """Enumerate finite checked owner forms writable in this environment.
-
-        Memoized once the environment is sealed, so consumers that need the
-        owner forms per case (match compilation) can simply ask the environment.
-        """
-        cached = self._sealed_enum_owner_forms
-        if cached is not None:
-            return cached
-        forms: set[EnumOwnerForm] = set()
-        for owner_name in self._own_source_type_names():
-            forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
-            forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
-        for exposed_name, qnames in self._import_env.unqualified.items():
-            if not isinstance(exposed_name, str) or self._name_spelled_elsewhere(exposed_name):
-                continue
-            type_qnames = tuple(
-                qname
-                for qname in qnames
-                if self._is_program_type_candidate(qname)
-                and not exposure_hidden(
-                    self._import_env,
-                    self._import_env.unqualified_ways.get(exposed_name, {}).get(qname, ()),
-                    qname,
-                )
-            )
-            if len(type_qnames) == 1:
-                forms.add(
-                    self._enum_owner_form(
-                        EnumOwnerFormKind.OPEN_IMPORT,
-                        exposed_name,
-                        None,
-                        qname_declaration(type_qnames[0]),
-                    )
-                )
-        for contribution in self._import_env.contributions.values():
-            for exposed_name, qname in contribution.members.items():
-                if not isinstance(exposed_name, str) or not self._is_program_type_candidate(qname):
-                    continue
-                _, source_scope_path, source_name = qname_declaration(qname)
-                template = self.declared_type_template(
-                    qname[0], source_name, scope_path=source_scope_path
-                )
-                for qualifier, anchored in contribution_routes(contribution):
-                    if not anchored and self._route_spelled_elsewhere(qualifier[0]):
-                        continue
-                    reached = qualifier_member_ways(
-                        self._import_env, qualifier, exposed_name, anchored=anchored
-                    )
-                    if {
-                        reached_qname
-                        for reached_qname, ways in reached.items()
-                        if not exposure_hidden(self._import_env, ways, reached_qname)
-                    } != {qname}:
-                        continue
-                    forms.add(
-                        EnumOwnerForm(
-                            exposed_name,
-                            qualifier,
-                            kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
-                            source_module_id=qname[0],
-                            source_name=source_name,
-                            type_template=template,
-                            qualifier_anchored=anchored,
-                        )
-                    )
-
-        def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], bool, str]:
-            return (
-                form.owner_name,
-                form.module_qualifier or (),
-                form.qualifier_anchored,
-                form.kind.value,
-            )
-
-        ordered = tuple(sorted(forms, key=form_key))
-        if self._sealed:
-            self._sealed_enum_owner_forms = ordered
-        return ordered
 
     def get_generic_type_from_module(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()

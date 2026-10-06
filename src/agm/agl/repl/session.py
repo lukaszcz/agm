@@ -798,7 +798,7 @@ class ReplSession:
         checked_program = _static_verdict(
             lambda: self._entry_pipeline.resolve_and_check_program(
                 program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
-            )
+            )[1]
         )
         if isinstance(checked_program, UnappliedGenericTypeError) and (
             checked_program.span == type_expr.span
@@ -1581,7 +1581,7 @@ class ReplSession:
             raise AglError(
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
-        checked_program = self._entry_pipeline.resolve_and_check_program(
+        resolved_program, checked_program = self._entry_pipeline.resolve_and_check_program(
             program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
         )
         checked = checked_program.modules[checked_program.entry_id]
@@ -1595,7 +1595,7 @@ class ReplSession:
             checked_program, cached_module_sites(self._last_match_compilation)
         )
         if match_result.compiled is None:
-            raise match_issue_error(match_result.issues[0])
+            raise match_issue_error(match_result.issues[0], resolved_program.speller)
         # The resolved program holds the expression with its operator chains grouped.
         typ = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         from agm.agl.repl.type_display import format_type_for_repl

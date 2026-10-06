@@ -68,6 +68,7 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
+    DeclarationKey,
     DeclInfo,
     DuplicateDeclarationError,
     MissRepair,
@@ -195,7 +196,30 @@ class ResolvedProgram:
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     graph: ModuleGraph
+    sources: Callable[[ModuleId], ModuleSources] = field(repr=False, compare=False)
     retired_member_scopes: frozenset[ScopePath] = frozenset()
+
+    def speller(self, module_id: ModuleId) -> Callable[[DeclarationKey, int], str]:
+        """Return the speller of constructors as written in *module_id*'s ``case`` expressions.
+
+        Spelled by what the real lookup accepts there
+        (:meth:`~agm.agl.scope.sources.ModuleSources.spell_constructor`); the
+        ``case`` is named by its node id.
+        """
+        sources = self.sources(module_id)
+        regions = self.modules[module_id].resolved.case_regions
+
+        def spell(constructor: DeclarationKey, case_node_id: int) -> str:
+            region = regions[case_node_id]
+            return sources.spell_constructor(
+                constructor,
+                region.scope_path,
+                region.span,
+                type_params=region.type_params,
+                by_scrutinee=True,
+            )
+
+        return spell
 
     @property
     def entry_id(self) -> ModuleId:
@@ -1330,5 +1354,6 @@ def resolve_program(
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         graph=graph,
+        sources=sources_of,
         retired_member_scopes=retired,
     )

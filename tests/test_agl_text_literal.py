@@ -48,7 +48,7 @@ _TEXT_CORPUS = (
 def test_text_encoders_agree(value: str) -> None:
     """Rendered text and text match witnesses use the same AgL literal form."""
     assert render_value(TextValue(value), _NO_DESCRIPTORS, quote_strings=True) == render_witness(
-        LiteralWitness(LiteralKind.TEXT, value)
+        LiteralWitness(LiteralKind.TEXT, value), lambda decl, _node: decl[2]
     )
 
 

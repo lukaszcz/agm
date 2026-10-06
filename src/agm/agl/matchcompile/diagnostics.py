@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import decimal
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeAlias, cast
 
 from agm.agl.diagnostics import AglError
-from agm.agl.modules.ids import render_route_member
-from agm.agl.semantics.types import EnumType, RecordType, Type
+from agm.agl.modules.ids import ModuleId
+from agm.agl.semantics.type_table import DeclKey
+from agm.agl.semantics.types import Type
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.value_syntax.lexical import quote_text
 
@@ -43,62 +45,29 @@ class WitnessField:
     witness: MatchWitness
 
 
-def qualified_owner_name(
-    owner_name: str,
-    module_qualifier: tuple[str, ...] | None,
-    *,
-    anchored: bool = False,
-) -> str:
-    """Render one enum owner's source spelling from its module qualifier.
+ConstructorSpeller: TypeAlias = Callable[[DeclKey, int], str]
+"""Spells a constructor, by its declaration, as written in the ``case`` with the given node id."""
 
-    ``None`` spells an unqualified owner, an empty qualifier spells the
-    self-module form ``::Owner``, and a non-empty one spells its slash route.
-    """
-    if module_qualifier is None:
-        return owner_name
-    return render_route_member(module_qualifier, (owner_name,), anchored=anchored)
-
-
-@dataclass(frozen=True, slots=True)
-class EnumWitnessQualification:
-    """Source-level enum owner spelling used to render one witness.
-
-    This diagnostic value deliberately omits the type-checker's owner-form
-    resolution metadata.  Consumers need only the selected owner name and its
-    optional module qualifier.
-    """
-
-    owner_name: str
-    module_qualifier: tuple[str, ...] | None
-    qualifier_anchored: bool = False
-
-    @property
-    def owner_spelling(self) -> str:
-        """The selected owner's source spelling, including any module qualifier."""
-        return qualified_owner_name(
-            self.owner_name,
-            self.module_qualifier,
-            anchored=self.qualifier_anchored,
-        )
+ConstructorSpellers: TypeAlias = Callable[[ModuleId], ConstructorSpeller]
+"""A module's :data:`ConstructorSpeller`."""
 
 
 @dataclass(frozen=True, slots=True)
 class EnumWitness:
     """A concrete enum constructor with structural child witnesses."""
 
-    enum_type: EnumType
-    variant: str
+    constructor: DeclKey
+    case_node_id: int
     fields: tuple[WitnessField, ...]
-    qualification: EnumWitnessQualification | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class RecordWitness:
     """A concrete record constructor with structural child witnesses."""
 
-    record_type: RecordType
+    constructor: DeclKey
+    case_node_id: int
     fields: tuple[WitnessField, ...]
-    qualification: EnumWitnessQualification | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +95,7 @@ class NonExhaustiveIssue:
     site_node_id: int
     span: SourceSpan
     witness: MatchWitness
+    module_id: ModuleId
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,8 +126,8 @@ def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> s
     return format(cast(decimal.Decimal, value), "f")
 
 
-def render_witness(witness: MatchWitness) -> str:
-    """Render structured witness data for a later user-facing diagnostic adapter."""
+def render_witness(witness: MatchWitness, speller: ConstructorSpeller) -> str:
+    """Render structured witness data, spelling constructors with *speller*."""
     if isinstance(witness, WildcardWitness):
         return "_"
     if isinstance(witness, BoolWitness):
@@ -165,20 +135,11 @@ def render_witness(witness: MatchWitness) -> str:
     if isinstance(witness, LiteralWitness):
         return _render_literal(witness.kind, witness.value)
     if isinstance(witness, (EnumWitness, RecordWitness)):
-        if isinstance(witness, EnumWitness):
-            constructor_name = witness.variant
-            if witness.qualification is not None:
-                constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
-        else:
-            constructor_name = (
-                witness.record_type.name
-                if witness.qualification is None
-                else witness.qualification.owner_spelling
-            )
+        constructor_name = speller(witness.constructor, witness.case_node_id)
         if not witness.fields:
             return constructor_name
         fields = ", ".join(
-            f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
+            f"{field.name} = {render_witness(field.witness, speller)}" for field in witness.fields
         )
         return f"{constructor_name}({fields})"
     excluded = ", ".join(
@@ -190,8 +151,10 @@ def render_witness(witness: MatchWitness) -> str:
     return f"a {domain} value other than {excluded}"
 
 
-def match_issue_error(issue: MatchIssue) -> AglError:
+def match_issue_error(issue: MatchIssue, spellers: ConstructorSpellers) -> AglError:
     """Build the one real static error a compiled match issue is reported as.
+
+    *spellers* spell the constructors of a missing pattern in the module of its ``case``.
 
     The sole synthesis of a match issue's user-facing message and span, so
     every consumer (a raised failure, or a rendered ``Diagnostic`` via
@@ -199,7 +162,8 @@ def match_issue_error(issue: MatchIssue) -> AglError:
     from this.
     """
     if isinstance(issue, NonExhaustiveIssue):
-        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
+        missing = render_witness(issue.witness, spellers(issue.module_id))
+        message = f"Non-exhaustive case; missing pattern: {missing}."
         return NonExhaustiveMatchError(message, span=issue.span)
     message = "Redundant case arm; this pattern can never be selected."
     return RedundantArmError(message, span=issue.span)
@@ -227,8 +191,9 @@ def issue_sort_key(issue: MatchIssue) -> tuple[str, int, int, int, int, int, int
 
 __all__ = [
     "BoolWitness",
+    "ConstructorSpeller",
+    "ConstructorSpellers",
     "EnumWitness",
-    "EnumWitnessQualification",
     "LiteralWitness",
     "MatchIssue",
     "MatchWitness",
@@ -242,6 +207,5 @@ __all__ = [
     "WitnessField",
     "issue_sort_key",
     "match_issue_error",
-    "qualified_owner_name",
     "render_witness",
 ]

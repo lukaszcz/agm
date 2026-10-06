@@ -226,16 +226,6 @@ def test_lowering_validates_ir_when_enabled() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_disabled_validation_still_memoises_checked_namespace_queries(
-    self_validation_disabled: None,
-) -> None:
-    """A checked environment is frozen whether or not it also re-verifies itself."""
-    env = resolve_and_check_inline_entry(_MATCH_SOURCE, base_caps()).type_env
-
-    assert env.enum_owner_forms()
-    assert env.enum_owner_forms() is env.enum_owner_forms()
-
-
 def test_disabled_validation_skips_the_inference_region_leak_check(
     self_validation_disabled: None,
 ) -> None:

@@ -1003,6 +1003,15 @@ class ParamBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class CaseRegion:
+    """Where a ``case`` is written: its named scope and the type parameters in scope there."""
+
+    scope_path: ScopePath
+    type_params: frozenset[str]
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleResolution:
     """Output of the scope resolution pass.
 
@@ -1039,8 +1048,11 @@ class ModuleResolution:
     ``scope_nodes``
         Named scope-region layers keyed by path, rooted at ``()``.
     ``constructor_candidates``
-        The root's bare constructor candidates by name; read by witness
-        rendering and by the root's own and host-constructor reads.
+        The root's own and host-seeded constructors by bare name, which the
+        root's own and host-constructor reads start from.
+    ``case_regions``
+        Maps each ``case`` node id to the :class:`CaseRegion` it is written
+        in, where a witness's spelling is verified.
     ``constructor_refs``
         Maps a ``VarRef.node_id`` (or ``Call.node_id`` whose callee was a
         constructor ``VarRef``) to the single :class:`ConstructorRef` it
@@ -1162,6 +1174,7 @@ class ModuleResolution:
         default_factory=dict
     )
     fixities: dict[str, Fixity] = field(default_factory=dict)
+    case_regions: dict[int, CaseRegion] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

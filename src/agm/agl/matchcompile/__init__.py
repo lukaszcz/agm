@@ -8,8 +8,9 @@ submodules.
 from .compiler import CompiledMatchSite
 from .diagnostics import (
     BoolWitness,
+    ConstructorSpeller,
+    ConstructorSpellers,
     EnumWitness,
-    EnumWitnessQualification,
     LiteralWitness,
     MatchIssue,
     MatchWitness,
@@ -64,7 +65,8 @@ __all__ = [
     "NominalConstructor",
     "EnumWitness",
     "FieldOccurrenceProvenance",
-    "EnumWitnessQualification",
+    "ConstructorSpeller",
+    "ConstructorSpellers",
     "LiteralKind",
     "LiteralWitness",
     "MatchCompilationResult",

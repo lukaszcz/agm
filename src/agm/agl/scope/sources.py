@@ -24,7 +24,6 @@ from agm.agl.diagnostics import (
 from agm.agl.modules.ids import (
     ModuleId,
     Reader,
-    render_route_member,
     spell_declaration,
 )
 from agm.agl.scope.hiding import (
@@ -33,6 +32,7 @@ from agm.agl.scope.hiding import (
     Origin,
     beneath_hiding,
     hidden_keys,
+    removed,
     removes,
     unremoved,
 )
@@ -63,6 +63,7 @@ from agm.agl.scope.lookup import (
     Route,
     Via,
     hidden_member,
+    lookup_constructors,
     lookup_qualified,
     lookup_reached,
     lookup_reached_origins,
@@ -87,6 +88,7 @@ from agm.agl.scope.symbols import (
     TypeOwner,
     TypeSelection,
     UnknownMemberError,
+    add_layers,
     anchored_layers,
     contribution_origin,
     contribution_origins,
@@ -126,6 +128,9 @@ from agm.agl.syntax.types import (
     render_qualified_name,
     render_qualifier_path,
 )
+
+type _Spelling = tuple[tuple[str, ...], str, QualifierAnchor | None]
+"""A qualified spelling: its qualifier segments, its member and its anchor."""
 
 type _Exposed = tuple[ScopePath, QName, frozenset[ImportWay]]
 """A path imports expose, what it reaches there, and the ways exposing it."""
@@ -175,6 +180,14 @@ def is_root_inline_member(constructor: ConstructorRef) -> bool:
     return (
         constructor.inline_enum_owner_decl_node_id is not None and len(constructor.owner_path) == 1
     )
+
+
+def render_spelling(qualifier: tuple[str, ...], member: str, anchor: QualifierAnchor | None) -> str:
+    """Render ``qualifier::member`` as written under *anchor*."""
+    path = "::".join((*qualifier, member))
+    if anchor is None:
+        return path
+    return f"/{path}" if anchor is QualifierAnchor.MODULE else f"::{path}"
 
 
 def _way_order(way: ImportWay) -> int:
@@ -766,55 +779,153 @@ class ModuleSources(SourcesHost):
         )
         return Reading(refusals=tuple(itertools.islice(referenced, 1)))
 
-    def _spelling_selects(
+    def constructor_declaration(self, constructor: ConstructorRef) -> DeclarationKey:
+        """The declaration *constructor* constructs: a renaming alias's is its target's.
+
+        A member an alias of an enum selects is that member of the enum behind it.
+        """
+        named = self._type_owners.constructor_identity(constructor)
+        if named.member is None:
+            return named.key
+        enum = self._type_owners.enum_behind(named.qname) or named.qname
+        return enum[0], _bare_path(enum[1]), named.member
+
+    def pattern_constructors(self, name: str, site: ScopePath) -> tuple[ConstructorRef, ...]:
+        """Return the constructor candidates a bare pattern or ``is`` spelling *name* reaches.
+
+        Its scrutinee selects among them: every constructor so spelled at
+        every step of *site* -- own, contributed and injected -- that no
+        ``hiding`` removed. A same-named record or exception does not make a
+        member yield here.
+        """
+        found: dict[ConstructorRef, Layers] = {}
+        for candidate in lookup_constructors(self, name, site):
+            constructor = candidate.target.constructor
+            if constructor is not None and not removed(
+                candidate.hiding, candidate.target.key, self
+            ):
+                add_layers(found, constructor, (candidate.layer,))
+        return tuple(self.one_per_declaration(found))
+
+    def one_per_declaration(
+        self, candidates: Mapping[ConstructorRef, Layers]
+    ) -> dict[ConstructorRef, Layers]:
+        """*candidates*, one per declaration they construct, with every layer reaching it.
+
+        A renaming alias's constructor is its target's
+        (:meth:`TypeOwnerIndex.constructor_identity`), and aliases denoting one
+        type construct one, as do the members aliases applying one enum alike
+        select (:meth:`TypeOwnerIndex.denotation`): the candidate
+        naming the declaration directly stands for it, else its first by path.
+        """
+        grouped: dict[object, dict[ConstructorRef, Layers]] = {}
+        for candidate, layers in candidates.items():
+            named = self._type_owners.constructor_identity(candidate)
+            denoted = self._type_owners.denotation(named.qname)
+            grouped.setdefault(named if denoted is None else denoted, {})[candidate] = layers
+        return {
+            (
+                named if named in reached else min(reached, key=constructor_candidate_sort_key)
+            ): frozenset().union(*reached.values())
+            for named, reached in grouped.items()
+        }
+
+    def selects_constructor(
         self,
         qualifier: tuple[str, ...],
         member: str,
-        candidate: ConstructorRef,
+        decl: DeclarationKey,
         span: SourceSpan,
         site: ScopePath,
         *,
-        anchored: bool = False,
+        anchor: QualifierAnchor | None = None,
+        kind: LookupKind = LookupKind.CONSTRUCTOR,
     ) -> bool:
-        """Whether ``qualifier::member``, written at *span* in *site*, selects *candidate*."""
+        """Whether ``qualifier::member``, written at *span* in *site* as *kind*, selects *decl*."""
         found = lookup_qualified(
             self,
-            self._probe_chain(qualifier, member, span, anchored=anchored),
+            self._probe_chain(qualifier, member, span, anchor=anchor),
             site,
-            LookupKind.VALUE,
+            kind,
             span=span,
         )
-        return isinstance(found, QualifiedTarget) and found.constructor == candidate
+        return (
+            isinstance(found, QualifiedTarget)
+            and found.constructor is not None
+            and self.constructor_declaration(found.constructor) == decl
+        )
 
-    def _routed_spelling(
-        self, candidate: ConstructorRef, origin: QName, span: SourceSpan, site: ScopePath
+    def spell_constructor(
+        self,
+        decl: DeclarationKey,
+        site: ScopePath,
+        span: SourceSpan,
+        *,
+        type_params: Collection[str] = (),
+        by_scrutinee: bool = False,
+        kind: LookupKind = LookupKind.CONSTRUCTOR,
     ) -> str:
-        """Spell *candidate*, imported as *origin*, by its shortest route selecting it at *span*.
+        """Spell constructor *decl* by the shortest spelling that selects it where written.
 
-        In *site*.
-
-        Each import route exposing *origin* is tried, anchored ones included;
-        without one, *candidate* is spelled by its declaration path.
+        Written at *span* in *site* in a *kind* position, with *type_params* in scope there, which
+        shadow a spelling's leading segment. Tried by fewest segments, then
+        fewest characters, the enum's own name before its renames: the bare
+        name -- when *by_scrutinee*, as a pattern whose scrutinee selects among
+        its candidates -- the name qualified by each spelling of its enum, each
+        import route to it, and its declaration's own path. Without one that
+        selects it, *decl* is spelled by its declaration path.
         """
-        spellings = (
-            render_route_member(route, written, anchored=anchored)
-            for contribution in self._import_env.contributions.values()
-            for atom, qname in contribution.members.items()
-            if qname == origin
-            for written in (_bare_path(atom),)
-            for route, anchored in contribution_routes(contribution)
-            if self._spelling_selects(
-                ("/".join(route), *written[:-1]),
-                written[-1],
-                candidate,
-                span,
-                site,
-                anchored=anchored,
-            )
+        module_id, path, name = decl
+        qname = (module_id, _bare_atom((*path, name)))
+        owner_qname = (module_id, _bare_atom(path)) if path else None
+        owner = None if owner_qname is None else self._type_owners.owner(owner_qname)
+        if owner is None or name not in owner.members:
+            owner_qname = None
+        # In the order that settles ties.
+        spellings: dict[_Spelling, None] = {}
+        if owner_qname is not None:
+            own_name = _bare_path(owner_qname[1])[-1]
+            for spelling in (
+                own_name,
+                *(n for n in self._spellings_of(owner_qname) if n != own_name),
+            ):
+                spellings[((spelling,), name, None)] = None
+        for contribution in self._import_env.contributions.values():
+            for atom, exposed in contribution.members.items():
+                if exposed != qname and exposed != owner_qname:
+                    continue
+                written = _bare_path(atom)
+                if exposed == qname:
+                    qualifier, member = written[:-1], written[-1]
+                else:
+                    qualifier, member = written, name
+                for route, anchored in contribution_routes(contribution):
+                    anchor = QualifierAnchor.MODULE if anchored else None
+                    spellings[(("/".join(route), *qualifier), member, anchor)] = None
+        if module_id == self._module_id:
+            spellings[(path, name, None)] = None
+            spellings[(path, name, QualifierAnchor.CURRENT_MODULE)] = None
+
+        def key(spelling: _Spelling) -> tuple[int, int]:
+            return len(spelling[0]) + 1, len(render_spelling(*spelling))
+
+        if by_scrutinee and any(
+            self.constructor_declaration(candidate) == decl
+            for candidate in self.pattern_constructors(name, site)
+        ):
+            return name
+        shadowed = frozenset(type_params)
+        qualified = (
+            spelling for spelling in sorted(spellings, key=key) if spelling[0] or spelling[2]
         )
-        return min(spellings, key=len, default=None) or spell_declaration(
-            origin[0], _bare_path(origin[1]), reader=self.reader()
-        )
+        for qualifier, member, anchor in qualified:
+            if anchor is None and qualifier[0] in shadowed:
+                continue
+            if self.selects_constructor(
+                qualifier, member, decl, span, site, anchor=anchor, kind=kind
+            ):
+                return render_spelling(qualifier, member, anchor)
+        return spell_declaration(module_id, (*path, name), reader=self.reader())
 
     def projected(
         self,
@@ -1551,7 +1662,7 @@ class ModuleSources(SourcesHost):
             origin = exported.get(())
             return frozenset(() if origin is None else (self.identity(_qname_decl_key(origin)),))
         written = (*named.item, *rest)
-        chain = self._probe_chain(written[:-1], written[-1], named.span, anchored=False)
+        chain = self._probe_chain(written[:-1], written[-1], named.span, anchor=None)
         return frozenset(
             self.identity(key)
             for kind in LookupKind
@@ -1568,12 +1679,17 @@ class ModuleSources(SourcesHost):
         )
 
     def _probe_chain(
-        self, qualifier: tuple[str, ...], member: str, span: SourceSpan, *, anchored: bool
+        self,
+        qualifier: tuple[str, ...],
+        member: str,
+        span: SourceSpan,
+        *,
+        anchor: QualifierAnchor | None,
     ) -> QualifierChain:
         """The spelling ``qualifier::member`` at *span*, looked up but never recorded."""
         node_id = self._program.node_id
         return QualifierChain(
-            QualifierAnchor.MODULE if anchored else None,
+            anchor,
             tuple(QualifierSegment(segment, None, span, node_id) for segment in qualifier),
             member,
             span,

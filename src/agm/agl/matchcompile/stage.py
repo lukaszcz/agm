@@ -16,7 +16,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
 
 from .compiler import CompiledMatchSite, compile_match_site, validate_compiled_case
-from .diagnostics import MatchIssue, issue_sort_key, match_issue_error
+from .diagnostics import ConstructorSpellers, MatchIssue, issue_sort_key, match_issue_error
 from .model import CaseSite, MatchCaseContext, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
@@ -179,14 +179,18 @@ def compile_program_matches(
     )
 
 
-def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
+def diagnostic_from_match_issue(issue: MatchIssue, spellers: ConstructorSpellers) -> Diagnostic:
     """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
-    return match_issue_error(issue).to_diagnostic()
+    return match_issue_error(issue, spellers).to_diagnostic()
 
 
-def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagnostic, ...]:
+def diagnostics_from_match_issues(
+    issues: tuple[MatchIssue, ...], spellers: ConstructorSpellers
+) -> tuple[Diagnostic, ...]:
     """Adapt and deterministically order match issues for pipeline consumers."""
-    return tuple(diagnostic_from_match_issue(issue) for issue in sorted(issues, key=issue_sort_key))
+    return tuple(
+        diagnostic_from_match_issue(issue, spellers) for issue in sorted(issues, key=issue_sort_key)
+    )
 
 
 def _validate_sites(

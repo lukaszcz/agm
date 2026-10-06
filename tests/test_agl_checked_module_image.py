@@ -302,16 +302,7 @@ class TestRehydrationParity:
         for mid in _non_entry_module_ids(compiled):
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
-            assert rehydrated_module.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()
             assert rehydrated_module.type_env.all_generic_types() == cm.type_env.all_generic_types()
-
-    def test_rehydrated_module_memoises_its_namespace_queries(
-        self, rehydrated: dict[ModuleId, CheckedModule]
-    ) -> None:
-        """A rehydrated environment is frozen, so whole-namespace queries are computed once."""
-        for module in rehydrated.values():
-            env = module.type_env
-            assert env.enum_owner_forms() is env.enum_owner_forms()
 
     def test_rehydrated_module_reproduces_its_image(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

@@ -1132,7 +1132,7 @@ class PipelineDriver:
 
         if compiled is None:
             compiled, match_diagnostics = _run_matchcompile_program(
-                checked, prepared.resolved.graph, capabilities
+                checked, prepared.resolved, capabilities
             )
             if compiled is None:
                 return ProgramDiscovery(
@@ -1528,9 +1528,7 @@ class PipelineDriver:
         _append_checker_warnings(warnings, checked)
 
         if compiled is None:
-            compiled, match_diagnostics = _run_matchcompile_program(
-                checked, resolved.graph, capabilities
-            )
+            compiled, match_diagnostics = _run_matchcompile_program(checked, resolved, capabilities)
             if compiled is None:
                 return (
                     RunResult(
@@ -1990,7 +1988,7 @@ def _run_typecheck_program(
 
 def _run_matchcompile_program(
     checked: "CheckedProgram",
-    graph: "ModuleGraph",
+    resolved: "ResolvedProgram",
     capabilities: "HostCapabilities",
 ) -> "tuple[MatchCompiledProgram | None, tuple[Diagnostic, ...]]":
     """Run program-level match compilation without raising.
@@ -2005,10 +2003,10 @@ def _run_matchcompile_program(
         diagnostics_from_match_issues,
     )
 
-    retainable = retained_module_sources(graph)
+    retainable = retained_module_sources(resolved.graph)
     result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
     if result.compiled is None:
-        return None, diagnostics_from_match_issues(result.issues)
+        return None, diagnostics_from_match_issues(result.issues, resolved.speller)
     retain_match_sites(retainable, capabilities, cached_module_sites(result.compiled))
     return result.compiled, ()
 

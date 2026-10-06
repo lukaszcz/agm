@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias, cast
+from typing import TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind, EnumType
+from agm.agl.semantics.types import EnumType
 
 from .diagnostics import (
     BoolWitness,
     EnumWitness,
-    EnumWitnessQualification,
     LiteralWitness,
     MatchIssue,
     MatchWitness,
@@ -22,7 +21,6 @@ from .diagnostics import (
     WildcardWitness,
     WitnessField,
     issue_sort_key,
-    qualified_owner_name,
 )
 from .matrix import (
     OccurrenceAllocator,
@@ -51,7 +49,6 @@ from .model import (
     DecisionSwitch,
     FieldOccurrenceProvenance,
     LiteralConstructor,
-    MatchCaseContext,
     MatchSiteSource,
     MatrixRow,
     NominalConstructor,
@@ -386,7 +383,7 @@ def _witness_for_occurrence(
     constraints: dict[OccurrenceId, _Constraint],
     occurrences: tuple[Occurrence, ...],
     type_table: TypeTable,
-    case_context: MatchCaseContext,
+    site_node_id: int,
 ) -> MatchWitness:
     constraint = constraints.get(occurrence.id)
     if constraint is None:
@@ -398,15 +395,6 @@ def _witness_for_occurrence(
         return BoolWitness(constructor.value)
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
-    subject_type = occurrence.type
-    if isinstance(subject_type, EnumType) and not type_table.is_inline_member(
-        subject_type, constructor.record_type
-    ):
-        # A referenced member is spelled at its own declaration path, like a record.
-        subject_type = constructor.record_type
-    spelling = _source_spelling(constructor, subject_type, case_context)
-    if isinstance(subject_type, EnumType) and spelling is None:
-        return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
         for child in occurrences
@@ -418,70 +406,20 @@ def _witness_for_occurrence(
         WitnessField(
             field.name,
             _witness_for_occurrence(
-                children_by_index[index], constraints, occurrences, type_table, case_context
+                children_by_index[index], constraints, occurrences, type_table, site_node_id
             )
             if index in children_by_index
             else WildcardWitness(),
         )
         for index, field in enumerate(constructor.fields)
     )
-    if isinstance(spelling, EnumOwnerForm):
-        qualification = EnumWitnessQualification(
-            owner_name=spelling.owner_name,
-            module_qualifier=spelling.module_qualifier,
-            qualifier_anchored=spelling.qualifier_anchored,
-        )
-    else:
-        qualification = None
-    if isinstance(subject_type, EnumType):
-        return EnumWitness(
-            subject_type,
-            constructor.record_type.name,
-            fields,
-            qualification,
-        )
-    return RecordWitness(constructor.record_type, fields, qualification)
-
-
-def _source_spelling(
-    constructor: NominalConstructor, subject_type: object, case_context: MatchCaseContext
-) -> EnumOwnerForm | Literal["bare"] | None:
-    """Select the shortest valid source owner for a concrete nominal constructor.
-
-    ``"bare"`` marks a constructor written without an owner; ``None`` means no
-    visible owner spells it.
-    """
-    nominal_type = subject_type if isinstance(subject_type, EnumType) else constructor.record_type
-    if isinstance(subject_type, EnumType):
-        declaration_identity = (
-            subject_type.module_id,
-            subject_type.name,
-            constructor.record_type.name,
-        )
-        if declaration_identity in case_context.bare_enum_constructors:
-            return "bare"
-
-    matches = tuple(
-        form for form in case_context.enum_owner_forms if form.match(nominal_type) is not None
-    )
-    if not matches:
-        return None
-
-    def candidate_key(
-        candidate: EnumOwnerForm,
-    ) -> tuple[int, str, bool]:
-        text = qualified_owner_name(
-            candidate.owner_name,
-            candidate.module_qualifier,
-            anchored=candidate.qualifier_anchored,
-        )
-        return (
-            len(text),
-            text,
-            candidate.kind is not EnumOwnerFormKind.LOCAL,
-        )
-
-    return min(matches, key=candidate_key)
+    record_type = constructor.record_type
+    identity = (record_type.module_id, record_type.scope_path, record_type.name)
+    if isinstance(occurrence.type, EnumType) and type_table.is_inline_member(
+        occurrence.type, record_type
+    ):
+        return EnumWitness(identity, site_node_id, fields)
+    return RecordWitness(identity, site_node_id, fields)
 
 
 def _witness_for_root(
@@ -489,10 +427,10 @@ def _witness_for_root(
     constraints: dict[OccurrenceId, _Constraint],
     occurrences: tuple[Occurrence, ...],
     type_table: TypeTable,
-    case_context: MatchCaseContext,
+    site_node_id: int,
 ) -> MatchWitness:
     if root.id in constraints:
-        return _witness_for_occurrence(root, constraints, occurrences, type_table, case_context)
+        return _witness_for_occurrence(root, constraints, occurrences, type_table, site_node_id)
     signature = signature_for_type(root.type, type_table)
     whole_domain: _Constraint
     if isinstance(signature, OpenSignature):
@@ -504,7 +442,7 @@ def _witness_for_root(
         {**constraints, root.id: whole_domain},
         occurrences,
         type_table,
-        case_context,
+        site_node_id,
     )
 
 
@@ -556,9 +494,16 @@ def _issues(
             dict(constraints),
             occurrences,
             normalized.type_table,
-            normalized.case_context,
+            normalized.site_node_id,
         )
-        issues.append(NonExhaustiveIssue(normalized.site_node_id, normalized.span, witness))
+        issues.append(
+            NonExhaustiveIssue(
+                normalized.site_node_id,
+                normalized.span,
+                witness,
+                normalized.case_context.module_id,
+            )
+        )
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
 
 

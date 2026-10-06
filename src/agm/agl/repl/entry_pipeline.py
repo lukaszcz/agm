@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 class LoadedCheckedProgram:
     """Result of :meth:`EntryPipeline.load_and_check_program`."""
 
+    resolved_program: "ResolvedProgram"
     checked_program: "CheckedProgram"
     new_modules: "dict[ModuleId, LoadedModule]"
     module_adjacency: "dict[ModuleId, tuple[ModuleId, ...]]"
@@ -139,6 +140,7 @@ class EntryPipeline:
         self._retain_module_artifacts(resolved_program, checked_program)
         raw_param_values = self._resolve_new_module_params(checked_program, new_modules)
         return LoadedCheckedProgram(
+            resolved_program=resolved_program,
             checked_program=checked_program,
             new_modules=new_modules,
             module_adjacency=graph.adjacency,
@@ -194,6 +196,7 @@ class EntryPipeline:
         except AglError as exc:
             return self._ctx._fail_static(exc, tab_warnings)
 
+        resolved_program = loaded.resolved_program
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
         module_adjacency = loaded.module_adjacency
@@ -231,11 +234,13 @@ class EntryPipeline:
             # ``AglError``; the first (already deterministically ordered)
             # issue's own real static error stands in for the entry's
             # failure, while every issue is still reported as a diagnostic.
-            match_diagnostics = list(diagnostics_from_match_issues(match_result.issues))
+            match_diagnostics = list(
+                diagnostics_from_match_issues(match_result.issues, resolved_program.speller)
+            )
             return self._ctx._fail(
                 match_diagnostics,
                 warnings,
-                failure=match_issue_error(match_result.issues[0]),
+                failure=match_issue_error(match_result.issues[0], resolved_program.speller),
             )
         compiled = match_result.compiled
         # Retained for the next entry: its library modules are the same checked
@@ -285,12 +290,13 @@ class EntryPipeline:
         host_env: HostEnvironment,
         *,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
-    ) -> CheckedProgram:
+    ) -> tuple[ResolvedProgram, CheckedProgram]:
         """Prepare, build the module graph, resolve, and typecheck *program*.
 
         Shared by REPL call sites that only need a checked program — no match
         compilation, lowering, or evaluation — such as ``type_of`` and the
-        bare-type-entry fallback. Raises the underlying
+        bare-type-entry fallback. Returns the resolution beside the checked
+        program, which spells a match issue's constructors. Raises the underlying
         ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
         on failure.
         """
@@ -299,13 +305,14 @@ class EntryPipeline:
         resolved_program = self.resolve_program(
             program, next_start_id, spaced_qualifiers=spaced_qualifiers
         )
-        return check_program(
+        checked_program = check_program(
             resolved_program,
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
             cached_checked_modules=self._ctx._retained_checked_modules,
             session_builtin_declarations=self._ctx._session_builtin_declarations,
         )
+        return resolved_program, checked_program
 
     def resolve_program(
         self,

@@ -202,7 +202,7 @@ def _graph_outcome(
         return ("typecheck", type(exc), exc.span, None), exc
     match_result = compile_program_matches(checked_program)
     if match_result.compiled is None:
-        match_error = match_issue_error(match_result.issues[0])
+        match_error = match_issue_error(match_result.issues[0], resolved.speller)
         return ("matchcompile", type(match_error), match_error.span, None), match_error
     entry = checked_program.modules[checked_program.entry_id]
     identity = _rendered_identity(_entry_final_type(entry, wrapped), entry.type_env.type_table)

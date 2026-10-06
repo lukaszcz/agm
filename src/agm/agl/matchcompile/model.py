@@ -15,7 +15,7 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, RecordType, Type
+from agm.agl.semantics.types import RecordType, Type
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -277,11 +277,9 @@ class MatrixRow:
 
 @dataclass(frozen=True, slots=True)
 class MatchCaseContext:
-    """Per-match-site frontend context used only for diagnostics and allocation identity."""
+    """Per-match-site frontend context used only for allocation identity."""
 
     module_id: ModuleId
-    enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
-    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] = frozenset()
     owner_program: Program | None = field(default=None, repr=False, compare=False, hash=False)
 
 

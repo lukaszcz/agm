@@ -540,43 +540,6 @@ def match_type_template(
     return TypeTemplateMatch(tuple((parameter, inferred[parameter]) for parameter in type_params))
 
 
-class EnumOwnerFormKind(_enum.Enum):
-    """Checked source forms capable of owning an enum constructor spelling."""
-
-    LOCAL = "local"
-    SELF = "self"
-    OPEN_IMPORT = "open_import"
-    QUALIFIED_IMPORT = "qualified_import"
-
-
-@dataclass(frozen=True, slots=True)
-class EnumOwnerForm:
-    """One immutable checked enum-owner source form.
-
-    Source identity and template metadata are excluded from display equality;
-    they retain the checked resolution needed to validate a concrete enum
-    without reinterpreting import syntax downstream. This type describes only
-    an owner spelling; which variants a module route makes ambiguous under
-    that spelling is variant-level data carried alongside forms, not on them.
-    """
-
-    owner_name: str
-    module_qualifier: tuple[str, ...] | None
-    kind: EnumOwnerFormKind = field(compare=False)
-    source_module_id: ModuleId = field(compare=False, repr=False)
-    source_name: str = field(compare=False, repr=False)
-    type_template: TypeTemplate = field(compare=False, repr=False)
-    qualifier_anchored: bool = False
-
-    def match(self, concrete: Type) -> TypeTemplateMatch | None:
-        """Match this checked owner form against one concrete semantic type.
-
-        Enum-owner aliases may carry phantom parameters, which cannot be
-        inferred from a scrutinee but do not affect the enum they denote.
-        """
-        return match_nominal_owner_template(self.type_template, concrete)
-
-
 def match_nominal_owner_template(
     template: TypeTemplate, concrete: Type
 ) -> TypeTemplateMatch | None:

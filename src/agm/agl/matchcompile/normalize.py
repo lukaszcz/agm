@@ -7,7 +7,6 @@ import weakref
 from dataclasses import replace
 from typing import assert_never, cast
 
-from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
@@ -75,34 +74,6 @@ CheckedPatternOwner = CheckedModule
 
 class MatchCompileInvariantError(RuntimeError):
     """A checked-program invariant required by match compilation was violated."""
-
-
-def resolve_bare_enum_constructors(
-    checked: CheckedPatternOwner,
-) -> frozenset[tuple[ModuleId, str, str]]:
-    """Collect enum constructors whose unqualified call forms are visible.
-
-    The witness renderer may use an explicit call form for field-bearing
-    variants, so its visibility set is broader than the nullary-only bare-name
-    pattern rule. Ordinary value bindings do not hide these pattern forms.
-
-    A candidate only qualifies when its owner path is a registered enum's own
-    declaration path, so the key's middle component really is an enum name. A
-    record declared in a named scope never qualifies: its owner path is its
-    declaration's enclosing scope, even when that scope shares a name with an
-    unrelated enum.
-    """
-    enum_paths = {
-        (typedef.module_id, (*typedef.scope_path, typedef.name))
-        for typedef in checked.type_env.type_table.entries()
-        if typedef.kind == "enum"
-    }
-    return frozenset(
-        (candidate.owner_module_id, candidate.owner_path[-1], candidate.owner_name)
-        for candidates in checked.resolved.constructor_candidates.values()
-        for candidate in candidates
-        if (candidate.owner_module_id, candidate.owner_path) in enum_paths
-    )
 
 
 def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> NominalConstructor:
@@ -361,13 +332,8 @@ def normalize_pattern(
 
 
 def match_case_context(checked: CheckedPatternOwner) -> MatchCaseContext:
-    """Resolve the checked qualification metadata shared by one owner's match sites."""
-    return MatchCaseContext(
-        module_id=checked.module_id,
-        enum_owner_forms=checked.type_env.enum_owner_forms(),
-        bare_enum_constructors=resolve_bare_enum_constructors(checked),
-        owner_program=checked.resolved.program,
-    )
+    """Resolve the context shared by one owner's match sites."""
+    return MatchCaseContext(module_id=checked.module_id, owner_program=checked.resolved.program)
 
 
 def normalize_case(
@@ -434,6 +400,5 @@ __all__ = [
     "normalize_pattern",
     "pattern_cell_inhabits_type",
     "record_constructor",
-    "resolve_bare_enum_constructors",
     "signature_for_type",
 ]

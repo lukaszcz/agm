@@ -114,7 +114,7 @@ def _record_register_type(env: TypeEnvironment) -> None:
 
 def _query_register_type(env: TypeEnvironment) -> object:
     resolved = env.get_type("Shapes::Color")
-    return (resolved, env.enum_owner_forms())
+    return resolved
 
 
 def _record_register_generic_type(env: TypeEnvironment) -> None:

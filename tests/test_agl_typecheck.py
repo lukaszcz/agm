@@ -797,21 +797,6 @@ class TestTypeEnvironment:
         env.register_type("Foo", rt)
         assert env.get_type("Foo") == rt
 
-    def test_enum_owner_forms_track_declarations_until_sealed(self) -> None:
-        """An unsealed env re-enumerates; a sealed one serves a stable answer."""
-        env = TypeEnvironment()
-        env.register_type("Foo", RecordType(name="Foo"))
-        assert "Foo" in {form.owner_name for form in env.enum_owner_forms()}
-        # Still mutable: a later declaration must show up rather than be masked
-        # by an answer memoized from the earlier call.
-        env.register_type("Bar", RecordType(name="Bar"))
-        owners = {form.owner_name for form in env.enum_owner_forms()}
-        assert {"Foo", "Bar"} <= owners
-
-        env.seal()
-        # Sealed: the enumeration is settled, so repeat asks reuse one answer.
-        assert env.enum_owner_forms() is env.enum_owner_forms()
-
     def test_resolve_type_expr_text(self) -> None:
         env = TypeEnvironment()
         sp = mk_span()
@@ -1111,6 +1096,18 @@ class TestTypeEnvironment:
 
         assert environment.declared_type_template(ENTRY_ID, "Alias") == TypeTemplate(IntType())
 
+    def test_declared_type_template_of_an_own_generic_and_plain_type(self) -> None:
+        environment = TypeEnvironment()
+        generic = GenericTypeDef(kind="record", type_params=("T",), template=RecordType("Box"))
+        environment.register_generic_type("Box", generic)
+        plain = RecordType("Plain")
+        environment.register_type("Plain", plain)
+
+        assert environment.declared_type_template(ENTRY_ID, "Box") == TypeTemplate(
+            generic.template, ("T",)
+        )
+        assert environment.declared_type_template(ENTRY_ID, "Plain") == TypeTemplate(plain)
+
     def test_unregister_name(self) -> None:
         env = TypeEnvironment()
         env.register_type("Foo", RecordType(name="Foo"))
@@ -1196,14 +1193,10 @@ class TestTypeEnvironment:
         return check_program(resolve_program(graph), default_capabilities())
 
     def test_renamed_scoped_enum_import_resolves_when_never_used(self, tmp_path: Path) -> None:
-        """Owner forms are enumerated even for an import no expression references."""
+        """A renamed scoped enum import no expression references still compiles."""
         from agm.agl.matchcompile import compile_program_matches
 
         checked = self._check_scoped_enum_import(tmp_path, "import lib::{A::Status as S}\nprint(3)")
-        # enum_owner_forms() is enumerated for every checked module regardless
-        # of whether an enum constructor is actually referenced; this must not
-        # raise even though 'S' is never used.
-        checked.modules[ENTRY_ID].type_env.enum_owner_forms()
         assert compile_program_matches(checked).compiled is not None
 
     def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: Path) -> None:

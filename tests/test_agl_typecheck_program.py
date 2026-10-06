@@ -2368,14 +2368,6 @@ def test_is_test_owner_spelling_both_local_enum_and_module_alias(tmp_path: Path,
     check_agl_program(tmp_path, modules)
 
 
-def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
-    checked = check_agl_program(tmp_path, {"entry": "enum Color | Red\n0"})
-
-    owners = {form.owner_name for form in checked.modules[ENTRY_ID].type_env.enum_owner_forms()}
-    assert "Color" in owners
-    assert "Missing" not in owners
-
-
 @pytest.mark.parametrize(
     "enum_use",
     (

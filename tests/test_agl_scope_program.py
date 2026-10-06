@@ -2019,10 +2019,10 @@ class TestWildcardImports:
             },
         )
         result = resolve_program(graph)
-        entry = result.modules[ENTRY_ID].resolved
-        (candidate,) = entry.constructor_candidates["Ready"]
-        assert candidate.owner_path == ("State",)
-        assert candidate.owner_name == "Ready"
+        ready_var = _find_varref(graph.modules[ENTRY_ID].program, "Ready")
+        assert ready_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[ready_var.node_id]
+        assert ref.module_id == ModuleId.from_path("foo/alpha")
 
     def test_wildcard_conflicting_overlap_clashes_on_use(self, tmp_path: Path) -> None:
         """Two wildcards expose same bare name from different modules → clash on use."""
@@ -2942,7 +2942,7 @@ class TestExceptionDefInGraph:
         assert (mylib_id, "MyErr") in result.all_public_types
 
     def test_exception_constructor_candidate_available(self, tmp_path: Path) -> None:
-        """A glob-imported exception exposes its name as a constructor candidate."""
+        """A glob-imported exception's name resolves to its constructor."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2953,9 +2953,10 @@ class TestExceptionDefInGraph:
         result = resolve_program(graph)
         # The entry resolved correctly (no scope error raised).
         assert ENTRY_ID in result.modules
-        entry_resolved = result.modules[ENTRY_ID].resolved
-        # MyErr is a constructor candidate resolved from the glob import.
-        assert "MyErr" in entry_resolved.constructor_candidates
+        err_var = _find_varref(graph.modules[ENTRY_ID].program, "MyErr")
+        assert err_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[err_var.node_id]
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     @pytest.mark.parametrize(
         "entry",
@@ -3161,7 +3162,7 @@ class TestReachableDeclarations:
         assert session.eval_entry("import metrics").ok
         program, next_node_id = parse_program_seeded("()", start_id=session._next_node_id)
 
-        checked = session._entry_pipeline.resolve_and_check_program(
+        _, checked = session._entry_pipeline.resolve_and_check_program(
             program, next_node_id, session._runtime.host_environment()
         )
         reachable = checked.modules[ENTRY_ID].resolved.reachable_declarations

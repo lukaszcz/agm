@@ -18,6 +18,7 @@ from agm.agl.matchcompile import (
     CachedModuleSites,
     CaseSite,
     CompiledMatchSite,
+    ConstructorSpeller,
     MatchCompilationResult,
     MatchCompiledProgram,
     NonExhaustiveIssue,
@@ -48,7 +49,6 @@ from agm.agl.pipeline import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests._agl_helpers import prepare_inline_code, run_inline_code
@@ -76,8 +76,9 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "DecisionLeaf",
         "DecisionSwitch",
         "NominalConstructor",
+        "ConstructorSpeller",
+        "ConstructorSpellers",
         "EnumWitness",
-        "EnumWitnessQualification",
         "FieldOccurrenceProvenance",
         "LiteralKind",
         "LiteralWitness",
@@ -109,7 +110,12 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     assert not hasattr(matchcompile, "EnumOwnerForm")
     assert not hasattr(matchcompile, "EnumOwnerFormKind")
     assert hasattr(matchcompile, "FieldOccurrenceProvenance")
-    assert matchcompile.EnumWitnessQualification is not EnumOwnerForm
+    assert not hasattr(matchcompile, "EnumWitnessQualification")
+
+
+def _no_constructors(_module_id: ModuleId) -> ConstructorSpeller:
+    """Speller for programs whose witnesses are not about scope spelling."""
+    return lambda decl, _case_node_id: decl[2]
 
 
 def _checked(source: str) -> CheckedModule:
@@ -342,7 +348,7 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
 
     assert result.compiled is None
     assert len(result.issues) == 3
-    diagnostics = diagnostics_from_match_issues(result.issues)
+    diagnostics = diagnostics_from_match_issues(result.issues, _no_constructors)
     assert [diagnostic.line for diagnostic in diagnostics] == sorted(
         diagnostic.line for diagnostic in diagnostics
     )
@@ -423,7 +429,8 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
             "beta": ("def beta(x: bool) -> int =\n  case x of\n    | true => 1\n    | true => 2\n"),
         },
     )
-    checked = check_program(resolve_program(graph), base_caps())
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, base_caps())
 
     result = compile_program_matches(checked)
 
@@ -448,7 +455,7 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
     ]
     assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
-    diagnostics = diagnostics_from_match_issues(result.issues)
+    diagnostics = diagnostics_from_match_issues(result.issues, resolved.speller)
     assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
     assert [
         (

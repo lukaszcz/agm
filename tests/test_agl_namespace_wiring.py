@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import HiddenMemberError
+from agm.agl.matchcompile import NonExhaustiveIssue, compile_program_matches, render_witness
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -1962,33 +1963,36 @@ def test_pattern_and_is_filter_type_module_routes_by_the_referenced_variant(tmp_
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
-def test_enum_owner_forms_exclude_ambiguous_suffix_routes(tmp_path: Path) -> None:
+def _missing_witnesses(graph: ModuleGraph) -> list[str]:
+    """The witnesses of *graph*'s non-exhaustive cases, spelled where written."""
+    resolved = resolve_program(graph)
+    issues = compile_program_matches(check_program(resolved, base_caps())).issues
+    return [
+        render_witness(issue.witness, resolved.speller(issue.module_id))
+        for issue in issues
+        if isinstance(issue, NonExhaustiveIssue)
+    ]
+
+
+def test_witness_does_not_spell_an_ambiguous_suffix_route(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
                 "import one/config\n"
                 "import two/config\n"
-                "let flag = one/config::Flag::On\n"
-                "case flag of | one/config::Flag::On => 1 | _ => 2"
+                "def f(flag: one/config::Flag) -> int =\n"
+                "  case flag of | one/config::Flag::On => 1\n"
             ),
             "one/config": "enum Flag | On | Off",
             "two/config": "enum Flag | On | Off",
         },
     )
 
-    checked = check_program(resolve_program(graph), base_caps())
-    forms = checked.modules[graph.entry_id].type_env.enum_owner_forms()
-
-    assert not any(form.module_qualifier == ("config",) for form in forms)
-    assert {
-        form.module_qualifier
-        for form in forms
-        if form.owner_name == "Flag" and form.module_qualifier is not None
-    } >= {("one", "config"), ("two", "config")}
+    assert _missing_witnesses(graph) == ["one/config::Flag::Off"]
 
 
-def test_enum_owner_forms_do_not_cross_repeated_import_routes(tmp_path: Path) -> None:
+def test_witness_does_not_cross_repeated_import_routes(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -1996,21 +2000,15 @@ def test_enum_owner_forms_do_not_cross_repeated_import_routes(tmp_path: Path) ->
                 "import alpha as X hiding E\n"
                 "import alpha\n"
                 "import beta as X\n"
-                "let value = alpha::E::One\n"
-                "case value of | alpha::E::One => 1 | _ => 0\n"
+                "def f(value: alpha::E) -> int =\n"
+                "  case value of | alpha::E::One => 1\n"
             ),
             "alpha": "enum E | One | Two\n",
             "beta": "enum E | Other\n",
         },
     )
 
-    checked = check_program(resolve_program(graph), base_caps())
-    forms = checked.modules[graph.entry_id].type_env.enum_owner_forms()
-    alias_forms = [
-        form for form in forms if form.owner_name == "E" and form.module_qualifier == ("X",)
-    ]
-
-    assert {form.source_module_id for form in alias_forms} == {ModuleId.from_path("beta")}
+    assert _missing_witnesses(graph) == ["alpha::E::Two"]
 
 
 def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: Path) -> None:

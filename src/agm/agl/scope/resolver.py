@@ -74,10 +74,8 @@ from agm.agl.modules.ids import (
     RESERVED_ID,
     ModuleId,
     render_route_member,
-    spell_declaration,
 )
 from agm.agl.scope.attributes import recognize_attributes
-from agm.agl.scope.hiding import removed
 from agm.agl.scope.imports import (
     ImportEnv,
     ItemDeclaration,
@@ -90,7 +88,6 @@ from agm.agl.scope.lookup import (
     Misfit,
     QualifiedTarget,
     lookup_bare,
-    lookup_constructors,
     lookup_declared,
     lookup_qualified,
     unknown_member,
@@ -114,6 +111,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     BuiltinMethodReceiver,
     BuiltinStaticKind,
+    CaseRegion,
     ConstructorRef,
     ContributionLayer,
     DeclarationKey,
@@ -133,7 +131,6 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     UnknownMemberError,
     UnknownQualifierError,
-    add_layers,
     builtin_call_kind,
     builtin_type_static_kind,
     duplicate_binder_message,
@@ -761,6 +758,9 @@ class _Resolver(ModuleSources):
         self._is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
         # Qualified pattern and ``is`` spellings whose qualifier names a local plain scope.
         self._scope_qualified_spellings: set[int] = set()
+        # The type parameters of the declarations enclosing the walk, and where each ``case`` is.
+        self._type_params_in_scope: frozenset[str] = frozenset()
+        self._case_regions: dict[int, CaseRegion] = {}
         # Each case branch creates one shared slot per pattern binding name.
         # The checker selects its final target after the branch is classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
@@ -946,7 +946,9 @@ class _Resolver(ModuleSources):
             static_root=self._is_static_root_module,
             origin_path=self._origin_path,
             declared_type_paths=frozenset(self._type_paths),
-            constructor_candidates=self._root_constructor_candidates(),
+            constructor_candidates={
+                name: tuple(refs) for name, refs in self._constructor_candidates.items() if refs
+            },
             constructor_refs=dict(self._constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             is_test_constructor_candidates=dict(self._is_test_constructor_candidates),
@@ -967,33 +969,12 @@ class _Resolver(ModuleSources):
                 key: tuple(refs) for key, refs in self._scoped_constructor_candidates.items()
             },
             fixities=fixities,
+            case_regions=dict(self._case_regions),
         )
 
     # ------------------------------------------------------------------
     # Fixity
     # ------------------------------------------------------------------
-
-    def _root_constructor_candidates(self) -> dict[str, tuple[ConstructorRef, ...]]:
-        """The constructors a bare name may denote at the module root.
-
-        Published as ``ModuleResolution.constructor_candidates``, which only
-        non-exhaustive-match witness rendering reads (to spell a member bare
-        when it is visible). Scope itself decides through :func:`lookup_bare`.
-        Holds this module's own and the host's constructors, those root
-        imports make bare, and the enum members they inject.
-        """
-        table = {name: list(refs) for name, refs in self._constructor_candidates.items()}
-        imported = (atom for atom in self._import_env.unqualified if isinstance(atom, str))
-        for name in (*self._enum_members(), *imported):
-            found = [
-                constructor
-                for candidate in lookup_constructors(self, name, ())
-                if (constructor := candidate.target.constructor) is not None
-                and not removed(candidate.hiding, candidate.target.key, self)
-            ]
-            known = table.setdefault(name, [])
-            known.extend(c for c in found if c not in known)
-        return {name: tuple(refs) for name, refs in table.items() if refs}
 
     def fixity(self, name: str) -> Fixity | None:
         """The fixity this module gives its declarations named *name*, if it declares one."""
@@ -1999,6 +1980,16 @@ class _Resolver(ModuleSources):
             self._scope = previous
 
     @contextmanager
+    def _type_params_ctx(self, params: Iterable[str]) -> Iterator[None]:
+        """Resolve a declaration's body with its type parameters in scope besides the enclosing."""
+        previous = self._type_params_in_scope
+        self._type_params_in_scope = previous.union(params)
+        try:
+            yield
+        finally:
+            self._type_params_in_scope = previous
+
+    @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
         """Open a fresh child scope and yield it.
 
@@ -2301,20 +2292,21 @@ class _Resolver(ModuleSources):
         use their collected member layer; a nested block holds no ``def``
         (placement is checked first).
         """
-        if node.scope_path:
-            base = self._scope.scope_path
-            with self._named_scope(_written_scope(node)):
-                self._classify_function_head(node, base)
-                self._validate_qualifier_chains(node, node.type_params)
-                self._resolve_program_config(node)
-                self._resolve_params_and_body(node)
-            return
-        # Defaults are resolved in the enclosing (root) scope — they are
-        # evaluated in the function's definition scope.
-        self._classify_function_head(node, ())
-        self._validate_qualifier_chains(node, node.type_params)
-        self._resolve_program_config(node)
-        self._resolve_params_and_body(node)
+        with self._type_params_ctx(node.type_params):
+            if node.scope_path:
+                base = self._scope.scope_path
+                with self._named_scope(_written_scope(node)):
+                    self._classify_function_head(node, base)
+                    self._validate_qualifier_chains(node, node.type_params)
+                    self._resolve_program_config(node)
+                    self._resolve_params_and_body(node)
+                return
+            # Defaults are resolved in the enclosing (root) scope — they are
+            # evaluated in the function's definition scope.
+            self._classify_function_head(node, ())
+            self._validate_qualifier_chains(node, node.type_params)
+            self._resolve_program_config(node)
+            self._resolve_params_and_body(node)
 
     def _resolve_program_config(self, node: FuncDef) -> None:
         """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
@@ -2340,7 +2332,7 @@ class _Resolver(ModuleSources):
         if isinstance(node, TypeAlias):
             self._validate_alias(path, node)
         else:
-            with self._named_scope(path):
+            with self._named_scope(path), self._type_params_ctx(node.type_params):
                 self._validate_type_decl(node)
                 self._resolve_field_defaults(node)
 
@@ -2780,12 +2772,17 @@ class _Resolver(ModuleSources):
 
         One per declaration they construct, repaired by the first.
         """
-        distinct = self._one_per_declaration(candidates)
+        distinct = self.one_per_declaration(candidates)
         ordered = sorted(distinct, key=constructor_candidate_sort_key)
         return self._ambiguous_constructor(
             name,
             {candidate: distinct[candidate] for candidate in ordered},
-            self._bare_constructor_repair(ordered[0], name, span),
+            self.spell_constructor(
+                self.constructor_declaration(ordered[0]),
+                self._named_scope_path(),
+                span,
+                kind=LookupKind.VALUE,
+            ),
             span,
         )
 
@@ -2795,18 +2792,18 @@ class _Resolver(ModuleSources):
         """Report module qualifier *chain*'s *member* injected from several *candidates*.
 
         Repaired by the first one, qualified by its owner through *chain*
-        where that selects it, else by its shortest routed spelling.
+        where that selects it, else by its shortest spelling.
         """
-        distinct = self._one_per_declaration(candidates)
+        distinct = self.one_per_declaration(candidates)
         ordered = sorted(distinct, key=constructor_candidate_sort_key)
-        first = ordered[0]
-        repair = render_qualified_name(chain, f"{first.owner_path[0]}::{member}")
+        first = self.constructor_declaration(ordered[0])
+        repair = render_qualified_name(chain, f"{first[1][0]}::{member}")
         site = self._named_scope_path()
-        qualifier = (*(segment.name for segment in chain.segments), first.owner_path[0])
-        if chain.segments and not self._spelling_selects(
-            qualifier, member, first, chain.span, site, anchored=chain.anchored
+        qualifier = (*(segment.name for segment in chain.segments), first[1][0])
+        if chain.segments and not self.selects_constructor(
+            qualifier, member, first, chain.span, site, anchor=chain.anchor, kind=LookupKind.VALUE
         ):
-            repair = self._routed_spelling(first, first.qname, chain.span, site)
+            repair = self.spell_constructor(first, site, chain.span, kind=LookupKind.VALUE)
         return self._ambiguous_constructor(
             render_qualified_name(chain, member),
             {candidate: distinct[candidate] for candidate in ordered},
@@ -2867,37 +2864,6 @@ class _Resolver(ModuleSources):
             f"call it directly ({reason}).",
             span=node.span,
         )
-
-    def _bare_constructor_repair(
-        self, candidate: ConstructorRef, name: str, span: SourceSpan
-    ) -> str:
-        """Spell *candidate*, which bare *name* written at *span* selects among others.
-
-        An imported member is qualified by the owner name a root import tail
-        makes bare, renamed as that import exposes it, while that spelling
-        selects *candidate* there; else by its shortest route that does
-        (:meth:`_routed_spelling`). Anything else is spelled by its
-        declaration path.
-        """
-        origin = candidate.qname
-        if candidate.owner_module_id == self._module_id:
-            path = (*_bare_path(origin[1])[:-1], name)
-            return spell_declaration(self._module_id, path, reader=self.reader())
-        owner = next(
-            (
-                atom[0]
-                for atom, qnames in self._import_env.unqualified.items()
-                if isinstance(atom, tuple)
-                and atom[1:] == (name,)
-                and origin in qnames
-                and len(self.tail_exposed(atom[0])) == 1
-            ),
-            None,
-        )
-        site = self._named_scope_path()
-        if owner is not None and self._spelling_selects((owner,), name, candidate, span, site):
-            return f"{owner}::{name}"
-        return self._routed_spelling(candidate, origin, span, site)
 
     def _validate_qualifier_chains(self, root: SyntaxNode, type_params: Iterable[str] = ()) -> None:
         """Validate qualifier syntax in the current lexical scope layer.
@@ -3088,7 +3054,7 @@ class _Resolver(ModuleSources):
                 ("/".join(advisory.segments),),
                 advisory.member,
                 failure_span,
-                anchored=advisory.anchored,
+                anchor=QualifierAnchor.MODULE if advisory.anchored else None,
             ),
             self._named_scope_path(),
             LookupKind.TYPE if advisory.type_qualified else LookupKind.VALUE,
@@ -3270,6 +3236,9 @@ class _Resolver(ModuleSources):
             self._resolve_expr_or_block(branch.body)
 
     def _resolve_case(self, node: Case) -> None:
+        self._case_regions[node.node_id] = CaseRegion(
+            self._named_scope_path(), self._type_params_in_scope, node.span
+        )
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
@@ -3438,50 +3407,11 @@ class _Resolver(ModuleSources):
             f"'{render_qualified_name(chain, name)}' names no constructor.", span=chain.span
         )
 
-    def _pattern_constructors(self, name: str) -> tuple[ConstructorRef, ...]:
-        """Return the constructor candidates a bare pattern or ``is`` spelling *name* reaches.
-
-        Its scrutinee selects among them: every constructor so spelled at
-        every step -- own, contributed and injected -- that no ``hiding`` removed.
-        A same-named record or exception does not make a member yield here.
-        """
-        found: dict[ConstructorRef, Layers] = {}
-        for candidate in lookup_constructors(self, name, self._named_scope_path()):
-            constructor = candidate.target.constructor
-            if constructor is not None and not removed(
-                candidate.hiding, candidate.target.key, self
-            ):
-                add_layers(found, constructor, (candidate.layer,))
-        return tuple(self._one_per_declaration(found))
-
-    def _one_per_declaration(
-        self, candidates: Mapping[ConstructorRef, Layers]
-    ) -> dict[ConstructorRef, Layers]:
-        """*candidates*, one per declaration they construct, with every layer reaching it.
-
-        A renaming alias's constructor is its target's
-        (:meth:`TypeOwnerIndex.constructor_identity`), and aliases denoting one
-        type construct one, as do the members aliases applying one enum alike
-        select (:meth:`TypeOwnerIndex.denotation`): the candidate
-        naming the declaration directly stands for it, else its first by path.
-        """
-        grouped: dict[object, dict[ConstructorRef, Layers]] = {}
-        for candidate, layers in candidates.items():
-            named = self._type_owners.constructor_identity(candidate)
-            denoted = self._type_owners.denotation(named.qname)
-            grouped.setdefault(named if denoted is None else denoted, {})[candidate] = layers
-        return {
-            (
-                named if named in reached else min(reached, key=constructor_candidate_sort_key)
-            ): frozenset().union(*reached.values())
-            for named, reached in grouped.items()
-        }
-
     def _visible_bare_constructor_candidates(
         self, name: str, span: SourceSpan
     ) -> tuple[ConstructorRef, ...]:
         """Return a bare pattern or ``is`` spelling's candidates, rejecting a spelling with none."""
-        candidates = self._pattern_constructors(name)
+        candidates = self.pattern_constructors(name, self._named_scope_path())
         if not candidates:
             raise NoVisibleConstructorError(f"'{name}' is not a visible constructor.", span=span)
         return candidates
@@ -3518,7 +3448,9 @@ class _Resolver(ModuleSources):
         walk(pattern, record_constructor_candidates)
         for candidate in pattern_binder_candidates(pattern):
             constructor_candidates = (
-                self._pattern_constructors(candidate.name) if not candidate.is_as_pattern else ()
+                self.pattern_constructors(candidate.name, self._named_scope_path())
+                if not candidate.is_as_pattern
+                else ()
             )
             if constructor_candidates:
                 self._pattern_constructor_candidates[candidate.node_id] = constructor_candidates

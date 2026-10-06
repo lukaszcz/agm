@@ -220,9 +220,12 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
     assert isinstance(issue.witness, RecordWitness)
-    assert strip_decl_ids(issue.witness.record_type) == RecordType("Box")
+    assert issue.witness.constructor[2] == "Box"
     assert [field.name for field in issue.witness.fields] == ["value"]
-    assert render_witness(issue.witness) == "Box(value = a int value other than 1)"
+    assert (
+        render_witness(issue.witness, lambda decl, _node: decl[2])
+        == "Box(value = a int value other than 1)"
+    )
 
 
 def test_path_decompositions_are_recorded_only_when_the_self_checks_run(

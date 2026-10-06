@@ -97,7 +97,6 @@ from agm.agl.artifact_cache import (
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import CycleAlias, Diagnostic, alias_cycle_error
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import DeclarationKey, ModuleResolution, ScopePath
 from agm.agl.self_validation import self_validation_enabled
@@ -629,13 +628,11 @@ def _build_program_type_table(
     for mid, rmod in resolved.modules.items():
         if mid in interfaces:
             continue
-        import_env = rmod.import_env
         cross_env = TypeEnvironment(
             program_type_table=tables.types,
             program_generic_table=tables.generics,
             program_alias_table=tables.aliases,
             program_aliases=program_aliases,
-            import_env=import_env,
             module_id=mid,
             type_table=shared_type_table,
             owner_declarations=rmod.resolved.owner_declarations,
@@ -746,14 +743,12 @@ def _build_program_func_sig_table(
             continue
         program = rmod.resolved.program
 
-        import_env = rmod.import_env
         # Build a cross-module-aware env for this module, seeded with its own
         # types so bare-name local type refs in param annotations resolve.
         env = TypeEnvironment(
             program_type_table=tables.types,
             program_generic_table=tables.generics,
             program_alias_table=tables.aliases,
-            import_env=import_env,
             module_id=mid,
             type_table=type_table,
             owner_declarations=rmod.resolved.owner_declarations,
@@ -1034,7 +1029,6 @@ def _prepare_module_environment(
     resolved: ModuleResolution,
     tables: ModuleTypeInterface,
     module_seeds: _ModuleTypeSeeds,
-    import_env_map: Mapping[ModuleId, ImportEnv],
     declared_func_sig_table: dict[int, FunctionSignatureRecord],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
@@ -1073,12 +1067,10 @@ def _prepare_module_environment(
         program_type_table=tables.types,
         program_generic_table=tables.generics,
         program_alias_table=tables.aliases,
-        import_env=import_env_map[mid],
         module_id=mid,
         type_table=type_table,
         declared_seed=declared_seed,
         owner_declarations=resolved.owner_declarations,
-        declared_segments=resolved.declared_segments,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
@@ -1268,11 +1260,6 @@ def _prepare_program(
         cached_modules=cached_checked_modules,
     )
 
-    # Collect import envs for per-module checking.
-    import_env_map: dict[ModuleId, ImportEnv] = {
-        mid: rmod.import_env for mid, rmod in resolved.modules.items()
-    }
-
     # Phase 3: build every module environment before candidate inference. The
     # completed explicit headers are present in every environment, while each
     # dependency SCC later adds only its closed candidates. ``program_func_sig_table``
@@ -1291,7 +1278,6 @@ def _prepare_program(
             resolved.modules[mid].resolved,
             tables,
             module_seeds,
-            import_env_map,
             declared_func_sig_table,
             shared_type_table,
             entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,

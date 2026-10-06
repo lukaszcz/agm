@@ -213,7 +213,7 @@ def _make_temp_file(suffix: str) -> Path:
 
 def temp_file(suffix: str = "") -> str:
     """Create a new empty temporary file named with *suffix*; removed at session end."""
-    return _session_temp_path("temp-file", lambda: _make_temp_file(suffix))
+    return _session_temp_path("temp-file", lambda: _make_temp_file(f"-{suffix}" if suffix else ""))
 
 
 def temp_dir() -> str:

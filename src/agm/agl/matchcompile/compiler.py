@@ -6,17 +6,15 @@ from dataclasses import dataclass, field
 from typing import TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType
 
 from .diagnostics import (
     BoolWitness,
-    EnumWitness,
+    ConstructorWitness,
     LiteralWitness,
     MatchIssue,
     MatchWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
-    RecordWitness,
     RedundantArmIssue,
     WildcardWitness,
     WitnessField,
@@ -415,11 +413,7 @@ def _witness_for_occurrence(
     )
     record_type = constructor.record_type
     identity = (record_type.module_id, record_type.scope_path, record_type.name)
-    if isinstance(occurrence.type, EnumType) and type_table.is_inline_member(
-        occurrence.type, record_type
-    ):
-        return EnumWitness(identity, site_node_id, fields)
-    return RecordWitness(identity, site_node_id, fields)
+    return ConstructorWitness(identity, site_node_id, fields)
 
 
 def _witness_for_root(

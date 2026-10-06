@@ -578,6 +578,82 @@ _OWN_MEMBER_LAYER = {
     ),
 }
 
+_OWN_RECORD = "scope S\n  record Red\n    n: int\nend S"
+_OWN_EXCEPTION = "scope S\n  exception Red\nend S"
+_OWN_DIRECT_COLOR = "enum Color\n  | Red\n  | Green"
+_OWN_COLOR = "scope T\n  enum Color\n    | Red\n    | Green\nend T"
+
+
+def _one_entry(
+    header: tuple[str, ...], probes: Mapping[str, Probe], shared: int | None = None
+) -> Scenario:
+    """A scenario whose first *shared* header lines (the uses and the scopes) share a REPL entry."""
+    shared = len(header) if shared is None else shared
+    legal = frozenset(s for s in all_groupings(len(header) + 1) if s[0] >= shared)
+    return Scenario(modules=_MODULES, header=header, probes=probes, legal=legal)
+
+
+_OWN_MEMBER_YIELDS = {
+    "own-record-by-use": _one_entry(
+        ("use S::Red", "use T::Color", _OWN_RECORD, _OWN_COLOR),
+        {"value": accepted("Red(n = 1)", "record S::Red\n  n: int")},
+    ),
+    "own-record-by-use-reversed": _one_entry(
+        ("use T::Color", "use S::Red", _OWN_RECORD, _OWN_COLOR),
+        {"value": accepted("Red(n = 1)", "record S::Red\n  n: int")},
+    ),
+    "own-exception-by-use": _one_entry(
+        ("use S::Red", "use T::Color", _OWN_EXCEPTION, _OWN_COLOR),
+        {"value": accepted('Red(message = "m")', "S::Red")},
+    ),
+    "own-record-by-use-in-region": _one_entry(
+        (_OWN_RECORD, _OWN_COLOR),
+        {
+            "value": accepted(
+                _in_region("use ::S::Red", "use ::T::Color", "let v = Red(n = 1)", tail="s::v"),
+                "record S::Red\n  n: int",
+            )
+        },
+        shared=0,
+    ),
+    "direct-own-member-beats-own-record-by-use": _one_entry(
+        ("use S::Red", _OWN_RECORD, _OWN_DIRECT_COLOR),
+        {"value": accepted("Red", "record Color::Red")},
+        shared=2,
+    ),
+    "direct-own-member-beats-own-exception-by-use": _one_entry(
+        ("use S::Red", _OWN_EXCEPTION, _OWN_DIRECT_COLOR),
+        {"value": accepted("Red", "record Color::Red")},
+        shared=2,
+    ),
+    "region-direct-own-member-beats-own-record-by-use": _one_entry(
+        (_OWN_RECORD,),
+        {
+            "value": accepted(
+                _in_region(
+                    "use ::S::Red", "enum Color\n  | Red\n  | Green", "let v = Red", tail="s::v"
+                ),
+                "record s::Color::Red",
+            )
+        },
+        shared=0,
+    ),
+    "two-own-enums-by-use-are-ambiguous": _one_entry(
+        (
+            "use T::Color",
+            "use U::Hue",
+            _OWN_COLOR,
+            "scope U\n  enum Hue\n    | Red\nend U",
+        ),
+        {"value": rejected("Red", AmbiguousConstructorError, "Red")},
+    ),
+    "own-direct-enum-beats-own-enum-by-use": _one_entry(
+        ("use T::Color", _OWN_COLOR, "enum Hue\n  | Red\n  | Blue"),
+        {"value": accepted("Red", "record Hue::Red")},
+        shared=2,
+    ),
+}
+
 _REEXPORTED_MEMBERS = {
     "renamed-enum-by-use": Scenario(
         modules=_RENAMED_MODULES,
@@ -700,6 +776,12 @@ class TestInjectionRules:
 
     @pytest.mark.parametrize("scenario", scenario_params(_OWN_MEMBER_LAYER))
     def test_own_enum_member_is_own_however_reached(
+        self, tmp_path: Path, scenario: Scenario
+    ) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", scenario_params(_OWN_MEMBER_YIELDS))
+    def test_own_member_yields_to_own_record_or_exception_it_shares_a_step_with(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)

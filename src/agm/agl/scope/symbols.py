@@ -1394,7 +1394,7 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
     or module-surface constructor spelling against every visible type,
     rather than by a qualified route. ``repair`` is one qualified spelling
     that selects a single candidate, written through the same module
-    qualifier when the ambiguous spelling has one.
+    qualifier when the ambiguous spelling has one; ``None`` when none does.
     """
 
     def __init__(
@@ -1403,7 +1403,7 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         *,
         spelling: str,
         origins: tuple[QualificationOrigin, ...],
-        repair: str,
+        repair: str | None,
         span: SourceSpan,
     ) -> None:
         super().__init__(message, spelling=spelling, origins=origins, span=span)
@@ -1414,14 +1414,19 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
         spelling: str,
         origins: Iterable[QualificationOrigin],
         *,
-        repair: str,
+        repair: str | None,
         span: SourceSpan,
         reader: Reader,
     ) -> AmbiguousConstructorError:
         """Build from *origins*, ending with *repair*, a spelling that selects one candidate."""
         ordered, statement = _render_ambiguity(spelling, origins, reader=reader)
+        advice = (
+            qualification_repair_guidance()
+            if repair is None
+            else f"Qualify the reference, e.g. '{repair}'."
+        )
         return AmbiguousConstructorError(
-            f"{statement} Qualify the reference, e.g. '{repair}'.",
+            f"{statement} {advice}",
             spelling=spelling,
             origins=ordered,
             repair=repair,
@@ -1433,23 +1438,25 @@ class AmbiguousConstructorError(AmbiguousQualificationError):
 class Ambiguity:
     """An ambiguous bare spelling's verdict kept as data, to report wherever it is read.
 
-    ``origins`` are what it selects; ``repair`` is set when they are all
-    constructors (:class:`AmbiguousConstructorError`).
+    ``origins`` are what it selects; ``constructors`` holds when they are all
+    constructors (:class:`AmbiguousConstructorError`), with a ``repair`` if
+    some spelling selects one.
     """
 
     origins: tuple[QualificationOrigin, ...]
     repair: str | None
+    constructors: bool = False
 
     @staticmethod
     def of(error: AmbiguousQualificationError) -> Ambiguity:
         """The verdict *error* reports."""
-        return Ambiguity(
-            error.origins, error.repair if isinstance(error, AmbiguousConstructorError) else None
-        )
+        if isinstance(error, AmbiguousConstructorError):
+            return Ambiguity(error.origins, error.repair, True)
+        return Ambiguity(error.origins, None)
 
     def error(self, name: str, span: SourceSpan, *, reader: Reader) -> AmbiguousQualificationError:
         """The error for bare *name*, read at *span*, selecting these origins."""
-        if self.repair is None:
+        if not self.constructors:
             return AmbiguousQualificationError.for_origins(
                 (), (name,), self.origins, span=span, reader=reader
             )

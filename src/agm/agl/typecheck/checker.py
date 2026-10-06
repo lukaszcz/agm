@@ -6299,8 +6299,7 @@ class _Checker:
         Scope supplies the source-spelling candidates. Their source type templates
         are matched against the concrete scrutinee, so transparent aliases still
         select the underlying nominal handle while module, name, and instantiated
-        arguments retain exact identity. Enum qualification remains validated by
-        the enum-specific owner-form metadata used by match compilation.
+        arguments retain exact identity.
         """
         owner_type: RecordType
         fields: Mapping[str, Type]

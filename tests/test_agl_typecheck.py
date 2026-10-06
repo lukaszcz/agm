@@ -1178,12 +1178,8 @@ class TestTypeEnvironment:
     def _check_scoped_enum_import(self, root: Path, entry: str) -> CheckedProgram:
         """Check a real two-module graph whose entry renames a scoped enum.
 
-        Both cases below guard the same regression: an
-        ``import lib::{A::Status as S}`` tail selects a QName whose declaration
-        path is ``("A",)``, and enum-owner-form construction used to discard
-        that path before asking the shared type table for the source template,
-        so it asked for a root ``lib::Status`` template instead and hit an
-        internal consistency check.
+        An ``import lib::{A::Status as S}`` tail selects a name whose declaration
+        path is ``("A",)``, which constructing and matching through ``S`` must keep.
         """
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
@@ -1192,15 +1188,8 @@ class TestTypeEnvironment:
         graph = make_graph_from_files(root, {"entry": entry, "lib": self._SCOPED_ENUM_LIB_SOURCE})
         return check_program(resolve_program(graph), default_capabilities())
 
-    def test_renamed_scoped_enum_import_resolves_when_never_used(self, tmp_path: Path) -> None:
-        """A renamed scoped enum import no expression references still compiles."""
-        from agm.agl.matchcompile import compile_program_matches
-
-        checked = self._check_scoped_enum_import(tmp_path, "import lib::{A::Status as S}\nprint(3)")
-        assert compile_program_matches(checked).compiled is not None
-
-    def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: Path) -> None:
-        """Constructing and matching through the renamed owner form resolves."""
+    def test_renamed_scoped_enum_import_constructs_and_matches(self, tmp_path: Path) -> None:
+        """Constructing and matching through the renamed scoped enum resolves."""
         from agm.agl.matchcompile import compile_program_matches
 
         checked = self._check_scoped_enum_import(

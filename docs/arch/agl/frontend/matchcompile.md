@@ -8,7 +8,7 @@ Patterns are normalized from the checker's binder and constructor classification
 
 ## Diagnostics Cannot Disagree with Execution
 
-Reachable-arm information and missing-pattern witnesses are derived from the same DAG that will execute, so exhaustiveness and redundancy diagnostics can never disagree with runtime behavior. A witness carries each constructor's declaration identity and its `case`'s node id, and is spelled only when rendered, by scope's constructor speller at that case's region (`ResolvedProgram.speller`, [scope.md](scope.md)): the shortest spelling that selects the constructor there; a fieldless constructor renders without parentheses. A refutable `let` is a static diagnostic carrying the same witness form as case exhaustiveness. Any issue yields diagnostics and no artifact, so lowering only ever sees fully compiled programs.
+Reachable-arm information and missing-pattern witnesses are derived from the same DAG that will execute, so exhaustiveness and redundancy diagnostics can never disagree with runtime behavior. A witness carries each constructor's declaration identity and its `case`'s node id, and is spelled only when rendered, by scope's constructor speller at that case's region (`ResolvedProgram.speller`, [scope.md](scope.md)): the shortest spelling that selects the constructor there (`_` when none does); a fieldless constructor renders without parentheses. A refutable `let` is a static diagnostic carrying the same witness form as case exhaustiveness. Any issue yields diagnostics and no artifact, so lowering only ever sees fully compiled programs.
 
 ## Whole-Program Artifacts
 

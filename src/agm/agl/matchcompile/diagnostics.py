@@ -45,25 +45,18 @@ class WitnessField:
     witness: MatchWitness
 
 
-ConstructorSpeller: TypeAlias = Callable[[DeclKey, int], str]
-"""Spells a constructor, by its declaration, as written in the ``case`` with the given node id."""
+ConstructorSpeller: TypeAlias = Callable[[DeclKey, int], str | None]
+"""Spells a constructor, by its declaration, as written in the ``case`` with the given node id.
+
+``None`` when no spelling there selects it."""
 
 ConstructorSpellers: TypeAlias = Callable[[ModuleId], ConstructorSpeller]
 """A module's :data:`ConstructorSpeller`."""
 
 
 @dataclass(frozen=True, slots=True)
-class EnumWitness:
-    """A concrete enum constructor with structural child witnesses."""
-
-    constructor: DeclKey
-    case_node_id: int
-    fields: tuple[WitnessField, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class RecordWitness:
-    """A concrete record constructor with structural child witnesses."""
+class ConstructorWitness:
+    """A concrete enum member or record constructor with structural child witnesses."""
 
     constructor: DeclKey
     case_node_id: int
@@ -79,12 +72,7 @@ class OpenComplementWitness:
 
 
 MatchWitness: TypeAlias = (
-    WildcardWitness
-    | BoolWitness
-    | LiteralWitness
-    | EnumWitness
-    | RecordWitness
-    | OpenComplementWitness
+    WildcardWitness | BoolWitness | LiteralWitness | ConstructorWitness | OpenComplementWitness
 )
 
 
@@ -134,8 +122,10 @@ def render_witness(witness: MatchWitness, speller: ConstructorSpeller) -> str:
         return "true" if witness.value else "false"
     if isinstance(witness, LiteralWitness):
         return _render_literal(witness.kind, witness.value)
-    if isinstance(witness, (EnumWitness, RecordWitness)):
+    if isinstance(witness, ConstructorWitness):
         constructor_name = speller(witness.constructor, witness.case_node_id)
+        if constructor_name is None:
+            return "_"
         if not witness.fields:
             return constructor_name
         fields = ", ".join(
@@ -193,7 +183,7 @@ __all__ = [
     "BoolWitness",
     "ConstructorSpeller",
     "ConstructorSpellers",
-    "EnumWitness",
+    "ConstructorWitness",
     "LiteralWitness",
     "MatchIssue",
     "MatchWitness",
@@ -202,7 +192,6 @@ __all__ = [
     "OpenComplementWitness",
     "RedundantArmIssue",
     "RedundantArmError",
-    "RecordWitness",
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",

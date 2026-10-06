@@ -28,8 +28,31 @@ _ARMS = "@@"
 """Placeholder for the arms of the one ``case`` in an entry template."""
 
 
+_OPT = "enum Opt[T]\n  | Nn\n  | Sm(value: T)\n"
+
+_REMOTE = "enum Remote\n  | empty\n  | item(value: int)\n"
+
+_OWNERS = "enum Owner\n  | block\n  | free\nenum Twin\n  | block\n  | free\n"
+
+_MODULES = {
+    "lib": _LIB,
+    "rb": _RB,
+    "g": _OPT,
+    "la": "import lib\ntype Hue = lib::Color\n",
+    "la2": "import g\ntype IntOpt = g::Opt[int]\n",
+    "la3": "import lib\ntype F = lib::Flag\n",
+    "l3": "scope S\n  enum Color\n    | Red\n    | Blue\nend S\n",
+    "library/remote": _REMOTE + "type Alias = Remote\n",
+    "lib2": _OWNERS,
+    "helpers/Owner": "def block() -> int = 1\n",
+    "support/Status": "enum Status | External\n",
+    "support/StatusFn": "enum Status | External\ndef Missing() -> int = 1\n",
+    "lh": "scope lib\n  enum Color\n    | Red\n    | Green\nend lib\n",
+}
+
+
 def _graph(tmp_path: Path, entry: str) -> ModuleGraph:
-    return make_graph_from_files(tmp_path, {"lib": _LIB, "rb": _RB, "entry": entry})
+    return make_graph_from_files(tmp_path, {**_MODULES, "entry": entry})
 
 
 def _witnesses(graph: ModuleGraph) -> list[str]:
@@ -113,6 +136,124 @@ _ENUM_ROWS = {
         "/lib::Color::Red",
         "/lib::Color::Blue",
     ),
+    "imported-alias-route": pytest.param(
+        _case("import la\n", "la::Hue"), "la::Hue::Red", "la::Hue::Blue"
+    ),
+    "imported-alias-renamed-route": pytest.param(
+        _case("import la as X\n", "X::Hue"), "X::Hue::Red", "X::Hue::Blue"
+    ),
+    "imported-applied-alias-route": pytest.param(
+        _case("import la2\n", "la2::IntOpt"), "la2::IntOpt::Nn", "la2::IntOpt::Sm(value = _)"
+    ),
+    "imported-applied-alias-glob": pytest.param(
+        _case("import la2::*\n", "IntOpt"), "Nn", "Sm(value = _)"
+    ),
+    "nested-through-imported-alias": pytest.param(
+        _case("import la\nrecord Box\n  c: la::Hue\n", "Box"),
+        "Box(c = la::Hue::Red)",
+        "Box(c = la::Hue::Blue)",
+    ),
+    "enum-in-imported-scope-glob": pytest.param(
+        _case("import l3::*\n", "S::Color"), "S::Color::Red", "S::Color::Blue"
+    ),
+    "remote-alias-through-renamed-route": pytest.param(
+        _case("import library/remote as r\n", "r::Alias"),
+        "r::Alias::empty",
+        "r::Alias::item(value = _)",
+    ),
+    "remote-suffix-route": pytest.param(
+        _case("import library/remote\n", "remote::Remote"),
+        "remote::Remote::empty",
+        "remote::Alias::item(value = _)",
+    ),
+}
+
+_UNWRITABLE_ROWS = {
+    "glob-hiding-the-member": pytest.param(
+        _case("import lib::* hiding Color::Blue\n", "Color"), "Red", "_"
+    ),
+    "route-hiding-the-member": pytest.param(
+        _case("import lib hiding Color::Blue\n", "lib::Color"), "lib::Color::Red", "_"
+    ),
+    "glob-hiding-an-owner-member": pytest.param(
+        _case("import lib2::* hiding Owner::block\nimport helpers/Owner\n", "Owner"),
+        "lib2::Owner::free",
+        "_",
+    ),
+}
+
+_SHADOWED_ROWS = {
+    "own-enum-beats-imported-same-name": pytest.param(
+        "import support/Status\nenum Status | Ready | Missing\n"
+        "def f(Missing: int, v: Status) -> int = case v of @@\n",
+        "Status::Ready",
+        "Missing",
+    ),
+    "own-enum-beats-imported-function-and-owner": pytest.param(
+        "import support/StatusFn\nenum Status | Ready | Missing\n"
+        "def f(Missing: int, v: Status) -> int = case v of @@\n",
+        "Status::Ready",
+        "Missing",
+    ),
+    "builtin-option-member-is-bare": pytest.param(
+        "def f(v: Option[int]) -> int = case v of @@\n", "Option::Some(value)", "None"
+    ),
+    "lexical-binding-of-a-member-name": pytest.param(
+        "enum Choice\n  | empty\n  | item(value: int)\n"
+        "def f(item: int, v: Choice) -> int = case v of @@\n",
+        "Choice::empty",
+        "item(value = _)",
+    ),
+    "later-lexical-binding-of-a-member-name": pytest.param(
+        "enum Choice\n  | empty\n  | item(value: int)\n"
+        "def f(v: Choice) -> int =\n  let result = case v of @@\n  let item = 1\n  result\n",
+        "Choice::empty",
+        "item(value = _)",
+    ),
+    "renamed-item-import": pytest.param(
+        "import library/remote::{Remote as R}\ndef f(item: int, v: R) -> int = case v of @@\n",
+        "R::empty",
+        "item(value = _)",
+    ),
+    "generic-own-alias-owner": pytest.param(
+        "enum Remote[T]\n  | empty\n  | item(value: T)\ntype Alias[T] = Remote[T]\n"
+        "def f(item: int, v: Remote[int]) -> int = case v of @@\n",
+        "Remote::empty",
+        "item(value = _)",
+    ),
+    "own-enum-beside-same-named-route": pytest.param(
+        "import library/remote as Choice\nenum Choice\n  | empty\n  | item(value: int)\n"
+        "def f(item: int, v: ::Choice) -> int = case v of @@\n",
+        "::Choice::empty",
+        "item(value = _)",
+    ),
+    "own-generic-enum-beside-same-named-route": pytest.param(
+        "import library/remote as Remote\nenum Remote[T]\n  | empty\n  | item(value: T)\n"
+        "def f(item: int, v: ::Remote[int]) -> int = case v of @@\n",
+        "::Remote::empty",
+        "item(value = _)",
+    ),
+    "own-owner-enum-beside-route-of-that-name": pytest.param(
+        f"import helpers/Owner\n{_OWNERS}def f(v: Owner) -> int = case v of @@\n",
+        "Owner::free",
+        "block",
+    ),
+    "imported-owner-enum-beside-route-of-that-name": pytest.param(
+        "import lib2::*\nimport helpers/Owner\ndef f(v: Owner) -> int = case v of @@\n",
+        "lib2::Owner::free",
+        "block",
+    ),
+    "route-head-beside-an-open-import-scope": pytest.param(
+        "import lib\nimport lh::*\ndef f(v: /lib::Color) -> int = case v of @@\n",
+        "/lib::Color::Red",
+        "lib::Color::Blue",
+    ),
+    "own-enum-clashing-with-an-imported-rename": pytest.param(
+        "import library/remote::{Remote as Clash}\nenum Clash\n  | local\n"
+        "def f(empty: int, item: int, v: /library/remote::Remote) -> int = case v of @@\n",
+        "/library/remote::Remote::empty",
+        "item(value = _)",
+    ),
 }
 
 _RECORD_ROWS = {
@@ -143,6 +284,23 @@ _RECORD_ROWS = {
         "Flag(on = true)",
         "Flag(on = false)",
     ),
+    "imported-alias-route": pytest.param(
+        _case("import la3\n", "la3::F"), "la3::F(on = true)", "la3::F(on = false)"
+    ),
+    "imported-alias-glob": pytest.param(
+        _case("import la3::*\n", "F"), "F(on = true)", "F(on = false)"
+    ),
+    "own-alias": pytest.param(
+        _case("import lib\ntype F = lib::Flag\n", "F"), "F(on = true)", "F(on = false)"
+    ),
+    "renamed-import": pytest.param(
+        _case("import lib::{Flag as F}\n", "F"), "F(on = true)", "F(on = false)"
+    ),
+    "aliases-tie-in-declaration-order": pytest.param(
+        _case("import lib\ntype Zz = lib::Flag\ntype Aa = lib::Flag\n", "Zz"),
+        "Zz(on = true)",
+        "Zz(on = false)",
+    ),
     "own-record-shadows-imported": pytest.param(
         _case(
             "import lib::*\nscope S\n  record Flag\n    z: int\n",
@@ -170,8 +328,26 @@ def test_enum_witness_is_the_shortest_spelling_at_the_case(
     _assert_witness_completes(tmp_path, entry, covered, expected)
 
 
+@pytest.mark.parametrize(
+    ("entry", "covered", "expected"), _SHADOWED_ROWS.values(), ids=_SHADOWED_ROWS
+)
+def test_witness_is_spelled_to_survive_what_shadows_the_names_it_uses(
+    tmp_path: Path, entry: str, covered: str, expected: str
+) -> None:
+    _assert_witness_completes(tmp_path, entry, covered, expected)
+
+
 @pytest.mark.parametrize(("entry", "covered", "expected"), _RECORD_ROWS.values(), ids=_RECORD_ROWS)
 def test_record_witness_is_the_shortest_spelling_at_the_case(
+    tmp_path: Path, entry: str, covered: str, expected: str
+) -> None:
+    _assert_witness_completes(tmp_path, entry, covered, expected)
+
+
+@pytest.mark.parametrize(
+    ("entry", "covered", "expected"), _UNWRITABLE_ROWS.values(), ids=_UNWRITABLE_ROWS
+)
+def test_witness_no_spelling_reaches_is_a_wildcard(
     tmp_path: Path, entry: str, covered: str, expected: str
 ) -> None:
     _assert_witness_completes(tmp_path, entry, covered, expected)
@@ -230,6 +406,8 @@ _REPAIR_ROWS = {
     "own-alias": ("import a\nimport b::*\ntype Hue = a::Color\n", "Hue::Red"),
     "renamed-import": ("import a::{Color as Hue}\nimport b::*\n", "Hue::Red"),
     "route-only-owner": ("import a::*\nimport b::*\n", "Color::Red"),
+    "imported-alias-glob": ("import la::*\nimport b::*\n", "Hue::Red"),
+    "imported-alias-item": ("import la::{Hue}\nimport b::*\n", "Hue::Red"),
 }
 
 
@@ -237,7 +415,7 @@ _REPAIR_ROWS = {
 def test_ambiguity_repair_is_the_shortest_spelling_that_selects_the_member(
     tmp_path: Path, header: str, repair: str
 ) -> None:
-    modules = {"a": _LIB, "b": _ENTRY_SHADE}
+    modules = {"a": _LIB, "b": _ENTRY_SHADE, "la": _MODULES["la"].replace("lib", "a")}
     graph = make_graph_from_files(tmp_path / "ambiguous", {**modules, "entry": f"{header}Red\n"})
     with pytest.raises(AmbiguousConstructorError) as caught:
         resolve_program(graph)
@@ -249,6 +427,44 @@ def test_ambiguity_repair_is_the_shortest_spelling_that_selects_the_member(
         ]
         == "accepted"
     )
+
+
+def test_ambiguity_repair_ignores_a_type_parameter_shadowing_the_owner(tmp_path: Path) -> None:
+    modules = {"a": _LIB, "b": _ENTRY_SHADE}
+    header = "import a::*\nimport b::*\ndef f[Color](x: Color) -> Color =\n"
+    graph = make_graph_from_files(
+        tmp_path / "ambiguous", {**modules, "entry": f"{header}  let z = Red\n  x\n"}
+    )
+    with pytest.raises(AmbiguousConstructorError) as caught:
+        resolve_program(graph)
+    repaired = f"{header}  let z = {caught.value.repair}\n  x\n"
+    graph = make_graph_from_files(tmp_path / "repaired", {**modules, "entry": repaired})
+    assert graph_verdict(graph)[0] == "accepted"
+
+
+def _repl_witness(tmp_path: Path, setup: list[str], entry: str) -> str:
+    """The witness an ``entry`` of a session after *setup* is rejected with, as written back."""
+    (tmp_path / "lib.agl").write_text(_LIB, encoding="utf-8")
+    session = ReplSession(cwd=tmp_path, default_stdlib=False)
+    assert not session.open()
+    for line in setup:
+        assert session.eval_entry(line).ok
+    failed = session.eval_entry(entry)
+    assert not failed.ok
+    witness = re.search(r"missing pattern: (.*)\.$", failed.diagnostics[0].message)
+    assert witness is not None
+    assert session.eval_entry(f"{entry} | {witness.group(1)} => 1").ok
+    return witness.group(1)
+
+
+def test_repl_witness_is_spelled_through_a_session_alias(tmp_path: Path) -> None:
+    entry = "def f(v: lib::Flag) -> int = case v of | lib::Flag(on = true) => 0"
+    assert _repl_witness(tmp_path, ["import lib", "type F = lib::Flag"], entry) == "F(on = false)"
+
+
+def test_repl_witness_of_an_enum_is_spelled_through_a_session_alias(tmp_path: Path) -> None:
+    entry = "def f(v: Hue) -> int = case v of | Red => 0"
+    assert _repl_witness(tmp_path, ["import lib", "type Hue = lib::Color"], entry) == "Blue"
 
 
 def test_repl_witness_is_spelled_at_the_entry(tmp_path: Path) -> None:

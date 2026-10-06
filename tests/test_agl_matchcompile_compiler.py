@@ -17,7 +17,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile import (
     BoolWitness,
-    EnumWitness,
+    ConstructorWitness,
     LiteralWitness,
     MatchWitness,
     NonExhaustiveIssue,
@@ -83,13 +83,16 @@ _CAPS = HostCapabilities(
 )
 
 
-def _bare(decl: DeclKey, _case_node_id: int) -> str:
-    """Speller naming a constructor by its own name; these tests do not exercise scope spelling."""
+def _by_own_name(decl: DeclKey, _case_node_id: int) -> str:
+    """Name a constructor by its own name: these tests check which constructors are missing.
+
+    How a scope spells them is covered by ``tests/test_agl_match_witness_spelling.py``.
+    """
     return decl[2]
 
 
 def _render(witness: MatchWitness) -> str:
-    return render_witness(witness, _bare)
+    return render_witness(witness, _by_own_name)
 
 
 def _compiled_cases(
@@ -566,7 +569,7 @@ def test_nested_missing_witness_is_structured_from_the_first_failure_path() -> N
     assert isinstance(issue, NonExhaustiveIssue)
     assert issue.site_node_id == case.node_id
     assert issue.span == case.span
-    assert isinstance(issue.witness, EnumWitness)
+    assert isinstance(issue.witness, ConstructorWitness)
     assert issue.witness.constructor[2] == "box"
     assert issue.witness.fields[0].name == "flag"
     assert issue.witness.fields[0].witness == BoolWitness(True)
@@ -1016,7 +1019,7 @@ def test_enum_witness_uses_wildcards_for_unconstrained_fields() -> None:
         "case value of | empty => 0"
     )
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
-    witness = cast(EnumWitness, issue.witness)
+    witness = cast(ConstructorWitness, issue.witness)
 
     assert witness.constructor[2] == "pair"
     assert [field.witness for field in witness.fields] == [
@@ -1043,7 +1046,7 @@ def test_same_spelled_local_variants_use_scrutinee_directed_witnesses(
         f"case value of | {covered_pattern} => 0"
     )
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
-    witness = cast(EnumWitness, issue.witness)
+    witness = cast(ConstructorWitness, issue.witness)
 
     assert _render(witness) == rendered.removeprefix("Left::")
 
@@ -1059,116 +1062,12 @@ def test_nested_same_spelled_variants_use_scrutinee_directed_witnesses() -> None
         "  | LeftOuter::wrap(value = LeftInner::present) => 1\n"
         "  | LeftOuter::finished => 0\n"
     )
-    outer = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    outer = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(outer) == "wrap(value = missing)"
 
 
-def test_local_enum_witness_prefers_a_scrutinee_directed_bare_constructor(
-    tmp_path: Path,
-) -> None:
-    compiled = _compile_graph_case(
-        tmp_path,
-        {
-            "support/Status": "enum Status | External",
-            "entry": (
-                "import support/Status\n"
-                "enum Status | Ready | Missing\n"
-                "def inspect(Missing: int, value: Status) -> int =\n"
-                "  case value of | Status::Ready => 0\n"
-                "inspect(0, Status::Ready)\n"
-            ),
-        },
-    )
-
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "Missing"
-
-
-def test_local_enum_witness_prefers_bare_constructor_over_its_short_owner(
-    tmp_path: Path,
-) -> None:
-    compiled = _compile_graph_case(
-        tmp_path,
-        {
-            "support/Status": "enum Status | External\ndef Missing() -> int = 1",
-            "entry": (
-                "import support/Status\n"
-                "enum Status | Ready | Missing\n"
-                "def inspect(Missing: int, value: Status) -> int =\n"
-                "  case value of | Status::Ready => 0\n"
-                "inspect(0, Status::Ready)\n"
-            ),
-        },
-    )
-
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "Missing"
-
-
-def test_stdlib_option_witness_still_renders_bare() -> None:
-    """A builtin enum's inline member keeps its bare witness spelling."""
-    _, _, compiled = _compile(
-        "let value: Option[int] = Option::Some(value = 1)\n"
-        "case value of | Option::Some(value) => value\n"
-    )
-
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "None"
-
-
-def test_lexical_binding_does_not_hide_constructor_witnesses() -> None:
-    _, _, compiled = _compile(
-        "enum Choice\n  | empty\n  | item(value: int)\n"
-        "def inspect(item: int, value: Choice) -> int =\n"
-        "  case value of | Choice::empty => 0\n"
-        "let result = inspect(1, Choice::empty)\n"
-        "result\n"
-    )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-
-
-def test_later_lexical_binding_does_not_retroactively_shadow_case_variant() -> None:
-    _, _, compiled = _compile(
-        "enum Choice\n  | empty\n  | item(value: int)\n"
-        "def inspect(value: Choice) -> int =\n"
-        "  let result = case value of | Choice::empty => 0\n"
-        "  let item = 1\n"
-        "  result\n"
-        "inspect(Choice::empty)\n"
-    )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-
-
-def test_renamed_wildcard_import_keeps_constructor_witnesses_unqualified(
-    tmp_path: Path,
-) -> None:
-    compiled = _compile_graph_case(
-        tmp_path,
-        {
-            "library/remote": "enum Remote\n  | empty\n  | item(value: int)",
-            "entry": (
-                "import library/remote::{Remote as R}\n"
-                "def inspect(item: int, value: R) -> int =\n"
-                "  case value of | R::empty => 0\n"
-                "let result = inspect(1, R::empty)\n"
-                "result\n"
-            ),
-        },
-    )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-
-
-def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
+def test_hidden_imported_type_allows_irrefutable_case(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -1187,7 +1086,7 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
 
     unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
-    assert isinstance(issue.witness, EnumWitness)
+    assert isinstance(issue.witness, ConstructorWitness)
 
 
 def test_imported_transformed_generic_alias_matches_concrete_enum_owner(
@@ -1209,28 +1108,9 @@ def test_imported_transformed_generic_alias_matches_concrete_enum_owner(
             ),
         },
     )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(witness) == "item(value = _)"
-
-
-def test_rendered_local_generic_alias_owner_round_trips_through_checker() -> None:
-    declaration = "enum Remote[T]\n  | empty\n  | item(value: T)\ntype Alias[T] = Remote[T]\n"
-    _, _, compiled = _compile(
-        declaration
-        + "def inspect(item: int, value: Remote[int]) -> int =\n"
-        + "  case value of | Remote::empty => 0\n"
-        + "inspect(1, Remote::empty)\n"
-    )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-    _compile(
-        declaration
-        + "def inspect(value: Remote[int]) -> int =\n"
-        + "  case value of | item(value = _) => 0\n"
-        + "inspect(Remote::empty)\n"
-    )
 
 
 def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
@@ -1252,7 +1132,7 @@ def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
             ),
         },
     )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(witness) == "item(value = _)"
 
@@ -1275,16 +1155,10 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
     unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
-    assert isinstance(issue.witness, EnumWitness)
+    assert isinstance(issue.witness, ConstructorWitness)
 
 
-_OWNER_ROUTE = {"helpers/Owner": "def block() -> int = 1\n"}
-"""A module route named ``Owner`` reaching a member ``block``."""
-
-_OWNER_ENUMS = "enum Owner\n  | block\n  | free\nenum Twin\n  | block\n  | free\n"
-
-
-def test_reexported_alias_chain_brings_its_target_members_bare(tmp_path: Path) -> None:
+def test_reexported_alias_chain_selects_its_target_enum(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,
         {
@@ -1301,7 +1175,7 @@ def test_reexported_alias_chain_brings_its_target_members_bare(tmp_path: Path) -
             ),
         },
     )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(witness) == "item(value = _)"
 
@@ -1331,7 +1205,7 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
             ),
         },
     )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(witness) == "pair(left = item(value = _), right = item(value = _))"
 
@@ -1363,64 +1237,9 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
             ),
         },
     )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(ConstructorWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
     assert _render(witness) == "next(value = value(item = _))"
-
-
-def test_local_type_keeps_constructor_witnesses_unqualified_when_import_handle_conflicts(
-    tmp_path: Path,
-) -> None:
-    compiled = _compile_graph_case(
-        tmp_path,
-        {
-            "library/remote": "def value() -> int = 1",
-            "entry": (
-                "import library/remote as Choice\n"
-                "enum Choice\n  | empty\n  | item(value: int)\n"
-                "def inspect(item: int, value: ::Choice) -> int =\n"
-                "  case value of | ::Choice::empty => 0\n"
-                "let result = inspect(1, ::Choice::empty)\n"
-                "result\n"
-            ),
-        },
-    )
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-
-
-def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict(
-    tmp_path: Path,
-) -> None:
-    modules = {
-        "library/remote": "enum Remote | foreign\ndef item() -> int = 1",
-        "entry": (
-            "import library/remote as Remote\n"
-            "enum Remote[T]\n  | empty\n  | item(value: T)\n"
-            "def inspect(item: int, value: ::Remote[int]) -> int =\n"
-            "  case value of | ::Remote::empty => 0\n"
-            "let result = inspect(1, ::Remote::empty)\n"
-            "result\n"
-        ),
-    }
-    compiled = _compile_graph_case(tmp_path, modules)
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
-
-    assert _render(witness) == "item(value = _)"
-    _compile_graph_case(
-        tmp_path,
-        {
-            **modules,
-            "entry": (
-                "import library/remote as Remote\n"
-                "enum Remote[T]\n  | empty\n  | item(value: T)\n"
-                "def inspect(value: ::Remote[int]) -> int =\n"
-                "  case value of | ::Remote::item(value = _) => 0\n"
-                "inspect(::Remote::empty)\n"
-            ),
-        },
-    )
 
 
 def test_whole_generic_enum_domain_uses_first_declaration_order_constructor() -> None:
@@ -1439,7 +1258,7 @@ def test_whole_generic_enum_domain_uses_first_declaration_order_constructor() ->
     ]
     assert cast(RedundantArmIssue, compiled.issues[1]).action_id == case.branches[0].node_id
     witness = cast(NonExhaustiveIssue, compiled.issues[0]).witness
-    assert isinstance(witness, EnumWitness)
+    assert isinstance(witness, ConstructorWitness)
     assert witness.constructor[2] == "filled"
     assert witness.fields == (WitnessField("value", WildcardWitness()),)
     assert _render(witness) == "filled(value = _)"
@@ -1512,7 +1331,7 @@ def test_nested_failure_path_can_contain_a_concrete_literal_witness() -> None:
         "case value of | packet(code = 1, flag = false) => 0"
     )
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
-    witness = cast(EnumWitness, issue.witness)
+    witness = cast(ConstructorWitness, issue.witness)
 
     assert witness.fields[0].witness == LiteralWitness(LiteralKind.NUMERIC, decimal.Decimal("1"))
     assert "1" in _render(witness)
@@ -1529,7 +1348,7 @@ def test_witness_renderer_covers_atomic_and_empty_complement_forms() -> None:
     assert _render(LiteralWitness(LiteralKind.TEXT, "%{name}")) == '"\\%{name}"'
     assert _render(LiteralWitness(LiteralKind.TEXT, "\\%{name}")) == '"\\\\\\%{name}"'
     assert _render(LiteralWitness(LiteralKind.NUMERIC, decimal.Decimal("1E-7"))) == "0.0000001"
-    empty_enum = EnumWitness((STD_PRELUDE_ID, (), "empty"), 0, ())
+    empty_enum = ConstructorWitness((STD_PRELUDE_ID, (), "empty"), 0, ())
     assert _render(empty_enum) == "empty"
     empty_complement = OpenComplementWitness(IntType(), ())
     assert _render(empty_complement) == "a int value"

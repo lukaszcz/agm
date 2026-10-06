@@ -1215,14 +1215,25 @@ def test_ambiguous_constructor_report_is_independent_of_hash_seed(tmp_path: Path
     assert next(iter(reports)).strip()
 
 
-def test_ambiguous_constructor_repair_of_an_unrouted_member_names_its_declaration(
+def test_ambiguous_constructor_repair_of_an_unrouted_member_offers_no_repair(
     tmp_path: Path,
 ) -> None:
-    header = "import middle::*\nimport shade::*\n"
+    """No spelling of a member its module does not route reaches it, so none is offered."""
+    with pytest.raises(AmbiguousConstructorError) as caught:
+        _check(
+            tmp_path,
+            "import middle::*\nimport shade::*\nlet probe = Shared\n()",
+        )
+    assert caught.value.repair is None
+
+
+def test_ambiguous_constructor_repair_of_a_routed_member_writes_back(tmp_path: Path) -> None:
+    header = "import other\nimport middle::*\nimport shade::*\n"
     with pytest.raises(AmbiguousConstructorError) as caught:
         _check(tmp_path / "ambiguous", f"{header}let probe = Shared\n()")
     repair = caught.value.repair
-    entry = f"import other\n{header}let probe: middle::Mixed = {repair}(id = 1)\nprobe is {repair}"
+    assert repair is not None
+    entry = f"{header}let probe: middle::Mixed = {repair}(id = 1)\nprobe is {repair}"
     _check(tmp_path / "repaired", entry)
 
 

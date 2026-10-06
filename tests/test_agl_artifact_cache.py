@@ -11,7 +11,7 @@ from agm.agl import artifact_cache, artifact_storage
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.constraints import ConstraintKind
 from agm.agl.lower.program import lower_program
-from agm.agl.matchcompile import compile_program_matches
+from agm.agl.matchcompile import NonExhaustiveIssue, compile_program_matches, render_witness
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import build_repl_graph, parse_entry_module
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
@@ -105,6 +105,40 @@ def test_field_default_survives_the_module_cache_disk_round_trip(
 
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "3\n"
+
+
+def _library_witnesses(root: Path, library: str) -> list[str]:
+    """The witnesses of the non-exhaustive ``case`` of module ``lib``, spelled where written."""
+    modules = {
+        "entry": "import lib\n",
+        "lib": library,
+        "other": "enum Color\n  | Red\n  | Blue\n",
+    }
+    graph = make_file_graph_from_files(root, modules)
+    resolved = resolve_program(graph)
+    issues = compile_program_matches(check_program(resolved, base_caps())).issues
+    return [
+        render_witness(issue.witness, resolved.speller(issue.module_id))
+        for issue in issues
+        if isinstance(issue, NonExhaustiveIssue)
+    ]
+
+
+def test_a_witness_of_a_cached_module_is_spelled_as_when_it_was_first_resolved(
+    tmp_path: Path,
+) -> None:
+    """A cached module's rejected ``case`` is spelled at its own region, from memory or disk."""
+    header = "import other\nscope S\n  use other::Color\n"
+    arms = "  def f(v: Color) -> int = case v of | Red => 0@@\nend S\n"
+    artifact_cache.clear_retained_artifacts()
+    cold = _library_witnesses(tmp_path / "cold", header + arms.replace("@@", ""))
+    memory = _library_witnesses(tmp_path / "memory", header + arms.replace("@@", ""))
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+    disk = _library_witnesses(tmp_path / "disk", header + arms.replace("@@", ""))
+
+    assert cold == memory == disk == ["Blue"]
+    completed = header + arms.replace("@@", f" | {cold[0]} => 1")
+    assert _library_witnesses(tmp_path / "completed", completed) == []
 
 
 def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(

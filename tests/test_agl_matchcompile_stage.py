@@ -78,7 +78,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "NominalConstructor",
         "ConstructorSpeller",
         "ConstructorSpellers",
-        "EnumWitness",
+        "ConstructorWitness",
         "FieldOccurrenceProvenance",
         "LiteralKind",
         "LiteralWitness",
@@ -94,7 +94,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "OccurrenceId",
         "OpenComplementWitness",
         "NominalConstructor",
-        "RecordWitness",
         "RedundantArmError",
         "RedundantArmIssue",
         "WildcardWitness",
@@ -107,10 +106,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "render_witness",
         "validate_match_compiled_program",
     }
-    assert not hasattr(matchcompile, "EnumOwnerForm")
-    assert not hasattr(matchcompile, "EnumOwnerFormKind")
     assert hasattr(matchcompile, "FieldOccurrenceProvenance")
-    assert not hasattr(matchcompile, "EnumWitnessQualification")
 
 
 def _no_constructors(_module_id: ModuleId) -> ConstructorSpeller:

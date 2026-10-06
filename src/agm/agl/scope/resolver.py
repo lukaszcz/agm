@@ -90,6 +90,7 @@ from agm.agl.scope.lookup import (
     lookup_bare,
     lookup_declared,
     lookup_qualified,
+    shadowed_by_type_parameter,
     unknown_member,
     unknown_qualifier,
 )
@@ -2770,7 +2771,7 @@ class _Resolver(ModuleSources):
     ) -> AmbiguousConstructorError:
         """Report bare *name*, written at *span*, selecting several *candidates*.
 
-        One per declaration they construct, repaired by the first.
+        One per declaration they construct, repaired by the first when a spelling selects it.
         """
         distinct = self.one_per_declaration(candidates)
         ordered = sorted(distinct, key=constructor_candidate_sort_key)
@@ -2781,6 +2782,7 @@ class _Resolver(ModuleSources):
                 self.constructor_declaration(ordered[0]),
                 self._named_scope_path(),
                 span,
+                type_params=self._type_params_in_scope,
                 kind=LookupKind.VALUE,
             ),
             span,
@@ -2792,18 +2794,24 @@ class _Resolver(ModuleSources):
         """Report module qualifier *chain*'s *member* injected from several *candidates*.
 
         Repaired by the first one, qualified by its owner through *chain*
-        where that selects it, else by its shortest spelling.
+        where that selects it, else by its shortest spelling, if any.
         """
         distinct = self.one_per_declaration(candidates)
         ordered = sorted(distinct, key=constructor_candidate_sort_key)
         first = self.constructor_declaration(ordered[0])
-        repair = render_qualified_name(chain, f"{first[1][0]}::{member}")
+        repair: str | None = render_qualified_name(chain, f"{first[1][0]}::{member}")
         site = self._named_scope_path()
         qualifier = (*(segment.name for segment in chain.segments), first[1][0])
         if chain.segments and not self.selects_constructor(
             qualifier, member, first, chain.span, site, anchor=chain.anchor, kind=LookupKind.VALUE
         ):
-            repair = self.spell_constructor(first, site, chain.span, kind=LookupKind.VALUE)
+            repair = self.spell_constructor(
+                first,
+                site,
+                chain.span,
+                type_params=self._type_params_in_scope,
+                kind=LookupKind.VALUE,
+            )
         return self._ambiguous_constructor(
             render_qualified_name(chain, member),
             {candidate: distinct[candidate] for candidate in ordered},
@@ -2899,7 +2907,9 @@ class _Resolver(ModuleSources):
                 raise AglScopeError(
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
-            if chain.anchor is None and chain.segments and chain.segments[0].name in type_param_set:
+            if shadowed_by_type_parameter(
+                chain.anchor, [segment.name for segment in chain.segments], type_param_set
+            ):
                 raise unknown_qualifier(chain)
             if isinstance(node, (NameT, AppliedT, VariantRef)):
                 self._record_type_selection(chain.node_id, self._type_name_target(node))

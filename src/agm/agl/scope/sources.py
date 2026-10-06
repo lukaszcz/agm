@@ -63,12 +63,14 @@ from agm.agl.scope.lookup import (
     Route,
     Via,
     hidden_member,
+    lookup_bare,
     lookup_constructors,
     lookup_qualified,
     lookup_reached,
     lookup_reached_origins,
     lookup_through,
     read_steps,
+    shadowed_by_type_parameter,
 )
 from agm.agl.scope.symbols import (
     AmbiguousConstructorError,
@@ -107,7 +109,7 @@ from agm.agl.scope.type_names import (
     owner_member_selection,
     selection_node_id,
 )
-from agm.agl.scope.type_owners import TypeOwnerIndex, is_current
+from agm.agl.scope.type_owners import TypeOwnerIndex, is_current, root_type_names
 from agm.agl.scope.uses import UseReader
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -188,6 +190,11 @@ def render_spelling(qualifier: tuple[str, ...], member: str, anchor: QualifierAn
     if anchor is None:
         return path
     return f"/{path}" if anchor is QualifierAnchor.MODULE else f"::{path}"
+
+
+def _spelling_cost(spelling: _Spelling) -> tuple[int, int]:
+    """Order spellings by segments, then characters."""
+    return len(spelling[0]) + 1, len(render_spelling(*spelling))
 
 
 def _way_order(way: ImportWay) -> int:
@@ -278,6 +285,8 @@ class ModuleSources(SourcesHost):
         # Each of those enums, by the names that can reach it (:meth:`_spellings_of`), built on
         # first use.
         self._spellings: dict[QName, tuple[str, ...]] | None = None
+        # Every path this module reads a type by (:meth:`_bindings`), built on first use.
+        self._name_bindings: tuple[list[tuple[ScopePath, QName]], list[str]] | None = None
         # (region path, exposed atom, exposed declaration) -> the ways import declarations of the
         # region reach it by; built on first use (:meth:`_region_import_ways`).
         self._region_ways: dict[tuple[ScopePath | None, NameAtom, QName], set[ImportWay]] | None = (
@@ -434,48 +443,65 @@ class ModuleSources(SourcesHost):
     def _build_spellings(self) -> dict[QName, tuple[str, ...]]:
         """Index each enum :meth:`enum_members_named` reads by the names that can reach it.
 
-        Its own name, and every other name this module reads for it: an alias
-        declared anywhere, an import item's or route surface's rename, and
-        any ``use`` rename (which may rename whatever it exposes).
+        Its own name, and every other name this module reads for it
+        (:meth:`_bindings`), in declaration order, and any ``use`` rename (which
+        may rename whatever it exposes).
         """
         enums = {qname for by_enum in self._enum_members().values() for qname in by_enum}
-        names: dict[QName, set[str]] = {qname: {_bare_path(qname[1])[-1]} for qname in enums}
-        owners = self._type_owners
+        names: dict[QName, dict[str, None]] = {
+            qname: {_bare_path(qname[1])[-1]: None} for qname in enums
+        }
+        bindings, renames = self._bindings()
+        for path, qname in bindings:
+            enum = self._type_owners.enum_behind(qname)
+            if len(path) == 1 and enum in names:
+                names[enum][path[0]] = None
+        return {
+            qname: (*found, *(r for r in renames if r not in found))
+            for qname, found in names.items()
+        }
 
-        def add(name: str, qname: QName) -> None:
-            enum = owners.enum_behind(qname)
-            if enum in names:
-                names[enum].add(name)
+    def _bindings(self) -> tuple[list[tuple[ScopePath, QName]], list[str]]:
+        """Every path this module reads a type or declaration by, with what it reaches there.
 
+        An alias declared anywhere, an import item's or route surface's name, a
+        contribution of any scope; in declaration order. Also the names ``use``
+        declarations rename to, which may rename whatever they expose.
+        """
+        if self._name_bindings is not None:
+            return self._name_bindings
+        bindings: list[tuple[ScopePath, QName]] = []
         for qname, declaration in self._all_public_types.items():
             if isinstance(declaration, TypeAlias):
-                add(declaration.name, qname)
+                bindings.append(((declaration.name,), qname))
         for item, path in self._type_declarations:
             if isinstance(item, TypeAlias):
-                add(item.name, (self._module_id, _bare_atom((*path, item.name))))
+                qname = (self._module_id, _bare_atom((*path, item.name)))
+                bindings.append(((item.name,), qname))
+                if path:
+                    bindings.append(((*path, item.name), qname))
         for path in self._repl_session_type_paths:
-            add(path[-1], (self._module_id, _bare_atom(path)))
+            bindings.append(((path[-1],), (self._module_id, _bare_atom(path))))
         env = self._import_env
         for atom, qnames in env.unqualified.items():
-            if isinstance(atom, str):
-                for qname in qnames:
-                    add(atom, qname)
+            bindings.extend((_bare_path(atom), qname) for qname in qnames)
         for contribution in env.contributions.values():
             for surface in contribution.routes.values():
-                for atom, qname in surface.members.items():
-                    if isinstance(atom, str):
-                        add(atom, qname)
-        renames: set[str] = set()
+                bindings.extend(
+                    (_bare_path(atom), qname) for atom, qname in surface.members.items()
+                )
+        renames: dict[str, None] = {}
         for layer in (self._root_scope, *self._scope_nodes.values()):
             for atom, refs in layer.bare_contributions.items():
-                if isinstance(atom, str):
-                    for ref in refs:
-                        add(atom, _ref_qname(ref))
+                bindings.extend((_bare_path(atom), _ref_qname(ref)) for ref in refs)
             for decl in layer.uses:
                 if decl.alias is not None:
-                    renames.add(decl.alias)
-                renames.update(item.rename for item in decl.tail or () if item.rename is not None)
-        return {qname: tuple(sorted(found | renames)) for qname, found in names.items()}
+                    renames[decl.alias] = None
+                for imported in decl.tail or ():
+                    if imported.rename is not None:
+                        renames[imported.rename] = None
+        self._name_bindings = bindings, list(renames)
+        return self._name_bindings
 
     def _scope_route_origins(self, route: BareRoute) -> ScopeOrigins:
         """Return the declarations scope route *route* reaches, through any number of re-exports."""
@@ -494,12 +520,12 @@ class ModuleSources(SourcesHost):
         self,
         spelling: str,
         candidates: Mapping[ConstructorRef, Layers],
-        repair: str,
+        repair: str | None,
         span: SourceSpan,
     ) -> AmbiguousConstructorError:
         """Report *spelling* as ambiguous among *candidates*, each from every contributing layer.
 
-        *repair* selects the first candidate.
+        *repair* selects the first candidate, if any spelling does.
         """
         return AmbiguousConstructorError.for_constructor_origins(
             spelling,
@@ -706,17 +732,13 @@ class ModuleSources(SourcesHost):
     ) -> Candidate:
         """The candidate for *member*, spelled bare *name*, with its type's ways' *hiding*.
 
-        It lies in the layer of its declaring module when this module declares it,
-        else in the layer its type was reached in -- an own alias of an imported
-        enum reaching it as the imported member's. An own member's origin is
-        the way its type was reached.
+        It lies in the layer its type was reached in; one reached as this module's
+        own is the member's module's, so an own alias of an imported enum reaches
+        it as the imported member's.
         """
-        own = member.owner_module_id == self._module_id
         layer = (
-            ContributionLayer.DECLARED
-            if own
-            else ContributionLayer.IMPORTED
-            if reached is ContributionLayer.DECLARED
+            ContributionLayer.IMPORTED
+            if reached is ContributionLayer.DECLARED and member.owner_module_id != self._module_id
             else reached
         )
         return Candidate(
@@ -724,9 +746,10 @@ class ModuleSources(SourcesHost):
                 _qname_decl_key(member.qname), constructor_binding(name, member), member
             ),
             layer,
-            contribution_origin(member.qname, reached if own else layer),
+            contribution_origin(member.qname, layer),
             hiding,
             via,
+            member.owner_module_id == self._module_id,
         )
 
     def routed_at(self, route: Route, path: ScopePath, kind: LookupKind) -> Reading:
@@ -783,6 +806,8 @@ class ModuleSources(SourcesHost):
         """The declaration *constructor* constructs: a renaming alias's is its target's.
 
         A member an alias of an enum selects is that member of the enum behind it.
+        Another alias is a declaration of its own here, though aliases denoting
+        one type construct one (:meth:`one_per_declaration`).
         """
         named = self._type_owners.constructor_identity(constructor)
         if named.member is None:
@@ -864,68 +889,115 @@ class ModuleSources(SourcesHost):
         type_params: Collection[str] = (),
         by_scrutinee: bool = False,
         kind: LookupKind = LookupKind.CONSTRUCTOR,
-    ) -> str:
+    ) -> str | None:
         """Spell constructor *decl* by the shortest spelling that selects it where written.
 
         Written at *span* in *site* in a *kind* position, with *type_params* in scope there, which
         shadow a spelling's leading segment. Tried by fewest segments, then
-        fewest characters, the enum's own name before its renames: the bare
-        name -- when *by_scrutinee*, as a pattern whose scrutinee selects among
-        its candidates -- the name qualified by each spelling of its enum, each
-        import route to it, and its declaration's own path. Without one that
-        selects it, *decl* is spelled by its declaration path.
+        fewest characters, then in the order :meth:`_spellings_reaching` gives;
+        the first the real lookup there selects *decl* by wins. Where *by_scrutinee*,
+        a bare spelling is a pattern whose scrutinee selects among its candidates.
+        ``None`` when no spelling selects it.
+        """
+        spellings = sorted(self._spellings_reaching(decl), key=_spelling_cost)
+        for qualifier, member, anchor in spellings:
+            if not qualifier and anchor is None:
+                selects = self._selects_bare(member, decl, span, site, by_scrutinee, kind)
+            else:
+                selects = not shadowed_by_type_parameter(
+                    anchor, qualifier, type_params
+                ) and self.selects_constructor(
+                    qualifier, member, decl, span, site, anchor=anchor, kind=kind
+                )
+            if selects:
+                return render_spelling(qualifier, member, anchor)
+        return None
+
+    def _selects_bare(
+        self,
+        name: str,
+        decl: DeclarationKey,
+        span: SourceSpan,
+        site: ScopePath,
+        by_scrutinee: bool,
+        kind: LookupKind,
+    ) -> bool:
+        """Whether bare *name* written at *span* in *site* selects constructor *decl*."""
+        if by_scrutinee:
+            return any(
+                self.constructor_declaration(candidate) == decl
+                for candidate in self.pattern_constructors(name, site)
+            )
+        found = lookup_bare(self, name, site, kind, span=span)
+        return (
+            isinstance(found, QualifiedTarget)
+            and found.constructor is not None
+            and self.constructor_declaration(found.constructor) == decl
+        )
+
+    def _spellings_reaching(self, decl: DeclarationKey) -> dict[_Spelling, None]:
+        """Every spelling that may select constructor *decl*, ties in the order they settle.
+
+        The name of the type *decl* is, or of the enum it is a member of --
+        its own, each alias's, each rename's (:meth:`_bindings`), every import
+        route to one, and the declaration's own path -- then the member under
+        it. Whether one selects *decl* is for the lookup to say.
         """
         module_id, path, name = decl
         qname = (module_id, _bare_atom((*path, name)))
         owner_qname = (module_id, _bare_atom(path)) if path else None
         owner = None if owner_qname is None else self._type_owners.owner(owner_qname)
-        if owner is None or name not in owner.members:
-            owner_qname = None
-        # In the order that settles ties.
+        target = (
+            owner_qname
+            if owner_qname is not None and owner is not None and name in owner.members
+            else qname
+        )
+        member = None if target == qname else name
         spellings: dict[_Spelling, None] = {}
-        if owner_qname is not None:
-            own_name = _bare_path(owner_qname[1])[-1]
-            for spelling in (
-                own_name,
-                *(n for n in self._spellings_of(owner_qname) if n != own_name),
-            ):
-                spellings[((spelling,), name, None)] = None
+
+        def add(written: ScopePath, anchor: QualifierAnchor | None = None) -> None:
+            """Spell the type by *written*, then its member (the type itself if a record)."""
+            if member is None:
+                spellings[(written[:-1], written[-1], anchor)] = None
+            else:
+                spellings[(written, member, anchor)] = None
+
+        def reaches(exposed: QName) -> bool:
+            return self._type_behind(exposed) == target
+
+        if member is not None:
+            spellings[((), member, None)] = None
+        add((_bare_path(target[1])[-1],))
+        bindings, renames = self._bindings()
+        for written, exposed in bindings:
+            if reaches(exposed):
+                add(written)
+        for rename in renames:
+            add((rename,))
         for contribution in self._import_env.contributions.values():
             for atom, exposed in contribution.members.items():
-                if exposed != qname and exposed != owner_qname:
-                    continue
                 written = _bare_path(atom)
-                if exposed == qname:
-                    qualifier, member = written[:-1], written[-1]
-                else:
-                    qualifier, member = written, name
                 for route, anchored in contribution_routes(contribution):
+                    leading = "/".join(route)
                     anchor = QualifierAnchor.MODULE if anchored else None
-                    spellings[(("/".join(route), *qualifier), member, anchor)] = None
+                    if reaches(exposed):
+                        add((leading, *written), anchor)
+                    elif exposed == qname:
+                        spellings[((leading, *written[:-1]), written[-1], anchor)] = None
         if module_id == self._module_id:
-            spellings[(path, name, None)] = None
-            spellings[(path, name, QualifierAnchor.CURRENT_MODULE)] = None
+            add((*path, name) if member is None else path)
+            add((*path, name) if member is None else path, QualifierAnchor.CURRENT_MODULE)
+        return spellings
 
-        def key(spelling: _Spelling) -> tuple[int, int]:
-            return len(spelling[0]) + 1, len(render_spelling(*spelling))
-
-        if by_scrutinee and any(
-            self.constructor_declaration(candidate) == decl
-            for candidate in self.pattern_constructors(name, site)
-        ):
-            return name
-        shadowed = frozenset(type_params)
-        qualified = (
-            spelling for spelling in sorted(spellings, key=key) if spelling[0] or spelling[2]
-        )
-        for qualifier, member, anchor in qualified:
-            if anchor is None and qualifier[0] in shadowed:
-                continue
-            if self.selects_constructor(
-                qualifier, member, decl, span, site, anchor=anchor, kind=kind
-            ):
-                return render_spelling(qualifier, member, anchor)
-        return spell_declaration(module_id, (*path, name), reader=self.reader())
+    def _type_behind(self, qname: QName) -> QName | None:
+        """The enum, record or exception type path *qname* is, or a renaming alias of it names."""
+        owners = self._type_owners
+        enum = owners.enum_behind(qname)
+        if enum is not None:
+            return enum
+        named = owners.identity(qname)
+        owner = owners.owner(named)
+        return named if owner is not None and owner.alias is None and owner.constructor else None
 
     def projected(
         self,
@@ -1428,6 +1500,10 @@ class ModuleSources(SourcesHost):
         owner = self._type_owners.owner(_key_qname(key))
         return owner is not None and owner.alias is not None
 
+    def declares(self, key: DeclarationKey) -> bool:
+        """Whether this module declares *key*."""
+        return key[0] == self._module_id
+
     def contributed_origins(self, step: ScopePath, path: ScopePath) -> frozenset[Origin]:
         """The scopes and types contributions anchored at or above *step* reach as *path*.
 
@@ -1858,6 +1934,7 @@ class ResolvedSources(ModuleSources):
         decl_info: dict[QName, DeclInfo],
         cross_module_constructor_refs: Mapping[QName, ConstructorRef],
         site_sources: Callable[[ModuleId], ModuleSources],
+        repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
     ) -> None:
         super().__init__()
         self._module_id = module_id
@@ -1867,8 +1944,8 @@ class ResolvedSources(ModuleSources):
         self._type_owners = type_owners
         self._decl_info = decl_info
         self._cross_module_constructor_refs = cross_module_constructor_refs
-        self._repl_session_type_paths = {}
-        self._repl_session_root_type_names = frozenset()
+        self._repl_session_type_paths = dict(repl_session_type_paths or {})
+        self._repl_session_root_type_names = root_type_names(self._repl_session_type_paths)
         self._root_scope = resolved.root_scope
         self._scope_nodes = resolved.scope_nodes
         self._declarations = resolved.declarations

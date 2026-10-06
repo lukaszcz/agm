@@ -14,8 +14,8 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile.compiler import compile_match_site
 from agm.agl.matchcompile.diagnostics import (
+    ConstructorWitness,
     NonExhaustiveIssue,
-    RecordWitness,
     render_witness,
 )
 from agm.agl.matchcompile.matrix import (
@@ -219,7 +219,7 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     assert len(compiled.occurrences) == 2
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
-    assert isinstance(issue.witness, RecordWitness)
+    assert isinstance(issue.witness, ConstructorWitness)
     assert issue.witness.constructor[2] == "Box"
     assert [field.name for field in issue.witness.fields] == ["value"]
     assert (

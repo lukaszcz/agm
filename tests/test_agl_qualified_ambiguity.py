@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ModuleId, Reader
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
+    Ambiguity,
     AmbiguousConstructorError,
     AmbiguousQualificationError,
     DeclaredOrigin,
@@ -24,6 +25,7 @@ from agm.agl.scope.symbols import (
     UseDeclarationOrigin,
     to_bare_atom,
 )
+from agm.agl.syntax.spans import SourceSpan
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.qualifier_support import (
     Part,
@@ -41,6 +43,8 @@ _QUALIFICATION: tuple[Phase, type[BaseException] | type[None]] = (
     "scope",
     AmbiguousQualificationError,
 )
+
+_SPAN = SourceSpan(start_line=1, start_col=1, end_line=1, end_col=1, start_offset=0, end_offset=0)
 
 _TWO_REDS = "enum A\n  | Red\nenum B\n  | Red\n"
 
@@ -186,6 +190,19 @@ def test_origins_are_ordered_by_kind_then_spelling_and_listed_once(tmp_path: Pat
         UseDeclarationOrigin((entry_id, to_bare_atom(("S", "shared")))),
         UseDeclarationOrigin((entry_id, to_bare_atom(("T", "shared")))),
     )
+
+
+def test_constructor_ambiguity_without_a_repair_stays_a_constructor_ambiguity() -> None:
+    """No spelling selecting a candidate leaves the repair out, however the verdict is kept."""
+    module = ModuleId.from_path("lib")
+    origins = (ImportedModuleOrigin((module, to_bare_atom(("A", "Red")))),)
+    error = AmbiguousConstructorError.for_constructor_origins(
+        "Red", origins, repair=None, span=_SPAN, reader=Reader(module)
+    )
+    assert error.repair is None
+    kept = Ambiguity.of(error).error("Red", _SPAN, reader=Reader(module))
+    assert isinstance(kept, AmbiguousConstructorError)
+    assert kept.repair is None
 
 
 class TestAmbiguousOwnerProjection:

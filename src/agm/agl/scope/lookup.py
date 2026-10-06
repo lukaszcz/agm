@@ -22,7 +22,7 @@ owns the order and the verdicts.
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import NamedTuple, Protocol
 
@@ -54,7 +54,6 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     UnknownMemberError,
     UnknownQualifierError,
-    UseDeclarationOrigin,
     add_layers,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment
@@ -169,7 +168,9 @@ class Candidate:
     ``hiding`` is what the ways that reached it hide; a path its owner table
     selects beneath it is reached the same ways. ``via`` is the ``::`` or
     module route that reached it, ``None`` for a region step; the paths
-    beneath an alias it reaches are read through it.
+    beneath an alias it reaches are read through it. ``own_member`` marks a
+    member of an enum the module declares, injected bare: it claims its
+    spelling over what another module declares.
     """
 
     target: QualifiedTarget
@@ -177,6 +178,7 @@ class Candidate:
     origin: QualificationOrigin
     hiding: Hiding = NOT_HIDDEN
     via: Via | None = None
+    own_member: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +313,10 @@ class PathSources(DeclarationNames, Protocol):
         """Whether *key* declares a type alias."""
         ...
 
+    def declares(self, key: DeclarationKey) -> bool:
+        """Whether the module declares *key*."""
+        ...
+
     def contributed_origins(self, step: ScopePath, path: ScopePath) -> frozenset[Origin]:
         """The scopes and types contributions anchored at or above *step* reach as *path*.
 
@@ -335,6 +341,16 @@ class PathSources(DeclarationNames, Protocol):
     def reader(self) -> Reader:
         """The module spellings are written in, as an ambiguity spells its declarations."""
         ...
+
+
+def shadowed_by_type_parameter(
+    anchor: QualifierAnchor | None, segments: Sequence[str], type_params: Collection[str]
+) -> bool:
+    """Whether a type parameter shadows the first of qualifier *segments* written under *anchor*.
+
+    It qualifies nothing, exactly as it shadows a bare name.
+    """
+    return anchor is None and bool(segments) and segments[0] in type_params
 
 
 def lookup_steps(scope_path: ScopePath) -> tuple[ScopePath, ...]:
@@ -670,9 +686,9 @@ def _step(
 
     An own declaration at a full path wins it. Otherwise the contributions
     there and, when *injects*, the enum members injected at *step*
-    (:meth:`PathSources.injected`) are read together; an injected member not of
-    an enum the module declares yields to a record or exception the
-    contributions reach there. Without *contributions*, only the own ones are
+    (:meth:`PathSources.injected`) are read together; an injected member yields
+    to a record or exception the contributions reach there, but an own enum's
+    member does not to another module's. Without *contributions*, only the own ones are
     read. Every type a prefix reaches owns what its member table selects, the
     contributed ones beside an own one included: those anchored above the
     prefix, which may itself lie at or above *step* (:func:`lookup_declared`).
@@ -688,9 +704,14 @@ def _step(
         if not injects:
             return contributed
         injected = sources.injected(reach, step, path[-1])
-        if not contributions or _claims_bare_name(contributed, sources):
+        claimers = _claiming(contributed, sources)
+        if not contributions or claimers:
             injected = Reading(
-                tuple(c for c in injected.candidates if c.layer is ContributionLayer.DECLARED)
+                tuple(
+                    c
+                    for c in injected.candidates
+                    if c.own_member and not any(_yields_to(c, claim, sources) for claim in claimers)
+                )
             )
         return contributed + injected
 
@@ -715,11 +736,29 @@ def _reach(sources: PathSources, step: ScopePath, *, contributions: bool = True)
     return reach
 
 
-def _claims_bare_name(reading: Reading, sources: PathSources) -> bool:
-    """Whether *reading* holds a record or exception constructor no ``hiding`` removes.
+def _yields_to(
+    member: Candidate, claim: tuple[DeclarationKey, ContributionLayer], sources: PathSources
+) -> bool:
+    """Whether own enum *member* yields its step to *claim*, a record or exception beside it.
 
-    It claims its bare name over the enum members injected beside it.
+    Only the module's own claims it; a directly declared enum's member
+    yields to none a ``use`` reaches.
     """
+    key, layer = claim
+    return sources.declares(key) and (
+        layer is ContributionLayer.DECLARED or member.layer is not ContributionLayer.DECLARED
+    )
+
+
+def _claiming(
+    reading: Reading, sources: PathSources
+) -> list[tuple[DeclarationKey, ContributionLayer]]:
+    """The record or exception constructors in *reading* with their layers, none ``hiding`` removes.
+
+    Each claims its bare name over the enum members injected beside it, bar an
+    own enum's over those another module declares.
+    """
+    claimers: list[tuple[DeclarationKey, ContributionLayer]] = []
     for candidate in reading.candidates:
         constructor, key = candidate.target.constructor, candidate.target.key
         if (
@@ -729,8 +768,8 @@ def _claims_bare_name(reading: Reading, sources: PathSources) -> bool:
             and not sources.aliases(key)
             and not removed(candidate.hiding, key, sources)
         ):
-            return True
-    return False
+            claimers.append((key, candidate.layer))
+    return claimers
 
 
 class _Walk:
@@ -1215,7 +1254,7 @@ def _decided(
 ) -> Candidate | tuple[Candidate, ...] | None:
     """The one candidate selected, own first; every competing one when several distinct ones do.
 
-    An own declaration a ``use`` reached yields to one declared directly.
+    Own are the declared ones, else the own enums' injected members.
 
     Candidates are distinct when they name distinct declarations by
     *identity* (:meth:`PathSources.denotes`): an alias renaming a declaration
@@ -1226,8 +1265,8 @@ def _decided(
     """
     pool = list(candidates)
     own = [candidate for candidate in pool if candidate.layer is ContributionLayer.DECLARED]
-    direct = [c for c in own if not isinstance(c.origin, UseDeclarationOrigin)]
-    competing = direct or own or pool
+    members = [candidate for candidate in pool if candidate.own_member]
+    competing = own or members or pool
     if len(competing) == 1:
         # A lone candidate is selected without reading what it names.
         return competing[0]

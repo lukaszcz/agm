@@ -199,7 +199,7 @@ class ResolvedProgram:
     sources: Callable[[ModuleId], ModuleSources] = field(repr=False, compare=False)
     retired_member_scopes: frozenset[ScopePath] = frozenset()
 
-    def speller(self, module_id: ModuleId) -> Callable[[DeclarationKey, int], str]:
+    def speller(self, module_id: ModuleId) -> Callable[[DeclarationKey, int], str | None]:
         """Return the speller of constructors as written in *module_id*'s ``case`` expressions.
 
         Spelled by what the real lookup accepts there
@@ -209,7 +209,7 @@ class ResolvedProgram:
         sources = self.sources(module_id)
         regions = self.modules[module_id].resolved.case_regions
 
-        def spell(constructor: DeclarationKey, case_node_id: int) -> str:
+        def spell(constructor: DeclarationKey, case_node_id: int) -> str | None:
             region = regions[case_node_id]
             return sources.spell_constructor(
                 constructor,
@@ -1078,12 +1078,18 @@ def resolve_program(
         found = cached_sources.get(module_id)
         if found is None:
             cached = resolved_modules[module_id]
+            session = module_id == graph.entry_id and retained_type_owners is not None
             found = cached_sources[module_id] = ResolvedSources(
                 module_id,
                 cached.resolved,
                 cached.import_env,
                 all_public_types=all_public_types,
-                type_owners=type_owners,
+                type_owners=(
+                    type_owners.with_retained(module_id, retained_type_owners)
+                    if session and retained_type_owners is not None
+                    else type_owners
+                ),
+                repl_session_type_paths=retained_type_owners if session else None,
                 decl_info=decl_info,
                 cross_module_constructor_refs=cross_module_constructor_refs,
                 site_sources=sources_of,
@@ -1129,6 +1135,11 @@ def resolve_program(
             selection_node_id(spelling)
         )
 
+    def read_view(module_id: ModuleId) -> object:
+        """Return what reads in *module_id* see of its uses; a finished module's never change."""
+        resolver = resolvers.get(module_id)
+        return None if resolver is None else resolver.read_view()
+
     # The index answers from prepared headers, so it is only asked once every
     # module below is constructed.
     type_owners = TypeOwnerIndex(
@@ -1137,7 +1148,7 @@ def resolve_program(
         alias_targets=alias_target,
         reached_paths=reached_paths,
         current_selection=current_selection,
-        read_view=lambda module_id: resolvers[module_id].read_view(),
+        read_view=read_view,
     )
 
     # What earlier REPL entries retain stays current unless the entry
@@ -1349,6 +1360,9 @@ def resolve_program(
 
     resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}
     retain_resolved_modules(retainable, resolved_modules)
+    # What reads a module from now on (spelling) is read from its resolution alone, as a cached
+    # module's is: the resolvers, and everything they hold, are not kept.
+    resolvers.clear()
     return ResolvedProgram(
         modules=resolved_modules,
         all_public_funcs=all_public_funcs,

@@ -61,7 +61,7 @@ from tests.agl.ir_harness import (
     make_inline_graph_from_files as _make_graph_from_files,
 )
 from tests.agl.module_graph import resolve_repl_entry
-from tests.agl.qualifier_support import span_text
+from tests.agl.qualifier_support import graph_verdict, span_text
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -3005,35 +3005,25 @@ class TestExceptionDefInGraph:
 
         check_program(resolve_program(graph), base_caps())
 
-    def test_exception_skip_branch_enum_variant_collision(self, tmp_path: Path) -> None:
-        """Exception-skip branch: an enum variant whose name collides with a public
-        ExceptionDef in the same module is skipped as a constructor candidate.
-
-        Exercises graph.py lines ~154-157: when iterating EnumDef variants, any variant
-        whose name matches a public ExceptionDef in all_public_types is skipped so the
-        exception wins as the constructor.
-        """
-        # The enum "Status" has a variant named "Conflict".
-        # The module also has a public exception "Conflict".
-        # When resolving the glob import, "Conflict" (enum variant) must be skipped
-        # and only the ExceptionDef "Conflict" is in constructor_candidates.
+    @pytest.mark.parametrize(
+        "entry",
+        (
+            'let e = Conflict(message = "x", msg = "x")',
+            "fn(s: mylib::Status) => case s of\n  | Conflict => 1\n  | Ok => 2",
+        ),
+        ids=("value-reads-the-exception", "pattern-on-the-enum-reads-the-member"),
+    )
+    def test_exception_and_enum_member_of_one_name(self, tmp_path: Path, entry: str) -> None:
+        """A glob-imported exception and enum member of one name: the exception in value
+        position, the member in a pattern on the enum."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib::*\n()",
-                "mylib": ("enum Status\n  | Ok\n  | Conflict\nexception Conflict\n  msg: text\n"),
+                "entry": f"import mylib::*\n{entry}",
+                "mylib": "enum Status\n  | Ok\n  | Conflict\nexception Conflict\n  msg: text\n",
             },
         )
-        result = resolve_program(graph)
-        entry_resolved = result.modules[ENTRY_ID].resolved
-        # "Conflict" must exist in constructor_candidates and must refer to the
-        # ExceptionDef, NOT to the enum member record named "Conflict".
-        assert "Conflict" in entry_resolved.constructor_candidates
-        candidates = entry_resolved.constructor_candidates["Conflict"]
-        assert all(c.owner_name == "Conflict" and c.owner_path == () for c in candidates), (
-            "Enum member 'Conflict' should have been skipped; only the ExceptionDef "
-            f"candidate should remain. Got: {candidates}"
-        )
+        assert graph_verdict(graph)[0] == "accepted"
 
 
 # ---------------------------------------------------------------------------

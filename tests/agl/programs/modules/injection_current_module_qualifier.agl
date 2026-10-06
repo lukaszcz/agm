@@ -1,0 +1,22 @@
+# `::name` reads this module's own root, own aliases of imported enums included; when
+# the root injects no member of that name, a builtin enum's member is the fallback, so
+# `::Some` is `Option::Some` unless the module declares `Some`, as `nolocal` shows.
+import a
+import nolocal
+
+type C = a::Color
+
+enum Local
+  | Some
+  | Other
+
+program def main(flag: bool) -> unit =
+  let c: a::Color = if flag => ::Red else => ::Blue
+  print(if c is Red => "red" else => "blue")
+  let l: Local = if flag => ::Some else => ::Other
+  print(if l is Some => "local some" else => "local other")
+  print(
+    case nolocal::some(if flag => 1 else => 2) of
+      | Some(value) => "builtin some %{value}"
+      | None => "none"
+  )

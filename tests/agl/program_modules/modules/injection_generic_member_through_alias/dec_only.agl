@@ -1,0 +1,6 @@
+import a
+import a::{DecOpt}
+
+def make(n: int) -> a::Opt[int] =
+  let z = Som(value = n)
+  z

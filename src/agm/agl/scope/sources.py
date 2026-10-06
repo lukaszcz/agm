@@ -27,7 +27,15 @@ from agm.agl.modules.ids import (
     render_route_member,
     spell_declaration,
 )
-from agm.agl.scope.hiding import NOT_HIDDEN, Hiding, Origin, hidden_keys, removes, unremoved
+from agm.agl.scope.hiding import (
+    NOT_HIDDEN,
+    Hiding,
+    Origin,
+    beneath_hiding,
+    hidden_keys,
+    removes,
+    unremoved,
+)
 from agm.agl.scope.imports import (
     BareRoute,
     ImportEnv,
@@ -37,7 +45,6 @@ from agm.agl.scope.imports import (
     QName,
     ScopeOrigins,
     contribution_routes,
-    declares_bare_constructor,
     qualifier_candidates,
     qualifier_exposures,
     qualifier_member_ways,
@@ -49,6 +56,8 @@ from agm.agl.scope.lookup import (
     Application,
     Candidate,
     LookupKind,
+    Own,
+    PathReader,
     QualifiedTarget,
     Reading,
     Route,
@@ -96,7 +105,7 @@ from agm.agl.scope.type_names import (
     owner_member_selection,
     selection_node_id,
 )
-from agm.agl.scope.type_owners import TypeOwnerIndex
+from agm.agl.scope.type_owners import TypeOwnerIndex, is_current
 from agm.agl.scope.uses import UseReader
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -218,7 +227,6 @@ class SourcesHost(Protocol):
     _type_declarations: Sequence[tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]]
     _scoped_constructor_candidates: Mapping[tuple[ScopePath, str], Sequence[ConstructorRef]]
     _constructor_candidates: Mapping[str, Sequence[ConstructorRef]]
-    _injected_constructors: Mapping[tuple[ScopePath, str], Sequence[ConstructorRef]]
     _uses: UseReader
     # What each module of the program reads where its aliases are declared.
     _site_sources: Callable[[ModuleId], ModuleSources]
@@ -254,6 +262,9 @@ class ModuleSources(SourcesHost):
         # Every enum this module reads by the names of its members, built on
         # first use.
         self._enum_member_index: dict[str, dict[QName, ConstructorRef]] | None = None
+        # Each of those enums, by the names that can reach it (:meth:`_spellings_of`), built on
+        # first use.
+        self._spellings: dict[QName, tuple[str, ...]] | None = None
         # (region path, exposed atom, exposed declaration) -> the ways import declarations of the
         # region reach it by; built on first use (:meth:`_region_import_ways`).
         self._region_ways: dict[tuple[ScopePath | None, NameAtom, QName], set[ImportWay]] | None = (
@@ -275,9 +286,6 @@ class ModuleSources(SourcesHost):
         self._keeping_readings = False
         self._kept_contributions: dict[tuple[ScopePath, ScopePath, LookupKind], Reading] = {}
         self._kept_own_types: dict[ScopePath, Reading] = {}
-        self._kept_imports: dict[
-            tuple[ScopePath, ScopePath], dict[BindingRef, tuple[Layers, Hiding, Via | None]]
-        ] = {}
 
     def _declared_type_owners(self) -> dict[ScopePath, TypeOwner]:
         """Return the owner each type this module declares resolves to."""
@@ -359,17 +367,19 @@ class ModuleSources(SourcesHost):
 
     def enum_members_named(self, name: str) -> Mapping[QName, ConstructorRef]:
         """The enums, of any module this one reads, with a member named *name*, and that member."""
+        return self._enum_members().get(name, {})
+
+    def _enum_members(self) -> dict[str, dict[QName, ConstructorRef]]:
+        """Every enum this module reads, by the names of its members; built on first use."""
         if self._enum_member_index is None:
             self._enum_member_index = self._build_enum_member_index()
-        return self._enum_member_index.get(name, {})
+        return self._enum_member_index
 
     def _build_enum_member_index(self) -> dict[str, dict[QName, ConstructorRef]]:
-        """Index every enum this module reads, and each alias renaming one, by its members' names.
+        """Index every enum this module reads by the names of its members.
 
         An inline member wins its name over an injected one; a current
-        declaration supersedes a retained enum at its path. An alias's paths
-        are its target's, so it brings the target's members: an alias
-        applying an enum, each as its own path beneath the alias selects it.
+        declaration supersedes a retained enum at its path.
         """
         owners: dict[QName, TypeOwner] = {
             (self._module_id, _bare_atom(path)): retained
@@ -385,30 +395,74 @@ class ModuleSources(SourcesHost):
             if isinstance(item, EnumDef):
                 qname = (self._module_id, _bare_atom((*path, item.name)))
                 owners[qname] = self._type_owners.declared_owner(qname, item)
-        owners.update(
-            (qname, owners[target])
-            for qname, declaration in self._all_public_types.items()
-            if isinstance(declaration, TypeAlias)
-            and (target := self._type_owners.identity(qname)) in owners
-        )
         index: dict[str, dict[QName, ConstructorRef]] = {}
         for qname, owner in owners.items():
             for member_name, constructor in (
                 *owner.members.items(),
-                *((injected.owner_name, injected) for injected in owner.injected),
+                *(
+                    (injected.owner_name, injected)
+                    for injected in owner.injected
+                    if is_current(self._module_id, self._owner_at, injected)
+                ),
             ):
                 index.setdefault(member_name, {}).setdefault(qname, constructor)
-        applying = (
-            (qname, applied)
-            for qname, declaration in self._all_public_types.items()
-            if isinstance(declaration, TypeAlias)
-            and qname not in owners
-            and (applied := self._type_owners.owner(qname)) is not None
-        )
-        for qname, applied in applying:
-            for member_name, constructor in applied.alias_members().items():
-                index.setdefault(member_name, {}).setdefault(qname, constructor)
         return index
+
+    def _owner_at(self, path: ScopePath) -> TypeOwner | None:
+        """This module's current type owner at *path*."""
+        return self._type_owners.owner((self._module_id, _bare_atom(path)))
+
+    def _spellings_of(self, enum: QName) -> tuple[str, ...]:
+        """The names that can reach *enum* here: its own, each alias's and each rename's."""
+        if self._spellings is None:
+            self._spellings = self._build_spellings()
+        return self._spellings.get(enum, ())
+
+    def _build_spellings(self) -> dict[QName, tuple[str, ...]]:
+        """Index each enum :meth:`enum_members_named` reads by the names that can reach it.
+
+        Its own name, and every other name this module reads for it: an alias
+        declared anywhere, an import item's or route surface's rename, and
+        any ``use`` rename (which may rename whatever it exposes).
+        """
+        enums = {qname for by_enum in self._enum_members().values() for qname in by_enum}
+        names: dict[QName, set[str]] = {qname: {_bare_path(qname[1])[-1]} for qname in enums}
+        owners = self._type_owners
+
+        def add(name: str, qname: QName) -> None:
+            enum = owners.enum_behind(qname)
+            if enum in names:
+                names[enum].add(name)
+
+        for qname, declaration in self._all_public_types.items():
+            if isinstance(declaration, TypeAlias):
+                add(declaration.name, qname)
+        for item, path in self._type_declarations:
+            if isinstance(item, TypeAlias):
+                add(item.name, (self._module_id, _bare_atom((*path, item.name))))
+        for path in self._repl_session_type_paths:
+            add(path[-1], (self._module_id, _bare_atom(path)))
+        env = self._import_env
+        for atom, qnames in env.unqualified.items():
+            if isinstance(atom, str):
+                for qname in qnames:
+                    add(atom, qname)
+        for contribution in env.contributions.values():
+            for surface in contribution.routes.values():
+                for atom, qname in surface.members.items():
+                    if isinstance(atom, str):
+                        add(atom, qname)
+        renames: set[str] = set()
+        for layer in (self._root_scope, *self._scope_nodes.values()):
+            for atom, refs in layer.bare_contributions.items():
+                if isinstance(atom, str):
+                    for ref in refs:
+                        add(atom, _ref_qname(ref))
+            for decl in layer.uses:
+                if decl.alias is not None:
+                    renames.add(decl.alias)
+                renames.update(item.rename for item in decl.tail or () if item.rename is not None)
+        return {qname: tuple(sorted(found | renames)) for qname, found in names.items()}
 
     def _scope_route_origins(self, route: BareRoute) -> ScopeOrigins:
         """Return the declarations scope route *route* reaches, through any number of re-exports."""
@@ -439,7 +493,7 @@ class ModuleSources(SourcesHost):
             (
                 origin
                 for candidate, layers in candidates.items()
-                for origin in contribution_origins(candidate.selected_qname, layers)
+                for origin in contribution_origins(candidate.qname, layers)
             ),
             repair=repair,
             span=span,
@@ -551,34 +605,112 @@ class ModuleSources(SourcesHost):
             (*(candidate for candidate in imported if self.fits(candidate.target, kind)), *used)
         )
 
-    def injected_at(self, step: ScopePath, name: str) -> Reading:
-        """The enum members injected as bare *name* at *step*.
+    def injected(
+        self,
+        reached: PathReader,
+        step: ScopePath,
+        name: str,
+        *,
+        via: Via | None = None,
+    ) -> Reading:
+        """The enum members injected as bare *name* at *step*, by the types *reached* reads.
 
-        This module's own enums inject their members at their own step, a
-        member another module declares being contributed; so does each
-        enum an import reaches (:meth:`_imports_inject`).
+        Each enum with a member *name* injects it once a spelling of the enum
+        reaches it at ``(*step, spelling)``: an own alias of it or a rename
+        included, an alias applying it as the enum itself. The member is its
+        own declaration -- an applied alias's arguments are inferred -- reached
+        the ways the type was, and in the layer of the module declaring it.
+        Through a module qualifier (*via*) only the inline members of enums
+        declared at a module's root inject, and ``::`` falls back on a
+        built-in enum's when none does.
         """
-        injected = self._injected_constructors.get((step, name), [])
-        other = [c for c in injected if c.owner_module_id != self._module_id]
-        other.extend(c for c in self._imports_inject(step, name) if c not in other)
-        return Reading(
-            tuple(
-                Candidate(
-                    QualifiedTarget(
-                        _qname_decl_key(c.selected_qname), constructor_binding(name, c), c
-                    ),
-                    layer,
-                    contribution_origin(c.selected_qname, layer),
-                )
-                for layer, constructors in (
-                    (
-                        ContributionLayer.DECLARED,
-                        [c for c in injected if c.owner_module_id == self._module_id],
-                    ),
-                    (ContributionLayer.IMPORTED, other),
-                )
-                for c in constructors
-            )
+        found: list[Candidate] = []
+        for enum, member in self.enum_members_named(name).items():
+            if via is not None and not is_root_inline_member(member):
+                continue
+            for spelling in self._spellings_of(enum):
+                for reaching in reached((*step, spelling), LookupKind.TYPE).candidates:
+                    candidate = self._injected(reaching, enum, member, name)
+                    if candidate is not None:
+                        found.append(candidate)
+        if isinstance(via, Own) and not found:
+            found = [
+                self._member_candidate(member, name, NOT_HIDDEN, via)
+                for member in self.enum_members_named(name).values()
+                if member.is_builtin and is_root_inline_member(member)
+            ]
+        elif via is None and not step:
+            found.extend(self._seeded_members(name, found))
+        return Reading(tuple(found))
+
+    def _seeded_members(self, name: str, found: Sequence[Candidate]) -> Iterator[Candidate]:
+        """Yield the host-seeded constructors bare *name* reaches at the root.
+
+        A standard-library declaration of the same built-in enum, among
+        *found*, displaces its seeded one.
+        """
+        declared = {
+            (c.target.constructor.owner_path)
+            for c in found
+            if c.target.constructor is not None and c.target.constructor.is_builtin
+        }
+        for constructor in self._constructor_candidates.get(name, ()):
+            if constructor.owner_module_id != self._module_id and not (
+                constructor.is_builtin and constructor.owner_path in declared
+            ):
+                yield self._member_candidate(constructor, name, NOT_HIDDEN, None)
+
+    def _injected(
+        self, reaching: Candidate, enum: QName, member: ConstructorRef, name: str
+    ) -> Candidate | None:
+        """The candidate for *member*, *name*d bare, when type *reaching* reaches *enum*'s.
+
+        ``None`` unless the type is *enum*, or an alias that leads to it and
+        does not hide the member.
+        """
+        key = reaching.target.key
+        owners = self._type_owners
+        owner = None if key is None else owners.owner(_key_qname(key))
+        if (
+            key is None
+            or owner is None
+            or owners.enum_behind(_key_qname(key)) != enum
+            or (owner.alias is not None and (name,) in owner.hidden)
+        ):
+            return None
+        hiding = beneath_hiding(
+            reaching.hiding, key, NOT_HIDDEN, _qname_decl_key(member.qname), self
+        )
+        return self._member_candidate(member, name, hiding, reaching.via, reaching.layer)
+
+    def _member_candidate(
+        self,
+        member: ConstructorRef,
+        name: str,
+        hiding: Hiding,
+        via: Via | None,
+        reached: ContributionLayer = ContributionLayer.DECLARED,
+    ) -> Candidate:
+        """The candidate for enum *member*, spelled bare *name*, with its type's ways' *hiding*.
+
+        It lies in the layer its type was reached in, except that one reached
+        as this module's own is the member's module's.
+        """
+        layer = (
+            reached
+            if reached is not ContributionLayer.DECLARED
+            else ContributionLayer.DECLARED
+            if member.owner_module_id == self._module_id
+            else ContributionLayer.IMPORTED
+        )
+        return Candidate(
+            QualifiedTarget(
+                _qname_decl_key(member.qname), constructor_binding(name, member), member
+            ),
+            layer,
+            contribution_origin(member.qname, layer),
+            hiding,
+            via,
         )
 
     def routed_at(self, route: Route, path: ScopePath, kind: LookupKind) -> Reading:
@@ -596,22 +728,14 @@ class ModuleSources(SourcesHost):
         )
         return Reading(tuple(c for c in candidates if self.fits(c.target, kind)))
 
-    def surface_injected(self, chain: QualifierChain, member: str, site: ScopePath) -> Reading:
-        """The root enum inline member module qualifier *chain*, in *site*, injects as *member*.
+    def referenced_refusal(self, chain: QualifierChain, member: str) -> Reading:
+        """The refusal of *member* beneath module qualifier *chain* when a root enum references it.
 
-        A module qualifier is ``::`` alone (this module's own root) or one
-        import route. Own root inline members win over builtin prelude members.
-        Its surface injects the terminal name of root enums' inline members.
-        A referenced member keeps its own path and is never injected.
-        Two injected members are ambiguous, repaired by the
-        first in declaration order, and a name only a root enum references
-        is refused.
+        A member keeps its own path: a name only a root enum references,
+        under ``::`` or the route *chain* leads with, is refused.
         """
         roots: Iterable[tuple[str, QName]]
         if chain.segments:
-            ref = None
-            layer = ContributionLayer.IMPORTED
-            injected = self._route_injected_members(chain, member, site)
             roots = (
                 (atom, origin)
                 for _module, members in qualifier_members(
@@ -621,18 +745,6 @@ class ModuleSources(SourcesHost):
                 if isinstance(atom, str)
             )
         else:
-            ref = self._level_value(tuple(self._root_scope.enclosing()), member)
-            layer = ContributionLayer.DECLARED
-            constructors = tuple(
-                candidate
-                for candidate in self._constructor_candidates.get(member, ())
-                if is_root_inline_member(candidate)
-            )
-            own = tuple(c for c in constructors if c.owner_module_id == self._module_id)
-            injected = {
-                candidate: render_qualified_name(chain, f"{candidate.owner_path[0]}::{member}")
-                for candidate in own or tuple(c for c in constructors if c.is_builtin)
-            }
             # Earlier REPL entries' root types, then this entry's.
             roots = (
                 (root, (self._module_id, root))
@@ -641,18 +753,6 @@ class ModuleSources(SourcesHost):
                     *(item.name for item, path in self._type_declarations if not path),
                 )
             )
-        if len(injected) > 1:
-            ambiguous = self._ambiguous_constructor(
-                render_qualified_name(chain, member),
-                dict.fromkeys(injected, frozenset({layer})),
-                injected[min(injected, key=constructor_candidate_sort_key)],
-                chain.span,
-            )
-            return Reading(refusals=(ambiguous,))
-        if injected:
-            (constructor,) = injected
-            origin = contribution_origin(constructor.qname, layer)
-            return Reading((Candidate(QualifiedTarget(None, ref, constructor), layer, origin),))
         referenced = (
             ReferencedMemberError(render_qualified_name(chain, root), member, span=chain.span)
             for root, qname in roots
@@ -662,43 +762,6 @@ class ModuleSources(SourcesHost):
             and member in owner.referenced
         )
         return Reading(refusals=tuple(itertools.islice(referenced, 1)))
-
-    def _route_injected_members(
-        self, chain: QualifierChain, name: str, site: ScopePath
-    ) -> dict[ConstructorRef, str]:
-        """Map each root enum inline member one-segment route *chain* injects as *name*.
-
-        A re-exported enum's members are injected too. Each maps to its
-        owner-qualified spelling where *chain* is written, in *site*: through
-        *chain* when it matches one module, else through a route selecting
-        only its exposing module.
-        """
-        surfaces = qualifier_members(self._import_env, chain.leading_route, anchored=chain.anchored)
-        injected: dict[ConstructorRef, str] = {}
-        for _module, members in surfaces:
-            for atom, origin in members.items():
-                path = _bare_path(atom)
-                constructor = self._cross_module_constructor_refs.get(origin)
-                if (
-                    path[1:] == (name,)
-                    and constructor is not None
-                    and is_root_inline_member(constructor)
-                    and not self._member_removed(chain, atom, origin)
-                ):
-                    injected.setdefault(
-                        constructor,
-                        render_qualified_name(chain, "::".join(path))
-                        if len(surfaces) == 1
-                        else self._routed_spelling(constructor, origin, chain.span, site),
-                    )
-        return injected
-
-    def _member_removed(self, chain: QualifierChain, atom: NameAtom, origin: QName) -> bool:
-        """Whether every import of route *chain*'s surface removes the member *atom* names."""
-        ways = qualifier_member_ways(
-            self._import_env, chain.leading_route, atom, anchored=chain.anchored
-        ).get(origin, ())
-        return self._ways_remove(ways, origin)
 
     def _spelling_selects(
         self,
@@ -1181,12 +1244,6 @@ class ModuleSources(SourcesHost):
             application = Application(_qname_decl_key(projected), arity, argument)
         return application
 
-    def applies(self, key: DeclarationKey) -> bool:
-        """Whether type *key* is an alias applying its target to type arguments of its own."""
-        owners = self._type_owners
-        reached = owners.owner(owners.identity(_key_qname(key)))
-        return reached is not None and reached.applies
-
     def _exposed(self, route: Route | None) -> dict[str, list[_Exposed]]:
         """What the imports *route* names expose, by first segment; root tails' at ``None``."""
         found = self._exposures.get(route)
@@ -1346,12 +1403,6 @@ class ModuleSources(SourcesHost):
         else:
             return frozenset()
         return frozenset({Origin(origin, self._hiding(ways))})
-
-    def _kept_imported(
-        self, step: ScopePath, path: ScopePath
-    ) -> dict[BindingRef, tuple[Layers, Hiding, Via | None]]:
-        """Read :meth:`_imported`, kept like :meth:`contributed_at`."""
-        return self._kept(self._kept_imports, (step, path), lambda: self._imported(step, path))
 
     def _imported(
         self, step: ScopePath, path: ScopePath
@@ -1526,20 +1577,13 @@ class ModuleSources(SourcesHost):
             node_id,
         )
 
-    def tail_removes(self, exposed: NameAtom, qname: QName, declaration: QName) -> bool:
-        """Whether every root import tail exposing *qname* as *exposed* removes *declaration*.
-
-        *declaration* is *qname*'s own or a member's beneath it.
-        """
-        ways = self._import_env.unqualified_ways.get(exposed, {}).get(qname, ())
-        return self._ways_remove(ways, declaration)
-
     def tail_exposed(self, exposed: NameAtom) -> tuple[QName, ...]:
         """The declarations the root import tails expose as *exposed* that none removes."""
+        ways = self._import_env.unqualified_ways.get(exposed, {})
         return tuple(
             qname
             for qname in self._import_env.unqualified.get(exposed, ())
-            if not self.tail_removes(exposed, qname, qname)
+            if not self._ways_remove(ways.get(qname, ()), qname)
         )
 
     def reachable_exports(self) -> Iterator[QName]:
@@ -1676,48 +1720,6 @@ class ModuleSources(SourcesHost):
             is_param=info.is_param,
         )
 
-    def _imports_inject(self, step: ScopePath, name: str) -> Iterator[ConstructorRef]:
-        """Yield the other modules' enum members imports inject as bare *name* at *step*.
-
-        An enum injects its members at its own step. At the module root,
-        those are the constructors the import tails make bare. In a named
-        scope, each enum an import reaches at a full path directly beneath
-        *step* injects its member *name* -- unless the ways reaching it
-        remove the enum or the member, or, for an inline member, an import
-        reaches a record or exception at the member's own full path there.
-        """
-        if not step:
-            yield from (
-                candidate
-                for candidate in self._constructor_candidates.get(name, ())
-                if candidate.owner_module_id != self._module_id
-            )
-            return
-        standalone = declares_bare_constructor(
-            (
-                _ref_qname(ref)
-                for ref, (_layers, hiding, _via) in self._imported(step, (*step, name)).items()
-                if not removes(hiding, (ref.module_id, ref.scope_path, ref.name), self)
-            ),
-            self._all_public_types,
-        )
-        for qname, member in self.enum_members_named(name).items():
-            if qname[0] == self._module_id or (
-                standalone and member.inline_enum_owner_decl_node_id is not None
-            ):
-                continue
-            key = _qname_decl_key(qname)
-            member_key = _qname_decl_key(member.selected_qname)
-            if any(
-                (ref.module_id, ref.scope_path, ref.name) == key
-                and not removes(hiding, key, self)
-                and not removes(hiding, member_key, self)
-                for ref, (_layers, hiding, _via) in self._kept_imported(
-                    step, (*step, key[2])
-                ).items()
-            ):
-                yield member
-
 
 class ResolvedSources(ModuleSources):
     """What a module an earlier compilation resolved reads, by full path (:class:`ModuleSources`).
@@ -1756,7 +1758,6 @@ class ResolvedSources(ModuleSources):
         self._type_declarations = resolved.type_declarations
         self._scoped_constructor_candidates = resolved.scoped_constructor_candidates
         self._constructor_candidates = resolved.constructor_candidates
-        self._injected_constructors = resolved.injected_constructors
         self._site_sources = site_sources
         self._owner_declarations = resolved.owner_declarations
         self._uses = UseReader(

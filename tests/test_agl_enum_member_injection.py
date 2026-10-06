@@ -55,6 +55,7 @@ _MODULES = {
 }
 _RED = "record a::Color::Red"
 _BLUE = "record a::Color::Blue"
+_COLOR_TYPE = "enum a::Color\n  | Red\n  | Blue"
 
 
 def _selections(red: str, blue: str, annotation: str) -> dict[str, Probe]:
@@ -77,10 +78,9 @@ def _bare(annotation: str = "Color", identity: str = _RED) -> dict[str, Probe]:
 
 
 def _record_selections() -> dict[str, Probe]:
-    """Pattern and ``is`` probes whose scrutinee is the record ``Red``."""
+    """The pattern probe whose scrutinee is the record ``Red``."""
     return {
         "record-pattern": accepted("let v: Red = Red(x = 1)\ncase v of\n  | Red(x) => x", "int"),
-        "record-is": accepted("let v: Red = Red(x = 1)\nv is Red", "bool"),
     }
 
 
@@ -151,6 +151,50 @@ _INJECTING = {
         {
             "route": accepted("a::Red", _RED),
             "anchored-route": accepted("/a::Red", _RED),
+        },
+    ),
+}
+
+_PARAM_DEFAULT = accepted("def f(x: Color = Red) -> Color = x\nf()", _COLOR_TYPE)
+_FIELD_DEFAULT = accepted("record Box\n  c: Color = Red\n\nBox().c", _COLOR_TYPE)
+
+_DEFAULTS = {
+    "root-tail": _scenario(
+        ("import a::Color",), {"param": _PARAM_DEFAULT, "field": _FIELD_DEFAULT}
+    ),
+    "root-tail-rename": _scenario(
+        ("import a::{Color as Hue}",),
+        {
+            "param": _PARAM_DEFAULT,
+            "field": accepted("record Box\n  c: Hue = Red\n\nBox().c", _COLOR_TYPE),
+        },
+    ),
+    "use-glob": _scenario(
+        ("import a", "use a::*"), {"param": _PARAM_DEFAULT, "field": _FIELD_DEFAULT}
+    ),
+    "route": _scenario(
+        ("import a",),
+        {
+            "param": accepted("def f(x: a::Color = a::Red) -> a::Color = x\nf()", _COLOR_TYPE),
+            "field": accepted("record Box\n  c: a::Color = a::Red\n\nBox().c", _COLOR_TYPE),
+        },
+    ),
+    "region-tail": _scenario(
+        (),
+        {
+            "param": accepted(
+                _in_region("import a::Color", "def f(x: Color = Red) -> Color = x", tail="s::f()"),
+                _COLOR_TYPE,
+            ),
+            "field": accepted(
+                _in_region(
+                    "import a::Color",
+                    "record Box",
+                    "  c: Color = Red",
+                    tail="s::Box().c",
+                ),
+                _COLOR_TYPE,
+            ),
         },
     ),
 }
@@ -296,7 +340,7 @@ _ROUTES = {
 class _Clash(NamedTuple):
     """A same-named enum member and record or exception reached through some contributions.
 
-    *red* names the probes that fail today and *by_use* says whether they fail because
+    *red* names the probes that clash and *by_use* says whether they fail because
     a ``use`` does not yield (otherwise because the scrutinee does not select).
     """
 
@@ -328,8 +372,8 @@ def _clash(
 _RECORD_VALUE = accepted("Red(x = 1)", _RECORD)
 _EXCEPTION_VALUE = accepted('Red(message = "m")', _EXCEPTION)
 _C_RECORD_VALUE = accepted("Red(x = 1)", "record c::Red\n  x: int")
-_USE_RED = ("value", "record-pattern", "record-is")
-_SCRUTINEE_RED = ("pattern", "is", "record-is")
+_USE_RED = ("value", "record-pattern")
+_SCRUTINEE_RED = ("pattern", "is")
 _REGION_RECORD = _in_region("import a::Color", "import b::Red", "let q = Red(x = 1)", tail="s::q")
 _REGION_USE = _in_region(
     "import a::Color", "import b", "use b::Red", "let q = Red(x = 1)", tail="s::q"
@@ -339,7 +383,7 @@ _CLASHES = {
     "own-enum-and-record": _clash(
         (_COLOR.rstrip(), _RED_RECORD.rstrip()),
         accepted("Red(x = 1)", "record Red\n  x: int"),
-        ("record-is",),
+        ("pattern", "is"),
     ),
     "two-imports": _clash(("import a::Color", "import b::Red"), _RECORD_VALUE, _SCRUTINEE_RED),
     "two-imports-exception": _clash(
@@ -517,6 +561,10 @@ class TestInjection:
     def test_own_alias_qualified(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
+    @pytest.mark.parametrize("scenario", scenario_params(_DEFAULTS))
+    def test_default_expressions(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
     @pytest.mark.parametrize("scenario", scenario_params(_ROUTES))
     def test_module_qualifier(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
@@ -529,65 +577,50 @@ class TestInjectionRules:
     position only; a bare member is the generic member declaration; own aliases inject.
     """
 
-    @pytest.mark.xfail(strict=True, reason="a use does not yield to a same-named record")
     @pytest.mark.parametrize("scenario", scenario_params(_USE_YIELDS))
     def test_use_yields_to_record_at_the_step(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(
-        strict=True, reason="a same-named record or exception hides the scrutinee's member"
-    )
     @pytest.mark.parametrize("scenario", scenario_params(_SCRUTINEE_SELECTS))
     def test_scrutinee_selects_member_over_same_named_record(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(
-        strict=True, reason="a qualified spelling reaching only removed members is unknown"
-    )
     @pytest.mark.parametrize("scenario", scenario_params(_HIDDEN_QUALIFIED))
     def test_qualified_spelling_of_removed_member_is_hidden(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(
-        strict=True, reason="a use injects the members of an enum its import hides beneath"
-    )
     @pytest.mark.parametrize("scenario", scenario_params(_USE_IGNORES_WAYS))
     def test_use_injects_only_members_its_imports_keep(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(strict=True, reason="members through an applied alias are distinct")
     @pytest.mark.parametrize("scenario", scenario_params(_ONE_MEMBER))
     def test_applied_alias_and_generic_are_one_member(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(strict=True, reason="an applied alias injects its own member")
     @pytest.mark.parametrize("scenario", scenario_params(_GENERIC_MEMBER))
     def test_lone_applied_alias_injects_generic_member(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(strict=True, reason="a module's own alias of an enum injects nothing")
     @pytest.mark.parametrize("scenario", scenario_params(_OWN_ALIAS))
     def test_own_alias_injects_members(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(strict=True, reason="a module's own alias of an enum injects nothing")
     @pytest.mark.parametrize("scenario", scenario_params(_OWN_ALIAS_CLASH))
     def test_own_alias_member_clashes_with_other_enum(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)
 
-    @pytest.mark.xfail(strict=True, reason="a region's own alias of an enum injects nothing")
     @pytest.mark.parametrize("scenario", scenario_params(_OWN_ALIAS_REGION))
     def test_own_alias_in_region_injects_members(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

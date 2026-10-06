@@ -1,0 +1,30 @@
+# At one lookup step an injected enum member yields to a same-named record that an
+# import or `use` reaches, whichever contributions reach each: with
+# `use a::Color` and `use b::Red`, bare `Red` in a value is the record, while a
+# pattern or `is` test selects the member by its scrutinee's type and
+# `Color::Red` stays the member. A region does the same with its own `use`s.
+import a
+import b
+
+use a::Color
+use b::Red
+
+scope Region
+  use a::Color
+  use b::Red
+
+  def make(n: int) -> Red = Red(x = n)
+end Region
+
+def name(c: Color) -> text =
+  case c of
+    | Red => "red"
+    | Green => "green"
+
+program def main(pick: int) -> unit =
+  let r = Red(x = pick)
+  print("record %{r.x}")
+  print("region %{Region::make(pick + 1).x}")
+  let c: Color = if pick == 0 => Color::Red else => Color::Green
+  print(name(c))
+  print(if c is Red => "member red" else => "not red")

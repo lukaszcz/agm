@@ -1,0 +1,30 @@
+# A bare member spelling is always the generic member, whatever brings it: an import
+# item naming an applied alias, or a `use` of the alias's members. Inference fixes the
+# type arguments, so a lone `IntOpt` import accepts `Som(value = "x")`, a lone
+# `DecOpt` import makes `Som(value = 1)` an `Opt[int]`, and importing the generic
+# enum beside an alias leaves bare `Nothing` unambiguous. Only the qualified
+# `IntOpt::Som` carries the alias's arguments.
+import a
+import dec_only
+import int_only
+import both
+import used
+
+def show(o: a::Opt[int]) -> text =
+  case o of
+    | a::Opt::Nothing => "nothing"
+    | a::Opt::Som(value) => "some %{value}"
+
+def show-text(o: a::Opt[text]) -> text =
+  case o of
+    | a::Opt::Nothing => "nothing"
+    | a::Opt::Som(value) => "some %{value}"
+
+program def main(n: int) -> unit =
+  print(show(dec_only::make(n)))
+  print(show-text(int_only::make("x%{n}")))
+  print(show(int_only::none()))
+  print(show(both::none()))
+  print(show(both::some(n)))
+  print(show-text(used::make("y%{n}")))
+  print(show(used::qualified(n)))

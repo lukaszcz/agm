@@ -481,13 +481,18 @@ enum Other
 let h: Holder[int] = Holder::Tagged(by = 7)   # qualified — unambiguous
 ```
 
-An enum member's bare spelling is an injected convenience, so among the names
-one import surface exposes it yields to a record or exception constructor
-declaring that very name, whichever module declares each; the member stays
-reachable qualified.
 A declaration of the module itself claims the spelling over any member an
 import injects, and a member of an enum the module declares claims it over an
-imported declaration.
+imported declaration. Otherwise an enum member's bare spelling, an injected
+convenience, yields at a lookup step to a record or exception constructor of
+that very name that an import or `use` declaration reaches at that step,
+whichever module declares each and whichever contributions reach them; the
+member stays reachable qualified. Where `a` declares `enum Color = Red | Green`
+and `b` declares `record Red`, after `import a`, `import b`, `use a::Color`,
+and `use b::Red`, bare `Red` is `b`'s record and `Color::Red` the member.
+Yielding applies in value position only: an enum-member pattern or `is` test
+selects among the bare candidates by its scrutinee's type
+([Constructor patterns](pattern-matching.md#constructor-patterns)).
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `Tagged` hides the outer

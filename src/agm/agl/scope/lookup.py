@@ -76,6 +76,7 @@ __all__ = [
     "Route",
     "Via",
     "lookup_bare",
+    "lookup_constructors",
     "lookup_declared",
     "lookup_hidden",
     "lookup_reached_origins",
@@ -203,6 +204,10 @@ class Application(NamedTuple):
     spelling: NameT | AppliedT
 
 
+type PathReader = Callable[[ScopePath, LookupKind], Reading]
+"""What one source reads at a full path, as a declaration of a kind."""
+
+
 class PathSources(DeclarationNames, Protocol):
     """The declarations and contributions a lookup reads, by full path."""
 
@@ -240,16 +245,26 @@ class PathSources(DeclarationNames, Protocol):
         """
         ...
 
-    def surface_injected(self, chain: QualifierChain, member: str, site: ScopePath) -> Reading:
-        """The enum member module qualifier *chain*'s surface, in *site*, injects as *member*."""
+    def injected(
+        self,
+        reached: PathReader,
+        step: ScopePath,
+        name: str,
+        *,
+        via: Via | None = None,
+    ) -> Reading:
+        """The enum members injected as bare *name* at *step*, by the types *reached* reads.
+
+        An enum injects its members under every spelling of it that *reached*
+        reads at ``(*step, spelling)``: the member declaration itself, reached
+        the ways its type was. A module qualifier (*via*: ``::`` or a route)
+        injects the inline members of enums declared at a module's root only,
+        and ``::`` falls back on a built-in enum's.
+        """
         ...
 
-    def injected_at(self, step: ScopePath, name: str) -> Reading:
-        """The enum members injected as bare *name* at *step*.
-
-        An enum injects its members at its own step: the module's own enums'
-        members are its own, and any other is contributed.
-        """
+    def referenced_refusal(self, chain: QualifierChain, member: str) -> Reading:
+        """The refusal of *member* beneath module qualifier *chain* an enum only references."""
         ...
 
     def inline_arity(self, owner: DeclarationKey, member: str, written: str) -> int | None:
@@ -259,10 +274,6 @@ class PathSources(DeclarationNames, Protocol):
         exception's own constructor spellings (``Box::Box``). An alias's
         are those of its target it reaches. ``None`` when *member* is none.
         """
-        ...
-
-    def applies(self, key: DeclarationKey) -> bool:
-        """Whether type *key* is an alias applying its target to type arguments of its own."""
         ...
 
     def beneath_applied(
@@ -373,7 +384,7 @@ def lookup_bare(
     """Return what bare *name*, written in *scope_path*, selects; ``None`` when nothing.
 
     A value spelling also reads, at each step, the enum members injected
-    there (:meth:`PathSources.injected_at`) once no own declaration at the
+    there (:meth:`PathSources.injected`) once no own declaration at the
     step's full path claims the name. Without *contributions*, only the
     module's own declarations and injections are read. *span* locates an
     ambiguity; *constructors*, when given, reports one among constructors
@@ -385,6 +396,23 @@ def lookup_bare(
     )
     walk = _Walk(sources, scope_path, steps, (), None, (name,), span, constructors=constructors)
     return walk.find(kind)
+
+
+def lookup_constructors(
+    sources: PathSources, name: str, scope_path: ScopePath
+) -> tuple[Candidate, ...]:
+    """Return every constructor candidate bare *name*, written in *scope_path*, reaches.
+
+    At every step: the own and contributed constructors at ``(*step, name)``
+    and the enum members injected there, none yielding to another, removed
+    ones included. A pattern's scrutinee selects among them.
+    """
+    candidates: list[Candidate] = []
+    for step in lookup_steps(scope_path):
+        reach = _reach(sources, step)
+        candidates.extend(reach((*step, name), LookupKind.CONSTRUCTOR).candidates)
+        candidates.extend(sources.injected(reach, step, name).candidates)
+    return tuple(candidates)
 
 
 def lookup_declared(
@@ -496,6 +524,8 @@ def _chain_walk(
     scope_path: ScopePath,
     span: SourceSpan,
     via: Via | None = None,
+    *,
+    constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
 ) -> _Walk:
     """The walk of *chain*'s full path, written in *scope_path*, read through *via*.
 
@@ -503,7 +533,16 @@ def _chain_walk(
     """
     names = (*(segment.name for segment in chain.segments), chain.member)
     anchor = _anchor(sources, chain, scope_path, via)
-    return _Walk(sources, scope_path, anchor.steps, anchor.route, chain, names, span)
+    return _Walk(
+        sources,
+        scope_path,
+        anchor.steps,
+        anchor.route,
+        chain,
+        names,
+        span,
+        constructors=constructors,
+    )
 
 
 def lookup_qualified(
@@ -513,13 +552,15 @@ def lookup_qualified(
     kind: LookupKind,
     *,
     span: SourceSpan,
+    constructors: Callable[[Mapping[ConstructorRef, Layers]], AglError] | None = None,
 ) -> QualifiedTarget | Misfit | AglError:
     """Return what *chain*, written in *scope_path*, selects, or why nothing.
 
     Finding nothing of *kind* but a declaration of another kind is a
-    :class:`Misfit`. *span* locates a ``::name`` miss.
+    :class:`Misfit`. *span* locates a ``::name`` miss; *constructors*, when
+    given, reports an ambiguity among constructors alone.
     """
-    walk = _chain_walk(sources, chain, scope_path, span)
+    walk = _chain_walk(sources, chain, scope_path, span, constructors=constructors)
     names = walk.names
     found = walk.find(kind)
     if found is not None:
@@ -585,10 +626,9 @@ def _anchor(
     )
 
 
-def _via_step(sources: PathSources, step: ScopePath, via: Via, *, start: int = 0) -> _Step:
-    """Return *step* reading only what *via* reaches at full paths beneath it.
+def _via_reader(sources: PathSources, via: Via, start: int = 0) -> PathReader:
+    """What *via* reaches at a full path, its first *start* names being the route itself.
 
-    The first *start* written names are the route itself, which full paths omit.
     Every candidate read carries *via*.
     """
 
@@ -602,6 +642,15 @@ def _via_step(sources: PathSources, step: ScopePath, via: Via, *, start: int = 0
             tuple(replace(candidate, via=via) for candidate in reading.candidates), reading.refusals
         )
 
+    return read
+
+
+def _via_step(sources: PathSources, step: ScopePath, via: Via, *, start: int = 0) -> _Step:
+    """Return *step* reading only what *via* reaches at full paths beneath it.
+
+    The first *start* written names are the route itself, which full paths omit.
+    """
+    read = _via_reader(sources, via, start)
     return _Step(
         step,
         read,
@@ -620,23 +669,29 @@ def _step(
 
     An own declaration at a full path wins it, so the contributions there are
     read only when there is none -- and, when *injects*, the enum members
-    injected at *step*, an own one winning like an own declaration. Without
-    *contributions*, only the own ones are read. Every type a prefix reaches
-    owns what its member table selects, the contributed ones beside an own
-    one included: those anchored above the prefix, which may itself lie at or
-    above *step* (:func:`lookup_declared`).
+    injected at *step* (:meth:`PathSources.injected`), an own one winning like
+    an own declaration. Another's yield to a record or exception the
+    contributions reach there. Without *contributions*, only the own ones are
+    read. Every type a prefix reaches owns what its member table selects, the
+    contributed ones beside an own one included: those anchored above the
+    prefix, which may itself lie at or above *step* (:func:`lookup_declared`).
     """
+
+    reach = _reach(sources, step, contributions=contributions)
 
     def read(path: ScopePath, kind: LookupKind) -> Reading:
         own = sources.own_at(path, kind)
         if own.candidates:
             return own
-        injected = sources.injected_at(step, path[-1]) if injects else Reading()
-        if contributions:
-            return sources.contributed_at(step, path, kind) + injected
-        return Reading(
-            tuple(c for c in injected.candidates if c.layer is ContributionLayer.DECLARED)
-        )
+        contributed = sources.contributed_at(step, path, kind) if contributions else Reading()
+        if not injects:
+            return contributed
+        injected = sources.injected(reach, step, path[-1])
+        if not contributions or _claims_bare_name(contributed, sources):
+            injected = Reading(
+                tuple(c for c in injected.candidates if c.layer is ContributionLayer.DECLARED)
+            )
+        return contributed + injected
 
     def owners(path: ScopePath) -> Reading:
         return sources.own_at(path, LookupKind.TYPE) + sources.contributed_at(
@@ -647,6 +702,34 @@ def _step(
         return sources.own_origins(path) | sources.contributed_origins(step, path)
 
     return _Step(step, read, owners, origins)
+
+
+def _reach(sources: PathSources, step: ScopePath, *, contributions: bool = True) -> PathReader:
+    """What the own declarations and the contributions anchored at or above *step* reach."""
+
+    def reach(path: ScopePath, kind: LookupKind) -> Reading:
+        own = sources.own_at(path, kind)
+        return own + sources.contributed_at(step, path, kind) if contributions else own
+
+    return reach
+
+
+def _claims_bare_name(reading: Reading, sources: PathSources) -> bool:
+    """Whether *reading* holds a record or exception constructor no ``hiding`` removes.
+
+    It claims its bare name over the enum members injected beside it.
+    """
+    for candidate in reading.candidates:
+        constructor, key = candidate.target.constructor, candidate.target.key
+        if (
+            constructor is not None
+            and constructor.inline_enum_owner_decl_node_id is None
+            and key is not None
+            and not sources.aliases(key)
+            and not removed(candidate.hiding, key, sources)
+        ):
+            return True
+    return False
 
 
 class _Walk:
@@ -672,6 +755,7 @@ class _Walk:
         self._sources = sources
         self._site = site
         self._constructors = constructors
+        self._injecting = chain is None
         self._steps = steps
         self._route = route
         self._chain = chain
@@ -775,6 +859,7 @@ class _Walk:
 
     def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Decide the full path at *step*: own first, then one distinct contribution."""
+        self._injecting = self._chain is None
         reading = self._unremoved(
             self._reading(step, kind, injects=True, owners_within=len(self._names))
         )[0]
@@ -785,7 +870,7 @@ class _Walk:
             return None
         if not isinstance(selected, Candidate):
             competing = _by_constructor(selected)
-            if self._constructors is not None and competing is not None:
+            if self._constructors is not None and competing is not None and self._injecting:
                 return self._constructors(competing)
             return self._ambiguous(
                 selected, self._names[step.start :], self._span if chain is None else chain.span
@@ -815,8 +900,25 @@ class _Walk:
             and not reading.candidates
             and _is_module_qualifier(chain, step)
         ):
-            reading += self._sources.surface_injected(chain, self._names[-1], self._site)
+            injected = self._qualifier_injected(chain)
+            self._injecting = bool(injected.candidates)
+            reading += injected
         return reading
+
+    def _qualifier_injected(self, chain: QualifierChain) -> Reading:
+        """The enum member module qualifier *chain* injects as the walk's last name.
+
+        Read through ``::`` or the route *chain* leads with
+        (:meth:`PathSources.injected`).
+        """
+        member, sources = self._names[-1], self._sources
+        via: Via = (
+            Own()
+            if chain.anchor is QualifierAnchor.CURRENT_MODULE
+            else Route(chain.leading_route, chain.anchored)
+        )
+        found = sources.injected(_via_reader(sources, via), (), member, via=via)
+        return found if found.candidates else sources.referenced_refusal(chain, member)
 
     def _through_prefixes(
         self, step: _Step, chain: QualifierChain, kind: LookupKind, owners_within: int

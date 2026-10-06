@@ -19,13 +19,9 @@ from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
-    EnumDef,
-    ExceptionDef,
     ImportDecl,
     ImportItem,
-    RecordDef,
 )
-from agm.agl.syntax.nodes import TypeAlias as TypeAliasDecl
 from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
@@ -55,7 +51,6 @@ __all__ = [
     "qualifier_members",
     "qualifier_scope_paths",
     "unqualified_exposures",
-    "declares_bare_constructor",
     "exposure_hidden",
 ]
 
@@ -83,21 +78,6 @@ class ImportWay:
 Exposure: TypeAlias = tuple[NameAtom, QName, frozenset[ImportWay]]
 """A path imports expose, what it names, and the ways import declarations reach it."""
 BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
-
-
-def declares_bare_constructor(
-    qnames: Iterable[QName],
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
-) -> bool:
-    """Whether one of *qnames* is a record or exception declaring its bare name.
-
-    An enum member's bare spelling is an injected convenience that stays
-    reachable qualified, so on an import surface it yields to a same-named
-    record or exception constructor, whichever module declares it.
-    """
-    return any(
-        isinstance(all_public_types.get(qname), (RecordDef, ExceptionDef)) for qname in qnames
-    )
 
 
 def _path_sort_key(atom: NameAtom) -> str:

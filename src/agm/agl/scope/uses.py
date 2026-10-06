@@ -9,7 +9,6 @@ which in turn read the uses: :class:`UseSources` is what it reads of them.
 
 from __future__ import annotations
 
-import itertools
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
@@ -22,7 +21,6 @@ from agm.agl.scope.hiding import (
     Origin,
     beneath_hiding,
     hidden_keys,
-    removed,
     unremoved,
 )
 from agm.agl.scope.lookup import (
@@ -36,8 +34,6 @@ from agm.agl.scope.lookup import (
     lookup_steps,
 )
 from agm.agl.scope.symbols import (
-    BindingRef,
-    ConstructorRef,
     ContributionLayer,
     DeclarationKey,
     MissRepair,
@@ -55,7 +51,6 @@ from agm.agl.scope.symbols import qname_declaration as _qname_decl_key
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.type_owners import TypeOwnerIndex
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment, UseDecl
-from agm.agl.syntax.spans import SourceSpan
 
 # What one outermost read has learned each ``use`` reaches, by declaration, path and kind.
 type _UseReads = dict[tuple[int, ScopePath, LookupKind], tuple[Candidate, ...]]
@@ -125,19 +120,11 @@ class UseSources(PathSources, Protocol):
         """The scopes and types module *route* reaches as *path* beneath it; itself for none."""
         ...
 
-    def variant_binding_ref(self, constructor: ConstructorRef, span: SourceSpan) -> BindingRef:
-        """The binding an enum member *constructor*, injected bare at *span*, is read through."""
-        ...
-
     def removed_with(self, qname: QName) -> frozenset[DeclarationKey]:
         """What a ``hiding`` naming *qname* removes, by identity.
 
         The declaration itself, and what a path beneath it reaches.
         """
-        ...
-
-    def enum_members_named(self, name: str) -> Mapping[QName, ConstructorRef]:
-        """The enums, of any module this one reads, with a member named *name*, and that member."""
         ...
 
 
@@ -412,14 +399,8 @@ class UseReader:
     def exposure(
         self, site: ScopePath, decl: UseDecl, relative: ScopePath, kind: LookupKind
     ) -> Iterator[Candidate]:
-        """What *decl*, written in region *site*, contributes of *kind* as *relative*.
-
-        What it reaches, and a bare enum member an enum it exposes injects.
-        """
-        reached: Iterable[Candidate] = self._use_reached(site, decl, relative, kind)
-        if kind is not LookupKind.TYPE and len(relative) == 1:
-            reached = itertools.chain(reached, self._use_injected(site, decl, relative[0]))
-        for candidate in reached:
+        """What *decl*, written in region *site*, contributes of *kind* as *relative*."""
+        for candidate in self._use_reached(site, decl, relative, kind):
             used = self._as_used(site, decl, candidate, alone=len(relative) == 1)
             if self._sources.fits(used.target, kind):
                 yield used
@@ -431,10 +412,9 @@ class UseReader:
 
         An alias segment selects a member of its target, read as written
         where the alias is declared. Exposed *alone* -- spelled by its own
-        name, not beneath the alias -- that member is the target's own when
-        the alias renames its target, and stays at the alias's type
-        arguments when the alias applies it. Each way it was reached also
-        removes what the use's ``hiding`` names.
+        name, not beneath the alias -- that member is the target's own,
+        whatever type arguments the alias applies it at. Each way it was
+        reached also removes what the use's ``hiding`` names.
         """
         target = candidate.target
         declaration = candidate.origin.declaration
@@ -443,8 +423,7 @@ class UseReader:
         member = None
         if alone and key is not None and constructor is not None and constructor.member is not None:
             owner = _qname_decl_key((key[0], _bare_atom(key[1])))
-            if not self._sources.applies(owner):
-                member = self._type_owners.owner_member(owner, key[2])
+            member = self._type_owners.owner_member(owner, key[2])
         hiding = candidate.hiding
         if member is not None:
             target = QualifiedTarget(member.key, None, member)
@@ -486,73 +465,6 @@ class UseReader:
             if origin[1]
         }
         return found
-
-    def _surviving(
-        self, site: ScopePath, decl: UseDecl, candidates: Iterable[Candidate]
-    ) -> Iterator[Candidate]:
-        """Yield *candidates*, read of *decl* in region *site*, that no ``hiding`` removes."""
-        hiding = frozenset({self._use_hidden(site, decl)})
-        for candidate in candidates:
-            key = candidate.target.key
-            if not removed(candidate.hiding, key, self._sources) and not removed(
-                hiding, key, self._sources
-            ):
-                yield candidate
-
-    def _use_injected(self, site: ScopePath, decl: UseDecl, name: str) -> Iterator[Candidate]:
-        """Yield the enum member *name* each enum *decl*, in region *site*, exposes injects.
-
-        An inline member its ``hiding`` removed, or whose name a record or
-        exception the use exposes owns, is not injected.
-        """
-        spellings = [] if decl.alias is None else [decl.alias]
-        spellings.extend(
-            item.rename
-            for item in decl.tail or ()
-            if item.rename is not None and not item.scope_path
-        )
-        layer = ContributionLayer.USE
-        for qname, constructor in self._sources.enum_members_named(name).items():
-            inline = constructor.inline_enum_owner_decl_node_id is not None
-            key = _qname_decl_key(qname)
-            exposed = any(
-                any(
-                    candidate.target.key == key
-                    for candidate in self._surviving(
-                        site, decl, self._use_reached(site, decl, (spelling,), LookupKind.TYPE)
-                    )
-                )
-                and (not inline or self._use_rests(site, decl, (spelling, name)))
-                for spelling in (key[2], *spellings)
-            )
-            if not exposed or (inline and self._exposes_standalone(site, decl, name)):
-                continue
-            yield Candidate(
-                QualifiedTarget(
-                    _qname_decl_key(constructor.selected_qname),
-                    self._sources.variant_binding_ref(constructor, decl.span),
-                    constructor,
-                ),
-                layer,
-                contribution_origin(constructor.selected_qname, layer),
-            )
-
-    def _exposes_standalone(self, site: ScopePath, decl: UseDecl, name: str) -> bool:
-        """Whether *decl*, in region *site*, exposes a record or exception as *name*."""
-        for candidate in self._surviving(
-            site, decl, self._use_reached(site, decl, (name,), LookupKind.VALUE)
-        ):
-            target = candidate.target
-            if (
-                target.key is None
-                or target.constructor is None
-                or target.constructor.inline_enum_owner_decl_node_id is not None
-            ):
-                continue
-            owner = self._type_owners.owner(_key_qname(target.key))
-            if owner is not None and owner.alias is None and owner.constructor is not None:
-                return True
-        return False
 
     def origins(self, site: ScopePath, decl: UseDecl, relative: ScopePath) -> frozenset[Origin]:
         """The scopes and types *decl*, written in region *site*, exposes as *relative*.

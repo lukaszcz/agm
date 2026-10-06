@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "red",
+      "module_roots": ["program_modules/modules/injection_own_alias"],
+      "params": {"flag": true},
+      "expect": {"stdout": "red\nred\nred\nred\n"}
+    },
+    {
+      "name": "blue",
+      "module_roots": ["program_modules/modules/injection_own_alias"],
+      "params": {"flag": false},
+      "expect": {"stdout": "blue\nblue\nblue\nblue\n"}
+    }
+  ]
+}

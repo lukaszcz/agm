@@ -1,0 +1,6 @@
+import a
+import a::{Opt, IntOpt}
+
+def none() -> a::Opt[int] = Nothing
+
+def some(n: int) -> a::Opt[int] = Som(value = n)

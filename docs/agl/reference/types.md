@@ -780,10 +780,10 @@ type arguments, and its members must have distinct terminal names. The enum's
 scope contains only its inline declarations: `Stored::Fresh` is available,
 while `Stored::Saved` is not; `Saved` remains reachable at its original
 declaration path. Referencing a record does not re-export it. Every member's
-terminal name is also an injected constructor and pattern candidate at the
-enum's own scope path: an enum declared or imported at `S` makes its members'
-names bare inside `scope S` ([Names and
-visibility](scopes.md#names-and-visibility)).
+terminal name is also an injected constructor and pattern candidate wherever
+the enum is reached: an enum declared at `S`, or reached there through an
+import, a `use`, or an alias, makes its members' names bare inside `scope S`
+([Names and visibility](scopes.md#names-and-visibility)).
 
 Each member is a record type. An inline member may appear in field, parameter,
 return, and generic-argument positions such as `array[Stored::Fresh]`; a
@@ -1165,13 +1165,20 @@ mentions; an explicit type application still supplies every declared
 parameter, so with `type Tagged[X] = Point`, `Tagged(x = 1)` and
 `Tagged::[int](x = 1)` both construct a `Point`.
 
-An alias of an applied enum injects its members at the alias's type
-arguments: an import item naming `type O = Opt[int]`, or `use O::*`, makes bare
-`Som` mean `O::Som`, an `Opt[int]` member. Members injected through different
-applied aliases, or through an applied alias and the generic enum, are
-distinct declarations for a bare value spelling, which is then ambiguous; a
-pattern or `is` test still selects among them by its scrutinee's type, and
-candidates constructing one member at the scrutinee's type arguments are one.
+An alias of an enum, renaming or applied, injects the enum's members as the
+generic member declarations. Where `a` declares
+`enum Opt[T] = Nothing | Som(value: T)`, `type IntOpt = Opt[int]`, and
+`type DecOpt = Opt[decimal]`, an import item naming `IntOpt`, or a module's
+own `type O = a::Opt[int]` after `import a`, makes bare `Som` mean
+`Opt::Som`, whose type arguments inference fixes as for any generic
+constructor: after `import a::{DecOpt}` alone, `Som(value = 1)` constructs an
+`Opt[int]` member, and after `import a::{IntOpt}` alone, `Som(value = "x")`
+an `Opt[text]` one. A bare spelling a `use` of the alias's members brings is
+the generic member too: after `import a::{IntOpt}` and `use IntOpt::*`,
+`Som(value = "x")` is accepted. Every route to one member is one candidate,
+so after `import a::{Opt, IntOpt}` bare `Nothing` is not ambiguous. Only a spelling
+beneath the alias carries its type arguments: `IntOpt::Som(value = 1)` is an
+`Opt[int]` member, and `IntOpt::Som(value = "x")` is a static error.
 
 An alias of a structural type (`type F = int -> bool`) reaches no paths. Two
 aliases denoting the same structural type are one declaration.

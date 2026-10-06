@@ -66,7 +66,7 @@ __all__ = [
     "TypeOwnerIndex",
     "beneath",
     "declared_member_scopes",
-    "injected_members",
+    "is_current",
     "owned_constructors",
     "retired_member_scopes",
     "root_type_names",
@@ -180,7 +180,6 @@ class TypeOwnerIndex:
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
         self._alias_targets: dict[QName, AliasSelection] = {}
-        self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
         # Aliases and enums being resolved: a read meanwhile presumes an alias
         # names no target yet, and an enum has its inline members alone.
         self._resolving: set[QName] = set()
@@ -209,9 +208,6 @@ class TypeOwnerIndex:
         """Forget what paths of *modules* select: their headers are prepared again."""
         self._owners = {q: o for q, o in self._owners.items() if q[0] not in modules}
         self._alias_targets = {q: t for q, t in self._alias_targets.items() if q[0] not in modules}
-        self._referenced_members = {
-            key: refs for key, refs in self._referenced_members.items() if key[0] not in modules
-        }
 
     def is_declared(self, qname: QName) -> bool:
         """Whether *qname* names a type or an inline enum member."""
@@ -246,16 +242,9 @@ class TypeOwnerIndex:
         *member* belongs to the enum declared at *qname* and selects what
         scope selects for its spelling there.
         """
-        key = (qname[0], member.node_id)
-        if key not in self._referenced_members:
-            selection = self._current_selection(
-                qname[0], _path(qname[1])[:-1], member, every_use=True
-            )
-            target = None if selection is None else self.declared_path(selection)
-            self._referenced_members[key] = (
-                () if target is None else self._constructors_through(target)
-            )
-        return self._referenced_members[key]
+        selection = self._current_selection(qname[0], _path(qname[1])[:-1], member, every_use=True)
+        target = None if selection is None else self.declared_path(selection)
+        return () if target is None else self._constructors_through(target)
 
     def owner(self, qname: QName) -> TypeOwner | None:
         """Return what type path *qname* selects, or ``None`` when it names no type.
@@ -423,6 +412,19 @@ class TypeOwnerIndex:
                 break
         return named
 
+    def enum_behind(self, qname: QName) -> QName | None:
+        """The enum type path *qname* is, or the end of the alias chain it heads.
+
+        ``None`` for any other path.
+        """
+        last = None
+        for current, owner in self._alias_chain(qname):
+            last = current, owner
+        if last is None:
+            return None
+        current, owner = last
+        return current if owner.alias is None and owner.constructor is None else None
+
     def denotation(self, qname: QName) -> Denoted | None:
         """The type the alias *qname* names (:meth:`identity`) denotes, unless renaming its target.
 
@@ -493,15 +495,9 @@ class TypeOwnerIndex:
         return denoted(alias.type_expr)
 
     def constructor_identity(self, constructor: ConstructorRef) -> ConstructorRef:
-        """Return the constructor *constructor* names: a renaming alias's is its target's.
-
-        A member an alias renaming an enum selects is the enum's member; one
-        an alias applying it selects stays the alias's (:meth:`denotation`).
-        """
+        """Return the constructor *constructor* names: a renaming alias's is its target's."""
         named = self.identity(constructor.qname)
         owner = self.owner(named)
-        if owner is not None and constructor.member is not None:
-            return constructor if owner.alias is not None else owner.members[constructor.member]
         if owner is None or named == constructor.qname or owner.constructor is None:
             return constructor
         return owner.constructor
@@ -877,43 +873,28 @@ def owned_constructors(
             yield path[-1], owner.constructor, path[:-1], bare
 
 
-def injected_members(
-    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner]
-) -> Iterator[tuple[ScopePath, str, ConstructorRef]]:
-    """Yield ``(step, name, constructor)`` for each member module *module_id*'s enums inject.
-
-    An enum at path ``P`` injects its inline members, and its referenced
-    members while it is the declaration *owners* hold at their paths, as
-    bare names at its own step ``P[:-1]``.
-    """
-    for path, owner in owners.items():
-        if owner.constructor is None and owner.alias is None:
-            for name, member in owner.members.items():
-                yield path[:-1], name, member
-            for injected in _current_injected(module_id, owners, owner):
-                yield path[:-1], injected.owner_name, injected
-
-
 def _current_injected(
     module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner], owner: TypeOwner
 ) -> Iterator[ConstructorRef]:
-    """Yield enum *owner*'s referenced members still current in *owners* (:func:`_is_current`)."""
-    return (injected for injected in owner.injected if _is_current(module_id, owners, injected))
+    """Yield enum *owner*'s referenced members still current in *owners* (:func:`is_current`)."""
+    return (injected for injected in owner.injected if is_current(module_id, owners.get, injected))
 
 
-def _is_current(
-    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner], constructor: ConstructorRef
+def is_current(
+    module_id: ModuleId,
+    owner_at: Callable[[ScopePath], TypeOwner | None],
+    constructor: ConstructorRef,
 ) -> bool:
-    """Whether *constructor* is still what *owners* declare at its own path.
+    """Whether *constructor* is still what the owners *owner_at* gives declare at its own path.
 
     Another module's declaration always is.
     """
     if constructor.owner_module_id != module_id:
         return True
-    at_path = owners.get((*constructor.owner_path, constructor.owner_name))
+    at_path = owner_at((*constructor.owner_path, constructor.owner_name))
     if at_path is not None:
         current = at_path.constructor
     else:
-        enum = owners.get(constructor.owner_path)
+        enum = owner_at(constructor.owner_path)
         current = None if enum is None else enum.members.get(constructor.owner_name)
     return current is not None and current.owner_decl_node_id == constructor.owner_decl_node_id

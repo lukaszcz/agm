@@ -1,0 +1,8 @@
+import a
+import a::{IntOpt}
+
+use IntOpt::*
+
+def make(s: text) -> a::Opt[text] = Som(value = s)
+
+def qualified(n: int) -> a::Opt[int] = IntOpt::Som(value = n)

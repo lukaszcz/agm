@@ -1,0 +1,1 @@
+def some(n: int) -> Option[int] = ::Some(value = n)

@@ -42,7 +42,6 @@ def _case(header: str, scrutinee: str, indent: str = "") -> str:
 
 
 _OVERQUALIFIED = "spells the constructor through its route although the region reaches it shorter"
-_SCRUTINEE_SELECTS = "a same-named imported record blocks the bare member the scrutinee selects"
 _SHADOWED_HEAD = "spells a route whose head a type parameter shadows at the case"
 
 # (entry template, covered arm, expected witness)
@@ -55,12 +54,7 @@ _ENUM_ROWS = {
     "route-only": pytest.param(
         _case("import lib\n", "lib::Color"), "lib::Color::Red", "lib::Color::Blue"
     ),
-    "use-at-root": pytest.param(
-        _case("import lib\nuse lib::Color\n", "Color"),
-        "Red",
-        "Blue",
-        marks=pytest.mark.xfail(strict=True, reason=_OVERQUALIFIED),
-    ),
+    "use-at-root": pytest.param(_case("import lib\nuse lib::Color\n", "Color"), "Red", "Blue"),
     "use-in-scope": pytest.param(
         _case("import lib\nscope S\n  use lib::Color\n", "Color", "  ") + "end S\n",
         "Red",
@@ -85,10 +79,7 @@ _ENUM_ROWS = {
         "/lib::Color::Blue",
     ),
     "imported-record-beside-bare-member": pytest.param(
-        _case("import lib::*\nimport rb::*\n", "Color"),
-        "Red",
-        "Blue",
-        marks=pytest.mark.xfail(strict=True, reason=_SCRUTINEE_SELECTS),
+        _case("import lib::*\nimport rb::*\n", "Color"), "Red", "Blue"
     ),
     "route-alias": pytest.param(
         _case("import lib as L\n", "L::Color"), "L::Color::Red", "L::Color::Blue"

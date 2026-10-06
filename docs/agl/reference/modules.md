@@ -80,7 +80,14 @@ import, under every spelling: with `type HGeo = Base` and a `def Base::j()`
 in `hid`, `import hid::* hiding HGeo` leaves neither `Base` nor `Base::j`. An
 alias of a different type survives (`hiding Box` leaves
 `type IntBox = Box[int]`). An item naming an enum, or an alias of an enum, also
-injects that enum's member names.
+injects that enum's member names, as does the importing module's own alias of
+an imported enum; through any alias a bare member is the generic member
+declaration ([Type aliases](types.md#type-aliases)). Such a member stays an
+imported declaration, so it does not claim its spelling over another import:
+where `a` declares `enum Color = Red | Green` and `b` declares
+`enum Light = Red | Amber`, a module with `import a`, `import b::*`, and
+`type C = a::Color` finds bare `Red` ambiguous; `C::Red` and `Light::Red`
+select each.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -270,18 +277,23 @@ reaches the module.
 A module qualifier followed by a terminal name, as in `mylib::Red` or `::Red`,
 selects a constructor from that module's surface: the record or exception
 (or an alias of one) it declares at its root under that name, else the one
-inline member with that name of the root enums it declares or, for an import
-route, re-exports. After `export base::{Color}` in `mid`, `mid::Red` selects
-`base`'s `Color::Red`. Only a declaration with a constructor claims the name:
+inline member with that name of the enums reached at its root under any name —
+those it declares, those its own aliases name, or, for an import route, those
+it re-exports. After `export base::{Color}` in `mid`, `mid::Red` selects
+`base`'s `Color::Red`; when `mylib` declares `type C = other::Color` after
+`import other`, `mylib::Red` selects `other::Color::Red`. Only a declaration
+with a constructor claims the name:
 next to `enum Color = Red | Green`, a root `enum Red`, `enum Red[T]`, or `type
-Red = int` leaves `mylib::Red` selecting `Color::Red`. `::` never reaches an
-imported, prelude, or builtin constructor, so `::Some` names nothing unless the
-current module declares `Some`. The spelling denotes the same constructor in a
+Red = int` leaves `mylib::Red` selecting `Color::Red`. `::` reaches an
+imported or prelude constructor only through an alias the current module
+declares; a builtin enum's member is its fallback when the module's root
+injects none, so `::Some` selects `Option::Some` unless the current module
+declares `Some`. The spelling denotes the same constructor in a
 value, a pattern, and an `is` test, except that a same-named `def` or `let` of
 the module claims the value spelling while pattern and `is` lookup stay
 independent (see [claiming a constructor's
 spelling](bindings-and-scope.md#overload-sets-shadowing-and-ambiguity)). Two
-such inline members, whether declared or re-exported, make it ambiguous in
+such inline members, whether declared, aliased, or re-exported, make it ambiguous in
 every position; qualify it with the owning enum (`mylib::Color::Red`), as
 the diagnostic suggests through the same qualifier. A scope or type the module
 itself declares under the route's name is read first: an own `scope mylib`

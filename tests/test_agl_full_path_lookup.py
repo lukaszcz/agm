@@ -425,10 +425,12 @@ _SCENARIOS = {
         probes={
             "member": accepted(_in_region("use C::*", "Red"), "record S::E::Red"),
             "module-root-alias": accepted(_in_region("use ::C::*", "Red"), "record S::E::Red"),
-            "unselected-member": rejected(
-                _in_region("use C::{Red}", "Blue(v = 1)"), AglScopeError, "Blue"
+            "member-the-use-does-not-select": accepted(
+                _in_region("use C::{Red}", "Blue(v = 1)"), "record S::E::Blue\n  v: int"
             ),
-            "outside-the-region": rejected(_OUTSIDE_THE_REGION, AglScopeError, "Red"),
+            "outside-the-region-the-alias-injects": accepted(
+                _OUTSIDE_THE_REGION, "record S::E::Red"
+            ),
         },
     ),
     "an-own-alias-wins-its-path-over-an-imported-one": Scenario(

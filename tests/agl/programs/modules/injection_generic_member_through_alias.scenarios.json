@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "small_value",
+      "module_roots": ["program_modules/modules/injection_generic_member_through_alias"],
+      "params": {"n": 1},
+      "expect": {
+        "stdout": "some 1\nsome x1\nnothing\nnothing\nsome 1\nsome y1\nsome 1\n"
+      }
+    },
+    {
+      "name": "other_value",
+      "module_roots": ["program_modules/modules/injection_generic_member_through_alias"],
+      "params": {"n": 42},
+      "expect": {
+        "stdout": "some 42\nsome x42\nnothing\nnothing\nsome 42\nsome y42\nsome 42\n"
+      }
+    }
+  ]
+}

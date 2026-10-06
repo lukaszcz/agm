@@ -59,7 +59,6 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     alias_prefix,
     build_import_env,
-    declares_bare_constructor,
     matching_atoms,
     validate_import_items,
 )
@@ -80,7 +79,6 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     UnknownMemberError,
     builtin_type_static_kind,
-    dedupe_constructor_candidates,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
@@ -215,111 +213,6 @@ class ResolvedProgram:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _build_cross_module_constructor_candidates(
-    import_env: ImportEnv,
-    all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
-    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
-    type_owners: TypeOwnerIndex,
-    tail_removes: Callable[[NameAtom, QName, QName], bool],
-    tail_exposed: Callable[[NameAtom], tuple[QName, ...]],
-) -> dict[str, tuple[ConstructorRef, ...]]:
-    """Build constructor candidates from types exposed by import tails for a module.
-
-    For each type exposed unqualified by an import tail:
-    - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
-    - EnumDef: add each variant name as a candidate (e.g. ``Red``), and each
-      member it references unless an import hides that member's declaration.
-    - TypeAlias: add the alias name unless *type_owners* resolves it to an
-      enum, following each alias of the chain where it is declared; an
-      alias renaming an enum adds the enum's members, one applying an enum
-      each member as ``Alias::member`` selects it.
-
-    A selected QName may also name an enum variant directly (e.g. an
-    individually imported/renamed variant); such names are absent from
-    ``all_public_types`` (which is keyed by owning-type QName), so they are
-    resolved through ``cross_module_constructor_refs`` instead, which already
-    carries a per-variant :class:`ConstructorRef`.
-
-    A declaration every tail exposing it removes by ``hiding``
-    (*tail_removes*) adds none; a member name a record or exception no tail
-    removes (*tail_exposed*) claims adds none.
-    """
-    candidates: dict[str, list[ConstructorRef]] = {}
-    exposed_qnames = frozenset(
-        qname for qnames in import_env.unqualified.values() for qname in qnames
-    )
-    seen_candidates: set[tuple[str, ConstructorRef]] = set()
-
-    def add_candidate(name: str, ref: ConstructorRef) -> None:
-        candidate = (name, ref)
-        if candidate not in seen_candidates:
-            seen_candidates.add(candidate)
-            candidates.setdefault(name, []).append(ref)
-
-    def add_members(
-        exposed_name: str, key: QName, enum_qname: QName, enum: EnumDef, *, through_alias: bool
-    ) -> None:
-        """Add the members enum *enum* at *enum_qname*, exposed as *key*, injects bare."""
-        mid, src_name = enum_qname
-        for member in enum.members:
-            if isinstance(member, VariantRef):
-                for referenced_cref in type_owners.referenced_member_refs(enum_qname, member):
-                    if not tail_removes(exposed_name, key, referenced_cref.qname):
-                        add_candidate(referenced_cref.owner_name, referenced_cref)
-                continue
-            if declares_bare_constructor(tail_exposed(member.name), all_public_types):
-                continue
-            member_qname = (mid, _atom((*_path(src_name), member.name)))
-            if (through_alias or member_qname in exposed_qnames) and not tail_removes(
-                exposed_name, key, member_qname
-            ):
-                add_candidate(member.name, cross_module_constructor_refs[member_qname])
-
-    def add_applied_members(exposed_name: str, key: QName, alias: TypeAlias) -> None:
-        """Add the members *alias*, declared at *key* and applying an enum, injects bare.
-
-        Each is what ``Alias::member`` selects: the member at the alias's
-        type arguments.
-        """
-        owner = type_owners.declared_owner(key, alias)
-        for name, member in owner.alias_members().items():
-            if not declares_bare_constructor(
-                tail_exposed(name), all_public_types
-            ) and not tail_removes(exposed_name, key, owner.members[name].qname):
-                add_candidate(name, member)
-
-    for exposed_name, qnames in import_env.unqualified.items():
-        if not isinstance(exposed_name, str):
-            continue
-        for mid, src_name in qnames:
-            key = (mid, src_name)
-            if tail_removes(exposed_name, key, key):
-                continue
-            decl = all_public_types.get(key)
-            if decl is None:
-                variant_ref = cross_module_constructor_refs.get(key)
-                if variant_ref is not None:
-                    add_candidate(exposed_name, variant_ref)
-                continue
-            if isinstance(decl, (RecordDef, ExceptionDef)):
-                cref = cross_module_constructor_refs[key]
-                add_candidate(exposed_name, cref)
-            elif isinstance(decl, TypeAlias):
-                alias_ref = type_owners.alias_constructor(decl, key)
-                target = type_owners.identity(key)
-                enum = all_public_types[target]
-                if alias_ref is not None:
-                    add_candidate(exposed_name, alias_ref)
-                elif isinstance(enum, EnumDef):
-                    # The alias's paths are its target's: its members come with it.
-                    add_members(exposed_name, key, target, enum, through_alias=True)
-                else:
-                    add_applied_members(exposed_name, key, decl)
-            else:
-                add_members(exposed_name, key, key, decl, through_alias=False)
-    return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}
 
 
 def _item_atom(
@@ -1414,16 +1307,7 @@ def resolve_program(
     # headers make selectable: a body reads through other modules' aliases.
     # ------------------------------------------------------------------
     for mid, resolver in resolvers.items():
-        # Build cross-module constructor candidates from unqualified import tails.
-        cross_module_candidates = _build_cross_module_constructor_candidates(
-            import_envs[mid],
-            all_public_types,
-            cross_module_constructor_refs,
-            type_owners,
-            resolver.tail_removes,
-            resolver.tail_exposed,
-        )
-        resolver.collect(ambient_constructor_candidates=cross_module_candidates or None)
+        resolver.collect()
     for mid in graph.modules:
         prepared = resolvers.get(mid)
         if prepared is None:

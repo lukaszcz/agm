@@ -320,14 +320,24 @@ declaration path, and only on a method. `Point::norm(p)` written bare follows
 ordinary scope-path rules, while `p.norm()` aggregates visible method
 declarations across modules.
 
-An enum member's terminal name is an injected bare constructor candidate at
-the enum's own scope path: inside `scope S`, `enum Color = Red | Green` makes
-`Red` bare within `S` (and its nested regions), whether the enum is declared
-there or provided there by an import, but declares no `S::Red`. A declaration
-the module itself makes claims the spelling over an injected member, and an
-injected member's name is never a type. In ordinary value position, scope
-resolution requires it to be the only visible constructor candidate with that
-name: several candidates are a static scope ambiguity, even when an expected
+An enum member's terminal name is an injected bare constructor candidate
+wherever its enum is reached: inside `scope S`, `enum Color = Red | Green`
+makes `Red` bare within `S` (and its nested regions), but declares no
+`S::Red`. Every type a lookup step reaches under some name injects the
+members it owns at that step, however it is reached — declared, imported,
+provided by a `use`, or named by an alias, the module's own included: where
+`a` declares `enum Color = Red | Green`, an own `type C = a::Color` after
+`import a` makes `Red` bare where `C` is visible. An injected member is the
+module's own only when the module declares its enum; through an own alias, a
+member of an imported enum competes as an imported declaration
+([Modules](modules.md#imports)). A declaration the module itself
+makes claims the spelling over an injected member, and an injected member's
+name is never a type. In ordinary value position, it yields to a record or
+exception of that name an import or `use` reaches at the same step ([Overload
+sets, shadowing, and
+ambiguity](bindings-and-scope.md#overload-sets-shadowing-and-ambiguity)), and
+scope resolution otherwise requires it to be the only visible constructor
+candidate with that name: several candidates are a static scope ambiguity, even when an expected
 enum type contains one of them. The expected
 type checks the constructor after scope has selected it; it does not select a
 same-named member. Enum-member patterns and `is` tests are different: their

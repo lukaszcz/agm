@@ -1,0 +1,6 @@
+import a
+import a::{IntOpt}
+
+def make(s: text) -> a::Opt[text] = Som(value = s)
+
+def none() -> a::Opt[int] = Nothing

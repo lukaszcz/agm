@@ -1,0 +1,25 @@
+# A module's own alias of an imported enum injects the enum's members bare where
+# the alias is visible: at the root, in a region, and as a module qualifier on
+# the exporting module (`lib::Red`). The member is still the imported declaration.
+import a
+import lib
+
+type C = a::Color
+
+scope Region
+  type K = a::Color
+
+  def pick(flag: bool) -> a::Color = if flag => Red else => Blue
+end Region
+
+def name(c: a::Color) -> text =
+  case c of
+    | Red => "red"
+    | Blue => "blue"
+
+program def main(flag: bool) -> unit =
+  let c: C = if flag => Red else => Blue
+  print(name(c))
+  print(name(Region::pick(flag)))
+  print(name(if flag => lib::Red else => lib::Blue))
+  print(name(if flag => C::Red else => C::Blue))

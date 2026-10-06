@@ -1444,8 +1444,8 @@ def test_imported_transformed_generic_alias_matches_concrete_enum_owner(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Flipped", None)
-    assert render_witness(witness) == "Flipped::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_local_generic_alias_is_retained_as_checked_template_candidate() -> None:
@@ -1522,8 +1522,8 @@ def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Fixed", None)
-    assert render_witness(witness) == "Fixed::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_qualified_generic_identity_alias_uses_source_handle(tmp_path: Path) -> None:
@@ -1738,9 +1738,7 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == (
-        "pair(left = IntRemote::item(value = _), right = TextRemote::item(value = _))"
-    )
+    assert render_witness(witness) == "pair(left = item(value = _), right = item(value = _))"
 
 
 def test_polymorphic_nested_instantiation_selects_generic_alias_template(
@@ -1772,7 +1770,7 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == "p::Root::next(value = N::value(item = _))"
+    assert render_witness(witness) == "next(value = value(item = _))"
 
 
 def test_local_type_keeps_constructor_witnesses_unqualified_when_import_handle_conflicts(

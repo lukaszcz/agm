@@ -90,9 +90,9 @@ from agm.agl.scope.lookup import (
     Misfit,
     QualifiedTarget,
     lookup_bare,
+    lookup_constructors,
     lookup_declared,
     lookup_qualified,
-    lookup_steps,
     unknown_member,
     unknown_qualifier,
 )
@@ -151,7 +151,6 @@ from agm.agl.scope.type_names import (
 )
 from agm.agl.scope.type_owners import (
     TypeOwnerIndex,
-    injected_members,
     owned_constructors,
     root_type_names,
 )
@@ -745,8 +744,6 @@ class _Resolver(ModuleSources):
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
-        # The members this module's enums inject bare: (step, name) -> constructors.
-        self._injected_constructors: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Qualified type-owner chains: QualifierChain.node_id -> the full
@@ -869,20 +866,13 @@ class _Resolver(ModuleSources):
         if completed is not None:
             raise _beneath_alias_error(*completed)
 
-    def collect(
-        self,
-        *,
-        ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ) -> None:
+    def collect(self) -> None:
         """Collect the prepared program's constructors and root bindings; the second phase.
 
         Runs once every module of the program is constructed, since the
         type-owner index answers from all of their headers, and for every
         module before any walks its bodies (:meth:`resolve`): a path read
         through another module's alias reads that module's tables.
-
-        *ambient_constructor_candidates* carries the other modules'
-        constructors that import tails make bare here.
         """
         type_owners = self._declared_type_owners()
         # A retained path's owner is re-derived through the index rather than
@@ -895,10 +885,6 @@ class _Resolver(ModuleSources):
             for path in {**self._repl_session_type_paths, **type_owners}
             if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
         }
-        if ambient_constructor_candidates:
-            for cname, crefs in ambient_constructor_candidates.items():
-                for cref in crefs:
-                    self._add_constructor_candidate(cname, cref)
         # Pre-pass 3: collect constructor candidates from the module's current
         # types: the earlier REPL entries' this entry leaves current, then its own.
         self._collect_constructor_candidates(current_type_owners)
@@ -960,9 +946,7 @@ class _Resolver(ModuleSources):
             static_root=self._is_static_root_module,
             origin_path=self._origin_path,
             declared_type_paths=frozenset(self._type_paths),
-            constructor_candidates={
-                name: tuple(refs) for name, refs in self._constructor_candidates.items()
-            },
+            constructor_candidates=self._root_constructor_candidates(),
             constructor_refs=dict(self._constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             is_test_constructor_candidates=dict(self._is_test_constructor_candidates),
@@ -982,15 +966,34 @@ class _Resolver(ModuleSources):
             scoped_constructor_candidates={
                 key: tuple(refs) for key, refs in self._scoped_constructor_candidates.items()
             },
-            injected_constructors={
-                key: tuple(refs) for key, refs in self._injected_constructors.items()
-            },
             fixities=fixities,
         )
 
     # ------------------------------------------------------------------
     # Fixity
     # ------------------------------------------------------------------
+
+    def _root_constructor_candidates(self) -> dict[str, tuple[ConstructorRef, ...]]:
+        """The constructors a bare name may denote at the module root.
+
+        Published as ``ModuleResolution.constructor_candidates``, which only
+        non-exhaustive-match witness rendering reads (to spell a member bare
+        when it is visible). Scope itself decides through :func:`lookup_bare`.
+        Holds this module's own and the host's constructors, those root
+        imports make bare, and the enum members they inject.
+        """
+        table = {name: list(refs) for name, refs in self._constructor_candidates.items()}
+        imported = (atom for atom in self._import_env.unqualified if isinstance(atom, str))
+        for name in (*self._enum_members(), *imported):
+            found = [
+                constructor
+                for candidate in lookup_constructors(self, name, ())
+                if (constructor := candidate.target.constructor) is not None
+                and not removed(candidate.hiding, candidate.target.key, self)
+            ]
+            known = table.setdefault(name, [])
+            known.extend(c for c in found if c not in known)
+        return {name: tuple(refs) for name, refs in table.items() if refs}
 
     def fixity(self, name: str) -> Fixity | None:
         """The fixity this module gives its declarations named *name*, if it declares one."""
@@ -1694,13 +1697,7 @@ class _Resolver(ModuleSources):
             constrained.add(constraint.param)
 
     def _canonical_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
-        """Intern *ref* as its member declaration's canonical metadata.
-
-        A member an alias selects is the alias's constructor with that member,
-        one per member, so it is its own.
-        """
-        if ref.member is not None:
-            return ref
+        """Intern *ref* as its member declaration's canonical metadata."""
         key = (ref.owner_module_id, ref.owner_decl_node_id)
         return self._constructor_metadata_by_decl_id.setdefault(key, ref)
 
@@ -1821,16 +1818,23 @@ class _Resolver(ModuleSources):
             for candidate in existing
         ):
             return existing
-        if cref.is_builtin:
-            for index, candidate in enumerate(existing):
-                if candidate.is_builtin and candidate.owner_path == cref.owner_path:
-                    # A standard-library declaration never displaces an
-                    # override; an override displaces a standard-library or
-                    # reserved one.
-                    if cref.owner_module_id.owns_standard_builtins:
-                        return existing
-                    if candidate.owner_module_id.owns_standard_builtins:
-                        return [*existing[:index], cref, *existing[index + 1 :]]
+        index = next(
+            (
+                index
+                for index, candidate in enumerate(existing)
+                if cref.is_builtin
+                and candidate.is_builtin
+                and candidate.owner_path == cref.owner_path
+            ),
+            None,
+        )
+        if index is not None:
+            # The built-ins joined so far are the seeded standard-library
+            # ones: a standard-library declaration never displaces an
+            # override, and an override displaces the seeded one.
+            if cref.owner_module_id.owns_standard_builtins:
+                return existing
+            return [*existing[:index], cref, *existing[index + 1 :]]
         return [*existing, cref]
 
     def _collect_constructor_candidates(self, owners: Mapping[ScopePath, TypeOwner]) -> None:
@@ -1842,11 +1846,6 @@ class _Resolver(ModuleSources):
         for name, constructor, scope_path, bare in owned_constructors(self._module_id, owners):
             self._add_constructor_candidate(
                 name, constructor, scope_path=scope_path, inject_bare=bare
-            )
-        for step, name, constructor in injected_members(self._module_id, owners):
-            self._injected_constructors[(step, name)] = self._place_candidate(
-                self._injected_constructors.get((step, name), []),
-                self._canonical_constructor_ref(constructor),
             )
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
@@ -2790,6 +2789,31 @@ class _Resolver(ModuleSources):
             span,
         )
 
+    def _ambiguous_qualified_constructor(
+        self, chain: QualifierChain, member: str, candidates: Mapping[ConstructorRef, Layers]
+    ) -> AmbiguousConstructorError:
+        """Report module qualifier *chain*'s *member* injected from several *candidates*.
+
+        Repaired by the first one, qualified by its owner through *chain*
+        where that selects it, else by its shortest routed spelling.
+        """
+        distinct = self._one_per_declaration(candidates)
+        ordered = sorted(distinct, key=constructor_candidate_sort_key)
+        first = ordered[0]
+        repair = render_qualified_name(chain, f"{first.owner_path[0]}::{member}")
+        site = self._named_scope_path()
+        qualifier = (*(segment.name for segment in chain.segments), first.owner_path[0])
+        if chain.segments and not self._spelling_selects(
+            qualifier, member, first, chain.span, site, anchored=chain.anchored
+        ):
+            repair = self._routed_spelling(first, first.qname, chain.span, site)
+        return self._ambiguous_constructor(
+            render_qualified_name(chain, member),
+            {candidate: distinct[candidate] for candidate in ordered},
+            repair,
+            chain.span,
+        )
+
     def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
         """Return the static kind attached to its resolved prelude owner."""
         if ref is None or not ref.is_builtin:
@@ -2855,7 +2879,7 @@ class _Resolver(ModuleSources):
         (:meth:`_routed_spelling`). Anything else is spelled by its
         declaration path.
         """
-        origin = candidate.selected_qname
+        origin = candidate.qname
         if candidate.owner_module_id == self._module_id:
             path = (*_bare_path(origin[1])[:-1], name)
             return spell_declaration(self._module_id, path, reader=self.reader())
@@ -2986,6 +3010,11 @@ class _Resolver(ModuleSources):
             self._named_scope_path(),
             kind,
             span=span,
+            constructors=(
+                None
+                if kind is LookupKind.TYPE
+                else partial(self._ambiguous_qualified_constructor, chain, member)
+            ),
         )
         if chain.anchor is QualifierAnchor.CURRENT_MODULE and isinstance(
             found, (UnknownMemberError, UnknownQualifierError)
@@ -3149,12 +3178,10 @@ class _Resolver(ModuleSources):
 
     def _bare_builtin_ref(self, name: str) -> BindingRef | None:
         """Find the host builtin made visible by the standard-library prelude."""
-        qnames = self._import_env.unqualified.get(name, frozenset())
         builtin_refs = [
             ref
-            for qname in qnames
-            if not self.tail_removes(name, qname, qname)
-            and self._is_builtin_function_ref(ref := self._cross_module_binding_ref(qname))
+            for qname in self.tail_exposed(name)
+            if self._is_builtin_function_ref(ref := self._cross_module_binding_ref(qname))
         ]
         if len(builtin_refs) == 1:
             return builtin_refs[0]
@@ -3416,21 +3443,15 @@ class _Resolver(ModuleSources):
 
         Its scrutinee selects among them: every constructor so spelled at
         every step -- own, contributed and injected -- that no ``hiding`` removed.
+        A same-named record or exception does not make a member yield here.
         """
         found: dict[ConstructorRef, Layers] = {}
-        for step in lookup_steps(self._named_scope_path()):
-            path = (*step, name)
-            reading = (
-                self.own_at(path, LookupKind.CONSTRUCTOR)
-                + self.contributed_at(step, path, LookupKind.CONSTRUCTOR)
-                + self.injected_at(step, name)
-            )
-            for candidate in reading.candidates:
-                constructor = candidate.target.constructor
-                if constructor is not None and not removed(
-                    candidate.hiding, candidate.target.key, self
-                ):
-                    add_layers(found, constructor, (candidate.layer,))
+        for candidate in lookup_constructors(self, name, self._named_scope_path()):
+            constructor = candidate.target.constructor
+            if constructor is not None and not removed(
+                candidate.hiding, candidate.target.key, self
+            ):
+                add_layers(found, constructor, (candidate.layer,))
         return tuple(self._one_per_declaration(found))
 
     def _one_per_declaration(
@@ -3447,7 +3468,7 @@ class _Resolver(ModuleSources):
         grouped: dict[object, dict[ConstructorRef, Layers]] = {}
         for candidate, layers in candidates.items():
             named = self._type_owners.constructor_identity(candidate)
-            denoted = self._type_owners.denotation(named.selected_qname)
+            denoted = self._type_owners.denotation(named.qname)
             grouped.setdefault(named if denoted is None else denoted, {})[candidate] = layers
         return {
             (

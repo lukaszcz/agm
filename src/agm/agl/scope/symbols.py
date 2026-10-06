@@ -59,7 +59,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, named_builtin_type
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 from agm.agl.zones import ParamZone
 
 ScopePath = tuple[str, ...]
@@ -472,13 +472,6 @@ class ConstructorRef:
         """This reference's declaration path, as a :data:`QName`."""
         return declaration_qname(self.key)
 
-    @property
-    def selected_qname(self) -> QName:
-        """The path this reference is selected at: an alias's member beneath the alias."""
-        if self.member is None:
-            return self.qname
-        return self.owner_module_id, to_bare_atom((*self.owner_path, self.owner_name, self.member))
-
 
 def passes_parameters(type_params: tuple[str, ...], target: AppliedT) -> bool:
     """Whether applied *target*'s arguments are exactly *type_params*, in order."""
@@ -579,20 +572,6 @@ class TypeOwner:
         )
 
     @property
-    def applies(self) -> bool:
-        """Whether an alias applies the type name it stands for to other arguments than its own.
-
-        A built-in's name included: ``type A = m::B[int]`` and ``type A =
-        array[int]`` do; ``type A[T] = array[T]`` passes its own parameters
-        through, and ``type A = text`` applies nothing.
-        """
-        alias, target = self.alias, self.stands_for
-        if alias is None or target is None:
-            return False
-        named = target if isinstance(target, (NameT, AppliedT)) else named_builtin_type(target)
-        return isinstance(named, AppliedT) and not passes_parameters(alias.type_params, named)
-
-    @property
     def constructs(self) -> bool:
         """Whether the owner qualifies constructors: its own, or its enum members'."""
         return bool(self.names or self.members or self.referenced)
@@ -620,16 +599,6 @@ class TypeOwner:
         if self.names and (name in self.names or name == written):
             return self.constructor
         return None
-
-    def alias_members(self) -> dict[str, ConstructorRef]:
-        """An alias's inline members by name, each as ``Alias::name`` selects it."""
-        constructor = self.constructor
-        if constructor is None:
-            return {}
-        return {
-            name: self._selected_member(constructor, member)
-            for name, member in self.members.items()
-        }
 
     @staticmethod
     def _selected_member(constructor: ConstructorRef, member: ConstructorRef) -> ConstructorRef:
@@ -1145,7 +1114,7 @@ class ModuleResolution:
         retained ones included -- the :class:`~agm.agl.modules.ids.Reader`
         data a diagnostic spelling another module's declaration anchors by.
     ``scope_entity_kinds``, ``import_decl_scope_paths``, ``type_declarations``,
-    ``scoped_constructor_candidates``, ``injected_constructors``
+    ``scoped_constructor_candidates``
         What each own full path declares (a scope, a type or an ordinary
         declaration), each import declaration's region, each type declaration
         with the scope path it is declared in, the constructors each scoped
@@ -1192,9 +1161,6 @@ class ModuleResolution:
         tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath], ...
     ] = ()
     scoped_constructor_candidates: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
-        default_factory=dict
-    )
-    injected_constructors: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
     fixities: dict[str, Fixity] = field(default_factory=dict)

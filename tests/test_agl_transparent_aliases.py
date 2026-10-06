@@ -1210,6 +1210,8 @@ _APPLIED_ENUM = "import op\ntype IntOpt = op::Opt[int]\n"
 """Declares an alias applying ``op``'s generic enum."""
 _INT_SOM = "record op::Opt::Som[int]\n  v: int"
 _BAD_SOM = 'Som(v = "s")'
+_NON = "record op::Opt::Non"
+_TEXT_SOM = "record op::Opt::Som[text]\n  v: text"
 
 
 def _applied_members_probes(prefix: str, before: str, spelled: str = "IntOpt") -> dict[str, Probe]:
@@ -1221,9 +1223,7 @@ def _applied_members_probes(prefix: str, before: str, spelled: str = "IntOpt") -
         f"{prefix}-{name}": probe
         for name, probe in {
             "member": accepted(f"{before}\nSom(v = 1)", _INT_SOM),
-            "member-fixes-its-arguments": rejected(
-                f"{before}\n{_BAD_SOM}", AglTypeError, '"s"', phase="typecheck"
-            ),
+            "member-infers-its-arguments": accepted(f"{before}\n{_BAD_SOM}", _TEXT_SOM),
             "nullary-member": accepted(
                 f"{before}\nfn(p: {spelled}) => p is Non", "op::Opt[int] -> bool"
             ),
@@ -1242,17 +1242,12 @@ _SCENARIOS["an-item-naming-an-applied-enum-alias-injects-its-members-applied"] =
         **_applied_members_probes("tail", "import ia::{IntOpt}"),
         **_applied_members_probes("use-tail", "import ia\nuse ia::{IntOpt}"),
         **_applied_members_probes("use-wildcard", "import ia\nuse ia::IntOpt::*", "ia::IntOpt"),
-        "use-rename": rejected(
-            f"import ia\n{_in_region('use ia::IntOpt as K', _BAD_SOM)}",
-            AglTypeError,
-            '"s"',
-            phase="typecheck",
+        "use-rename": accepted(
+            f"import ia\n{_in_region('use ia::IntOpt as K', _BAD_SOM)}", _TEXT_SOM
         ),
-        "own-use": rejected(
+        "own-use": accepted(
             f"import op\ntype IntOpt = op::Opt[int]\n{_in_region('use IntOpt::*', _BAD_SOM)}",
-            AglTypeError,
-            '"s"',
-            phase="typecheck",
+            _TEXT_SOM,
         ),
         "hidden-member": rejected(
             "import ia::* hiding IntOpt::Som\nSom(v = 1)", AglScopeError, "Som"
@@ -1261,13 +1256,13 @@ _SCENARIOS["an-item-naming-an-applied-enum-alias-injects-its-members-applied"] =
             "import ia::* hiding IntOpt::Som\nfn(p: IntOpt) => p is Non", "op::Opt[int] -> bool"
         ),
         **{
-            f"beside-its-generic-enum-{name}": rejected(
-                f"import op::*\nimport ia::*\n{value}", AmbiguousConstructorError, spelled
+            f"beside-its-generic-enum-{name}": accepted(
+                f"import op::*\nimport ia::*\n{value}", identity
             )
-            for name, value, spelled in (
-                ("member", "Som(v = 1)", "Som"),
-                ("member-at-other-arguments", _BAD_SOM, "Som"),
-                ("nullary-member", "Non", "Non"),
+            for name, value, identity in (
+                ("member", "Som(v = 1)", _INT_SOM),
+                ("member-at-other-arguments", _BAD_SOM, _TEXT_SOM),
+                ("nullary-member", "Non", _NON),
             )
         },
         **{
@@ -1302,11 +1297,9 @@ def _distinct_members_probes(prefix: str, before: str, text_opt: str) -> dict[st
     return {
         f"{prefix}-{name}": probe
         for name, probe in {
-            "member": rejected(f"{before}\nSom(v = 1)", AmbiguousConstructorError, "Som"),
-            "member-at-other-arguments": rejected(
-                f"{before}\n{_BAD_SOM}", AmbiguousConstructorError, "Som"
-            ),
-            "nullary-member": rejected(f"{before}\nNon", AmbiguousConstructorError, "Non"),
+            "member": accepted(f"{before}\nSom(v = 1)", _INT_SOM),
+            "member-at-other-arguments": accepted(f"{before}\n{_BAD_SOM}", _TEXT_SOM),
+            "nullary-member": accepted(f"{before}\nNon", _NON),
             "pattern": accepted(
                 f'{before}\nfn(p: {text_opt}) => case p of\n  | Som(v) => v\n  | Non => ""',
                 "op::Opt[text] -> text",
@@ -1342,37 +1335,33 @@ _SCENARIOS["applied-enum-aliases-inject-their-members-at-their-own-arguments"] =
             "it::TextOpt",
         ),
         **{
-            f"beside-its-generic-enum-used-{name}": rejected(
-                f"import op\nimport ia\nuse op::Opt::*\nuse ia::IntOpt::*\n{value}",
-                AmbiguousConstructorError,
-                "Som",
+            f"beside-its-generic-enum-used-{name}": accepted(
+                f"import op\nimport ia\nuse op::Opt::*\nuse ia::IntOpt::*\n{value}", identity
             )
-            for name, value in (("member", "Som(v = 1)"), ("at-other-arguments", _BAD_SOM))
+            for name, value, identity in (
+                ("member", "Som(v = 1)", _INT_SOM),
+                ("at-other-arguments", _BAD_SOM, _TEXT_SOM),
+            )
         },
         "at-the-same-arguments": accepted(
             "import ia::{IntOpt}\nimport twin::{OtherIntOpt}\nSom(v = 1)", _INT_SOM
         ),
-        "at-the-same-arguments-fixes-them": rejected(
-            f"import ia::{{IntOpt}}\nimport twin::{{OtherIntOpt}}\n{_BAD_SOM}",
-            AglTypeError,
-            '"s"',
-            phase="typecheck",
+        "at-the-same-arguments-infers-them": accepted(
+            f"import ia::{{IntOpt}}\nimport twin::{{OtherIntOpt}}\n{_BAD_SOM}", _TEXT_SOM
         ),
         **{
-            f"compatible-with-neither-{name}": rejected(
+            f"generic-at-any-arguments-{name}": accepted(
                 f"import ia::{{IntOpt}}\nimport it::{{TextOpt}}\nimport op\n"
                 f"fn(p: op::Opt[bool]) => {text}",
-                AglTypeError,
-                spelling,
-                phase="typecheck",
+                "op::Opt[bool] -> bool",
             )
-            for name, text, spelling in (
-                ("pattern", "case p of\n  | Som(v) => v\n  | Non => false", "Som(v)"),
-                ("is", "p is Som", "p is Som"),
+            for name, text in (
+                ("pattern", "case p of\n  | Som(v) => v\n  | Non => false"),
+                ("is", "p is Som"),
             )
         },
         "renaming-beside-its-generic-enum": accepted(
-            f"import op::*\nimport ren::{{Ren}}\n{_BAD_SOM}", "record op::Opt::Som[text]\n  v: text"
+            f"import op::*\nimport ren::{{Ren}}\n{_BAD_SOM}", _TEXT_SOM
         ),
     },
 )

@@ -605,6 +605,12 @@ _SCENARIOS |= {
     ),
 }
 
+_GROWING = {
+    "ga": "import gb\ntype Ta = gb::Tb::X\n",
+    "gb": "import ga\ntype Tb = ga::Ta::Y\n",
+}
+"""Aliases whose targets each pass beneath the other, never terminating."""
+
 _SELF_NESTED = "record T\n  x: int\ndef T::f() -> int = 1\ntype A = T\ntype T::M = A\n"
 """``A`` is ``T``, and ``T`` owns a member ``M`` that is ``A`` again."""
 _SELF_NESTED_REGION = (
@@ -666,6 +672,25 @@ _SCENARIOS |= {
             "target": accepted("T::M::f()", "int"),
         },
     ),
+    "alias-whose-nested-member-is-another-member-of-its-target-through-a-route": Scenario(
+        modules={"lib": _SIBLING_NESTED},
+        header=("import lib",),
+        probes={
+            "alias": accepted("lib::A::M::f()", "int"),
+            "target": accepted("lib::T::M::f()", "int"),
+        },
+    ),
+    "applied-alias-of-a-target-beneath-its-own-alias-reads-like-the-bare-alias": Scenario(
+        header=(
+            "type Id[X] = X\nrecord A\n  x: int\nrecord A::B\n  y: int\n"
+            "def A::B::f() -> int = 1\n\nscope P\n  type A = Id[A::B]\nend P\n",
+        ),
+        probes={
+            "static": accepted("P::A::f()", "int"),
+            "applied": rejected("Id[P::A]::f()", TypeArgumentsError, "Id[P::A]"),
+            "constructor": accepted("P::A(y = 1).y", "int"),
+        },
+    ),
 }
 
 _ROOT_METHOD = "record T\n  x: int\ndef T::f() -> int = 1\n"
@@ -692,7 +717,6 @@ _SCENARIOS |= {
             "anchored": accepted("::R::A::f()", "int"),
             "constructor": accepted("R::A(x = 1).x", "int"),
         },
-        legal=frozenset({(2,), (1, 1)}),
     ),
     "type-arguments-applied-past-a-scope-whose-member-is-hidden": Scenario(
         header=(_APPLIED,),
@@ -799,14 +823,18 @@ class TestPathBeneathAnAliasIsReadThroughItsTarget:
             part="file",
         )
 
-    def test_root_re_entrant_alias_target_is_rejected(self) -> None:
-        with pytest.raises(AglScopeError):
-            resolve_entry("type A = A::B\nA::f()")
-
-    def test_re_entrant_alias_target_is_rejected(self) -> None:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "type A = A::B\nA::f()",
+            "scope P\n  type B = Q::C::D\nend P\n\nscope Q\n  type C = P::B\nend Q",
+        ],
+        ids=["root", "across-scopes"],
+    )
+    def test_re_entrant_alias_target_is_rejected(self, source: str) -> None:
         """A scope error, not a crash."""
         with pytest.raises(AglScopeError):
-            resolve_entry("scope P\n  type B = Q::C::D\nend P\n\nscope Q\n  type C = P::B\nend Q")
+            resolve_entry(source)
 
     def test_target_beneath_its_own_alias_is_read_at_an_outer_step(self, tmp_path: Path) -> None:
         """Beneath the alias itself the target reaches nothing, so an outer step selects it."""
@@ -823,19 +851,19 @@ class TestPathBeneathAnAliasIsReadThroughItsTarget:
             },
         )
 
-    @pytest.mark.parametrize("probe", ["ga::Ta::f()", "/ga::Ta::f()"])
+    @pytest.mark.parametrize(
+        ("header", "probe"),
+        [
+            pytest.param("import ga", "ga::Ta::f()", id="route"),
+            pytest.param("import ga", "/ga::Ta::f()", id="anchored-route"),
+            pytest.param("import ga::*", "Ta::f()", id="wildcard"),
+        ],
+    )
     def test_aliases_growing_each_others_targets_across_modules_reach_nothing(
-        self, tmp_path: Path, probe: str
+        self, tmp_path: Path, header: str, probe: str
     ) -> None:
         """Each alias's target passes beneath the other, never terminating: no crash."""
-        phase, error, _, _ = inline_verdict(
-            tmp_path,
-            {
-                "ga": "import gb\ntype Ta = gb::Tb::X\n",
-                "gb": "import ga\ntype Tb = ga::Ta::Y\n",
-                "entry": f"import ga\n{probe}",
-            },
-        )
+        phase, error, _, _ = inline_verdict(tmp_path, {**_GROWING, "entry": f"{header}\n{probe}"})
         assert (phase, error) == ("scope", UnknownMemberError)
 
     def test_use_hiding_a_path_beneath_a_hidden_alias_is_rejected(self, tmp_path: Path) -> None:

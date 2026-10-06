@@ -82,6 +82,7 @@ __all__ = [
     "lookup_qualified",
     "lookup_reached",
     "lookup_steps",
+    "read_steps",
     "lookup_through",
     "hidden_member",
     "unknown_member",
@@ -329,6 +330,11 @@ def lookup_steps(scope_path: ScopePath) -> tuple[ScopePath, ...]:
     return tuple(scope_path[:end] for end in range(len(scope_path), -1, -1))
 
 
+def read_steps(own: bool, scope_path: ScopePath) -> tuple[ScopePath, ...]:
+    """The steps a chain written in *scope_path* is read at: ``::`` (*own*) reads the root alone."""
+    return ((),) if own else lookup_steps(scope_path)
+
+
 @dataclass(frozen=True, slots=True)
 class _Step:
     """One step: the path spellings are read under, and what reads them.
@@ -443,19 +449,19 @@ def lookup_through(
     *,
     owners_within: int,
     via: Via | None = None,
-    target: int | None = None,
+    sealed: int | None = None,
 ) -> Reading:
     """What *chain*, an alias's target and the path beneath it, written in *scope_path*, reaches.
 
     The declarations of *kind* the step where the target is selected reaches
     (:func:`lookup_reached`); an outer step is read only when that one reaches
-    nothing, not when it reaches hidden ones -- at the step selecting the
-    first *target* names, the target, that is the last read. *via* reads every step through
-    the ``::`` or module route that reached the alias (:func:`_anchor`).
-    Reaching nothing is the walk's refusal, if any.
+    nothing, not when it reaches hidden ones. The step holding the types the
+    first *sealed* names (the target's) reach is the last read then. *via* reads
+    every step through the ``::`` or module route that reached the alias
+    (:func:`_anchor`). Reaching nothing is the walk's refusal, if any.
     """
     walk = _chain_walk(sources, chain, scope_path, chain.span, via)
-    candidates = walk.reached(kind, owners_within, sealed=target)
+    candidates = walk.reached(kind, owners_within, sealed=sealed)
     if candidates:
         return Reading(candidates)
     refusal = walk.refusal()
@@ -551,11 +557,6 @@ def unknown_qualifier(chain: QualifierChain) -> UnknownQualifierError:
 def hidden_member(chain: QualifierChain, member: str) -> HiddenMemberError:
     """Return the refusal of *member* beneath *chain*, as written, as hidden."""
     return HiddenMemberError(render_qualifier_path(chain), member, span=chain.span)
-
-
-def read_steps(own: bool, scope_path: ScopePath) -> tuple[ScopePath, ...]:
-    """The steps a chain written in *scope_path* is read at: ``::`` (*own*) reads the root alone."""
-    return ((),) if own else lookup_steps(scope_path)
 
 
 def _anchor(

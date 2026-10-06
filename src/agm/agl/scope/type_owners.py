@@ -303,6 +303,8 @@ class TypeOwnerIndex:
             key = (qname, self._view(qname[0]))
             found = projected.get(key)
             if found is None:
+                # A read of this alias beneath its own projection stands unchanged.
+                projected[key] = retained
                 found = projected[key] = self._projected_owner(qname, retained, alias)
             return found
 

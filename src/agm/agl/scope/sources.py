@@ -13,6 +13,7 @@ import itertools
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
+from enum import Enum, auto
 from typing import Protocol
 
 from agm.agl.diagnostics import (
@@ -48,7 +49,6 @@ from agm.agl.scope.lookup import (
     Application,
     Candidate,
     LookupKind,
-    Own,
     QualifiedTarget,
     Reading,
     Route,
@@ -72,6 +72,7 @@ from agm.agl.scope.symbols import (
     Layers,
     MissRepair,
     ModuleResolution,
+    OwnerMemberSelection,
     ScopeNode,
     ScopePath,
     TypeOwner,
@@ -120,10 +121,18 @@ from agm.agl.syntax.types import (
 type _Exposed = tuple[ScopePath, QName, frozenset[ImportWay]]
 """A path imports expose, what it reaches there, and the ways exposing it."""
 
-type _Through = tuple[QName, LookupKind | None, Via | None, bool]
-"""An alias whose target as written is read beneath: for a kind, or as a qualifier, via a route.
 
-The last field tells the read of the alias's own projected member table from one of its target."""
+class _Read(Enum):
+    """A read beneath an alias's target as written that is no member lookup of a kind."""
+
+    ORIGINS = auto()
+    """The scopes and types the path names (:meth:`ModuleSources.origins_through`)."""
+    HEAD = auto()
+    """The target head's own reading (:meth:`ModuleSources.leads_with_route`)."""
+
+
+type _Through = tuple[QName, LookupKind | _Read, Via | None]
+"""A read beneath an alias's target as written: of a kind or a :class:`_Read`, via a route."""
 
 
 def constructor_binding(name: str, constructor: ConstructorRef) -> BindingRef:
@@ -221,6 +230,16 @@ class SourcesHost(Protocol):
         ...
 
 
+def _owner_path(selection: TypeSelection) -> QName | None:
+    """The owner *selection* names the constructor of, as the type it stands for; else ``None``.
+
+    The owner is where no inline member of it is declared: an alias's own
+    constructor, spelled through the alias (``type A = A::B`` in a scope
+    declaring it, spelled ``A::B`` there).
+    """
+    return _key_qname(selection.owner) if isinstance(selection, OwnerMemberSelection) else None
+
+
 def _within(chain: QualifierChain, path: ScopePath, owners_within: int) -> int:
     """Return *owners_within* re-based from *path*, a tail of *chain*'s full path, to all of it."""
     return len(chain.segments) + 1 - len(path) + max(owners_within, 0)
@@ -244,7 +263,8 @@ class ModuleSources(SourcesHost):
         self._hidden_by: dict[int, frozenset[DeclarationKey]] = {}
         # What an export ``hiding`` withholds -> the declarations that remove, by identity.
         self._withheld_keys: dict[frozenset[QName], frozenset[DeclarationKey]] = {}
-        # The aliases of this module whose targets are being read, by kind and reach
+        # The aliases of this module whose targets are being read beneath, by what is read and
+        # the route it is reached through, with the paths of the reads in progress
         # (:meth:`_reading_through`).
         self._through: dict[_Through, list[ScopePath]] = {}
         # What the imports a qualifier route names expose -- the root-position
@@ -759,8 +779,7 @@ class ModuleSources(SourcesHost):
         start = len(segments) + 1 - len(rest)
         current = _key_qname(owner)
         for index, name in enumerate(rest, start):
-            with self._unless_reading((current, None, None, True), rest[index - start :]) as reads:
-                reached = self._type_owners.owner(current) if reads else None
+            reached = self._type_owners.owner(current)
             if reached is None:
                 return Reading()
             table = reached
@@ -891,7 +910,7 @@ class ModuleSources(SourcesHost):
         declarations included.
         """
         head = member_chain(spelling, ())
-        with self._reading_through((alias, None, Own(), False), (), every_use=False) as reads:
+        with self._reading_through((alias, _Read.HEAD, None), (), every_use=False) as reads:
             if not reads:
                 return False
             found = lookup_reached(
@@ -916,12 +935,15 @@ class ModuleSources(SourcesHost):
         return replace(target, ref=self._cross_module_binding_ref(_ref_qname(ref)))
 
     @contextmanager
-    def _unless_reading(self, through: _Through, path: ScopePath) -> Iterator[bool]:
+    def _reading_through(
+        self, through: _Through, path: ScopePath, *, every_use: bool
+    ) -> Iterator[bool]:
         """Yield whether to read *through* beneath an alias at *path*: not when already reading it.
 
         A read whose target as written leads back to the alias reaches nothing
         more once an in-progress read's path is *path* or a suffix of it; a
-        different path is a different read.
+        different path is a different read. Every use is read when *every_use*, as
+        another module reads it; otherwise those the read in progress sees.
         """
         reading = self._through.setdefault(through, [])
         if any(
@@ -931,25 +953,10 @@ class ModuleSources(SourcesHost):
             return
         reading.append(path)
         try:
-            yield True
+            with self._uses.view(every_use):
+                yield True
         finally:
             reading.pop()
-
-    @contextmanager
-    def _reading_through(
-        self, through: _Through, path: ScopePath, *, every_use: bool
-    ) -> Iterator[bool]:
-        """Read *through* beneath an alias at *path* here unless already reading it.
-
-        Every use is read when *every_use*, as another module reads it;
-        otherwise those the read in progress sees (:meth:`_unless_reading`).
-        """
-        with self._unless_reading(through, path) as reads:
-            if reads:
-                with self._uses.view(every_use):
-                    yield True
-            else:
-                yield False
 
     def read_through(
         self,
@@ -972,7 +979,7 @@ class ModuleSources(SourcesHost):
         """
         chain = replace(member_chain(spelling, path), span=span)
         within = _within(chain, path, owners_within)
-        with self._reading_through((alias, kind, via, False), path, every_use=every_use) as reads:
+        with self._reading_through((alias, kind, via), path, every_use=every_use) as reads:
             if not reads:
                 return Reading()
             return lookup_through(
@@ -982,7 +989,7 @@ class ModuleSources(SourcesHost):
                 kind,
                 owners_within=within,
                 via=via,
-                target=len(chain.segments) + 1 - len(path),
+                sealed=len(chain.segments) + 1 - len(path),
             )
 
     def origins_through(
@@ -992,7 +999,9 @@ class ModuleSources(SourcesHost):
 
         Read in the alias's region, as :meth:`read_through` reads it; removed ones included.
         """
-        with self._reading_through((alias, None, None, False), path, every_use=every_use) as reads:
+        with self._reading_through(
+            (alias, _Read.ORIGINS, None), path, every_use=every_use
+        ) as reads:
             if not reads:
                 return frozenset()
             return lookup_reached_origins(
@@ -1164,7 +1173,7 @@ class ModuleSources(SourcesHost):
             and is_nominal_type_expr(argument := arguments[parameter[0]], ())
             and (selection := self.type_name_selection_at(site, argument, every_use=False))
             is not None
-            and (projected := owners.declared_path(selection)) is not None
+            and (projected := owners.declared_path(selection) or _owner_path(selection)) is not None
         ):
             qname = projected
             arguments = argument.args if isinstance(argument, AppliedT) else None

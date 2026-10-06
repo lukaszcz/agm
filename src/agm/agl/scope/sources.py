@@ -635,15 +635,15 @@ class ModuleSources(SourcesHost):
                         found.append(candidate)
         if isinstance(via, Own) and not found:
             found = [
-                self._member_candidate(member, name, NOT_HIDDEN, via)
+                self._constructor_candidate(member, name, NOT_HIDDEN, via)
                 for member in self.enum_members_named(name).values()
                 if member.is_builtin and is_root_inline_member(member)
             ]
         elif via is None and not step:
-            found.extend(self._seeded_members(name, found))
+            found.extend(self._seeded_constructors(name, found))
         return Reading(tuple(found))
 
-    def _seeded_members(self, name: str, found: Sequence[Candidate]) -> Iterator[Candidate]:
+    def _seeded_constructors(self, name: str, found: Sequence[Candidate]) -> Iterator[Candidate]:
         """Yield the host-seeded constructors bare *name* reaches at the root.
 
         A standard-library declaration of the same built-in enum, among
@@ -658,7 +658,7 @@ class ModuleSources(SourcesHost):
             if constructor.owner_module_id != self._module_id and not (
                 constructor.is_builtin and constructor.owner_path in declared
             ):
-                yield self._member_candidate(constructor, name, NOT_HIDDEN, None)
+                yield self._constructor_candidate(constructor, name, NOT_HIDDEN, None)
 
     def _injected(
         self, reaching: Candidate, enum: QName, member: ConstructorRef, name: str
@@ -681,9 +681,9 @@ class ModuleSources(SourcesHost):
         hiding = beneath_hiding(
             reaching.hiding, key, NOT_HIDDEN, _qname_decl_key(member.qname), self
         )
-        return self._member_candidate(member, name, hiding, reaching.via, reaching.layer)
+        return self._constructor_candidate(member, name, hiding, reaching.via, reaching.layer)
 
-    def _member_candidate(
+    def _constructor_candidate(
         self,
         member: ConstructorRef,
         name: str,
@@ -691,24 +691,27 @@ class ModuleSources(SourcesHost):
         via: Via | None,
         reached: ContributionLayer = ContributionLayer.DECLARED,
     ) -> Candidate:
-        """The candidate for enum *member*, spelled bare *name*, with its type's ways' *hiding*.
+        """The candidate for *member*, spelled bare *name*, with its type's ways' *hiding*.
 
-        It lies in the layer its type was reached in, except that one reached
-        as this module's own is the member's module's.
+        It lies in the layer of its declaring module when this module declares it,
+        else in the layer its type was reached in -- an own alias of an imported
+        enum reaching it as the imported member's. An own member's origin is
+        the way its type was reached.
         """
+        own = member.owner_module_id == self._module_id
         layer = (
-            reached
-            if reached is not ContributionLayer.DECLARED
-            else ContributionLayer.DECLARED
-            if member.owner_module_id == self._module_id
+            ContributionLayer.DECLARED
+            if own
             else ContributionLayer.IMPORTED
+            if reached is ContributionLayer.DECLARED
+            else reached
         )
         return Candidate(
             QualifiedTarget(
                 _qname_decl_key(member.qname), constructor_binding(name, member), member
             ),
             layer,
-            contribution_origin(member.qname, layer),
+            contribution_origin(member.qname, reached if own else layer),
             hiding,
             via,
         )

@@ -54,6 +54,7 @@ from agm.agl.scope.symbols import (
     TypeSelection,
     UnknownMemberError,
     UnknownQualifierError,
+    UseDeclarationOrigin,
     add_layers,
 )
 from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain, QualifierSegment
@@ -667,10 +668,10 @@ def _step(
 ) -> _Step:
     """Return *step* reading own declarations and contributions.
 
-    An own declaration at a full path wins it, so the contributions there are
-    read only when there is none -- and, when *injects*, the enum members
-    injected at *step* (:meth:`PathSources.injected`), an own one winning like
-    an own declaration. Another's yield to a record or exception the
+    An own declaration at a full path wins it. Otherwise the contributions
+    there and, when *injects*, the enum members injected at *step*
+    (:meth:`PathSources.injected`) are read together; an injected member not of
+    an enum the module declares yields to a record or exception the
     contributions reach there. Without *contributions*, only the own ones are
     read. Every type a prefix reaches owns what its member table selects, the
     contributed ones beside an own one included: those anchored above the
@@ -755,7 +756,6 @@ class _Walk:
         self._sources = sources
         self._site = site
         self._constructors = constructors
-        self._injecting = chain is None
         self._steps = steps
         self._route = route
         self._chain = chain
@@ -841,7 +841,7 @@ class _Walk:
         removed: tuple[Candidate, ...] = ()
         for step in self._steps:
             reading, dropped = self._unremoved(
-                self._reading(step, kind, injects=False, owners_within=within)
+                self._reading(step, kind, injects=False, owners_within=within)[0]
             )
             self._refusals.extend(reading.refusals)
             candidates = reading.candidates
@@ -859,10 +859,8 @@ class _Walk:
 
     def _decide(self, step: _Step, kind: LookupKind) -> QualifiedTarget | AglError | None:
         """Decide the full path at *step*: own first, then one distinct contribution."""
-        self._injecting = self._chain is None
-        reading = self._unremoved(
-            self._reading(step, kind, injects=True, owners_within=len(self._names))
-        )[0]
+        read, injecting = self._reading(step, kind, injects=True, owners_within=len(self._names))
+        reading = self._unremoved(read)[0]
         self._refusals.extend(reading.refusals)
         selected = _decided(reading.candidates, self._sources.denotes)
         chain = self._chain
@@ -870,7 +868,7 @@ class _Walk:
             return None
         if not isinstance(selected, Candidate):
             competing = _by_constructor(selected)
-            if self._constructors is not None and competing is not None and self._injecting:
+            if self._constructors is not None and competing is not None and injecting:
                 return self._constructors(competing)
             return self._ambiguous(
                 selected, self._names[step.start :], self._span if chain is None else chain.span
@@ -881,18 +879,21 @@ class _Walk:
 
     def _reading(
         self, step: _Step, kind: LookupKind, *, injects: bool, owners_within: int
-    ) -> Reading:
-        """Read the full path at *step*.
+    ) -> tuple[Reading, bool]:
+        """Read the full path at *step*, and whether constructors it reads compete as injected.
 
         Every type a written prefix of at most *owners_within* names reaches,
         and every alias a longer one reaches, adds what it selects for the
         rest of the path (:meth:`_beneath`). When *injects*, a module
-        qualifier's surface adds the enum member it injects.
+        qualifier's surface adds the enum member it injects. Constructors
+        compete as injected unless a qualifier chain reads them without
+        injecting any.
         """
         reading = step.read((*step.path, *self._names), kind)
         chain = self._chain
         if chain is None:
-            return reading
+            return reading, True
+        injecting = False
         reading += self._through_prefixes(step, chain, kind, owners_within)
         if (
             injects
@@ -901,9 +902,9 @@ class _Walk:
             and _is_module_qualifier(chain, step)
         ):
             injected = self._qualifier_injected(chain)
-            self._injecting = bool(injected.candidates)
+            injecting = bool(injected.candidates)
             reading += injected
-        return reading
+        return reading, injecting
 
     def _qualifier_injected(self, chain: QualifierChain) -> Reading:
         """The enum member module qualifier *chain* injects as the walk's last name.
@@ -1214,6 +1215,8 @@ def _decided(
 ) -> Candidate | tuple[Candidate, ...] | None:
     """The one candidate selected, own first; every competing one when several distinct ones do.
 
+    An own declaration a ``use`` reached yields to one declared directly.
+
     Candidates are distinct when they name distinct declarations by
     *identity* (:meth:`PathSources.denotes`): an alias renaming a declaration
     is that declaration, and aliases denoting one type are one. A
@@ -1223,7 +1226,8 @@ def _decided(
     """
     pool = list(candidates)
     own = [candidate for candidate in pool if candidate.layer is ContributionLayer.DECLARED]
-    competing = own or pool
+    direct = [c for c in own if not isinstance(c.origin, UseDeclarationOrigin)]
+    competing = direct or own or pool
     if len(competing) == 1:
         # A lone candidate is selected without reading what it names.
         return competing[0]

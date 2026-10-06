@@ -28,6 +28,7 @@ from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
+    all_groupings,
     assert_scenario,
     rejected,
     scenario_params,
@@ -532,6 +533,78 @@ _OWN_ALIAS = {
 }
 
 
+def _use_with_own_scope(header: tuple[str, ...], probes: Mapping[str, Probe]) -> Scenario:
+    """A scenario whose ``use`` of the own scope must share its REPL entry with the scope."""
+    use = next(i for i, line in enumerate(header) if line.startswith("use "))
+    own = len(header) - 1
+    legal = frozenset(
+        sizes
+        for sizes in all_groupings(len(header) + 1)
+        if any(sum(sizes[:k]) <= use and own < sum(sizes[: k + 1]) for k in range(len(sizes)))
+    )
+    return Scenario(modules=_MODULES, header=header, probes=probes, legal=legal)
+
+
+_OWN_HUE = "scope S\n  enum Hue\n    | Red\n    | Green\nend S"
+_HUE_RED = "record S::Hue::Red"
+_RENAMED_MODULES = {**_MODULES, "mid": "import a\nexport a::{Color as Hue}\n"}
+_HIDING_MODULES = {**_MODULES, "mid": "import a\nexport a hiding Color::Red\n"}
+
+_OWN_MEMBER_LAYER = {
+    "use-item-beside-imported-record": _use_with_own_scope(
+        ("import b::*", "use S::Hue", _OWN_HUE), {"value": accepted("Red", _HUE_RED)}
+    ),
+    "use-glob-beside-imported-record": _use_with_own_scope(
+        ("import b::*", "use S::*", _OWN_HUE), {"value": accepted("Red", _HUE_RED)}
+    ),
+    "use-item-beside-imported-member": _use_with_own_scope(
+        ("import a::*", "use S::Hue", _OWN_HUE), {"value": accepted("Red", _HUE_RED)}
+    ),
+    "use-glob-beside-imported-member": _use_with_own_scope(
+        ("import a::*", "use S::*", _OWN_HUE), {"value": accepted("Red", _HUE_RED)}
+    ),
+    "region-use-beside-region-import": _scenario(
+        (
+            _OWN_HUE,
+            "scope R\n  import b::*\n  use ::S::Hue\n  let v = Red\nend R",
+        ),
+        {"value": accepted("R::v", _HUE_RED)},
+    ),
+    "root-alias-beside-imported-record": _scenario(
+        ("import b::*", _OWN_HUE, "type H = S::Hue"), {"value": accepted("Red", _HUE_RED)}
+    ),
+    "imported-enum-by-use-yields-to-imported-record": _scenario(
+        ("import b::*", "import a", "use a::Color"), {"value": accepted("Red(x = 1)", _RECORD)}
+    ),
+}
+
+_REEXPORTED_MEMBERS = {
+    "renamed-enum-by-use": Scenario(
+        modules=_RENAMED_MODULES,
+        header=("import mid", "use mid::*"),
+        probes={"value": accepted("Red", _RED)},
+    ),
+    "renamed-enum-region-import": Scenario(
+        modules=_RENAMED_MODULES,
+        header=(),
+        probes={"value": accepted(_in_region("import mid::*", "let q = Red", tail="s::q"), _RED)},
+    ),
+    "withheld-member-qualified": Scenario(
+        modules=_HIDING_MODULES,
+        header=("import mid",),
+        probes={"route": rejected("mid::Red", HiddenMemberError, "mid::Red")},
+    ),
+    "withheld-member-by-use": Scenario(
+        modules=_HIDING_MODULES,
+        header=("import mid", "use mid::*"),
+        probes={
+            "bare": rejected("Red", AglScopeError, "Red"),
+            "is": rejected("mid::Blue is Red", NoVisibleConstructorError, "mid::Blue is Red"),
+        },
+    ),
+}
+
+
 class TestInjection:
     """Every contribution that reaches an enum injects its members bare."""
 
@@ -623,4 +696,14 @@ class TestInjectionRules:
 
     @pytest.mark.parametrize("scenario", scenario_params(_OWN_ALIAS_REGION))
     def test_own_alias_in_region_injects_members(self, tmp_path: Path, scenario: Scenario) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", scenario_params(_OWN_MEMBER_LAYER))
+    def test_own_enum_member_is_own_however_reached(
+        self, tmp_path: Path, scenario: Scenario
+    ) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.parametrize("scenario", scenario_params(_REEXPORTED_MEMBERS))
+    def test_members_through_a_reexporting_module(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

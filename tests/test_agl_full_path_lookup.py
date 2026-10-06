@@ -122,6 +122,10 @@ _ONE_BLUE = "record one::E::Blue\n  v: int"
 _OTHER_RED = "enum F\n  | Red\n"
 _OUTSIDE_THE_REGION = "scope r\n  use C::*\n  def v() = Red\nend r\n\nRed"
 _OWN_ALIASED_ENUM = ("scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S", "type C = S::E")
+_SIBLING_ALIASED_ENUM = (
+    "scope S\n  enum E\n    | Red\n    | Blue(v: int)\nend S",
+    "scope T\n  type C = S::E\nend T",
+)
 _REFERENCED_R = "record R\n  x: int\nenum A\n  | ::R\n  | B\n"
 _TWICE_REFERENCED_P = "record P\n  x: int\nenum A\n  | ::P\n  | Q\nenum B\n  | ::P\n  | Z\n"
 _USES_X = "use A::*\n  use B::*\n  use X::*"
@@ -421,22 +425,25 @@ _SCENARIOS = {
         },
     ),
     "a-use-of-an-own-alias-reaches-its-target-members": Scenario(
-        header=_OWN_ALIASED_ENUM,
+        header=_SIBLING_ALIASED_ENUM,
         probes={
-            "member": accepted(_in_region("use C::*", "Red"), "record S::E::Red"),
-            "module-root-alias": accepted(_in_region("use ::C::*", "Red"), "record S::E::Red"),
-            "member-the-use-does-not-select": accepted(
-                _in_region("use C::{Red}", "Blue(v = 1)"), "record S::E::Blue\n  v: int"
+            "member": accepted(_in_region("use T::C::*", "Red"), "record S::E::Red"),
+            "module-root-alias": accepted(_in_region("use ::T::C::*", "Red"), "record S::E::Red"),
+            "member-the-use-does-not-select": rejected(
+                _in_region("use T::C::{Red}", "Blue(v = 1)"), AglScopeError, "Blue"
             ),
-            "outside-the-region-the-alias-injects": accepted(
-                _OUTSIDE_THE_REGION, "record S::E::Red"
+            "outside-the-region-nothing-injects": rejected(
+                "scope r\n  use T::C::*\n  def v() = Red\nend r\n\nRed", AglScopeError, "Red"
             ),
         },
     ),
     "an-own-alias-wins-its-path-over-an-imported-one": Scenario(
         modules={"one": _ALIASED_ENUM},
-        header=("import one::{C}", *_OWN_ALIASED_ENUM),
-        probes={"member": accepted(_in_region("use C::*", "Red"), "record S::E::Red")},
+        header=(
+            _SIBLING_ALIASED_ENUM[0],
+            "scope T\n  import one::{C}\n  type C = S::E\nend T",
+        ),
+        probes={"member": accepted(_in_region("use T::C::*", "Red"), "record S::E::Red")},
     ),
     "nothing-is-declared-beneath-an-own-alias-of-an-enum": Scenario(
         header=_OWN_ALIASED_ENUM,

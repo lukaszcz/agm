@@ -1039,10 +1039,8 @@ class ModuleResolution:
     ``scope_nodes``
         Named scope-region layers keyed by path, rooted at ``()``.
     ``constructor_candidates``
-        Maps each constructor name to an ordered tuple of all
-        :class:`ConstructorRef` candidates (one per record/enum that declares
-        it).  A single entry means the name is unambiguous; two or more mean
-        an overload set requiring qualification.
+        The root's bare constructor candidates by name; read by witness
+        rendering and by the root's own and host-constructor reads.
     ``constructor_refs``
         Maps a ``VarRef.node_id`` (or ``Call.node_id`` whose callee was a
         constructor ``VarRef``) to the single :class:`ConstructorRef` it

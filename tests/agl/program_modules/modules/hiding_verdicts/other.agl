@@ -1,0 +1,5 @@
+# Declares its own `T`, supplying what `facade` withholds.
+scope T
+  def t() -> int = 50
+  def w() -> int = 70
+end T

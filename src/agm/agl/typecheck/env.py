@@ -38,7 +38,8 @@ from agm.agl.scope.imports import (
     ImportEnv,
     QName,
     contribution_routes,
-    qualifier_member_decls,
+    exposure_hidden,
+    qualifier_member_ways,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -2283,9 +2284,14 @@ class TypeEnvironment:
 
         Such an owner spelling could select another declaration, so a witness
         spells the owner through a longer route instead: over-qualifying is
-        harmless.
+        harmless. A bare imported name that every import exposing it hides spells
+        nothing (:func:`exposure_hidden`).
         """
-        return head in self._declared_segments or head in self._import_env.unqualified
+        env = self._import_env
+        return head in self._declared_segments or any(
+            not exposure_hidden(env, ways, qname)
+            for qname, ways in env.unqualified_ways.get(head, {}).items()
+        )
 
     def _name_spelled_elsewhere(self, head: str) -> bool:
         """Whether an own path or a module route also spells bare imported name *head*.
@@ -2310,7 +2316,16 @@ class TypeEnvironment:
         for exposed_name, qnames in self._import_env.unqualified.items():
             if not isinstance(exposed_name, str) or self._name_spelled_elsewhere(exposed_name):
                 continue
-            type_qnames = tuple(qname for qname in qnames if self._is_program_type_candidate(qname))
+            type_qnames = tuple(
+                qname
+                for qname in qnames
+                if self._is_program_type_candidate(qname)
+                and not exposure_hidden(
+                    self._import_env,
+                    self._import_env.unqualified_ways.get(exposed_name, {}).get(qname, ()),
+                    qname,
+                )
+            )
             if len(type_qnames) == 1:
                 forms.add(
                     self._enum_owner_form(
@@ -2331,10 +2346,14 @@ class TypeEnvironment:
                 for qualifier, anchored in contribution_routes(contribution):
                     if not anchored and self._route_spelled_elsewhere(qualifier[0]):
                         continue
-                    reached = qualifier_member_decls(
+                    reached = qualifier_member_ways(
                         self._import_env, qualifier, exposed_name, anchored=anchored
                     )
-                    if reached.keys() != {qname}:
+                    if {
+                        reached_qname
+                        for reached_qname, ways in reached.items()
+                        if not exposure_hidden(self._import_env, ways, reached_qname)
+                    } != {qname}:
                         continue
                     forms.add(
                         EnumOwnerForm(

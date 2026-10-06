@@ -77,6 +77,7 @@ from agm.agl.modules.ids import (
     spell_declaration,
 )
 from agm.agl.scope.attributes import recognize_attributes
+from agm.agl.scope.hiding import removed
 from agm.agl.scope.imports import (
     ImportEnv,
     ItemDeclaration,
@@ -88,7 +89,6 @@ from agm.agl.scope.lookup import (
     LookupKind,
     Misfit,
     QualifiedTarget,
-    is_removed,
     lookup_bare,
     lookup_declared,
     lookup_qualified,
@@ -529,10 +529,6 @@ class _Resolver(ModuleSources):
     sessions), and ``::name`` self-references fall back to it too. New
     declarations live in the entry's own root scope and shadow parent
     bindings without a duplicate-declaration error.
-
-    *ambient_type_names* carries type names from prior entries so that
-    qualified constructor access (``Owner::variant``) resolves for types
-    declared in earlier REPL entries.
     """
 
     def __init__(
@@ -550,7 +546,6 @@ class _Resolver(ModuleSources):
         site_sources: Callable[[ModuleId], ModuleSources],
         fixity_of: Callable[[ModuleId, str], Fixity | None],
         *,
-        ambient_type_names: frozenset[str] = frozenset(),
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
         allow_root_statements: bool = False,
         is_standard_library_module: bool = False,
@@ -784,16 +779,17 @@ class _Resolver(ModuleSources):
         # Whether this module declares a ``program def`` of its own, which
         # decides how a static-root rejection is explained.
         self._declares_program_entry = declares_source_entry(program.body.items)
-        self._prepare(program, ambient_type_names)
+        self._prepare(program)
 
     # ------------------------------------------------------------------
     # Phases
     # ------------------------------------------------------------------
 
-    def _prepare(self, program: Program, ambient_type_names: frozenset[str]) -> None:
+    def _prepare(self, program: Program) -> None:
         """Collect *program*'s declarations and resolve its header contributions."""
-        combined_ambient_type_names = ambient_type_names | self._repl_session_root_type_names
-        self._type_paths.update((name,) for name in combined_ambient_type_names)
+        self._type_paths.update(
+            (name,) for name in self.tail_type_names() | self._repl_session_root_type_names
+        )
 
         # Published on the returned ModuleResolution as ``static_root``: true
         # for every importable module and for a loose file with its own
@@ -931,13 +927,14 @@ class _Resolver(ModuleSources):
         self._reject_declaring_beneath_type_renames()
         # A tail or ``hiding`` item written through an alias must name a
         # declaration whether or not anything reads it.
-        for node_id in self._import_env.decl_hiding:
-            self._import_hidden(node_id)
+        for items in self._import_env.decl_hiding.values():
+            for named in items:
+                self._reject_unnamed(named)
         for exposures in self._import_env.decl_tail_beneath.values():
             for named in sorted(
                 {named for items in exposures.values() for named in items}, key=_item_order
             ):
-                self._named_by(named)
+                self._reject_unnamed(named)
         self._resolve_root_items(self._program.body.items)
         self._reject_fixities_declaring_nothing()
         self._validate_function_names()
@@ -1114,8 +1111,7 @@ class _Resolver(ModuleSources):
     def _reachable_declarations(self) -> frozenset[DeclarationKey]:
         """Return local, imported, and retained declaration identities."""
         reachable = set(self._declarations)
-        for contribution in self._import_env.contributions.values():
-            reachable.update(_qname_decl_key(qname) for qname in contribution.members.values())
+        reachable.update(_qname_decl_key(qname) for qname in self.reachable_exports())
         retained_nodes = (*self._repl_session_scope_nodes.values(), self._repl_session_scope)
         for node in retained_nodes:
             if node is None:
@@ -2268,7 +2264,7 @@ class _Resolver(ModuleSources):
         """Contribute a region-scoped import tail to its own region only.
 
         ``build_import_env`` keeps a tail's bare atoms per declaration in
-        ``ImportEnv.decl_bare`` rather than merging them into the root
+        ``ImportEnv.decl_bare_ways`` rather than merging them into the root
         ``unqualified`` table. This snapshots them onto the current
         ``ScopeNode`` while the declaration's qualified routes remain
         module-wide through ``self._import_env.contributions``.
@@ -2279,7 +2275,7 @@ class _Resolver(ModuleSources):
         the same policy ``unqualified`` already applies at the module root --
         rather than raising here.
         """
-        bare = self._import_env.decl_bare.get(decl.node_id, {})
+        bare = self._import_env.decl_bare_ways.get(decl.node_id, {})
         scope = self._scope
         for atom, qnames in bare.items():
             for qname in qnames:
@@ -2863,15 +2859,14 @@ class _Resolver(ModuleSources):
         if candidate.owner_module_id == self._module_id:
             path = (*_bare_path(origin[1])[:-1], name)
             return spell_declaration(self._module_id, path, reader=self.reader())
-        unqualified = self._import_env.unqualified
         owner = next(
             (
                 atom[0]
-                for atom, qnames in unqualified.items()
+                for atom, qnames in self._import_env.unqualified.items()
                 if isinstance(atom, tuple)
                 and atom[1:] == (name,)
                 and origin in qnames
-                and len(unqualified.get(atom[0], ())) == 1
+                and len(self.tail_exposed(atom[0])) == 1
             ),
             None,
         )
@@ -3158,7 +3153,8 @@ class _Resolver(ModuleSources):
         builtin_refs = [
             ref
             for qname in qnames
-            if self._is_builtin_function_ref(ref := self._cross_module_binding_ref(qname))
+            if not self.tail_removes(name, qname, qname)
+            and self._is_builtin_function_ref(ref := self._cross_module_binding_ref(qname))
         ]
         if len(builtin_refs) == 1:
             return builtin_refs[0]
@@ -3431,7 +3427,9 @@ class _Resolver(ModuleSources):
             )
             for candidate in reading.candidates:
                 constructor = candidate.target.constructor
-                if constructor is not None and not is_removed(candidate, self):
+                if constructor is not None and not removed(
+                    candidate.hiding, candidate.target.key, self
+                ):
                     add_layers(found, constructor, (candidate.layer,))
         return tuple(self._one_per_declaration(found))
 

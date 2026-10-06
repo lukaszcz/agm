@@ -1,0 +1,5 @@
+# A scope with a function that importers hide.
+scope S
+  def x() -> int = 1
+  def y() -> int = 2
+end S

@@ -12,20 +12,28 @@ from __future__ import annotations
 import itertools
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Protocol
 
 from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.modules.ids import ModuleId, render_route_member
+from agm.agl.scope.hiding import (
+    NOT_HIDDEN,
+    Origin,
+    beneath_hiding,
+    hidden_keys,
+    removed,
+    unremoved,
+)
 from agm.agl.scope.lookup import (
     Candidate,
     LookupKind,
     PathSources,
     QualifiedTarget,
     lookup_hidden,
-    lookup_origins,
     lookup_reached,
+    lookup_reached_origins,
     lookup_steps,
-    removes_origin,
 )
 from agm.agl.scope.symbols import (
     BindingRef,
@@ -113,7 +121,7 @@ class UseSources(PathSources, Protocol):
 
     def module_route_origins(
         self, route: tuple[str, ...], path: ScopePath, *, anchored: bool
-    ) -> frozenset[QName]:
+    ) -> frozenset[Origin]:
         """The scopes and types module *route* reaches as *path* beneath it; itself for none."""
         ...
 
@@ -278,7 +286,9 @@ class UseReader:
         found = self._identities.get(decl.node_id)
         if found is None:
             with self._reading_use(decl):
-                found = self._use_path_origins(site, decl, _use_target(decl))
+                found = unremoved(
+                    self._use_path_origins(site, decl, _use_target(decl)), self._sources
+                )
             self._identities[decl.node_id] = found
         return found
 
@@ -351,7 +361,7 @@ class UseReader:
         """The paths beneath *decl*'s target it exposes as *relative* in region *site*.
 
         An alias stands for the target, a single-item rename adds the item
-        under its own name, a glob exposes every path its ``hiding`` leaves,
+        under its own name, a glob every path,
         and a tail each path under an item, a renamed item under its rename
         too.
         """
@@ -363,9 +373,7 @@ class UseReader:
             if len(target) > 1 and relative[0] == target[-1] and self._use_renames(site, decl):
                 rests[relative[1:]] = None
         elif not decl.tail:
-            atom = _bare_atom(relative)
-            if not any(atom_under_prefix(atom, _item_path(item)) for item in decl.hidden):
-                rests[relative] = None
+            rests[relative] = None
         else:
             for item in decl.tail:
                 path = _item_path(item)
@@ -395,7 +403,7 @@ class UseReader:
                     candidate
                     for rest in self._use_rests(site, decl, relative)
                     for candidate in self._use_path_reached(
-                        site, decl, (*target, *rest), kind, owners_within
+                        site, decl, (*target, *rest), kind, owners_within, keep_removed=True
                     )
                 )
                 reads[key] = found
@@ -437,14 +445,14 @@ class UseReader:
             owner = _qname_decl_key((key[0], _bare_atom(key[1])))
             if not self._sources.applies(owner):
                 member = self._type_owners.owner_member(owner, key[2])
+        hiding = candidate.hiding
         if member is not None:
             target = QualifiedTarget(member.key, None, member)
             declaration = member.qname
+            hiding = beneath_hiding(hiding, key, NOT_HIDDEN, member.key, self._sources)
         layer = ContributionLayer.USE
         removed = self._use_hidden(site, decl)
-        hiding = (
-            frozenset(way | removed for way in candidate.hiding) if removed else candidate.hiding
-        )
+        hiding = frozenset(way | removed for way in hiding) if removed else hiding
         return Candidate(target, layer, contribution_origin(declaration, layer), hiding)
 
     def _use_hidden(self, site: ScopePath, decl: UseDecl) -> frozenset[DeclarationKey]:
@@ -456,18 +464,40 @@ class UseReader:
         if found is None:
             target = _use_target(decl)
             with self._reading_use(decl):
-                found = frozenset(
-                    removed
-                    for item in decl.hidden
-                    for kind in LookupKind
-                    for candidate in self._use_path_reached(
-                        site, decl, (*target, *_item_path(item)), kind, len(target)
-                    )
-                    if (key := candidate.target.key) is not None
-                    for removed in self._sources.removed_with(_key_qname(key))
+                found = hidden_keys(
+                    decl.hidden,
+                    lambda item: self._named_declarations(site, decl, (*target, *_item_path(item))),
+                    self._sources.removed_with,
                 )
             self._hidden_by[decl.node_id] = found
         return found
+
+    def _named_declarations(self, site: ScopePath, decl: UseDecl, names: ScopePath) -> set[QName]:
+        """The declarations and scopes *names*, spelled beneath *decl*'s anchor, names unremoved."""
+        found = {
+            _key_qname(key)
+            for kind in LookupKind
+            for candidate in self._use_path_reached(site, decl, names, kind)
+            if (key := candidate.target.key) is not None
+        }
+        found |= {
+            origin
+            for origin in unremoved(self._use_path_origins(site, decl, names), self._sources)
+            if origin[1]
+        }
+        return found
+
+    def _surviving(
+        self, site: ScopePath, decl: UseDecl, candidates: Iterable[Candidate]
+    ) -> Iterator[Candidate]:
+        """Yield *candidates*, read of *decl* in region *site*, that no ``hiding`` removes."""
+        hiding = frozenset({self._use_hidden(site, decl)})
+        for candidate in candidates:
+            key = candidate.target.key
+            if not removed(candidate.hiding, key, self._sources) and not removed(
+                hiding, key, self._sources
+            ):
+                yield candidate
 
     def _use_injected(self, site: ScopePath, decl: UseDecl, name: str) -> Iterator[Candidate]:
         """Yield the enum member *name* each enum *decl*, in region *site*, exposes injects.
@@ -488,7 +518,9 @@ class UseReader:
             exposed = any(
                 any(
                     candidate.target.key == key
-                    for candidate in self._use_reached(site, decl, (spelling,), LookupKind.TYPE)
+                    for candidate in self._surviving(
+                        site, decl, self._use_reached(site, decl, (spelling,), LookupKind.TYPE)
+                    )
                 )
                 and (not inline or self._use_rests(site, decl, (spelling, name)))
                 for spelling in (key[2], *spellings)
@@ -507,7 +539,9 @@ class UseReader:
 
     def _exposes_standalone(self, site: ScopePath, decl: UseDecl, name: str) -> bool:
         """Whether *decl*, in region *site*, exposes a record or exception as *name*."""
-        for candidate in self._use_reached(site, decl, (name,), LookupKind.VALUE):
+        for candidate in self._surviving(
+            site, decl, self._use_reached(site, decl, (name,), LookupKind.VALUE)
+        ):
             target = candidate.target
             if (
                 target.key is None
@@ -520,11 +554,11 @@ class UseReader:
                 return True
         return False
 
-    def origins(self, site: ScopePath, decl: UseDecl, relative: ScopePath) -> frozenset[QName]:
+    def origins(self, site: ScopePath, decl: UseDecl, relative: ScopePath) -> frozenset[Origin]:
         """The scopes and types *decl*, written in region *site*, exposes as *relative*.
 
         A path holding a tail item names what the target's path there names;
-        one its ``hiding`` removes -- it or one above it -- is none.
+        each also removed by what the use's ``hiding`` removes.
         """
         with self._reading_use(decl):
             target = _use_target(decl)
@@ -534,12 +568,11 @@ class UseReader:
                 for item in decl.tail or ()
             ):
                 paths.append((*target, *relative))
-            named: frozenset[QName] = frozenset().union(
-                *(self._use_path_origins(site, decl, path) for path in paths)
-            )
-            hiding = frozenset({self._use_hidden(site, decl)})
+            removed = self._use_hidden(site, decl)
             return frozenset(
-                origin for origin in named if not removes_origin(hiding, origin, self._sources)
+                replace(origin, hiding=frozenset(way | removed for way in origin.hiding))
+                for path in paths
+                for origin in self._use_path_origins(site, decl, path)
             )
 
     def _use_path_reached(
@@ -549,10 +582,13 @@ class UseReader:
         names: ScopePath,
         kind: LookupKind,
         owners_within: int | None = None,
+        *,
+        keep_removed: bool = False,
     ) -> tuple[Candidate, ...]:
         """What *names*, spelled beneath *decl*'s anchor in region *site*, reaches of *kind*.
 
-        With *owners_within*, only a type its first that many names reach projects.
+        With *owners_within*, only a type its first that many names reach
+        projects; with *keep_removed*, the removed ones follow.
         """
         if _use_route(decl, names) is not None:
             return ()
@@ -562,16 +598,17 @@ class UseReader:
             site,
             kind,
             owners_within=owners_within,
+            keep_removed=keep_removed,
         )
 
     def _use_path_origins(
         self, site: ScopePath, decl: UseDecl, names: ScopePath
-    ) -> frozenset[QName]:
+    ) -> frozenset[Origin]:
         """The scopes and types *names*, spelled beneath *decl*'s anchor in region *site*, name."""
         route = _use_route(decl, names)
         if route is not None:
             return self._sources.module_route_origins(route, (), anchored=decl.anchored)
-        return lookup_origins(self._sources, _use_chain(decl, names), site)
+        return lookup_reached_origins(self._sources, _use_chain(decl, names), site)
 
     def _names_qualifier(
         self, site: ScopePath, decl: UseDecl, names: ScopePath, owners_within: int | None = None
@@ -580,7 +617,7 @@ class UseReader:
 
         With *owners_within*, only a type its first that many names reach projects.
         """
-        return bool(self._use_path_origins(site, decl, names)) or bool(
+        return bool(unremoved(self._use_path_origins(site, decl, names), self._sources)) or bool(
             self._use_path_reached(site, decl, names, LookupKind.TYPE, owners_within)
         )
 

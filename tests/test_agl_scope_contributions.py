@@ -12,7 +12,7 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     build_import_env,
     qualifier_candidates,
-    qualifier_member_decls,
+    qualifier_member_ways,
 )
 from agm.agl.scope.symbols import (
     BinderKind,
@@ -101,11 +101,13 @@ def test_region_tailed_import_keeps_its_bare_contribution_regional() -> None:
     )
 
     assert env.unqualified == {}
-    assert dict(env.decl_bare[decl.node_id]) == {"one": frozenset({(module, "one")})}
+    assert {atom: set(origins) for atom, origins in env.decl_bare_ways[decl.node_id].items()} == {
+        "one": {(module, "one")}
+    }
     assert set(env.contributions[module].members) == {"one", "two"}
 
 
-def test_alias_route_retains_full_surface_except_its_own_hiding() -> None:
+def test_alias_route_retains_full_surface_and_records_its_own_hiding() -> None:
     decl = _decl("std/config", alias="settings", hidden=(_item("debug"),))
     module = _module("std/config")
 
@@ -115,8 +117,9 @@ def test_alias_route_retains_full_surface_except_its_own_hiding() -> None:
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert set(qualifier_member_decls(env, ("settings",), "timeout")) == {(module, "timeout")}
-    assert "debug" not in env.contributions[module].members
+    assert set(qualifier_member_ways(env, ("settings",), "timeout")) == {(module, "timeout")}
+    assert "debug" in env.contributions[module].members
+    assert {item.declaration for item in env.decl_hiding[decl.node_id]} == {(module, "debug")}
 
 
 def test_alias_route_does_not_also_contribute_the_module_suffix() -> None:
@@ -129,11 +132,11 @@ def test_alias_route_does_not_also_contribute_the_module_suffix() -> None:
         {module: _exports("std/config", "timeout")},
     )
 
-    assert set(qualifier_member_decls(env, ("settings",), "timeout")) == {(module, "timeout")}
+    assert set(qualifier_member_ways(env, ("settings",), "timeout")) == {(module, "timeout")}
     assert qualifier_candidates(env, ("config",), anchored=False) == ()
 
 
-def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
+def test_alias_hiding_is_recorded_on_the_alias_declaration_only() -> None:
     alias = _decl("std/config", alias="settings", hidden=(_item("debug"),))
     plain = _decl("std/config")
     module = _module("std/config")
@@ -144,8 +147,10 @@ def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert set(qualifier_member_decls(env, ("config",), "debug")) == {(module, "debug")}
-    assert "debug" not in env.contributions[module].routes["settings"].members
+    assert set(qualifier_member_ways(env, ("config",), "debug")) == {(module, "debug")}
+    assert plain.node_id not in env.decl_hiding
+    ways = env.contributions[module].routes["settings"].member_ways["debug"]
+    assert {way.node_id for way in ways} == {alias.node_id}
 
 
 def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
@@ -169,7 +174,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
     right_scope = ScopeNode(node_id=2, parent=root, scope_path=("Right",))
 
     for scope, decl in ((left_scope, left_decl), (right_scope, right_decl)):
-        for name, qnames in env.decl_bare[decl.node_id].items():
+        for name, qnames in env.decl_bare_ways[decl.node_id].items():
             for module, _source in qnames:
                 binding_name = name if isinstance(name, str) else name[-1]
                 scope.contribute_bare(

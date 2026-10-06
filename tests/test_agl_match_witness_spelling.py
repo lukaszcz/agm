@@ -149,3 +149,18 @@ def test_record_witness_is_the_shortest_spelling_at_the_case(
     tmp_path: Path, entry: str, covered: str, expected: str
 ) -> None:
     _assert_witness_completes(tmp_path, entry, covered, expected)
+
+
+def test_witness_ignores_a_hidden_binding_of_the_route_head(tmp_path: Path) -> None:
+    """A name an import hides does not make the route head ``lib`` need its anchor."""
+    entry = (
+        "import lib\nimport lh::* hiding lib\n"
+        "def f(v: lib::Color) -> int = case v of | lib::Color::Red => 0\n"
+    )
+    graph = make_graph_from_files(
+        tmp_path, {"lib": _LIB, "lh": "def lib() -> int = 1\n", "entry": entry}
+    )
+    issues = compile_program_matches(check_agl_graph(graph)).issues
+    assert [
+        render_witness(issue.witness) for issue in issues if isinstance(issue, NonExhaustiveIssue)
+    ] == ["lib::Color::Blue"]

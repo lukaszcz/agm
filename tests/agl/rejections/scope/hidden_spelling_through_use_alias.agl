@@ -1,0 +1,6 @@
+# A `use` alias reads the import's `hiding`: `X::x` reaches only the hidden `S::x`.
+import lib::* hiding S::x
+use S as X
+
+program def main() -> int =
+  X::x()

@@ -15,7 +15,7 @@ from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.imports import (
     SingleTarget,
     build_import_env,
-    qualifier_member_decls,
+    qualifier_member_ways,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
@@ -1069,7 +1069,7 @@ def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None
     )
 
     assert env.unqualified["Color"] == frozenset({(module, "Color")})
-    assert set(qualifier_member_decls(env, ("lib",), ("Color", "Red"))) == {
+    assert set(qualifier_member_ways(env, ("lib",), ("Color", "Red"))) == {
         (module, ("Color", "Red"))
     }
 

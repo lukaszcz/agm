@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/modules/hiding_through_alias"],
+  "diagnostic": {"line": 6, "message_contains": ["X::x", "hidden"]}
+}

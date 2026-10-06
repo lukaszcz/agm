@@ -223,6 +223,7 @@ def _build_cross_module_constructor_candidates(
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
     type_owners: TypeOwnerIndex,
     tail_removes: Callable[[NameAtom, QName, QName], bool],
+    tail_exposed: Callable[[NameAtom], tuple[QName, ...]],
 ) -> dict[str, tuple[ConstructorRef, ...]]:
     """Build constructor candidates from types exposed by import tails for a module.
 
@@ -242,18 +243,14 @@ def _build_cross_module_constructor_candidates(
     carries a per-variant :class:`ConstructorRef`.
 
     A declaration every tail exposing it removes by ``hiding``
-    (*tail_removes*) adds none.
+    (*tail_removes*) adds none; a member name a record or exception no tail
+    removes (*tail_exposed*) claims adds none.
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     exposed_qnames = frozenset(
         qname for qnames in import_env.unqualified.values() for qname in qnames
     )
     seen_candidates: set[tuple[str, ConstructorRef]] = set()
-
-    def hidden_here(ref: ConstructorRef) -> bool:
-        """Whether an import hides *ref*'s declaration, which no other exposes."""
-        qname = ref.qname
-        return qname in import_env.unqualified_hidden and qname not in exposed_qnames
 
     def add_candidate(name: str, ref: ConstructorRef) -> None:
         candidate = (name, ref)
@@ -269,14 +266,10 @@ def _build_cross_module_constructor_candidates(
         for member in enum.members:
             if isinstance(member, VariantRef):
                 for referenced_cref in type_owners.referenced_member_refs(enum_qname, member):
-                    if not hidden_here(referenced_cref) and not tail_removes(
-                        exposed_name, key, referenced_cref.qname
-                    ):
+                    if not tail_removes(exposed_name, key, referenced_cref.qname):
                         add_candidate(referenced_cref.owner_name, referenced_cref)
                 continue
-            if declares_bare_constructor(
-                import_env.unqualified.get(member.name, ()), all_public_types
-            ):
+            if declares_bare_constructor(tail_exposed(member.name), all_public_types):
                 continue
             member_qname = (mid, _atom((*_path(src_name), member.name)))
             if (through_alias or member_qname in exposed_qnames) and not tail_removes(
@@ -293,7 +286,7 @@ def _build_cross_module_constructor_candidates(
         owner = type_owners.declared_owner(key, alias)
         for name, member in owner.alias_members().items():
             if not declares_bare_constructor(
-                import_env.unqualified.get(name, ()), all_public_types
+                tail_exposed(name), all_public_types
             ) and not tail_removes(exposed_name, key, owner.members[name].qname):
                 add_candidate(name, member)
 
@@ -327,18 +320,6 @@ def _build_cross_module_constructor_candidates(
             else:
                 add_members(exposed_name, key, key, decl, through_alias=False)
     return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}
-
-
-def _import_tail_type_names(
-    import_env: ImportEnv,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
-) -> frozenset[str]:
-    """Return the type names import tails expose unqualified, for ``Owner::member`` access."""
-    return frozenset(
-        name
-        for name, qnames in import_env.unqualified.items()
-        if isinstance(name, str) and any(qname in all_public_types for qname in qnames)
-    )
 
 
 def _item_atom(
@@ -1344,7 +1325,6 @@ def resolve_program(
             repl_session_fixities=entry_repl_session_fixities if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
-            ambient_type_names=_import_tail_type_names(import_envs[mid], all_public_types),
         )
 
     def validate_imports(mid: ModuleId) -> None:
@@ -1441,6 +1421,7 @@ def resolve_program(
             cross_module_constructor_refs,
             type_owners,
             resolver.tail_removes,
+            resolver.tail_exposed,
         )
         resolver.collect(ambient_constructor_candidates=cross_module_candidates or None)
     for mid in graph.modules:

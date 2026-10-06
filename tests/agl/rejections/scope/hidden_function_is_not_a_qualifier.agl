@@ -1,0 +1,5 @@
+# A function is never a qualifier: beneath hidden `S::x` nothing removed is reached as a prefix.
+import lib::* hiding S::x
+
+program def main() -> int =
+  S::x::z()

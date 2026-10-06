@@ -1,0 +1,9 @@
+# Two scopes: importers hide one function of `S`; `facade` withholds `T`.
+scope S
+  def x() -> int = 1
+  def y() -> int = 2
+end S
+
+scope T
+  def t() -> int = 5
+end T

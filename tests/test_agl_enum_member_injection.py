@@ -48,6 +48,8 @@ _MODULES = {
     "opt": _OPT,
     "c": _COLOR + _RED_RECORD,
     "d": "enum Light\n  | Red\n",
+    "e": "record Blue\n  n: int\n",
+    "nothing": "record Nothing\n",
     "other": "record Rec\n  x: int\n",
     "ref": _REFERENCED,
 }
@@ -250,6 +252,24 @@ _REMOVED = {
     ),
 }
 
+_HIDDEN_CLASH = {
+    "hidden-record": _scenario(("import a::*", "import b::* hiding Red"), _bare()),
+    "hidden-record-beside-a-visible-member": _scenario(
+        ("import a::*", "import e::* hiding Blue"),
+        {"value": accepted("Blue", _BLUE), "pattern": _bare()["pattern"]},
+    ),
+    "hidden-record-renamed-enum": _scenario(
+        ("import a::{Color as Hue}", "import b::* hiding Red"), _bare("Hue")
+    ),
+    "hidden-record-applied-alias": _scenario(
+        ("import opt::{IntOpt}", "import nothing::* hiding Nothing"),
+        {"value": accepted("Nothing", _NOTHING)},
+    ),
+    "hidden-record-region": _scenario(
+        (), _region_members("import a::Color\nimport b::* hiding Red", "Color")
+    ),
+}
+
 _ALIASES = {
     "own-alias-qualified": _scenario(
         ("import a", "type C = a::Color"), {"value": accepted("C::Red", _RED)}
@@ -397,6 +417,29 @@ _HIDDEN_QUALIFIED = {
     ),
 }
 
+
+def _withheld_scenario(use: str) -> Scenario:
+    """``mid`` re-exports ``a`` withholding ``Color::Red``; bare ``Red`` stays unknown."""
+    return Scenario(
+        modules={**_MODULES, "mid": "import a\nexport a hiding Color::Red\n"},
+        header=("import mid", use),
+        probes={"bare": rejected("Red", AglScopeError, "Red")},
+    )
+
+
+_USE_IGNORES_WAYS = {
+    "use-glob-of-an-import-hiding-a-member": _scenario(
+        ("import a hiding Color::Red", "use a::*"),
+        {"bare": rejected("Red", AglScopeError, "Red")},
+    ),
+    "use-item-of-an-import-hiding-a-member": _scenario(
+        ("import a hiding Color::Red", "use a::{Color}"),
+        {"bare": rejected("Red", AglScopeError, "Red")},
+    ),
+    "use-glob-of-an-export-withholding-a-member": _withheld_scenario("use mid::*"),
+    "use-item-of-an-export-withholding-a-member": _withheld_scenario("use mid::{Color}"),
+}
+
 _SAME_NAME = _clash_table()
 _SCRUTINEE_SELECTS = _clash_table(red=True)
 _USE_YIELDS = _clash_table(red=True, by_use=True)
@@ -460,6 +503,12 @@ class TestInjection:
     def test_removal(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
+    @pytest.mark.parametrize("scenario", scenario_params(_HIDDEN_CLASH))
+    def test_hidden_record_does_not_claim_the_bare_member(
+        self, tmp_path: Path, scenario: Scenario
+    ) -> None:
+        assert_scenario(tmp_path, scenario)
+
     @pytest.mark.parametrize("scenario", scenario_params(_SAME_NAME))
     def test_same_named_record_or_exception(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
@@ -499,6 +548,15 @@ class TestInjectionRules:
     )
     @pytest.mark.parametrize("scenario", scenario_params(_HIDDEN_QUALIFIED))
     def test_qualified_spelling_of_removed_member_is_hidden(
+        self, tmp_path: Path, scenario: Scenario
+    ) -> None:
+        assert_scenario(tmp_path, scenario)
+
+    @pytest.mark.xfail(
+        strict=True, reason="a use injects the members of an enum its import hides beneath"
+    )
+    @pytest.mark.parametrize("scenario", scenario_params(_USE_IGNORES_WAYS))
+    def test_use_injects_only_members_its_imports_keep(
         self, tmp_path: Path, scenario: Scenario
     ) -> None:
         assert_scenario(tmp_path, scenario)

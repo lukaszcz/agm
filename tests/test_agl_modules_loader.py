@@ -1445,7 +1445,7 @@ class TestPreludeSupersession:
     def test_explicit_core_wildcard_import_suppresses_the_default_prelude(
         self, tmp_path: Path
     ) -> None:
-        from agm.agl.scope import resolve_program
+        from agm.agl.scope import AglScopeError, resolve_program
 
         graph = load_graph(
             "import std/prelude::* hiding ask",
@@ -1459,8 +1459,26 @@ class TestPreludeSupersession:
         ]
         assert len(core_imports) == 1
         resolution = resolve_program(graph).modules[ENTRY_ID]
-        assert "ask" not in resolution.import_env.unqualified
+        env = resolution.import_env
+        assert {item.declaration[1] for items in env.decl_hiding.values() for item in items} == {
+            "ask"
+        }
         assert "print" in resolution.import_env.unqualified
+        resolve_program(
+            load_graph(
+                'import std/prelude::* hiding ask\ndef f() -> unit = print("kept")',
+                entry_path=None,
+                roots=_roots(tmp_path),
+            )
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(
+                load_graph(
+                    'import std/prelude::* hiding ask\ndef g() -> text = ask("hidden")',
+                    entry_path=None,
+                    roots=_roots(tmp_path),
+                )
+            )
 
     def test_scoped_explicit_core_import_suppresses_the_default_prelude(
         self, tmp_path: Path

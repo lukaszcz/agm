@@ -13,7 +13,7 @@ from agm.agl.scope.imports import (
     ImportEnv,
     SingleTarget,
     build_import_env,
-    qualifier_member_decls,
+    qualifier_member_ways,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import (
@@ -360,7 +360,7 @@ def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:
     module = ModuleId.from_path("Pal")
     env = _import_env("Pal", ("public", ("Secret", "hidden")), tail=(_item("public"),))
 
-    assert set(qualifier_member_decls(env, ("Pal",), ("Secret", "hidden"))) == {
+    assert set(qualifier_member_ways(env, ("Pal",), ("Secret", "hidden"))) == {
         (module, ("Secret", "hidden"))
     }
 
@@ -398,7 +398,10 @@ def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path)
     assert _program_outcome(tmp_path, modules) == "accepted"
 
 
-def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:
+def test_import_hiding_keeps_a_qualified_owner_in_the_route_surface() -> None:
+    module = ModuleId.from_path("Pal")
     env = _import_env("Pal", ("public", ("Secret", "hidden")), hidden=(_item("Secret"),))
 
-    assert not qualifier_member_decls(env, ("Pal",), ("Secret", "hidden"))
+    assert set(qualifier_member_ways(env, ("Pal",), ("Secret", "hidden"))) == {
+        (module, ("Secret", "hidden"))
+    }

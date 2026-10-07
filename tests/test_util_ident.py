@@ -24,3 +24,8 @@ from agm.util.ident import is_identifier
 )
 def test_identifier_matches_agl_identifier_grammar(name: str, expected: bool) -> None:
     assert is_identifier(name) is expected
+
+
+@pytest.mark.parametrize("delimiter", list(" \t\n\r()[]{}:,.|;/@="))
+def test_identifier_rejects_structural_delimiters(delimiter: str) -> None:
+    assert not is_identifier(f"before{delimiter}after")

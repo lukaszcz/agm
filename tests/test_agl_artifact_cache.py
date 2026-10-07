@@ -125,20 +125,37 @@ def _library_witnesses(root: Path, library: str) -> list[str]:
 
 
 def test_a_witness_of_a_cached_module_is_spelled_as_when_it_was_first_resolved(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cached module's rejected ``case`` is spelled at its own region, from memory or disk."""
+    from agm.agl.typecheck import program as program_module
+
+    lookup = program_module.retained_checked_modules
+    served: list[CheckedModule | CheckedModuleImage | None] = []
+
+    def spied(
+        retainable: artifact_cache.RetainedSources, capabilities: HostCapabilities
+    ) -> dict[ModuleId, CheckedModule | CheckedModuleImage]:
+        cached = lookup(retainable, capabilities)
+        served.append(cached.get(ModuleId.from_path("lib")))
+        return cached
+
+    monkeypatch.setattr(program_module, "retained_checked_modules", spied)
     header = "import other\nscope S\n  use other::Color\n"
     arms = "  def f(v: Color) -> int = case v of | Red => 0@@\nend S\n"
     artifact_cache.clear_retained_artifacts()
-    cold = _library_witnesses(tmp_path / "cold", header + arms.replace("@@", ""))
-    memory = _library_witnesses(tmp_path / "memory", header + arms.replace("@@", ""))
+    # Source paths are part of cache identity: all three runs must use the same root.
+    cold = _library_witnesses(tmp_path, header + arms.replace("@@", ""))
+    memory = _library_witnesses(tmp_path, header + arms.replace("@@", ""))
     artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
-    disk = _library_witnesses(tmp_path / "disk", header + arms.replace("@@", ""))
+    disk = _library_witnesses(tmp_path, header + arms.replace("@@", ""))
 
     assert cold == memory == disk == ["Blue"]
+    assert served[0] is None
+    assert isinstance(served[1], CheckedModule)
+    assert isinstance(served[2], CheckedModuleImage)
     completed = header + arms.replace("@@", f" | {cold[0]} => 1")
-    assert _library_witnesses(tmp_path / "completed", completed) == []
+    assert _library_witnesses(tmp_path, completed) == []
 
 
 def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(

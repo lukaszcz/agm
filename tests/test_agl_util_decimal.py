@@ -27,6 +27,12 @@ from agm.util.decimal import (
 )
 
 
+@pytest.fixture(scope="module")
+def int_range_threshold() -> int:
+    """Construct the real million-digit boundary once, independently of the range helper."""
+    return 10 ** (AGL_DECIMAL_CONTEXT.Emax + 1)
+
+
 class TestPinnedContext:
     def test_precision_and_rounding(self) -> None:
         assert AGL_DECIMAL_CONTEXT.prec == 28
@@ -104,17 +110,19 @@ class TestIntInRange:
         assert int_in_range(10**27) is True
 
     def test_huge_int_out_of_range(self) -> None:
-        assert int_in_range(10**1_000_000) is False
-        assert int_in_range(-(10**1_000_000)) is False
+        # A shift constructs a million-digit int without expensive exponentiation.
+        huge = 1 << 3_400_000
+        assert int_in_range(huge) is False
+        assert int_in_range(-huge) is False
 
-    def test_boundary_around_the_exact_threshold(self) -> None:
-        threshold = 10 ** (AGL_DECIMAL_CONTEXT.Emax + 1)
+    def test_boundary_around_the_exact_threshold(self, int_range_threshold: int) -> None:
+        threshold = int_range_threshold
         assert int_in_range(threshold - 1) is True
         assert int_in_range(threshold) is False
         assert int_in_range(-(threshold - 1)) is True
         assert int_in_range(-threshold) is False
 
-    def test_matches_decimal_in_range_at_the_boundary(self) -> None:
+    def test_matches_decimal_in_range_at_the_boundary(self, int_range_threshold: int) -> None:
         """int_in_range(n) agrees with decimal_in_range on the same boundary
         magnitude -- the bit-length shortcut must not disagree with the exact
         predicate it approximates. The boundary decimals are built directly
@@ -122,19 +130,19 @@ class TestIntInRange:
         million-digit int: that conversion is quadratic in digit count, and
         this test must stay cheap (see int_in_range's own docstring)."""
         emax = AGL_DECIMAL_CONTEXT.Emax
-        threshold = 10 ** (emax + 1)
+        threshold = int_range_threshold
         just_in_range = decimal.Decimal((0, (9,) * (emax + 1), 0))  # 10**(emax+1) - 1
         just_out_of_range = decimal.Decimal((0, (1,), emax + 1))  # 10**(emax+1)
         assert int_in_range(threshold - 1) == decimal_in_range(just_in_range) is True
         assert int_in_range(threshold) == decimal_in_range(just_out_of_range) is False
 
 
-def test_bit_length_threshold_is_exact() -> None:
+def test_bit_length_threshold_is_exact(int_range_threshold: int) -> None:
     """The cached bit-length threshold this module derives arithmetically
     matches the exact bit length of ``10**(Emax+1)``, computed directly."""
     from agm.util.decimal import _INT_RANGE_THRESHOLD_BITS
 
-    exact = (10 ** (AGL_DECIMAL_CONTEXT.Emax + 1)).bit_length()
+    exact = int_range_threshold.bit_length()
     assert _INT_RANGE_THRESHOLD_BITS == exact
 
 

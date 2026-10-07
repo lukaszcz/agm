@@ -1266,6 +1266,9 @@ def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict
         assert agent.prompts == [], (
             f"agent {agent.name!r} was called despite param validation failing"
         )
+        assert agent.sessions == [], (
+            f"agent {agent.name!r} opened a session despite param validation failing"
+        )
 
 
 def _fields_match(actual: Any, expected: Any) -> bool:
@@ -2013,16 +2016,15 @@ def test_program_scenario(
         assert len(set(units)) == len(units), f"expected distinct scope names, got {units}"
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
+        expect = {"stdout": "", "calls": dict.fromkeys(agents, 0), **expect}
     elif "exit_code" in expect:
         assert isinstance(result, SystemExit)
         assert result.code == expect["exit_code"]
-        _assert_output(out, expect)
-        _assert_calls(agents, expect)
     else:
         _assert_outcome(result, expect)
-        _assert_output(out, expect)
-        _assert_calls(agents, expect)
-        _assert_sessions(agents, expect)
+    _assert_output(out, expect)
+    _assert_calls(agents, expect)
+    _assert_sessions(agents, expect)
     for script in scripts:
         script.assert_complete()
 
@@ -2043,14 +2045,20 @@ def test_static_rejection(program: Path) -> None:
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)
     assert diagnostics, "expected at least one diagnostic"
+    needles = expect.get("message_contains", [])
     if "line" in expect:
-        lines = [d.line for d in diagnostics]
-        assert expect["line"] in lines, f"no diagnostic on line {expect['line']}; lines: {lines}"
-    joined = " | ".join(d.message for d in diagnostics)
-    for needle in expect.get("message_contains", []):
-        assert needle.lower() in joined.lower(), (
-            f"no diagnostic mentions {needle!r}; diagnostics: {joined!r}"
-        )
+        candidates = [diagnostic for diagnostic in diagnostics if diagnostic.line == expect["line"]]
+        message_groups = [needles]
+    else:
+        # Unlocated expectations may describe several independent errors.
+        candidates = diagnostics
+        message_groups = [[needle] for needle in needles]
+    assert candidates, f"no diagnostic at {expect!r}; diagnostics: {diagnostics!r}"
+    for group in message_groups:
+        assert any(
+            all(needle.lower() in diagnostic.message.lower() for needle in group)
+            for diagnostic in candidates
+        ), f"no single diagnostic matches {group!r} at {expect!r}; diagnostics: {diagnostics!r}"
 
 
 def test_pipeline_run_invokes_the_single_entry_program(capsys: pytest.CaptureFixture[str]) -> None:

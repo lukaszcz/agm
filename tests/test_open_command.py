@@ -8,7 +8,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
+from typer.main import get_command
 
+import agm.cli as cli
 import agm.commands.workspace.open as open_module
 import agm.tmux.session as session_module
 from agm.cli_support.args import OpenArgs
@@ -20,10 +23,10 @@ from agm.commands.workspace.open import (
     queue_setup_and_focus_workspace_session,
     validate_pane_count,
 )
-from agm.core import dry_run
+from agm.core import dry_run, process
 from agm.project import workspace_shell
 from agm.project.workspace_shell import ensure_workspace_shell
-from tests._git_helpers import clone_with_fork_remote, init_repo
+from tests._git_helpers import clone_with_fork_remote, git_output, git_run, init_repo
 
 
 def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
@@ -867,29 +870,61 @@ class TestOpenWorkspaceRemoteBranches:
 class TestOpenWorkspaceRunningSession:
     """A workspace whose tmux session is already running is not reopened."""
 
-    def test_running_session_is_reported_before_any_workspace_is_created(
+    @pytest.mark.parametrize("state", ["repo", "main", "missing", "branch", "worktree"])
+    def test_running_session_is_reported_before_fetch_or_workspace_changes(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         env: dict[str, str],
-        capsys: pytest.CaptureFixture[str],
+        state: str,
     ) -> None:
         project = _make_git_project(tmp_path, env)
+        repo = project / "repo"
+        branch = state if state in {"repo", "main"} else "feature"
+        session_name = "proj" if state in {"repo", "main"} else "proj/feature"
+        if state == "branch":
+            git_run(repo, ["branch", branch], env)
+        elif state == "worktree":
+            git_run(
+                repo, ["worktree", "add", "-b", branch, str(project / "worktrees" / branch)], env
+            )
         for name, value in env.items():
             monkeypatch.setenv(name, value)
+        monkeypatch.chdir(project)
 
-        def _session_running(cmd: list[str], **_kwargs: object) -> tuple[int, str, str]:
-            assert cmd[:2] == ["tmux", "has-session"]
+        def project_files() -> dict[Path, bytes | None]:
+            return {
+                path.relative_to(project): path.read_bytes() if path.is_file() else None
+                for path in project.rglob("*")
+            }
+
+        refs_before = git_output(repo, ["for-each-ref"], env)
+        worktrees_before = git_output(repo, ["worktree", "list", "--porcelain"], env)
+        files_before = project_files()
+        fetches: list[list[str]] = []
+        session_checks: list[list[str]] = []
+
+        def occupied_session(cmd: list[str], **_kwargs: object) -> tuple[int, str, str]:
+            session_checks.append(cmd)
+            assert cmd == ["tmux", "has-session", "-t", f"={session_name}"]
             return 0, "", ""
 
-        monkeypatch.setattr(session_module, "run_capture", _session_running)
+        def failing_fetch(cmd: list[str], **_kwargs: object) -> int:
+            assert cmd == ["git", "-C", str(repo), "fetch"]
+            fetches.append(cmd)
+            return 73
 
-        with pytest.raises(SystemExit) as exc_info:
-            open_or_create_workspace(
-                detached=True, pane_count=None, parent=None, branch="feature", cwd=project
-            )
+        monkeypatch.setattr(session_module, "run_capture", occupied_session)
+        monkeypatch.setattr(process, "run_foreground", failing_fetch)
 
-        assert exc_info.value.code == 1
-        assert "proj/feature" in capsys.readouterr().err
-        # Nothing was created for the branch: the check runs before any git work.
-        assert not (project / "worktrees" / "feature").exists()
+        result = CliRunner().invoke(
+            get_command(cli.app), ["workspace", "open", "--detach", branch], prog_name="agm"
+        )
+
+        assert result.exit_code == 1
+        assert session_name in result.stderr
+        assert session_checks
+        assert fetches == []
+        assert git_output(repo, ["for-each-ref"], env) == refs_before
+        assert git_output(repo, ["worktree", "list", "--porcelain"], env) == worktrees_before
+        assert project_files() == files_before

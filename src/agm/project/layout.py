@@ -212,9 +212,9 @@ def current_workspace(
 ) -> CurrentWorkspace | None:
     """Return the current AGM workspace within *project_dir*.
 
-    Prefers the ``REPO_DIR`` environment variable when it points to a git
-    checkout (main or branch workspace) inside *project_dir*. Falls back to
-    detecting the workspace from *cwd*. Returns ``None`` when *cwd* is not inside
+    Prefers the ``REPO_DIR`` environment variable when it points into a git
+    checkout (main or branch workspace) inside *project_dir*, resolving its root.
+    Falls back to detecting the workspace from *cwd*. Returns ``None`` when *cwd* is not inside
     *project_dir* and no usable ``REPO_DIR`` override is available.
     """
     resolved_env = resolve_env(env)
@@ -235,7 +235,7 @@ def current_workspace(
             or candidate == resolved_project_dir
             or resolved_project_dir in candidate.parents
         ):
-            workspace_dir = candidate
+            workspace_dir = git_helpers.checkout_root(candidate).resolve(strict=False)
 
     # --- Fall back to cwd-based detection ---
     if workspace_dir is None:
@@ -261,7 +261,8 @@ def current_workspace(
                     workspace_dir = current
 
     # --- Determine workspace branch ---
-    if workspace_dir == repo_dir or repo_dir in workspace_dir.parents:
+    # Embedded worktrees live below the main checkout but are distinct checkouts.
+    if workspace_dir == repo_dir:
         return CurrentWorkspace(workspace_dir=workspace_dir, branch=None)
 
     branch = git_helpers.current_branch(workspace_dir, env=env)

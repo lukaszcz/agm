@@ -85,22 +85,22 @@ def _lower(source: str):
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "expected"),
     [
-        "let x = 3 as decimal\n()\n",  # int -> decimal widen
-        "let x = 42 as int\n()\n",  # identity noop
-        "let x = 42 as text\n()\n",  # render scalar
-        "let x = 4.5 as text\n()\n",
-        "let x = true as text\n()\n",
-        "let x = [1, 2, 3] as text\n()\n",
-        'let x = {"k": 1} as text\n()\n',
-        "let x = 42 as json\n()\n",
-        'let x = "hi" as json\n()\n',  # text -> json wraps as JSON string
-        "let x = [1, 2] as json\n()\n",
+        ("let x = 3 as decimal\n()\n", DecimalValue(Decimal(3))),
+        ("let x = 42 as int\n()\n", IntValue(42)),
+        ("let x = 42 as text\n()\n", TextValue("42")),
+        ("let x = 4.5 as text\n()\n", TextValue("4.5")),
+        ("let x = true as text\n()\n", TextValue("true")),
+        ("let x = [1, 2, 3] as text\n()\n", TextValue("[1, 2, 3]")),
+        ('let x = {"k": 1} as text\n()\n', TextValue('{"k": 1}')),
+        ("let x = 42 as json\n()\n", JsonValue(42)),
+        ('let x = "hi" as json\n()\n', JsonValue("hi")),
+        ("let x = [1, 2] as json\n()\n", JsonValue([1, 2])),
     ],
 )
-def test_total_cast_agrees(source: str) -> None:
-    evaluate_ir(source)
+def test_total_cast_agrees(source: str, expected: Value) -> None:
+    assert evaluate_ir(source)["x"] == expected
 
 
 #: A real out-of-range int, computed at runtime via `.pow()` rather than
@@ -152,7 +152,12 @@ let c-text = Color::Red() as text
 let c-json = Color::Red() as json
 ()
 """
-    evaluate_ir(source)
+    values = evaluate_ir(source)
+    assert values["r-text"] == TextValue("Foo(a = 1)")
+    assert values["r-json"] == JsonValue({"a": 1})
+    assert values["c-text"] == TextValue("Color::Red")
+    # The constructor is member-record typed, not widened to the enum.
+    assert values["c-json"] == JsonValue({})
 
 
 # ---------------------------------------------------------------------------
@@ -161,24 +166,33 @@ let c-json = Color::Red() as json
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "expected"),
     [
-        'let x = "42" as int\n()\n',
-        'let x = "4.5" as decimal\n()\n',
-        'let x = "true" as bool\n()\n',
-        'let x = "4.0" as int\n()\n',  # integral decimal narrows to int
-        'let x = "[1, 2, 3]" as array[int]\n()\n',
-        'let x = "[\\"a\\", \\"b\\"]" as array[text]\n()\n',
-        'let x = "[1, 2]" as array[json]\n()\n',  # json leaf decode
-        'let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n',
+        ('let x = "42" as int\n()\n', IntValue(42)),
+        ('let x = "4.5" as decimal\n()\n', DecimalValue(Decimal("4.5"))),
+        ('let x = "true" as bool\n()\n', BoolValue(True)),
+        ('let x = "4.0" as int\n()\n', IntValue(4)),
+        (
+            'let x = "[1, 2, 3]" as array[int]\n()\n',
+            ArrayValue([IntValue(1), IntValue(2), IntValue(3)]),
+        ),
+        (
+            'let x = "[\\"a\\", \\"b\\"]" as array[text]\n()\n',
+            ArrayValue([TextValue("a"), TextValue("b")]),
+        ),
+        ('let x = "[1, 2]" as array[json]\n()\n', ArrayValue([JsonValue(1), JsonValue(2)])),
+        (
+            'let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n',
+            DictValue({"k": ArrayValue([IntValue(1), IntValue(2)])}),
+        ),
     ],
 )
-def test_fallible_text_cast_success_agrees(source: str) -> None:
-    evaluate_ir(source)
+def test_fallible_text_cast_success_agrees(source: str, expected: Value) -> None:
+    assert evaluate_ir(source)["x"] == expected
 
 
 def test_decimal_to_int_integral_agrees() -> None:
-    evaluate_ir("let x = 4.0 as int\n()\n")
+    assert evaluate_ir("let x = 4.0 as int\n()\n")["x"] == IntValue(4)
 
 
 def test_text_to_record_and_nested_agrees() -> None:
@@ -187,27 +201,35 @@ record Foo
   a: int
 let one = "{\\"a\\": 1}" as Foo
 let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as array[Foo]
+let expected-one = Foo(a = 1)
+let expected-two = Foo(a = 2)
 ()
 """
-    evaluate_ir(source)
+    values = evaluate_ir(source)
+    assert values["one"] == values["expected-one"]
+    assert values["many"] == ArrayValue([values["expected-one"], values["expected-two"]])
 
 
 def test_text_to_enum_agrees() -> None:
     source = """\
 enum Color | Red | Blue
 let x = "\\"Red\\"" as Color
+let expected = Color::Red()
 ()
 """
-    evaluate_ir(source)
+    values = evaluate_ir(source)
+    assert values["x"] == values["expected"]
 
 
 def test_text_to_enum_with_fields_agrees() -> None:
     source = """\
 enum Shape | Circle(radius: decimal) | Square(side: decimal)
 let x = "{\\"$case\\": \\"Circle\\", \\"radius\\": 2.5}" as Shape
+let expected = Shape::Circle(radius = 2.5)
 ()
 """
-    evaluate_ir(source)
+    values = evaluate_ir(source)
+    assert values["x"] == values["expected"]
 
 
 def test_json_to_typed_agrees() -> None:
@@ -216,7 +238,9 @@ let j = 42 as json
 let x = j as int
 ()
 """
-    evaluate_ir(source)
+    values = evaluate_ir(source)
+    assert values["j"] == JsonValue(42)
+    assert values["x"] == IntValue(42)
 
 
 # ---------------------------------------------------------------------------

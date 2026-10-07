@@ -94,21 +94,24 @@ def _dict_companion() -> _DictCompanion:
 
 def test_dict_companion_get_and_remove_options_preserve_the_live_dict() -> None:
     companion = _dict_companion()
-    values = AglDictView(DictValue({"one": IntValue(1)}), _NO_DESCRIPTORS)
+    values = AglDictView(DictValue({"one": IntValue(1), "two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert decode_boundary_value(companion.get_option(values, "one")) == RecordValue(
         _OPTION_SOME, {"value": IntValue(1)}
     )
+    assert _entries(values) == {"one": 1, "two": 2}
     assert decode_boundary_value(companion.get_option(values, "missing")) == RecordValue(
         _OPTION_NONE, {}
     )
+    assert _entries(values) == {"one": 1, "two": 2}
     assert decode_boundary_value(companion.remove_option(values, "one")) == RecordValue(
         _OPTION_SOME, {"value": IntValue(1)}
     )
+    assert _entries(values) == {"two": 2}
     assert decode_boundary_value(companion.remove_option(values, "missing")) == RecordValue(
         _OPTION_NONE, {}
     )
-    assert _entries(values) == {}
+    assert _entries(values) == {"two": 2}
 
 
 def test_dict_companion_set_updates_the_live_dict() -> None:
@@ -131,9 +134,14 @@ def test_dict_companion_mutating_operations_update_boundary_views() -> None:
     assert _entries(values) == {"one": 1, "two": 2}
 
     companion.merge_in_place(
-        values, AglDictView(DictValue({"three": IntValue(3)}), _NO_DESCRIPTORS)
+        values,
+        AglDictView(DictValue({"one": IntValue(10), "three": IntValue(3)}), _NO_DESCRIPTORS),
     )
+    assert _entries(alias) == {"one": 10, "two": 2, "three": 3}
+
     companion.select_in_place(values, _exclude_two)
+    assert _entries(alias) == {"one": 10, "three": 3}
+
     companion.clear(values)
 
     assert _entries(alias) == {}

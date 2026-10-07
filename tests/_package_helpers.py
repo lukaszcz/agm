@@ -21,6 +21,9 @@ its ``PackageInfo``.
 ``write_python_package`` writes a package source declaring ``[python]``
 requirements; ``PythonInstaller`` records installer runs in place of the real
 installer (see the ``python_installer`` fixture).
+
+``write_rollback_package``, ``replace_rollback_payload``, and
+``InstalledPackageSnapshot`` share failed-reinstall setup and restoration checks.
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import semver
+from click.testing import CliRunner
+from typer.main import get_command
 
 import agm.packages.archive as package_archive
 from agm.packages.activation import (
@@ -43,7 +48,7 @@ from agm.packages.install import install_archive_with_plan, install_directory_wi
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
-from agm.packages.record import write_record
+from agm.packages.record import verify_record, write_record
 from agm.version import AGM_VERSION
 
 
@@ -164,6 +169,82 @@ def write_python_package(root: Path, name: str, *specs: str) -> Path:
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     return root
+
+
+def write_rollback_package(root: Path, *specs: str) -> Path:
+    """Write an executable original package with resources and an old-only file."""
+    source = write_python_package(root, "alpha", *specs)
+    manifest = source / "package.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + '\n[commands]\noriginal = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import std/fs\nprogram def main() -> unit =\n"
+        '  print("original behavior")\n  print(fs::read(resource("payload.txt")))\n',
+        encoding="utf-8",
+    )
+    (source / "payload.txt").write_text("original resource", encoding="utf-8")
+    (source / "obsolete.txt").write_text("old only", encoding="utf-8")
+    return source
+
+
+def replace_rollback_payload(source: Path) -> None:
+    """Change behavior, resource bytes, and file membership before a failed reinstall."""
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        'program def main() -> unit = print("replacement behavior")\n', encoding="utf-8"
+    )
+    (source / "payload.txt").write_text("replacement resource", encoding="utf-8")
+    (source / "obsolete.txt").unlink()
+    (source / "new-only.txt").write_text("new only", encoding="utf-8")
+
+
+def _file_snapshot(root: Path) -> dict[Path, bytes]:
+    """Snapshot file membership and bytes, not modes or empty directories."""
+    return {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
+@dataclass
+class InstalledPackageSnapshot:
+    """Original files and activation state that a failed reinstall must restore."""
+
+    root: Path
+    home: Path
+    files: dict[Path, bytes]
+    index: ActivationIndex
+    index_bytes: bytes
+
+    @property
+    def index_path(self) -> Path:
+        return self.home / ".agm" / "packages" / "index.toml"
+
+    @classmethod
+    def capture(cls, package: PackageInfo, *, home: Path) -> InstalledPackageSnapshot:
+        """Remember the installed package and both forms of its activation state."""
+        return cls(
+            package.root,
+            home,
+            _file_snapshot(package.root),
+            load_activation_index(home=home, env={}),
+            (home / ".agm" / "packages" / "index.toml").read_bytes(),
+        )
+
+    def assert_restored(self) -> None:
+        """Verify rollback integrity, cleanup, and the original CLI behavior."""
+        import agm.cli as cli
+
+        assert _file_snapshot(self.root) == self.files
+        assert verify_record(self.root)
+        assert load_activation_index(home=self.home, env={}) == self.index
+        assert self.index_path.read_bytes() == self.index_bytes
+        assert not tuple(self.root.parent.glob(".agm-previous-*"))
+        assert not tuple(self.root.parent.glob(".agm-package-*"))
+        result = CliRunner().invoke(
+            get_command(cli.app), ["original"], env={"HOME": str(self.home)}, catch_exceptions=False
+        )
+        assert result.exit_code == 0
+        assert result.stdout.splitlines() == ["original behavior", "original resource"]
 
 
 @dataclass

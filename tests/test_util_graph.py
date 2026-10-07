@@ -226,6 +226,16 @@ class TestToposort:
         # Reverse alphabetical: c, b, a
         assert result == ["c", "b", "a"]
 
+    def test_newly_ready_nodes_compete_with_waiting_nodes_by_key(self) -> None:
+        nodes = ["root", "waiting", "released"]
+        priority = {"root": 0, "released": 1, "waiting": 2}
+
+        assert toposort(nodes, {"released": ["root"]}, key=priority.__getitem__) == [
+            "root",
+            "released",
+            "waiting",
+        ]
+
     def test_integer_nodes(self) -> None:
         nodes = [3, 1, 2]
         deps = {3: [1], 2: [1]}
@@ -318,6 +328,22 @@ class TestBfsFirst:
             key=str,
         )
         assert result == ("b", 1)
+
+    @pytest.mark.parametrize("selected", [0, "", False])
+    def test_falsey_non_none_selection_stops_the_search(self, selected: int | str) -> None:
+        visited: list[str] = []
+
+        def select(node: str) -> int | str | None:
+            visited.append(node)
+            return selected if node == "first" else "later"
+
+        result = bfs_first(["first", "second"], lambda n: [], select, key=str)
+
+        assert result == selected
+        assert visited == ["first"]
+
+    def test_seed_order_is_preserved_even_when_it_differs_from_key_order(self) -> None:
+        assert bfs_first(["z", "a"], lambda n: [], lambda n: n, key=str) == "z"
 
     def test_duplicate_seeds_are_visited_once(self) -> None:
         seen: list[str] = []

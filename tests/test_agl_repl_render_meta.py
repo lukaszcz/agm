@@ -15,8 +15,15 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError, Diagnostic, HiddenMemberError, RelatedDiagnostic
+from agm.agl.diagnostics import (
+    AglError,
+    Diagnostic,
+    HiddenMemberError,
+    RelatedDiagnostic,
+    format_diagnostic_location,
+)
 from agm.agl.ir.program import ValueDescriptors
+from agm.agl.matchcompile.diagnostics import NonExhaustiveMatchError
 from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
@@ -253,6 +260,7 @@ class TestRenderEntryResult:
         result = _result(kind="expression", value=TextValue("hi"), value_type=TextType(), ok=True)
         assert render_mod.render_entry_result(result, echo=False) is None
 
+    # Caller-supplied sentinel prose pins formatting, not production diagnostics.
     def test_warnings_are_always_rendered(self) -> None:
         result = _result(
             kind="statement",
@@ -373,14 +381,14 @@ class TestDispatchMeta:
     def test_unknown_command(self) -> None:
         outcome = meta_mod.dispatch_meta(":nope", _ctx())
         assert outcome.text is not None
-        assert "Unknown command ':nope'" in outcome.text
+        assert ":nope" in outcome.text
         assert outcome.quit is False
 
     def test_params_is_an_unknown_command(self) -> None:
         # The REPL has no entry function, so ":params" is not a meta command.
         outcome = meta_mod.dispatch_meta(":params", _ctx())
         assert outcome.text is not None
-        assert "Unknown command ':params'" in outcome.text
+        assert ":params" in outcome.text
         assert outcome.quit is False
 
     def test_argument_is_ignored_for_known_command(self) -> None:
@@ -397,12 +405,10 @@ class TestDispatchMeta:
         assert ":exit" in names
 
     def test_dispatch_tab_separated_command(self) -> None:
-        # Issue #3: tab (or other whitespace) between command word and arg must
-        # dispatch correctly, not produce "Unknown command".
-        outcome = meta_mod.dispatch_meta(":type\tx + 1", _ctx())
-        # ":type" with no valid binding → some error message, but NOT "Unknown command"
-        assert outcome.text is not None
-        assert "Unknown command" not in outcome.text
+        ctx = _ctx()
+        assert ctx.session.eval_entry("let x = 2").ok
+        outcome = meta_mod.dispatch_meta(":type\tx + 1", ctx)
+        assert outcome.text == "int"
 
     def test_dispatch_tab_command_no_arg(self) -> None:
         # A tab immediately after a known command name with no trailing arg.
@@ -529,28 +535,41 @@ class TestType:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
-    def test_type_unknown_name_clean_error(self) -> None:
-        outcome = meta_mod.dispatch_meta(":type nope", _session_ctx())
-        assert outcome.text is not None
-        assert outcome.text.startswith("1:1")
-        assert "error:" in outcome.text
-        assert outcome.quit is False  # never crashed the loop
+    @pytest.mark.parametrize(
+        ("expression", "error", "span_text"),
+        [
+            ("nope", AglScopeError, "nope"),
+            ("case true of | true => 1", NonExhaustiveMatchError, "case true of | true => 1"),
+            ("1 +", AglSyntaxError, "+"),
+            ("let y = 1", AglError, None),
+        ],
+        ids=["unknown-name", "non-exhaustive-match", "bad-syntax", "non-expression"],
+    )
+    def test_type_rejection_is_rendered_without_changing_the_session(
+        self, expression: str, error: type[AglError], span_text: str | None
+    ) -> None:
+        session = _open_session()
+        with pytest.raises(AglError) as raised:
+            session.type_of(expression)
 
-    def test_type_match_error_preserves_source_location(self) -> None:
-        outcome = meta_mod.dispatch_meta(":type case true of | true => 1", _session_ctx())
-        assert outcome.text is not None
-        assert outcome.text.startswith("1:1")
-        assert "Non-exhaustive" in outcome.text
+        assert type(raised.value) is error
+        diagnostic = raised.value.to_diagnostic()
+        assert diagnostic.severity == "error"
+        assert diagnostic.line == 1
+        span = raised.value.span
+        if span_text is None:
+            assert span is None
+        else:
+            assert span is not None
+            assert expression[span.start_offset : span.end_offset] == span_text
 
-    def test_type_bad_syntax_clean_error(self) -> None:
-        outcome = meta_mod.dispatch_meta(":type 1 +", _session_ctx())
-        assert outcome.text is not None
+        outcome = meta_mod.dispatch_meta(f":type {expression}", _session_ctx(session))
 
-    def test_type_non_expression_clean_error(self) -> None:
-        # A binding is not a single expression — type_of raises AglError, caught.
-        outcome = meta_mod.dispatch_meta(":type let y = 1", _session_ctx())
         assert outcome.text is not None
-        assert "expression" in outcome.text.lower()
+        location = format_diagnostic_location(diagnostic, source_name=None)
+        assert outcome.text.startswith(f"{location}: {diagnostic.severity}:")
+        assert outcome.quit is False
+        assert session.bindings() == []
 
 
 class TestInfo:
@@ -692,6 +711,7 @@ class TestInfo:
             session.info_of(name)
 
         assert type(raised.value) is error
+        assert raised.value.to_diagnostic().severity == "error"
         span = raised.value.span
         assert span is not None
         assert name[span.start_offset : span.end_offset] == span_text
@@ -1149,7 +1169,9 @@ class TestLoad:
         missing = tmp_path / "nope.agl"
         outcome = meta_mod.dispatch_meta(f":load {missing}", _session_ctx())
         assert outcome.text is not None
-        assert "cannot read" in outcome.text.lower()
+        assert outcome.text.startswith("Error:")
+        assert str(missing) in outcome.text
+        assert outcome.quit is False
 
     def test_load_empty_arg_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":load", _session_ctx())
@@ -1182,7 +1204,7 @@ class TestLoad:
         s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
-        assert "no statements" in outcome.text.lower()
+        assert str(src) in outcome.text
         assert s.bindings() == []
 
 
@@ -1227,7 +1249,10 @@ class TestSave:
         bad = tmp_path / "missing_dir" / "out.agl"
         outcome = meta_mod.dispatch_meta(f":save {bad}", _session_ctx())
         assert outcome.text is not None
-        assert "cannot write" in outcome.text.lower()
+        assert outcome.text.startswith("Error:")
+        assert str(bad) in outcome.text
+        assert not bad.exists()
+        assert outcome.quit is False
 
 
 class TestTheme:
@@ -1267,7 +1292,7 @@ class TestTheme:
         ctx = _ctx()
         outcome = meta_mod.dispatch_meta(":theme neon", ctx)
         assert outcome.text is not None
-        assert "Unknown theme" in outcome.text
+        assert "neon" in outcome.text
         assert ctx.theme == "auto"  # unchanged
         assert outcome.setting_change is None
 

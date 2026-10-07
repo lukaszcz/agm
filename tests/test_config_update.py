@@ -1,41 +1,64 @@
-"""Tests for agm.commands.config.update."""
+"""CLI state and history tests for ``agm config update``."""
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
-import agm.commands.config.update as config_update
-from agm.cli_support.args import ConfigUpdateArgs
+from agm.cli import app
+from tests._git_helpers import add_linked_worktree, git_output, git_run, init_repo
 
 
-class TestConfigUpdateRun:
-    """Tests for the config update run() entrypoint."""
+@pytest.mark.parametrize("versioned", [False, True], ids=["unversioned", "versioned"])
+def test_config_update_refreshes_checkouts_and_preserves_unrelated_files(
+    tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch, versioned: bool
+) -> None:
+    project = tmp_path / "project"
+    repo = init_repo(project / "repo", env)
+    add_linked_worktree(repo, project / "worktrees" / "feat" / "app", env, branch="feat/app")
+    git_run(repo, ["branch", "not-checked-out"], env)
+    dep = init_repo(project / "deps" / "mylib" / "main", env)
+    add_linked_worktree(dep, dep.parent / "feat" / "app", env, branch="feat/app")
+    config = project / "config"
+    if versioned:
+        init_repo(config, env)
+    else:
+        config.mkdir()
+    local = config / "local.txt"
+    local.write_text("keep unstaged\n", encoding="utf-8")
+    main_config = config / "config.toml"
+    main_config.write_text('# keep this comment\n[deps]\nmylib = "stale"\n', encoding="utf-8")
+    before = git_output(config, ["rev-parse", "HEAD"], env) if versioned else None
+    monkeypatch.chdir(repo)
 
-    def test_calls_update_all_and_commit(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
+    result = CliRunner().invoke(app, ["config", "update"], env=env, catch_exceptions=False)
 
-        monkeypatch.setattr(config_update, "require_current_project_dir", lambda: project_dir)
-
-        update_calls: list[Path] = []
-        monkeypatch.setattr(
-            config_update,
-            "update_all_project_dependency_configs",
-            lambda pd, env=None: update_calls.append(pd),
+    assert result.exit_code == 0, result.output
+    workspace_config = config / "feat" / "app" / "config.toml"
+    assert tomllib.loads(main_config.read_text())["deps"] == {"mylib": "main"}
+    assert tomllib.loads(workspace_config.read_text())["deps"] == {"mylib": "feat/app"}
+    assert main_config.read_text().startswith("# keep this comment\n")
+    assert not (config / "not-checked-out" / "config.toml").exists()
+    assert local.read_text() == "keep unstaged\n"
+    if versioned:
+        after = git_output(config, ["rev-parse", "HEAD"], env)
+        assert after != before
+        assert set(
+            git_output(config, ["show", "--pretty=", "--name-only", "HEAD"], env).splitlines()
+        ) == {
+            "config.toml",
+            "feat/app/config.toml",
+        }
+        assert git_output(config, ["status", "--short"], env) == "?? local.txt"
+        assert (
+            git_output(config, ["show", "HEAD:feat/app/config.toml"], env)
+            == workspace_config.read_text().strip()
         )
 
-        commit_calls: list[tuple[Path, str]] = []
-        monkeypatch.setattr(
-            config_update,
-            "commit_config_dir_changes",
-            lambda pd, msg, env=None: commit_calls.append((pd, msg)),
-        )
+        repeated = CliRunner().invoke(app, ["config", "update"], env=env, catch_exceptions=False)
 
-        config_update.run(ConfigUpdateArgs())
-
-        assert update_calls == [project_dir]
-        assert commit_calls == [(project_dir, "chore: update config")]
+        assert repeated.exit_code == 0, repeated.output
+        assert git_output(config, ["rev-parse", "HEAD"], env) == after

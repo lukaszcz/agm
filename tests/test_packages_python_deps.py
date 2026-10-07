@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,14 +14,22 @@ from agm.core import dry_run, process
 from agm.packages.activation import load_activation_index, resolve_indexed_packages
 from agm.packages.archive import write_archive
 from agm.packages.errors import PackageInstallError
-from agm.packages.install import sync_active_python_dependencies, uninstall_package
+from agm.packages.install import (
+    install_archive_with_plan,
+    install_directory_with_plan,
+    sync_active_python_dependencies,
+    uninstall_package,
+)
 from agm.packages.python_deps import python_dependencies, sync_python_dependencies
 from agm.packages.store import installed_packages, package_store_path
 from tests._package_helpers import (
+    InstalledPackageSnapshot,
     PythonInstaller,
     install_archive,
     install_directory,
+    replace_rollback_payload,
     write_python_package,
+    write_rollback_package,
 )
 
 # ``packaging`` is an AGM runtime dependency, so it is always installed; the
@@ -147,6 +158,62 @@ def test_failed_python_install_rolls_the_store_back(
     assert load_activation_index(home=home, env={}) == before_index
     assert installed_packages(home=home, env={}) == before_store
     assert not package_store_path("bravo", semver.Version(1), home=home, env={}).exists()
+
+
+@pytest.mark.parametrize("archive_source", [False, True], ids=["directory", "archive"])
+def test_failed_external_python_installer_restores_a_replaced_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, archive_source: bool
+) -> None:
+    home = tmp_path / "home"
+    source = write_rollback_package(tmp_path / "alpha", _PRESENT)
+    installed = install_directory(source, home=home, env={})
+    previous = InstalledPackageSnapshot.capture(installed, home=home)
+    manifest = source / "package.toml"
+    manifest.write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "replacement"\n'
+        f'\n[python]\ndependencies = ["{_PRESENT}", "{_ABSENT_B}"]\n'
+        '\n[commands]\nreplacement = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    replace_rollback_payload(source)
+    if archive_source:
+        archive = tmp_path / "replacement.agmpkg"
+        write_archive(source, archive)
+
+    # Execute a failing installer binary, never the real environment's installer.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    installer = bin_dir / "uv"
+    log = tmp_path / "installer.json"
+    installer.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        f"root = Path({str(installed.root)!r})\n"
+        "observed = {'args': sys.argv[1:], "
+        "'manifest': (root / 'package.toml').read_text(), "
+        "'resource': (root / 'payload.txt').read_text(), "
+        f"'index': Path({str(previous.index_path)!r}).read_text()}}\n"
+        f"Path({str(log)!r}).write_text(json.dumps(observed))\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    installer.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(PackageInstallError):
+        if archive_source:
+            install_archive_with_plan(archive, home=home, env={}, reinstall=True)
+        else:
+            install_directory_with_plan(source, home=home, env={}, reinstall=True)
+
+    observed = json.loads(log.read_text(encoding="utf-8"))
+    assert observed["args"] == ["pip", "install", "--python", sys.executable, _PRESENT, _ABSENT_B]
+    assert _ABSENT_B in observed["manifest"]
+    assert "replacement" in observed["manifest"]
+    assert observed["resource"] == "replacement resource"
+    assert observed["index"].encode() == previous.index_bytes
+    monkeypatch.chdir(tmp_path)
+    previous.assert_restored()
 
 
 def test_interrupted_python_install_rolls_the_store_back(

@@ -124,7 +124,9 @@ def test_constructor_field_default_omitted_across_module_boundary(tmp_path: Path
     assert point_type.name == "Point"
 
 
-def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> None:
+def test_selected_program_does_not_wire_unreachable_extern(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     library_root = tmp_path / "library"
     library_root.mkdir()
     (library_root / "a.agl").write_text('program def run() -> unit = print "selected"\n')
@@ -162,6 +164,7 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
     )
 
     assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "selected\n"
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "invalid_argument_does_not_execute_or_open_sessions",
+      "params": {"status": "not-an-int"},
+      "agents": {"writer": {"responses": []}},
+      "expect": {
+        "host_error": {"message_contains": ["status", "int"]},
+        "stdout": "",
+        "calls": {"writer": 0},
+        "sessions": [],
+        "session_prompts": [],
+        "session_operations": []
+      }
+    },
+    {
+      "name": "system_exit_preserves_output_and_closes_sessions",
+      "params": {"status": 42},
+      "agents": {"writer": {"responses": ["ready"]}},
+      "expect": {
+        "exit_code": 42,
+        "stdout": "started\nready\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "equals": "before exit"}
+        ],
+        "session_operations": []
+      }
+    }
+  ]
+}

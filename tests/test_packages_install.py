@@ -56,10 +56,13 @@ from agm.packages.record import (
 )
 from agm.version import AGM_VERSION
 from tests._package_helpers import (
+    InstalledPackageSnapshot,
     archive_contents,
     install_archive,
     install_directory,
     older_incompatible_std_requirement,
+    replace_rollback_payload,
+    write_rollback_package,
     write_zip,
 )
 from tests._parse_counts import parse_counts
@@ -2623,8 +2626,9 @@ def test_reinstall_cannot_be_used_with_an_editable_package(tmp_path: Path) -> No
         )
 
 
+@pytest.mark.parametrize("archive_source", [False, True], ids=["directory", "archive"])
 def test_failed_reinstall_restores_the_previous_store_tree_and_activation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, archive_source: bool
 ) -> None:
     home = tmp_path / "home"
     owner = _package(
@@ -2634,27 +2638,27 @@ def test_failed_reinstall_restores_the_previous_store_tree_and_activation(
         '\n[commands]\nlaunch = { program = "owner/main::main" }\n',
     )
     install_directory(owner, home=home, env={})
-    source = _package(
-        tmp_path / "alpha",
-        "alpha",
-        "1.0.0",
-        '\n[commands]\noriginal = { program = "alpha/main::main" }\n',
-    )
+    source = write_rollback_package(tmp_path / "alpha")
     installed = install_directory(source, home=home, env={})
-    previous_module = (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_bytes()
-    previous_index = load_activation_index(home=home, env={})
+    previous = InstalledPackageSnapshot.capture(installed, home=home)
     (source / "package.toml").write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "replacement"\n\n'
         '[commands]\nlaunch = { program = "alpha/main::main" }\n',
         encoding="utf-8",
     )
+    replace_rollback_payload(source)
+    if archive_source:
+        archive = tmp_path / "replacement.agmpkg"
+        write_archive(source, archive)
 
-    with pytest.raises(PackageInstallError, match="conflict"):
-        install_directory_with_plan(source, home=home, env={}, reinstall=True)
+    with pytest.raises(PackageInstallError):
+        if archive_source:
+            install_archive_with_plan(archive, home=home, env={}, reinstall=True)
+        else:
+            install_directory_with_plan(source, home=home, env={}, reinstall=True)
 
-    assert (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_bytes() == previous_module
-    assert load_activation_index(home=home, env={}) == previous_index
-    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+    monkeypatch.chdir(tmp_path)
+    previous.assert_restored()
 
 
 def test_dry_run_archive_install_rejects_a_tampered_existing_tree(tmp_path: Path) -> None:

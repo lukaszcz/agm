@@ -626,14 +626,14 @@ def _assert_pid_gone(pid: int) -> None:
         except ProcessLookupError:
             return
         time.sleep(0.025)
-    # Last resort: try SIGKILL before failing, so we don't leave orphans.
+    # Fail on the observed leak; emergency cleanup cannot turn it into a pass.
     try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    time.sleep(0.05)
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+        pytest.fail(f"Process {pid} survived CLI cleanup")
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _interrupt_agm_process(process: subprocess.Popen[str], *, child_pid: int) -> None:
@@ -728,6 +728,98 @@ def _assert_systemd_run_command(
 
 class TestCpConfig:
     """agm config cp: copy configuration files."""
+
+    @pytest.mark.parametrize("embedded", [False, True], ids=["split", "embedded"])
+    def test_nested_branch_cwd_copies_workspace_over_shared_config(
+        self, tmp_path: Path, env: dict[str, str], embedded: bool
+    ) -> None:
+        if embedded:
+            bare = make_bare_repo(tmp_path / "origin.git", env)
+            repo = make_working_repo(tmp_path / "proj", bare, env)
+            project = repo / ".agm"
+        else:
+            project = _make_workspace_project(tmp_path, env)
+            repo = project / "repo"
+        config = project / "config"
+        config.mkdir(parents=True, exist_ok=True)
+        worktree = project / "worktrees" / "feat/copy"
+        run_agm(["wt", "new", "feat/copy"], env=env, cwd=repo)
+        nested = worktree / "src" / "nested"
+        nested.mkdir(parents=True)
+        workspace_config = config / "feat" / "copy"
+        workspace_config.mkdir(parents=True, exist_ok=True)
+        layers = {
+            config / ".env": "VALUE=shared\nSHARED_ONLY=shared\nCHAIN=root\n",
+            config / ".env.local": (
+                "VALUE=shared-local\nBRANCH_WINS=shared-local\n"
+                "SHARED_LOCAL_ONLY=shared-local\nCHAIN=${CHAIN}-shared-local\n"
+            ),
+            workspace_config / ".env": (
+                "VALUE=branch\nBRANCH_WINS=branch\nBRANCH_ONLY=branch\nCHAIN=${CHAIN}-branch\n"
+            ),
+            workspace_config / ".env.local": (
+                "VALUE=branch-local\nBRANCH_LOCAL_ONLY=branch-local\nCHAIN=${CHAIN}-branch-local\n"
+            ),
+            config / ".mcp.json": '{"scope":"shared"}\n',
+            workspace_config / ".mcp.json": '{"scope":"branch"}\n',
+            config / ".pi" / "settings.json": '{"scope":"shared"}\n',
+            config / ".pi" / "shared.txt": "shared\n",
+            workspace_config / ".pi" / "settings.json": '{"scope":"branch"}\n',
+            workspace_config / ".pi" / "branch.txt": "branch\n",
+            config / "not-dot.txt": "not copied\n",
+            config / "feat" / "other" / ".mcp.json": '{"scope":"other"}\n',
+        }
+        for path, content in layers.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        _git("init", "-b", "main", cwd=config, env=env)
+        _git("add", ".", cwd=config, env=env)
+        _git("commit", "-m", "config layers", cwd=config, env=env)
+        config_head = _git("rev-parse", "HEAD", cwd=config, env=env).stdout
+        (nested / ".mcp.json").write_text('{"scope":"cwd"}\n', encoding="utf-8")
+        target = nested / "target"
+        target.mkdir()
+        (target / ".env.local").write_text("VALUE=stale\n", encoding="utf-8")
+        env.pop("PROJ_DIR", None)
+        env.pop("REPO_DIR", None)
+
+        run_agm(["config", "copy", "target"], env=env, cwd=nested)
+
+        expected = {
+            "VALUE": "branch-local",
+            "SHARED_ONLY": "shared",
+            "SHARED_LOCAL_ONLY": "shared-local",
+            "BRANCH_WINS": "branch",
+            "BRANCH_ONLY": "branch",
+            "BRANCH_LOCAL_ONLY": "branch-local",
+            "CHAIN": "root-shared-local-branch-branch-local",
+        }
+        # Consume the copied dotenv files as a shell would, not their serialization.
+        copied_env = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -a; source .env; source .env.local; "
+                + "; ".join(f'printf "%s=%s\\n" {key} "${{{key}}}"' for key in expected),
+            ],
+            cwd=target,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert dict(line.split("=", 1) for line in copied_env.stdout.splitlines()) == expected
+        assert (target / ".env").read_text() == layers[config / ".env"]
+        assert json.loads((target / ".mcp.json").read_text()) == {"scope": "branch"}
+        assert json.loads((target / ".pi" / "settings.json").read_text()) == {"scope": "branch"}
+        assert (target / ".pi" / "shared.txt").read_text() == "shared\n"
+        assert (target / ".pi" / "branch.txt").read_text() == "branch\n"
+        assert not (target / ".git").exists()
+        assert not (target / "not-dot.txt").exists()
+        assert not (target / "feat").exists()
+        assert {path: path.read_text() for path in layers} == layers
+        assert _git("rev-parse", "HEAD", cwd=config, env=env).stdout == config_head
+        assert _git("status", "--porcelain", cwd=config, env=env).stdout == ""
 
     def test_ignores_files_from_current_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
@@ -1330,6 +1422,87 @@ class TestConfigUpdate:
         assert (project / "deps" / "vyper-automation" / branch).is_dir()
 
 
+# ── no-fetch workflows ──────────────────────────────────────────────────────
+
+
+class TestNoFetch:
+    """Offline branch resolution uses cached Git refs, not newer remote commits."""
+
+    @pytest.mark.parametrize("workflow", ["open", "worktree", "dependency"])
+    @pytest.mark.parametrize("create_branch", [False, True], ids=["cached-branch", "new-branch"])
+    def test_no_fetch_preserves_cached_refs_until_sync(
+        self, tmp_path: Path, env: dict[str, str], workflow: str, create_branch: bool
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        publisher = make_working_repo(tmp_path / "publisher", bare, env)
+        _push_branch(publisher, bare, "feat/cached", "cached.txt", env)
+        project = _make_project(tmp_path, bare, env)
+        repo = project / "repo"
+        if workflow == "dependency":
+            repo = project / "deps" / "mylib" / "main"
+            repo.parent.mkdir(parents=True)
+            make_working_repo(repo, bare, env)
+        cached = _git("rev-parse", "origin/feat/cached", cwd=repo, env=env).stdout.strip()
+        main = _git("rev-parse", "HEAD", cwd=repo, env=env).stdout.strip()
+        assert (
+            _git(
+                "show-ref", "--verify", "refs/heads/feat/cached", cwd=repo, env=env, check=False
+            ).returncode
+            != 0
+        )
+
+        _git("checkout", "feat/cached", cwd=publisher, env=env)
+        (publisher / "remote-only.txt").write_text("new remote commit\n", encoding="utf-8")
+        _git("add", ".", cwd=publisher, env=env)
+        _git("commit", "-m", "advance remote branch", cwd=publisher, env=env)
+        _git("push", cwd=publisher, env=env)
+        advanced = _git("rev-parse", "HEAD", cwd=publisher, env=env).stdout.strip()
+        assert advanced != cached
+
+        branch = "feat/local" if create_branch else "feat/cached"
+        if workflow == "dependency":
+            command = ["dep", "switch", "--no-fetch"]
+            if create_branch:
+                command.append("-b")
+            command.extend(["mylib", branch])
+            checkout = project / "deps" / "mylib" / branch
+        else:
+            command = ["open"] if workflow == "open" else ["worktree", "new"]
+            command.extend(["--no-fetch", branch])
+            checkout = project / "worktrees" / branch
+            if workflow == "open":
+                _install_fake_tmux(tmp_path / "bin", tmp_path / "tmux.log", env)
+
+        run_agm(command, env=env, cwd=project / "repo")
+
+        assert checkout.is_dir()
+        assert _git("branch", "--show-current", cwd=checkout, env=env).stdout.strip() == branch
+        expected = main if create_branch else cached
+        assert _git("rev-parse", "HEAD", cwd=checkout, env=env).stdout.strip() == expected
+        assert _git("rev-parse", "origin/feat/cached", cwd=repo, env=env).stdout.strip() == cached
+        assert not (checkout / "remote-only.txt").exists()
+        if not create_branch:
+            assert (checkout / "cached.txt").read_text() == "cached.txt"
+            assert (
+                _git(
+                    "rev-parse", "--abbrev-ref", "@{upstream}", cwd=checkout, env=env
+                ).stdout.strip()
+                == "origin/feat/cached"
+            )
+        if workflow == "dependency":
+            config = cast(
+                dict[str, object],
+                tomllib.loads((project / "config" / "config.toml").read_text(encoding="utf-8")),
+            )
+            assert config["deps"] == {"mylib": branch}
+        if workflow == "open":
+            assert f"-s proj/{branch}" in (tmp_path / "tmux.log").read_text()
+
+        run_agm(["sync", "fetch"], env=env, cwd=project / "repo")
+        assert _git("rev-parse", "origin/feat/cached", cwd=repo, env=env).stdout.strip() == advanced
+        assert _git("rev-parse", "HEAD", cwd=checkout, env=env).stdout.strip() == expected
+
+
 # ── agm wt new ───────────────────────────────────────────────────────────────
 
 
@@ -1930,8 +2103,155 @@ class TestWorkspaceShellRegen:
         assert result.returncode != 0
 
 
+@pytest.fixture
+def unmerged_close_workspace(tmp_path: Path, env: dict[str, str]) -> Path:
+    """An unmerged branch with tracked config and a running fake-tmux session."""
+    project = _make_workspace_project(tmp_path, env)
+    _install_fake_tmux(tmp_path / "bin", tmp_path / "tmux.log", env)
+    run_agm(["open", "--no-fetch", "-d", "feat/unmerged"], env=env, cwd=project)
+    worktree = project / "worktrees" / "feat/unmerged"
+    (worktree / "README.md").write_text("branch-only commit\n", encoding="utf-8")
+    _git("add", "README.md", cwd=worktree, env=env)
+    _git("commit", "-m", "unmerged work", cwd=worktree, env=env)
+    config = project / "config"
+    workspace_config = config / "feat" / "unmerged"
+    workspace_config.mkdir(parents=True, exist_ok=True)
+    (workspace_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+    (config / ".env").write_text("SHARED_CONFIG=1\n", encoding="utf-8")
+    other_config = config / "feat" / "other"
+    other_config.mkdir(parents=True)
+    (other_config / ".env").write_text("OTHER_CONFIG=1\n", encoding="utf-8")
+    env["AGM_CLOSE_SIDE_EFFECT"] = str(tmp_path / "environment-loaded")
+    (config / "env.sh").write_text('printf sourced > "$AGM_CLOSE_SIDE_EFFECT"\n', encoding="utf-8")
+    _git("init", "-b", "main", cwd=config, env=env)
+    _git("add", ".", cwd=config, env=env)
+    _git("commit", "-m", "workspace config", cwd=config, env=env)
+    return project
+
+
+def _unmerged_close_state(project: Path, env: dict[str, str]) -> dict[str, str]:
+    """Snapshot observable state that a rejected close must preserve."""
+    repo = project / "repo"
+    config = project / "config"
+    worktree = project / "worktrees" / "feat/unmerged"
+    state = {
+        "branches": _git("show-ref", "--heads", cwd=repo, env=env).stdout,
+        "worktrees": _git("worktree", "list", "--porcelain", cwd=repo, env=env).stdout,
+        "dirty": _git("status", "--porcelain", cwd=worktree, env=env).stdout,
+        "config_head": _git("rev-parse", "HEAD", cwd=config, env=env).stdout,
+        "tmux": Path(env["TMUX_LOG"]).read_text(),
+        "sessions": Path(env["TMUX_LOG"] + ".sessions").read_text(),
+        "shell": _workspace_shell_path(env, "proj/feat/unmerged").read_text(),
+    }
+    for root in (worktree, config):
+        for path in root.rglob("*"):
+            if path.is_file() and ".git" not in path.relative_to(root).parts:
+                state[str(path.relative_to(project))] = path.read_text()
+    return state
+
+
+def _assert_unmerged_workspace_closed(
+    project: Path, env: dict[str, str], *, keep_branch: bool = False
+) -> None:
+    repo = project / "repo"
+    worktree = project / "worktrees" / "feat/unmerged"
+    assert not worktree.exists()
+    registrations = _git("worktree", "list", "--porcelain", cwd=repo, env=env).stdout
+    assert f"worktree {worktree}\n" not in registrations
+    assert f"worktree {repo}\n" in registrations
+    branch = _git(
+        "show-ref", "--verify", "refs/heads/feat/unmerged", cwd=repo, env=env, check=False
+    )
+    assert (branch.returncode == 0) == keep_branch
+    config = project / "config"
+    assert not (config / "feat" / "unmerged").exists()
+    assert (config / ".env").read_text() == "SHARED_CONFIG=1\n"
+    assert (config / "feat" / "other" / ".env").read_text() == "OTHER_CONFIG=1\n"
+    assert _git("status", "--porcelain", cwd=config, env=env).stdout == ""
+    assert not _git("ls-tree", "-r", "HEAD", "feat/unmerged", cwd=config, env=env).stdout
+    assert not _workspace_shell_path(env, "proj/feat/unmerged").parent.exists()
+    assert "kill-session -t =proj/feat/unmerged" in Path(env["TMUX_LOG"]).read_text()
+    assert "proj/feat/unmerged" not in Path(env["TMUX_LOG"] + ".sessions").read_text().splitlines()
+
+
 class TestClose:
     """agm close: remove worktrees and stop matching tmux sessions."""
+
+    def test_unmerged_branch_is_preserved_until_force_deleted(
+        self, unmerged_close_workspace: Path, env: dict[str, str]
+    ) -> None:
+        project = unmerged_close_workspace
+        before = _unmerged_close_state(project, env)
+
+        rejected = run_agm(["close", "feat/unmerged"], env=env, cwd=project, check=False)
+
+        assert rejected.returncode != 0
+        assert _unmerged_close_state(project, env) == before
+        assert not Path(env["AGM_CLOSE_SIDE_EFFECT"]).exists()
+
+        run_agm(["close", "-D", "feat/unmerged"], env=env, cwd=project)
+
+        _assert_unmerged_workspace_closed(project, env)
+        assert (
+            _git("rev-parse", "HEAD", cwd=project / "config", env=env).stdout
+            != before["config_head"]
+        )
+
+    @pytest.mark.parametrize("force_flag", ["-f", "--force"])
+    def test_force_removes_dirty_unmerged_workspace_but_D_does_not(
+        self, unmerged_close_workspace: Path, env: dict[str, str], force_flag: str
+    ) -> None:
+        project = unmerged_close_workspace
+        worktree = project / "worktrees" / "feat/unmerged"
+        (worktree / "README.md").write_text("uncommitted edit\n", encoding="utf-8")
+        (worktree / "staged.txt").write_text("staged work\n", encoding="utf-8")
+        _git("add", "staged.txt", cwd=worktree, env=env)
+        (worktree / "untracked.txt").write_text("untracked work\n", encoding="utf-8")
+        before = _unmerged_close_state(project, env)
+
+        rejected = run_agm(["close", "-D", "feat/unmerged"], env=env, cwd=project, check=False)
+
+        assert rejected.returncode != 0
+        assert _unmerged_close_state(project, env) == before
+        assert not Path(env["AGM_CLOSE_SIDE_EFFECT"]).exists()
+
+        run_agm(["close", force_flag, "feat/unmerged"], env=env, cwd=project)
+
+        _assert_unmerged_workspace_closed(project, env)
+
+    def test_keep_branch_preserves_unmerged_commit_for_reopening(
+        self, unmerged_close_workspace: Path, env: dict[str, str]
+    ) -> None:
+        project = unmerged_close_workspace
+        repo = project / "repo"
+        revision = _git("rev-parse", "feat/unmerged", cwd=repo, env=env).stdout
+
+        run_agm(["close", "--keep-branch", "feat/unmerged"], env=env, cwd=project)
+
+        _assert_unmerged_workspace_closed(project, env, keep_branch=True)
+        assert _git("rev-parse", "feat/unmerged", cwd=repo, env=env).stdout == revision
+        run_agm(["open", "--no-fetch", "-d", "feat/unmerged"], env=env, cwd=project)
+        worktree = project / "worktrees" / "feat/unmerged"
+        assert _git("rev-parse", "HEAD", cwd=worktree, env=env).stdout == revision
+        assert (worktree / "README.md").read_text() == "branch-only commit\n"
+        assert _workspace_shell_path(env, "proj/feat/unmerged").is_file()
+
+    @pytest.mark.parametrize("branch", ["repo", "main"])
+    @pytest.mark.parametrize("flags", [["-D"], ["--force"], ["--force", "--keep-workspace"]])
+    def test_destructive_flags_cannot_close_main_workspace(
+        self, unmerged_close_workspace: Path, env: dict[str, str], branch: str, flags: list[str]
+    ) -> None:
+        project = unmerged_close_workspace
+        before = _unmerged_close_state(project, env)
+        repo_head = _git("rev-parse", "HEAD", cwd=project / "repo", env=env).stdout
+
+        rejected = run_agm(["close", *flags, branch], env=env, cwd=project, check=False)
+
+        assert rejected.returncode != 0
+        assert _unmerged_close_state(project, env) == before
+        assert _git("rev-parse", "HEAD", cwd=project / "repo", env=env).stdout == repo_head
+        assert (project / "repo" / "README.md").read_text() == "initial\n"
+        assert not Path(env["AGM_CLOSE_SIDE_EFFECT"]).exists()
 
     def test_removes_worktree_and_kills_tmux_session(
         self, tmp_path: Path, env: dict[str, str]
@@ -2821,18 +3141,56 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching ." in result.stdout
 
-    def test_error_when_repo_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
+    @pytest.mark.parametrize("command", ["fetch", "pull"])
+    @pytest.mark.parametrize("repo_exists", [False, True])
+    def test_error_when_repo_missing(
+        self, tmp_path: Path, env: dict[str, str], command: str, repo_exists: bool
+    ) -> None:
         project = tmp_path / "proj"
         project.mkdir()
+        if repo_exists:
+            (project / "repo").mkdir()
 
         result = run_agm(
-            ["sync", "fetch"],
-            env=env,
+            ["sync", command],
+            env={**env, "PROJ_DIR": str(project)},
             cwd=str(project),
             check=False,
         )
         assert result.returncode != 0
-        assert "error" in result.stderr.lower()
+
+    @pytest.mark.parametrize("command", ["fetch", "pull"])
+    def test_prunes_deleted_main_and_dependency_worktrees(
+        self, tmp_path: Path, env: dict[str, str], command: str
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "mylib.git", env)
+        project = _make_project(tmp_path, bare, env)
+        run_agm(["wt", "new", "feat/deleted"], env=env, cwd=project / "repo")
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=project / "repo")
+        dep_repo = project / "deps" / "mylib" / "main"
+        dep_worktree = dep_repo.parent / "feat/deleted"
+        _git("worktree", "add", "-b", "feat/deleted", str(dep_worktree), cwd=dep_repo, env=env)
+        deleted = [
+            (project / "repo", project / "worktrees" / "feat/deleted"),
+            (dep_repo, dep_worktree),
+        ]
+        for repo, worktree in deleted:
+            shutil.rmtree(worktree)
+            registrations = _git("worktree", "list", "--porcelain", cwd=repo, env=env).stdout
+            assert f"worktree {worktree}\n" in registrations
+
+        run_agm(["sync", command], env=env, cwd=project / "repo")
+
+        for repo, worktree in deleted:
+            registrations = _git("worktree", "list", "--porcelain", cwd=repo, env=env).stdout
+            assert f"worktree {worktree}\n" not in registrations
+            assert f"worktree {repo}\n" in registrations
+            assert not worktree.exists()
+            _git("show-ref", "--verify", "refs/heads/feat/deleted", cwd=repo, env=env)
+        # Pruning releases the branch for a replacement workspace without deleting it.
+        run_agm(["wt", "new", "feat/deleted"], env=env, cwd=project / "repo")
+        assert (project / "worktrees" / "feat/deleted" / "README.md").read_text() == "initial\n"
 
     def test_picks_up_new_remote_commits(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -2925,6 +3283,7 @@ class TestFetch:
         bare_dep2 = make_bare_repo(tmp_path / "dep2.git", env)
 
         project = _make_project(tmp_path, bare_main, env)
+        (project / "deps" / "not-a-checkout").write_text("ignore this file\n")
 
         dep1_wt = project / "deps" / "dep1" / "main"
         dep1_wt.mkdir(parents=True)
@@ -3084,6 +3443,94 @@ class TestPull:
         assert "Merging deps/mylib/feat/dep" in result.stdout
         assert (dep_repo / "main-remote.txt").read_text() == "main remote"
         assert (dep_worktree / "dep-worktree-remote.txt").read_text() == "dep worktree remote"
+
+    @pytest.mark.parametrize("conflicting_checkout", [0, 2], ids=["main", "dependency"])
+    def test_conflict_stops_later_merges_and_pull_resumes_after_resolution(
+        self, tmp_path: Path, env: dict[str, str], conflicting_checkout: int
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "mylib.git", env)
+        project = _make_project(tmp_path, bare, env)
+        repo = project / "repo"
+        run_agm(["wt", "new", "feat/app"], env=env, cwd=repo)
+        workspace = project / "worktrees" / "feat/app"
+        _git("push", "-u", "origin", "feat/app", cwd=workspace, env=env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=repo)
+        dep_repo = project / "deps" / "mylib" / "main"
+        dep_workspace = dep_repo.parent / "feat/lib"
+        _git("worktree", "add", "-b", "feat/lib", str(dep_workspace), cwd=dep_repo, env=env)
+        _git("push", "-u", "origin", "feat/lib", cwd=dep_workspace, env=env)
+        outside = tmp_path / "outside"
+        _git("worktree", "add", "-b", "feat/outside", str(outside), cwd=repo, env=env)
+        _git("push", "-u", "origin", "feat/outside", cwd=outside, env=env)
+        other = make_working_repo(tmp_path / "other", bare, env)
+        dep_other = make_working_repo(tmp_path / "dep-other", bare_dep, env)
+        checkouts = [repo, workspace, dep_repo, dep_workspace]
+        branches = ["main", "feat/app", "main", "feat/lib"]
+        conflict = checkouts[conflicting_checkout]
+        (conflict / "README.md").write_text("local edit\n")
+        _git("add", "README.md", cwd=conflict, env=env)
+        _git("commit", "-m", "local edit", cwd=conflict, env=env)
+        original_heads = [_git("rev-parse", "HEAD", cwd=p, env=env).stdout for p in checkouts]
+        outside_head = _git("rev-parse", "HEAD", cwd=outside, env=env).stdout
+        remote_heads: list[str] = []
+        for publisher, branch in [
+            (other, "main"),
+            (other, "feat/app"),
+            (dep_other, "main"),
+            (dep_other, "feat/lib"),
+            (other, "feat/outside"),
+        ]:
+            _git("checkout", branch, cwd=publisher, env=env)
+            (publisher / "README.md").write_text(f"remote edit on {branch}\n")
+            _git("add", "README.md", cwd=publisher, env=env)
+            _git("commit", "-m", "remote edit", cwd=publisher, env=env)
+            _git("push", cwd=publisher, env=env)
+            remote_heads.append(_git("rev-parse", "HEAD", cwd=publisher, env=env).stdout)
+
+        result = run_agm(["sync", "pull"], env=env, cwd=repo, check=False)
+
+        assert result.returncode != 0
+        unmerged = _git("diff", "--name-only", "--diff-filter=U", cwd=conflict, env=env)
+        assert unmerged.stdout.splitlines() == ["README.md"]
+        assert (
+            _git("rev-parse", "MERGE_HEAD", cwd=conflict, env=env).stdout
+            == remote_heads[conflicting_checkout]
+        )
+        for index, checkout in enumerate(checkouts):
+            # Fetch finishes for every repo even when an earlier merge will conflict.
+            assert (
+                _git("rev-parse", "@{upstream}", cwd=checkout, env=env).stdout
+                == remote_heads[index]
+            )
+            expected = (
+                remote_heads[index] if index < conflicting_checkout else original_heads[index]
+            )
+            assert _git("rev-parse", "HEAD", cwd=checkout, env=env).stdout == expected
+        assert _git("rev-parse", "@{upstream}", cwd=outside, env=env).stdout == remote_heads[-1]
+        assert _git("rev-parse", "HEAD", cwd=outside, env=env).stdout == outside_head
+
+        (conflict / "README.md").write_text("resolved edit\n")
+        _git("add", "README.md", cwd=conflict, env=env)
+        _git("commit", "-m", "resolve conflict", cwd=conflict, env=env)
+        run_agm(["sync", "pull"], env=env, cwd=repo)
+
+        for index, checkout in enumerate(checkouts):
+            assert not _git("status", "--porcelain", cwd=checkout, env=env).stdout
+            _git(
+                "merge-base",
+                "--is-ancestor",
+                remote_heads[index].strip(),
+                "HEAD",
+                cwd=checkout,
+                env=env,
+            )
+            expected_content = (
+                "resolved edit\n" if checkout == conflict else f"remote edit on {branches[index]}\n"
+            )
+            assert (checkout / "README.md").read_text() == expected_content
+        assert _git("rev-parse", "HEAD", cwd=outside, env=env).stdout == outside_head
+        assert (outside / "README.md").read_text() == "initial\n"
 
 
 # ── agm init ────────────────────────────────────────────────────────────────
@@ -4392,7 +4839,8 @@ class TestSandbox:
             script=(
                 f'child_pid_file="{child_pid_file}"\n'
                 f'ready_file="{ready_file}"\n'
-                "(sleep 30) &\n"
+                # A leaked child must not hold the CLI's output pipes open.
+                "sleep 30 >/dev/null 2>&1 &\n"
                 'child_pid="$!"\n'
                 'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
                 'printf "ready\\n" > "$ready_file"\n'
@@ -4444,7 +4892,8 @@ class TestSandbox:
             script=(
                 f'child_pid_file="{child_pid_file}"\n'
                 f'ready_file="{ready_file}"\n'
-                "(sleep 30) &\n"
+                # A leaked child must not hold the CLI's output pipes open.
+                "sleep 30 >/dev/null 2>&1 &\n"
                 'child_pid="$!"\n'
                 'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
                 'printf "ready\\n" > "$ready_file"\n'
@@ -4936,7 +5385,9 @@ class TestOpen:
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
-        run_agm(["open", "feat/existing"], env=env, cwd=str(project))
+        run_agm(["wt", "new", "feat/existing"], env=env, cwd=str(project))
+        worktree = project / "worktrees" / "feat/existing"
+        head_before = _git("rev-parse", "HEAD", cwd=worktree, env=env).stdout
 
         result = run_agm(
             ["open", "-p", "main", "feat/existing"],
@@ -4946,8 +5397,11 @@ class TestOpen:
         )
 
         assert result.returncode != 0
-        assert "workspace" in result.stderr
+        assert "feat/existing" in result.stderr
         assert "--parent" in result.stderr
+        assert _git("rev-parse", "HEAD", cwd=worktree, env=env).stdout == head_before
+        assert (worktree / "existing.txt").is_file()
+        assert "new-session" not in tmux_log.read_text()
 
     def test_error_open_without_target(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -6412,14 +6866,20 @@ class TestPackageInstall:
             env=env,
             cwd=tmp_path,
         )
+        assert created.returncode == 0
+        assert "dry-run: agm create-package-archive" in created.stdout
+        assert not archive.exists()
+        assert not (tmp_path / "agm-home").exists()
+
         write_archive = run_agm(
             ["pkg", "create", str(source), "-o", str(archive)], env=env, cwd=tmp_path
         )
+        assert write_archive.returncode == 0
+        assert archive.is_file()
+        archive_before = archive.read_bytes()
         installed = run_agm(["pkg", "install", str(archive), "--dry-run"], env=env, cwd=tmp_path)
 
-        assert created.returncode == 0
-        assert "dry-run: agm create-package-archive" in created.stdout
-        assert write_archive.returncode == 0
+        assert archive.read_bytes() == archive_before
         assert installed.returncode == 0
         assert "dry-run: agm install-package-archive" in installed.stdout
         assert not (tmp_path / "agm-home").exists()
@@ -6453,6 +6913,9 @@ class TestPackageInstall:
         package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
 
         dry_run = run_agm(["pkg", "install", str(package), "--dry-run"], env=env, cwd=tmp_path)
+        assert dry_run.returncode == 0
+        assert not (tmp_path / "agm-home").exists()
+
         editable = run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
         program = tmp_path / "program.agl"
         program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
@@ -6462,7 +6925,6 @@ class TestPackageInstall:
         listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
 
         assert not (tmp_path / "agm-home" / "packages" / "alpha" / "1.0.0").exists()
-        assert dry_run.returncode == 0
         assert editable.returncode == 0
         assert before_edit.returncode == 0
         assert after_edit.returncode == 1
@@ -6476,12 +6938,23 @@ class TestPackageInstall:
         root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
-        dry_run = run_agm(["pkg", "uninstall", "alpha", "--dry-run"], env=env, cwd=tmp_path)
-        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
-
         assert installed.returncode == 0
+        assert root.is_dir()
+        index = root.parent.parent / "index.toml"
+        index_before = index.read_bytes()
+        files_before = {
+            path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()
+        }
+
+        dry_run = run_agm(["pkg", "uninstall", "alpha", "--dry-run"], env=env, cwd=tmp_path)
         assert dry_run.returncode == 0
         assert root.is_dir()
+        assert index.read_bytes() == index_before
+        assert {
+            path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()
+        } == files_before
+
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
         assert "alpha" in listing.stdout
 
     def test_uninstall_refuses_an_unsatisfied_dependency_in_an_isolated_agm_home(

@@ -380,7 +380,7 @@ def test_array_view_index_with_an_out_of_range_int_probe_never_equals_a_decimal(
     magnitude, uncoerced by the lowerer's own range check: an out-of-range
     int can never equal any in-range decimal, so the search reports "not
     found" rather than constructing a huge ``Decimal`` to compare against."""
-    huge = 10**1_000_000
+    huge = 1 << 3_400_000
     view = AglArrayView(ArrayValue([DecimalValue(Decimal("1.5"))]), _NO_DESCRIPTORS)
 
     with pytest.raises(ValueError):
@@ -391,7 +391,7 @@ def test_array_view_index_with_an_out_of_range_int_element_never_equals_a_decima
     """Symmetric to the int-probe case: a live view can also hold an
     out-of-range int element (written through by a companion), which an
     in-range decimal probe can never equal."""
-    huge = 10**1_000_000
+    huge = 1 << 3_400_000
     view = AglArrayView(ArrayValue([IntValue(huge)]), _NO_DESCRIPTORS)
 
     with pytest.raises(ValueError):

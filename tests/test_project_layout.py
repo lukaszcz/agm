@@ -1216,6 +1216,46 @@ class TestCurrentProjectDirFallbackPaths:
 
 
 class TestCurrentWorkspace:
+    @pytest.mark.parametrize("embedded", [False, True], ids=["split", "embedded"])
+    @pytest.mark.parametrize(
+        "repo_dir_override", [None, "root", "nested"], ids=["cwd", "REPO_DIR", "nested_REPO_DIR"]
+    )
+    @pytest.mark.parametrize("branch_workspace", [False, True], ids=["main", "branch"])
+    def test_identifies_checkout_in_either_layout(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        embedded: bool,
+        repo_dir_override: str | None,
+        branch_workspace: bool,
+    ) -> None:
+        root = tmp_path / "proj"
+        repo = init_repo(root if embedded else root / "repo", env)
+        project = root / ".agm" if embedded else root
+        project.mkdir(exist_ok=True)
+        workspace = (
+            add_linked_worktree(
+                repo, project / "worktrees" / "feat" / "copy", env, branch="feat/copy"
+            )
+            if branch_workspace
+            else repo
+        )
+        nested = workspace / "src" / "nested"
+        nested.mkdir(parents=True)
+        workspace_env = dict(env)
+        workspace_env.pop("PROJ_DIR", None)
+        workspace_env.pop("REPO_DIR", None)
+        if repo_dir_override:
+            workspace_env["REPO_DIR"] = str(nested if repo_dir_override == "nested" else workspace)
+
+        result = current_workspace(
+            project, cwd=tmp_path if repo_dir_override else nested, env=workspace_env
+        )
+
+        assert result is not None
+        assert result.workspace_dir == workspace.resolve()
+        assert result.branch == ("feat/copy" if branch_workspace else None)
+
     def test_returns_none_when_cwd_not_in_project(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)

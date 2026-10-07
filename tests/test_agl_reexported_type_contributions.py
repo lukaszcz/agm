@@ -18,11 +18,13 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import HiddenMemberError
+from agm.agl.matchcompile import NonExhaustiveMatchError
 from tests.agl.qualifier_support import (
     Probe,
     Scenario,
     accepted,
     assert_scenario,
+    inline_verdict,
     option_identity,
     rejected,
     scenario_params,
@@ -170,3 +172,37 @@ class TestReexportedTypes:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
     def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
+
+    def test_repeated_verdicts_observe_reexported_enum_edits(self, tmp_path: Path) -> None:
+        """Reused library artifacts must still report newly non-exhaustive matches."""
+        library = (
+            _TL + "def classify(color: Color) =\n"
+            "  case color of\n"
+            "    | Color::Red => 1\n"
+            "    | Color::Blue => 2\n"
+        )
+        modules = {
+            "entry": "import mid2::*\nclassify(Color::Red)",
+            "tl": library,
+            "mid2": "export tl::{Color, classify}",
+        }
+        for _ in range(2):
+            assert inline_verdict(tmp_path, modules, stdlib=False) == (
+                "accepted",
+                type(None),
+                None,
+                "int",
+            )
+        modules["tl"] = library.replace("  | Blue\n", "  | Blue\n  | Green\n")
+        phase, error, span, identity = inline_verdict(tmp_path, modules, stdlib=False)
+        assert phase == "matchcompile"
+        assert error is NonExhaustiveMatchError
+        assert span is not None
+        assert identity is None
+        modules["tl"] = library
+        assert inline_verdict(tmp_path, modules, stdlib=False) == (
+            "accepted",
+            type(None),
+            None,
+            "int",
+        )

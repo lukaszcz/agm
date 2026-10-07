@@ -244,7 +244,10 @@ def _assert_decomposition_partition(
     matrix: PatternMatrix,
     allocator: OccurrenceAllocator,
     subjects: tuple[Value, ...],
+    expected_source_indices: tuple[int, ...] | None = None,
 ) -> None:
+    if expected_source_indices is not None:
+        assert len(subjects) == len(expected_source_indices)
     heads = head_constructors(matrix, 0)
     specialized: list[tuple[Constructor, PatternMatrix, ConstructorCell]] = []
     for head in heads:
@@ -259,8 +262,14 @@ def _assert_decomposition_partition(
     defaulted = default_matrix(matrix, 0)
     members_by_variant = enum_variant_members(matrix.occurrences, matrix.type_table)
 
-    for subject in subjects:
-        expected = reference_action(case, checked, subject)
+    for index, subject in enumerate(subjects):
+        expected = (
+            reference_action(case, checked, subject)
+            if expected_source_indices is None
+            else case.branches[expected_source_indices[index]].node_id
+        )
+        assert reference_action(case, checked, subject) == expected
+        assert matrix_action(matrix, (subject,)) == expected
         matching = [
             (specialized_matrix, arguments)
             for head, specialized_matrix, provenance_cell in specialized
@@ -296,11 +305,14 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
         "case value of | red() => 1 | blue() => 2 | _ as remaining => 3"
     )
     enum_type = cast(EnumType, enum_matrix.occurrences[0].type)
-    nominal = NominalId(enum_type.decl_id)
+    members = enum_checked.type_env.type_table.enum_member_names(enum_type)
     subjects = tuple(
-        RecordValue(nominal=nominal, fields={}) for variant in ("red", "green", "blue")
+        RecordValue(nominal=NominalId(members[variant].decl_id), fields={})
+        for variant in ("red", "green", "blue")
     )
-    _assert_decomposition_partition(enum_checked, enum_case, enum_matrix, enum_allocator, subjects)
+    _assert_decomposition_partition(
+        enum_checked, enum_case, enum_matrix, enum_allocator, subjects, (0, 2, 1)
+    )
 
 
 @pytest.mark.parametrize(
@@ -428,41 +440,50 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
         "  | _ => 5\n"
     )
     envelope_type = cast(EnumType, matrix.occurrences[0].type)
-    envelope_nominal = NominalId(envelope_type.decl_id)
-    wrapped_cell = cast(ConstructorCell, matrix.rows[0].cells[0])
-    payload_type = cast(EnumType, wrapped_cell.constructor.fields[0].type)
-    payload_nominal = NominalId(payload_type.decl_id)
+    type_table = checked.type_env.type_table
+    envelope_members = type_table.enum_member_names(envelope_type)
+    wrapped = envelope_members["wrapped"]
+    wrapped_nominal = NominalId(wrapped.decl_id)
+    empty_nominal = NominalId(envelope_members["empty"].decl_id)
+    payload_type = cast(EnumType, type_table.record_fields(wrapped)["payload"])
+    payload_members = type_table.enum_member_names(payload_type)
 
     def payload(variant: str, value: Value) -> RecordValue:
         return RecordValue(
-            nominal=payload_nominal,
+            nominal=NominalId(payload_members[variant].decl_id),
             fields={"value": value},
         )
 
     subjects = (
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=wrapped_nominal,
             fields={"payload": payload("number", IntValue(1))},
         ),
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=wrapped_nominal,
             fields={"payload": payload("number", DecimalValue(decimal.Decimal("1.0")))},
         ),
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=wrapped_nominal,
             fields={"payload": payload("number", DecimalValue(decimal.Decimal("2.5")))},
         ),
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=wrapped_nominal,
+            fields={"payload": payload("number", IntValue(9))},
+        ),
+        RecordValue(
+            nominal=wrapped_nominal,
             fields={"payload": payload("word", TextValue("x"))},
         ),
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=wrapped_nominal,
             fields={"payload": payload("word", TextValue("other"))},
         ),
         RecordValue(
-            nominal=envelope_nominal,
+            nominal=empty_nominal,
             fields={},
         ),
     )
-    _assert_decomposition_partition(checked, case, matrix, allocator, subjects)
+    _assert_decomposition_partition(
+        checked, case, matrix, allocator, subjects, (0, 0, 1, 4, 2, 4, 3)
+    )

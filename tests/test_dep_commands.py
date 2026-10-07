@@ -374,32 +374,33 @@ class TestDepRemoveRun:
             dep_remove.run(DepRemoveArgs(all=False, target="nonexistent/feature"))
 
     @pytest.mark.parametrize(
-        ("target", "remove_all", "message"),
+        ("target", "remove_all", "identifiers"),
         [
-            ("mylib", False, "expected DEP/BRANCH"),
-            ("mylib/", False, "expected DEP/BRANCH"),
-            ("mylib/branch", True, "--all expects DEP"),
-            ("/branch", False, "invalid dependency target"),
-            ("", False, "invalid dependency target"),
+            ("mylib", False, ("DEP/BRANCH",)),
+            ("mylib/", False, ("DEP/BRANCH",)),
+            ("mylib/branch", True, ("--all", "DEP")),
+            ("/branch", False, ("/branch",)),
+            ("", False, ("dependency",)),
         ],
     )
-    def test_invalid_targets_exit_before_project_lookup(
+    def test_invalid_targets_report_target_usage_outside_a_project(
         self,
+        tmp_path: Path,
         target: str,
         remove_all: bool,
-        message: str,
+        identifiers: tuple[str, ...],
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        def fail_project_lookup() -> Path:
-            raise AssertionError("invalid targets should fail before project lookup")
+        monkeypatch.chdir(tmp_path)
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", fail_project_lookup)
-
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as raised:
             dep_remove.run(DepRemoveArgs(all=remove_all, target=target))
 
-        assert message in capsys.readouterr().err
+        assert raised.value.code == 1
+        diagnostic = capsys.readouterr().err
+        assert diagnostic.startswith("error:")
+        assert all(identifier in diagnostic for identifier in identifiers)
 
     @pytest.mark.parametrize("ref", ["repo", "main"], ids=["by-name", "by-path"])
     def test_removing_the_main_checkout_removes_the_whole_dependency(

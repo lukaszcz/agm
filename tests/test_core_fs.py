@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import time
 from collections.abc import Callable, Generator
@@ -269,6 +270,81 @@ def test_identity_stamp_is_settled_false_for_an_mtime_after_the_observed_instant
     stamp = (observed + 3_600_000_000_000, 0, 0)
 
     assert not fs.identity_stamp_is_settled(stamp, observed)
+
+
+@pytest.mark.parametrize(
+    ("age_ns", "expected"),
+    [(2_000_000_001, True), (2_000_000_000, True), (1_999_999_999, False), (1_500_000_000, False)],
+)
+def test_identity_stamp_settle_window_boundary(age_ns: int, expected: bool) -> None:
+    observed = 10_000_000_000
+
+    assert fs.identity_stamp_is_settled((observed - age_ns, 0, 0), observed) is expected
+
+
+def test_identity_stamp_detects_replacement_with_preserved_size_and_mtime(tmp_path: Path) -> None:
+    path = tmp_path / "cached.txt"
+    path.write_bytes(b"old")
+    timestamp = 1_000_000_000
+    os.utime(path, ns=(timestamp, timestamp))
+    before = fs.identity_stamp(path)
+    replacement = tmp_path / "replacement.txt"
+    replacement.write_bytes(b"new")
+    os.utime(replacement, ns=(timestamp, timestamp))
+
+    replacement.replace(path)
+
+    assert fs.identity_stamp(path) != before
+
+
+def test_identity_stamp_detects_resize_with_preserved_mtime(tmp_path: Path) -> None:
+    path = tmp_path / "cached.txt"
+    path.write_bytes(b"old")
+    timestamp = 1_000_000_000
+    os.utime(path, ns=(timestamp, timestamp))
+    before = fs.identity_stamp(path)
+
+    path.write_bytes(b"longer")
+    os.utime(path, ns=(timestamp, timestamp))
+
+    assert fs.identity_stamp(path) != before
+
+
+def test_lstat_reports_the_link_rather_than_its_target(tmp_path: Path) -> None:
+    target = tmp_path / "target.txt"
+    target.write_bytes(b"data")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+
+    assert stat.S_ISLNK(fs.lstat(link).st_mode)
+    assert stat.S_ISREG(fs.stat(link).st_mode)
+
+
+def test_write_text_atomic_honors_requested_encoding(tmp_path: Path) -> None:
+    path = tmp_path / "latin.txt"
+
+    fs.write_text_atomic(path, "café", encoding="latin-1")
+
+    assert path.read_bytes() == b"caf\xe9"
+
+
+def test_write_bytes_atomic_keeps_in_progress_contents_private(tmp_path: Path) -> None:
+    path = tmp_path / "secret.bin"
+    path.write_bytes(b"previous")
+    path.chmod(0o644)
+
+    def chunks() -> Generator[bytes, None, None]:
+        yield b"secret"
+        temporary = next(child for child in tmp_path.iterdir() if child != path)
+        assert stat.S_IMODE(temporary.stat().st_mode) == 0o600
+        assert path.read_bytes() == b"previous"
+        yield b" complete"
+
+    fs.write_bytes_atomic(path, chunks())
+
+    assert path.read_bytes() == b"secret complete"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_fs_error_message_names_the_operation_and_path() -> None:

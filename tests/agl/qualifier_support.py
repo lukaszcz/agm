@@ -74,8 +74,13 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 
 import pytest
 
+from agm.agl.artifact_cache import (
+    retain_match_sites,
+    retained_match_sites,
+    retained_module_sources,
+)
 from agm.agl.diagnostics import AglError, AglTypeError
-from agm.agl.matchcompile import compile_program_matches, match_issue_error
+from agm.agl.matchcompile import cached_module_sites, compile_program_matches, match_issue_error
 from agm.agl.modules.ids import ENTRY_ID, Reader, spell_declaration
 from agm.agl.modules.loader import parse_entry_module
 from agm.agl.repl import EntryResult, ReplSession
@@ -196,14 +201,18 @@ def _graph_outcome(
         resolved = resolve_program(graph)
     except AglError as exc:
         return ("scope", type(exc), exc.span, None), exc
+    caps = base_caps()
     try:
-        checked_program = check_program(resolved, base_caps())
+        checked_program = check_program(resolved, caps)
     except AglError as exc:
         return ("typecheck", type(exc), exc.span, None), exc
-    match_result = compile_program_matches(checked_program)
+    # Offer imported sites exactly as PipelineDriver does; entries still compile afresh.
+    retainable = retained_module_sources(graph)
+    match_result = compile_program_matches(checked_program, retained_match_sites(retainable, caps))
     if match_result.compiled is None:
         match_error = match_issue_error(match_result.issues[0], resolved.speller)
         return ("matchcompile", type(match_error), match_error.span, None), match_error
+    retain_match_sites(retainable, caps, cached_module_sites(match_result.compiled))
     entry = checked_program.modules[checked_program.entry_id]
     identity = _rendered_identity(_entry_final_type(entry, wrapped), entry.type_env.type_table)
     return ("accepted", type(None), None, identity), None

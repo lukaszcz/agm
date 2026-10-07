@@ -102,6 +102,19 @@ def test_interp_reports_malformed_holes(template: str, kind: str, text: str, off
     assert str(offset) in str(error)
 
 
+def test_interpolation_error_context_is_opt_in_and_does_not_change_diagnostic_fields() -> None:
+    with pytest.raises(InterpolationError) as raised:
+        interp("prefix %{missing}", {})
+
+    error = raised.value
+    assert error.context is None
+    original = (error.kind, error.text, error.offset)
+    error.context = "second input template"
+
+    assert error.context in str(error)
+    assert (error.kind, error.text, error.offset) == original
+
+
 def test_interp_reports_a_missing_variable_with_its_name_and_offset() -> None:
     with pytest.raises(InterpolationError) as raised:
         interp("hello %{missing}", {})

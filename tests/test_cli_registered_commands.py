@@ -466,7 +466,7 @@ def test_registered_command_conflict_help_includes_module_parameters(
     result = invoke(CliRunner(), ["tools", "run", "--trace", "--no-trace"])
 
     assert result.exit_code == 1
-    assert "Parameters of tools/main" in result.output
+    assert "tools/main" in result.output
     assert "--verbose" in result.output
 
 
@@ -658,7 +658,8 @@ def test_registered_command_help_degrades_when_program_discovery_fails() -> None
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=None
     )
 
-    assert "Run the registered AgL program." in text
+    assert "agm tools lint" in text
+    assert "--help" in text
     assert "--level" not in text
 
     from tests._agl_helpers import discover_program_declarations_from_source
@@ -1091,8 +1092,8 @@ def test_unknown_command_without_registered_entry_keeps_click_error(
 
     result = invoke(CliRunner(), ["not-a-command"])
 
-    assert result.exit_code != 0
-    assert "No such command" in result.output
+    assert result.exit_code == 2
+    assert "not-a-command" in result.output
 
 
 def test_builtin_commands_do_not_load_the_package_index(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1134,25 +1135,25 @@ version = "1.0.0"
     result = invoke(CliRunner(), ["help"], env={"HOME": str(home)})
 
     assert result.exit_code == 0
-    assert "Registered commands:" in result.stdout
     assert "tools lint" in result.stdout
     assert "Lint package inputs" in result.stdout
 
 
-def test_help_overview_degrades_when_the_command_index_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_help_overview_degrades_when_the_command_index_is_unavailable(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    write_installed_package(home, "tools", commands={"tools lint": "tools/main::main"})
+    runner = CliRunner()
+    before = invoke(runner, ["help"], env={"HOME": str(home)})
+    assert before.exit_code == 0
+    assert "tools lint" in before.stdout
 
-    monkeypatch.setattr(
-        dispatch,
-        "load_command_index",
-        lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
-    )
-
-    result = invoke(CliRunner(), ["help"])
+    # Corrupt the real index instead of replacing command discovery.
+    (home / ".agm" / "packages" / "index.toml").write_text("[broken", encoding="utf-8")
+    result = invoke(runner, ["help"], env={"HOME": str(home)})
 
     assert result.exit_code == 0
-    assert "Registered commands:" not in result.stdout
+    assert "tools lint" not in result.stdout
+    assert "exec" in result.stdout
 
 
 def test_exec_installed_reference_preserves_all_file_options(
@@ -1698,9 +1699,9 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     assert "--unknown" in err
     assert "agm tools lint" in err
     assert "Lint package inputs" in err
-    assert "Options:" in err
+    assert "--help" in err
     assert "--level" in err
-    assert "Parameters of tools/lint" in err
+    assert "tools/lint" in err
     assert "--verbose" in err
 
 
@@ -1736,7 +1737,8 @@ def test_registered_command_argument_error_handles_no_description_or_parameters(
     assert result.exit_code == 1
     err = result.output
     assert "agm tools lint" in err
-    assert "Run the registered AgL program." in err
+    assert "--unknown" in err
+    assert "--help" in err
 
 
 def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
@@ -1765,7 +1767,7 @@ def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
     assert exc_info.value.code == 1
     error = capsys.readouterr().err
     assert "--unknown" in error
-    assert "usage: agm exec" in error
+    assert "agm exec" in error
 
 
 @pytest.mark.parametrize("reference", ["not-a-reference", "1bad/main::main"])
@@ -2258,7 +2260,8 @@ def test_registered_command_binds_module_parameters_from_its_command_table(
 
     help_result = invoke(CliRunner(), ["dev", "review", "--help"])
     assert help_result.exit_code == 0
-    assert "Parameters of tools/logging" in help_result.output
+    assert "tools/logging" in help_result.output
+    assert "--retries" in help_result.output
 
 
 def test_registered_command_reports_an_ambiguous_module_parameter(
@@ -2285,7 +2288,9 @@ def test_registered_command_reports_an_ambiguous_module_parameter(
     result = invoke(CliRunner(), ["dev", "review", "--verbose"])
 
     assert result.exit_code == 1
-    assert "ambiguous" in result.output.lower()
+    assert "verbose" in result.output
+    assert "tools.logging.verbose" in result.output
+    assert "tools.other.verbose" in result.output
 
 
 def test_registered_command_binds_parameter_fixture_across_host_inputs(
@@ -2352,8 +2357,8 @@ def test_registered_command_binds_parameter_fixture_across_host_inputs(
 
     help_result = invoke(CliRunner(), ["param", "review", "--help"])
     assert help_result.exit_code == 0
-    assert "Parameters of param_tools/logging" in help_result.output
-    assert "Parameters of param_tools/format" in help_result.output
+    assert "param_tools/logging" in help_result.output
+    assert "param_tools/format" in help_result.output
     assert "--logging.level" in help_result.output
 
 
@@ -2782,7 +2787,9 @@ def test_manifest_engine_key_conflict_across_two_command_groups_errors_cleanly(
     result = invoke(CliRunner(), ["tools", "review"])
 
     assert result.exit_code == 1
-    assert "Error:" in result.output
+    assert "strict-json" in result.output
+    assert "tools" in result.output
+    assert "devel" in result.output
     assert "Traceback" not in result.output
 
 

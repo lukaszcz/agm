@@ -3863,7 +3863,11 @@ class TestLarkErrorMapping:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
 
-        assert str(exc_info.value) == "Unexpected end of input."
+        span = exc_info.value.span
+        assert span is not None
+        assert span.end_offset == len(source)
+        assert span.start_offset < span.end_offset
+        assert "''" not in str(exc_info.value)
 
     def test_end_of_input_error_points_at_the_end_of_the_source(self) -> None:
         """The ``$END`` token carries a position, so the span beats the (1,1) fallback."""
@@ -3903,19 +3907,25 @@ class TestLarkErrorMapping:
         assert span.start_offset == len(source)
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "expected_line"),
         [
-            "def g() -> int =\n  let x = [1,\n",
-            "record R\n  x:\n",
-            "scope S\n  def g() -> int =\n    let x = [1,\nend S\n",
+            ("def g() -> int =\n  let x = [1,\n", 2),
+            ("record R\n  x:\n", 2),
+            ("scope S\n  def g() -> int =\n    let x = [1,\nend S\n", 4),
         ],
     )
-    def test_block_ending_mid_item_names_the_end_of_block(self, source: str) -> None:
+    def test_block_ending_mid_item_names_the_end_of_block(
+        self, source: str, expected_line: int
+    ) -> None:
         """A dedent closing an unfinished item names the block, not an empty token."""
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
 
-        assert str(exc_info.value) == "Unexpected end of block."
+        span = exc_info.value.span
+        assert span is not None
+        assert span.start_line == expected_line
+        assert span.start_offset > 0
+        assert "''" not in str(exc_info.value)
 
     def test_indent_after_an_unfinished_item_names_the_indentation(self) -> None:
         """An indent the grammar cannot take is named even when no item is in hand.
@@ -3926,7 +3936,11 @@ class TestLarkErrorMapping:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let x = raise\n\n  1\n")
 
-        assert str(exc_info.value) == "Unexpected indentation."
+        span = exc_info.value.span
+        assert span is not None
+        assert span.start_line == 1
+        assert span.start_offset == len("let x = raise")
+        assert "''" not in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+import std/os
+
+program def main(status: int) -> unit =
+  print "started"
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  print(session.ask("before exit"))
+  os::exit(status)
+  print "unreachable"

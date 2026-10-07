@@ -35,7 +35,7 @@ branch it was opened for); other Git worktrees of the repo are not workspaces.
 - a branch that exists only on a remote is checked out as a tracking branch of whichever remote carries it; one carried by several remotes is ambiguous and rejected
 - a missing branch is created from `--parent` or the main workspace's current branch and then opened
 - with `--parent`, an existing target branch warns (`--parent` only bases new branches); an existing target workspace errors
-- a workspace whose tmux session is already running errors instead of reopening, and nothing is created; attach to the running session instead
+- a workspace whose tmux session is already running errors before fetching or changing workspace state; attach to the running session instead
 - `--no-fetch` skips Git fetches; remote branches are resolved using the local refs already available
 
 `agm workspace open` options:

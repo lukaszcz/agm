@@ -279,6 +279,8 @@ def open_or_create_workspace(
         open_workspace(detached=detached, pane_count=pane_count, branch=None, cwd=current)
         return
 
+    # Reject occupied sessions before fetching or changing workspace state.
+    require_session_absent(session_name=branch_session_name(proj_dir, branch), cwd=current)
     if not no_fetch:
         git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
@@ -290,10 +292,6 @@ def open_or_create_workspace(
             raise SystemExit(1)
         open_workspace(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
-    # The remaining paths check out or create a workspace; refuse a session name
-    # that is already taken first, so a running session never leaves a
-    # half-opened workspace behind.
-    require_session_absent(session_name=branch_session_name(proj_dir, branch), cwd=current)
     if branch_exists(repo_dir, branch):
         if parent is not None:
             warn_parent_ignored_for_existing_branch(branch)

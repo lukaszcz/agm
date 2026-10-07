@@ -1,0 +1,905 @@
+[
+  {
+    "id": "M001",
+    "path": "src/agm/core/env.py",
+    "line": 26,
+    "column": 11,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "resolve_env",
+    "before": "os.environ if env is None else env",
+    "after": "dict(os.environ if env is None else env)",
+    "mode": "eval",
+    "reason": "Break no-copy identity contract"
+  },
+  {
+    "id": "M002",
+    "path": "src/agm/core/env.py",
+    "line": 31,
+    "column": 16,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "resolve_home",
+    "before": "resolve_env(env)",
+    "after": "resolve_env()",
+    "mode": "eval",
+    "reason": "Ignore explicit HOME"
+  },
+  {
+    "id": "M003",
+    "path": "src/agm/core/env.py",
+    "line": 41,
+    "column": 11,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "help_width",
+    "before": "max(min(shutil.get_terminal_size().columns, widest), narrowest)",
+    "after": "min(shutil.get_terminal_size().columns, widest)",
+    "mode": "eval",
+    "reason": "Remove lower help-width clamp"
+  },
+  {
+    "id": "M004",
+    "path": "src/agm/core/env.py",
+    "line": 46,
+    "column": 30,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "clone_env",
+    "before": "env is None",
+    "after": "not env",
+    "mode": "eval",
+    "reason": "Treat an explicit empty environment as ambient"
+  },
+  {
+    "id": "M005",
+    "path": "src/agm/core/env.py",
+    "line": 81,
+    "column": 11,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "is_safe_shell_env_assignment_name",
+    "before": "is_shell_identifier(name) and name not in _SHELL_ENV_ASSIGNMENT_SKIP_NAMES",
+    "after": "is_shell_identifier(name) or name not in _SHELL_ENV_ASSIGNMENT_SKIP_NAMES",
+    "mode": "eval",
+    "reason": "Allow unsafe shell names"
+  },
+  {
+    "id": "M006",
+    "path": "src/agm/core/env.py",
+    "line": 137,
+    "column": 8,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "source_env_files",
+    "before": "cwd=cwd",
+    "after": "cwd=None",
+    "mode": "keyword",
+    "reason": "Ignore shell working directory"
+  },
+  {
+    "id": "M007",
+    "path": "src/agm/core/env.py",
+    "line": 149,
+    "column": 17,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "source_env_files",
+    "before": "result.stdout.split(b\"\\0\")",
+    "after": "result.stdout.split(b\"\\n\")",
+    "mode": "eval",
+    "reason": "Use newline instead of NUL delimiters"
+  },
+  {
+    "id": "M008",
+    "path": "src/agm/core/env.py",
+    "line": 153,
+    "column": 43,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "source_env_files",
+    "before": "value.decode(\"utf-8\", errors=\"surrogateescape\")",
+    "after": "value.decode(\"utf-8\", errors=\"replace\")",
+    "mode": "eval",
+    "reason": "Lose undecodable shell value bytes"
+  },
+  {
+    "id": "M009",
+    "path": "src/agm/core/env.py",
+    "line": 175,
+    "column": 8,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "load_dotenv_file",
+    "before": "resolved_env[key] = resolved",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Stop earlier assignments feeding later ones"
+  },
+  {
+    "id": "M010",
+    "path": "src/agm/core/env.py",
+    "line": 187,
+    "column": 28,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "load_dotenv_files",
+    "before": "load_dotenv_file(path, resolved_env)",
+    "after": "load_dotenv_file(path)",
+    "mode": "eval",
+    "reason": "Use ambient environment for each dotenv layer"
+  },
+  {
+    "id": "M011",
+    "path": "src/agm/core/env.py",
+    "line": 200,
+    "column": 12,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "load_config_dotenv_files",
+    "before": "[config_dir / \".env\", config_dir / \".env.local\"]",
+    "after": "[config_dir / \".env.local\", config_dir / \".env\"]",
+    "mode": "eval",
+    "reason": "Reverse dotenv precedence"
+  },
+  {
+    "id": "M012",
+    "path": "src/agm/core/env.py",
+    "line": 214,
+    "column": 41,
+    "source_sha256": "e9e79cb5f7d2c773e5438b44f899b1b836b4495d3f85c1dc577cab742e78d6c7",
+    "tests": [
+      "tests/test_env_utils.py",
+      "tests/test_core_utils.py",
+      "tests/test_core_env.py"
+    ],
+    "module": "agm.core.env",
+    "function": "source_env_file",
+    "before": "cwd=cwd",
+    "after": "cwd=None",
+    "mode": "keyword",
+    "reason": "Drop cwd in single-file wrapper"
+  },
+  {
+    "id": "M013",
+    "path": "src/agm/core/fs.py",
+    "line": 100,
+    "column": 11,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "lstat",
+    "before": "path.lstat()",
+    "after": "path.stat()",
+    "mode": "eval",
+    "reason": "Dereference final symlink"
+  },
+  {
+    "id": "M014",
+    "path": "src/agm/core/fs.py",
+    "line": 114,
+    "column": 11,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "identity_stamp",
+    "before": "(info.st_mtime_ns, info.st_size, info.st_ino)",
+    "after": "(info.st_mtime_ns, info.st_size, 0)",
+    "mode": "eval",
+    "reason": "Lose replacement-file inode identity"
+  },
+  {
+    "id": "M015",
+    "path": "src/agm/core/fs.py",
+    "line": 114,
+    "column": 11,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "identity_stamp",
+    "before": "(info.st_mtime_ns, info.st_size, info.st_ino)",
+    "after": "(info.st_mtime_ns, 0, info.st_ino)",
+    "mode": "eval",
+    "reason": "Lose size identity under preserved timestamp"
+  },
+  {
+    "id": "M016",
+    "path": "src/agm/core/fs.py",
+    "line": 121,
+    "column": 11,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "identity_stamp_is_settled",
+    "before": "mtime_ns <= observed_ns - _SETTLE_WINDOW_NS",
+    "after": "mtime_ns < observed_ns - _SETTLE_WINDOW_NS",
+    "mode": "eval",
+    "reason": "Exclude exact settle boundary"
+  },
+  {
+    "id": "M017",
+    "path": "src/agm/core/fs.py",
+    "line": 121,
+    "column": 23,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "identity_stamp_is_settled",
+    "before": "observed_ns - _SETTLE_WINDOW_NS",
+    "after": "observed_ns - 1_000_000_000",
+    "mode": "eval",
+    "reason": "Halve settle window"
+  },
+  {
+    "id": "M018",
+    "path": "src/agm/core/fs.py",
+    "line": 172,
+    "column": 30,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "write_text_atomic",
+    "before": "content.encode(encoding)",
+    "after": "content.encode(\"utf-8\")",
+    "mode": "eval",
+    "reason": "Ignore requested atomic text encoding"
+  },
+  {
+    "id": "M019",
+    "path": "src/agm/core/fs.py",
+    "line": 199,
+    "column": 42,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "write_bytes_atomic",
+    "before": "0o600",
+    "after": "0o644",
+    "mode": "eval",
+    "reason": "Expose temporary contents while writing"
+  },
+  {
+    "id": "M020",
+    "path": "src/agm/core/fs.py",
+    "line": 202,
+    "column": 29,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "write_bytes_atomic",
+    "before": "default_mode if destination_mode is None else destination_mode",
+    "after": "default_mode",
+    "mode": "eval",
+    "reason": "Lose destination permissions"
+  },
+  {
+    "id": "M021",
+    "path": "src/agm/core/fs.py",
+    "line": 205,
+    "column": 8,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "write_bytes_atomic",
+    "before": "temporary_path.unlink(missing_ok=True)",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Leak temporary file after stream failure"
+  },
+  {
+    "id": "M022",
+    "path": "src/agm/core/fs.py",
+    "line": 191,
+    "column": 8,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "write_bytes_atomic",
+    "before": "for _ in chunks:\n    pass",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Do not drain dry-run stream"
+  },
+  {
+    "id": "M023",
+    "path": "src/agm/core/fs.py",
+    "line": 280,
+    "column": 8,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "copy_tree",
+    "before": "symlinks=True",
+    "after": "symlinks=False",
+    "mode": "keyword",
+    "reason": "Dereference descendant links"
+  },
+  {
+    "id": "M024",
+    "path": "src/agm/core/fs.py",
+    "line": 269,
+    "column": 7,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "copy_tree",
+    "before": "source.is_symlink()",
+    "after": "False",
+    "mode": "eval",
+    "reason": "Accept linked source roots"
+  },
+  {
+    "id": "M025",
+    "path": "src/agm/core/fs.py",
+    "line": 273,
+    "column": 11,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "copy_tree",
+    "before": "path.is_symlink()",
+    "after": "False",
+    "mode": "eval",
+    "reason": "Accept linked destination paths"
+  },
+  {
+    "id": "M026",
+    "path": "src/agm/core/fs.py",
+    "line": 248,
+    "column": 8,
+    "source_sha256": "5545de3e370a7de4ac96ce01abbff8ac083e360e59d4fe05742b241041f6949f",
+    "tests": [
+      "tests/test_core_fs.py",
+      "tests/test_core_utils.py"
+    ],
+    "module": "agm.core.fs",
+    "function": "backup_file",
+    "before": "backup_file(backup)",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Discard differing older backups"
+  },
+  {
+    "id": "M027",
+    "path": "src/agm/util/graph.py",
+    "line": 61,
+    "column": 15,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "bfs_first",
+    "before": "queue.popleft()",
+    "after": "queue.pop()",
+    "mode": "eval",
+    "reason": "Use DFS instead of BFS"
+  },
+  {
+    "id": "M028",
+    "path": "src/agm/util/graph.py",
+    "line": 66,
+    "column": 11,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "bfs_first",
+    "before": "found is not None",
+    "after": "bool(found)",
+    "mode": "eval",
+    "reason": "Ignore falsey non-None selections"
+  },
+  {
+    "id": "M029",
+    "path": "src/agm/util/graph.py",
+    "line": 59,
+    "column": 22,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "bfs_first",
+    "before": "deque(seeds)",
+    "after": "deque(sorted(seeds, key=key))",
+    "mode": "eval",
+    "reason": "Sort seeds instead of retaining caller order"
+  },
+  {
+    "id": "M030",
+    "path": "src/agm/util/graph.py",
+    "line": 68,
+    "column": 21,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "bfs_first",
+    "before": "sorted((s for s in successors(node) if s not in seen), key=key)",
+    "after": "list(s for s in successors(node) if s not in seen)",
+    "mode": "eval",
+    "reason": "Ignore successor key ordering"
+  },
+  {
+    "id": "M031",
+    "path": "src/agm/util/graph.py",
+    "line": 130,
+    "column": 21,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "sccs",
+    "before": "neighbour in on_stack",
+    "after": "True",
+    "mode": "eval",
+    "reason": "Merge/lose components on edges to completed SCCs"
+  },
+  {
+    "id": "M032",
+    "path": "src/agm/util/graph.py",
+    "line": 131,
+    "column": 36,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "sccs",
+    "before": "min(lowlink[node], index[neighbour])",
+    "after": "lowlink[node]",
+    "mode": "eval",
+    "reason": "Ignore SCC back-edge lowlink"
+  },
+  {
+    "id": "M033",
+    "path": "src/agm/util/graph.py",
+    "line": 141,
+    "column": 12,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "sccs",
+    "before": "scc.sort(key=key)",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Do not order members by key"
+  },
+  {
+    "id": "M034",
+    "path": "src/agm/util/graph.py",
+    "line": 205,
+    "column": 15,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "toposort",
+    "before": "ready.pop(0)",
+    "after": "ready.pop()",
+    "mode": "eval",
+    "reason": "Reverse ready-node tie breaking"
+  },
+  {
+    "id": "M035",
+    "path": "src/agm/util/graph.py",
+    "line": 211,
+    "column": 16,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "toposort",
+    "before": "bisect.insort(ready, dep, key=key)",
+    "after": "ready.append(dep)",
+    "mode": "exec",
+    "reason": "Append newly ready nodes without priority insertion"
+  },
+  {
+    "id": "M036",
+    "path": "src/agm/util/graph.py",
+    "line": 213,
+    "column": 7,
+    "source_sha256": "d6a4edfae58b2bc95254cb42b9f2cf65aca19abafaf38bc03f3baad568745d11",
+    "tests": [
+      "tests/test_util_graph.py"
+    ],
+    "module": "agm.util.graph",
+    "function": "toposort",
+    "before": "len(order) < len(all_nodes)",
+    "after": "len(order) <= len(all_nodes)",
+    "mode": "eval",
+    "reason": "Report complete DAG as cyclic"
+  },
+  {
+    "id": "M037",
+    "path": "src/agm/util/ident.py",
+    "line": 19,
+    "column": 11,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier_start",
+    "before": "character.isalpha()",
+    "after": "character.isascii() and character.isalpha()",
+    "mode": "eval",
+    "reason": "Reject Unicode initial letters"
+  },
+  {
+    "id": "M038",
+    "path": "src/agm/util/ident.py",
+    "line": 19,
+    "column": 34,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier_start",
+    "before": "character == \"_\"",
+    "after": "False",
+    "mode": "eval",
+    "reason": "Reject underscore initial names"
+  },
+  {
+    "id": "M039",
+    "path": "src/agm/util/ident.py",
+    "line": 19,
+    "column": 11,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier_start",
+    "before": "character.isalpha()",
+    "after": "character.isalnum()",
+    "mode": "eval",
+    "reason": "Allow digit initial names"
+  },
+  {
+    "id": "M040",
+    "path": "src/agm/util/ident.py",
+    "line": 26,
+    "column": 32,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier",
+    "before": "name[0]",
+    "after": "name[-1]",
+    "mode": "eval",
+    "reason": "Validate final character instead of first"
+  },
+  {
+    "id": "M041",
+    "path": "src/agm/util/ident.py",
+    "line": 27,
+    "column": 20,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier",
+    "before": "character in IDENT_STOP",
+    "after": "character in (IDENT_STOP - {\":\"})",
+    "mode": "eval",
+    "reason": "Allow colon in identifiers"
+  },
+  {
+    "id": "M042",
+    "path": "src/agm/util/ident.py",
+    "line": 27,
+    "column": 20,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier",
+    "before": "character in IDENT_STOP",
+    "after": "character in (IDENT_STOP - {\"\t\"})",
+    "mode": "eval",
+    "reason": "Allow tab in identifiers"
+  },
+  {
+    "id": "M043",
+    "path": "src/agm/util/ident.py",
+    "line": 27,
+    "column": 20,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier",
+    "before": "character in IDENT_STOP",
+    "after": "character in (IDENT_STOP - {\".\"})",
+    "mode": "eval",
+    "reason": "Allow dot in identifiers"
+  },
+  {
+    "id": "M044",
+    "path": "src/agm/util/ident.py",
+    "line": 27,
+    "column": 20,
+    "source_sha256": "ec72602e42d05fefe2b6c2ef8a208125abe722ba3db5af493511531e99b984d6",
+    "tests": [
+      "tests/test_util_ident.py"
+    ],
+    "module": "agm.util.ident",
+    "function": "is_identifier",
+    "before": "character in IDENT_STOP",
+    "after": "character in (IDENT_STOP - {\"@\"})",
+    "mode": "eval",
+    "reason": "Allow at-sign in identifiers"
+  },
+  {
+    "id": "M045",
+    "path": "src/agm/util/interp.py",
+    "line": 60,
+    "column": 8,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "InterpolationError",
+    "before": "self.context = None",
+    "after": "self.context = \"unexpected\"",
+    "mode": "exec",
+    "reason": "Inject unsolicited interpolation context"
+  },
+  {
+    "id": "M046",
+    "path": "src/agm/util/interp.py",
+    "line": 65,
+    "column": 15,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "__str__",
+    "before": "f\"{message} ({self.context})\" if self.context else message",
+    "after": "message",
+    "mode": "eval",
+    "reason": "Drop caller error context"
+  },
+  {
+    "id": "M047",
+    "path": "src/agm/util/interp.py",
+    "line": 103,
+    "column": 13,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "_scan",
+    "before": "trigger > position and text[trigger - 1] == \"\\\\\"",
+    "after": "False",
+    "mode": "eval",
+    "reason": "Do not honor escaped holes"
+  },
+  {
+    "id": "M048",
+    "path": "src/agm/util/interp.py",
+    "line": 120,
+    "column": 32,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "_scan",
+    "before": "Hole(name, trigger)",
+    "after": "Hole(name, 0)",
+    "mode": "eval",
+    "reason": "Lose hole source offset"
+  },
+  {
+    "id": "M049",
+    "path": "src/agm/util/interp.py",
+    "line": 113,
+    "column": 16,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "_scan",
+    "before": "malformed_hole = True",
+    "after": "malformed_hole = False",
+    "mode": "exec",
+    "reason": "Do not flag unterminated lenient hole",
+    "occurrence": 0
+  },
+  {
+    "id": "M050",
+    "path": "src/agm/util/interp.py",
+    "line": 92,
+    "column": 12,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "_scan",
+    "before": "literal.clear()",
+    "after": "pass",
+    "mode": "exec",
+    "reason": "Keep flushed literal prefix for later flush"
+  },
+  {
+    "id": "M051",
+    "path": "src/agm/util/interp.py",
+    "line": 156,
+    "column": 12,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "interp_segments",
+    "before": "parts.append(variables[segment.name])",
+    "after": "parts.append(segment.name)",
+    "mode": "exec",
+    "reason": "Render hole name instead of value"
+  },
+  {
+    "id": "M052",
+    "path": "src/agm/util/interp.py",
+    "line": 166,
+    "column": 27,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "interp",
+    "before": "split_template(template)",
+    "after": "split_template(template, lenient=True)",
+    "mode": "eval",
+    "reason": "Use lenient scan in strict interpolation"
+  },
+  {
+    "id": "M053",
+    "path": "src/agm/util/interp.py",
+    "line": 177,
+    "column": 17,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "interp_preserving",
+    "before": "malformed_hole or any(isinstance(segment, Hole) and segment.name not in variables for segment in segments)",
+    "after": "malformed_hole",
+    "mode": "eval",
+    "reason": "Do not flag unavailable variables"
+  },
+  {
+    "id": "M054",
+    "path": "src/agm/util/interp.py",
+    "line": 160,
+    "column": 71,
+    "source_sha256": "8bd27039afa4a902bb70070c62e27f4b1179702bd39d213f610185fdbe7c5069",
+    "tests": [
+      "tests/test_util_interp.py"
+    ],
+    "module": "agm.util.interp",
+    "function": "interp_segments",
+    "before": "segment.offset",
+    "after": "0",
+    "mode": "eval",
+    "reason": "Lose missing-variable error offset"
+  }
+]

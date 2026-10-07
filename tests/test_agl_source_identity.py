@@ -1,4 +1,4 @@
-"""Tests for SourceId / source-aware SourceSpan / Diagnostic source_label (Task A).
+"""Tests for SourceId / source-aware SourceSpan / Diagnostic source_label.
 
 Covers:
 - SourceId dataclass: creation, equality, frozen, label.
@@ -369,16 +369,18 @@ class TestDiagnosticSourceLabel:
 
 
 class TestRelatedDiagnostics:
+    """Format caller-supplied sentinel messages independently of production prose."""
+
     def test_one_related_location_is_rendered_after_primary(self) -> None:
         primary = SourceSpan(1, 1, 1, 2, 0, 1, SourceId("/main.agl"))
         previous = SourceSpan(4, 5, 4, 9, 20, 24, SourceId("/main.agl"))
 
         diagnostic = AglError(
-            "type mismatch", span=primary, related=(("expected here", previous),)
+            "sentinel-primary", span=primary, related=(("sentinel-related", previous),)
         ).to_diagnostic()
 
         assert format_diagnostic(diagnostic) == (
-            "/main.agl:1:1: error: type mismatch\n  /main.agl:4:5-8: note: expected here"
+            "/main.agl:1:1: error: sentinel-primary\n  /main.agl:4:5-8: note: sentinel-related"
         )
 
     def test_multiple_related_locations_preserve_input_order(self) -> None:
@@ -387,18 +389,18 @@ class TestRelatedDiagnostics:
         second = SourceSpan(3, 1, 3, 2, 4, 5)
 
         diagnostic = AglError(
-            "type mismatch",
+            "sentinel-primary",
             span=primary,
-            related=(("first constraint", first), ("second constraint", second)),
+            related=(("sentinel-first", first), ("sentinel-second", second)),
         ).to_diagnostic()
 
         assert [note.message for note in diagnostic.related] == [
-            "first constraint",
-            "second constraint",
+            "sentinel-first",
+            "sentinel-second",
         ]
         assert format_diagnostic(diagnostic).splitlines()[1:] == [
-            "  <agl>:2:1: note: first constraint",
-            "  <agl>:3:1: note: second constraint",
+            "  <agl>:2:1: note: sentinel-first",
+            "  <agl>:3:1: note: sentinel-second",
         ]
 
     def test_multiline_related_location_uses_range_formatting(self) -> None:
@@ -406,11 +408,11 @@ class TestRelatedDiagnostics:
         multiline = SourceSpan(2, 3, 4, 5, 4, 20)
 
         diagnostic = AglError(
-            "type mismatch", span=primary, related=(("value originates here", multiline),)
+            "sentinel-primary", span=primary, related=(("sentinel-multiline", multiline),)
         ).to_diagnostic()
 
         assert format_diagnostic(diagnostic).splitlines()[-1] == (
-            "  <agl>:2:3-4:5: note: value originates here"
+            "  <agl>:2:3-4:5: note: sentinel-multiline"
         )
 
     def test_related_location_from_another_module_keeps_its_source_label(self) -> None:
@@ -418,12 +420,12 @@ class TestRelatedDiagnostics:
         imported = SourceSpan(7, 2, 7, 3, 30, 31, SourceId("/library/types.agl"))
 
         diagnostic = AglError(
-            "type mismatch", span=primary, related=(("declared by imported module", imported),)
+            "sentinel-primary", span=primary, related=(("sentinel-imported", imported),)
         ).to_diagnostic()
 
         assert diagnostic.related[0].source_label == "/library/types.agl"
         assert format_diagnostic(diagnostic).splitlines()[-1] == (
-            "  /library/types.agl:7:2: note: declared by imported module"
+            "  /library/types.agl:7:2: note: sentinel-imported"
         )
 
 

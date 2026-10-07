@@ -28,6 +28,7 @@ from agm.sandbox.backend import (
     SandboxUnavailableError,
     default_backend,
 )
+from agm.sandbox.profile import profile_name
 from agm.sandbox.request import (
     DRY_RUN_SETTINGS_PLACEHOLDER,
     Default,
@@ -361,8 +362,14 @@ def prepare(
     temp_files: list[Path] = []
     tracked_artifacts: list[Path] = []
 
+    command = list(request.command)
+    if request.sandboxed and profile_name(command[0]) == "codex":
+        options = command[1 : command.index("--")] if "--" in command else command[1:]
+        if "--no-daemon" not in options:
+            # A shared host daemon executes outside this command's sandbox.
+            command.insert(1, "--no-daemon")
     pty_wrapper = [sys.executable, "-m", "agm.sandbox.pty", "--"] if request.pty else []
-    command = [*pty_wrapper, *request.command]
+    command = [*pty_wrapper, *command]
     if request.sandboxed:
         active_backend = backend or default_backend()
         active_backend.require_available(env)

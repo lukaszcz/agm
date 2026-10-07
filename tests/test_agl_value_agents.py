@@ -930,7 +930,7 @@ def _capturing_run_capture_result(
     ("source", "profile", "argv_prefix"),
     [
         ('AgentClaude("sonnet", "medium")', "claude", ["claude", "-p"]),
-        ('AgentCodex("o3", "high")', "codex", ["codex", "exec"]),
+        ('AgentCodex("o3", "high")', "codex", ["codex", "--no-daemon", "exec"]),
         ('AgentPi("openai", "gpt", "low")', "pi", ["pi", "-p"]),
         ('AgentCommand("/some/path/my-agent")', "my-agent", ["/some/path/my-agent"]),
     ],

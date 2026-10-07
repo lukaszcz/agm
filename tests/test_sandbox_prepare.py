@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from collections.abc import Iterator
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError, dataclass, replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -247,6 +248,53 @@ class TestSandboxLimitsForCommand:
 
 
 class TestPrepareArgvComposition:
+    def test_a_codex_prompt_cannot_disable_daemon_isolation(
+        self, home_with_default_settings: Path
+    ) -> None:
+        request = replace(
+            _request(tmp_path=home_with_default_settings, memory=None, swap=None),
+            command=["codex", "--", "--no-daemon"],
+        )
+        prepared = prepare(request, run_config=_run_config())
+        try:
+            assert prepared.argv[-4:] == ["codex", "--no-daemon", "--", "--no-daemon"]
+        finally:
+            prepared.close()
+
+    @pytest.mark.parametrize("sandboxed", [False, True])
+    @pytest.mark.parametrize("pty", [False, True])
+    @pytest.mark.parametrize("already_disabled", [False, True])
+    def test_codex_uses_an_executor_inside_its_sandbox(
+        self,
+        home_with_default_settings: Path,
+        sandboxed: bool,
+        pty: bool,
+        already_disabled: bool,
+    ) -> None:
+        command = ["/opt/bin/codex"]
+        if already_disabled:
+            command.append("--no-daemon")
+        command.extend(["--yolo", "exec", "a prompt with spaces"])
+        request = replace(
+            _request(
+                tmp_path=home_with_default_settings,
+                sandboxed=sandboxed,
+                pty=pty,
+                memory=None,
+                swap=None,
+            ),
+            command=command,
+        )
+
+        prepared = prepare(request, run_config=_run_config())
+        try:
+            forwarded = shlex.split(" ".join(prepared.argv)) if sandboxed else prepared.argv
+            assert forwarded.count("--no-daemon") == int(sandboxed or already_disabled)
+            assert forwarded[-1] == "a prompt with spaces"
+            assert request.command == command
+        finally:
+            prepared.close()
+
     def test_limits_prefix_plus_srt_wrapper_plus_command(
         self, home_with_default_settings: Path
     ) -> None:

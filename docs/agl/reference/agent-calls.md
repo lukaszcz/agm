@@ -451,6 +451,10 @@ The all-permissions and don't-ask/auto-approve framing above applies only to
 flag is ever added, so `Native` and `Disabled` differ only in sandboxing, and
 `Sandbox` runs the agent under its own default permissions.
 
+Sandboxed Codex agents run with `--no-daemon`, so their executor stays inside
+the sandbox instead of using a shared host daemon. This applies to asks,
+sessions, and interactive chats; Codex must support that flag.
+
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = reviewer.ask("Review %{a}", sandbox = Native)

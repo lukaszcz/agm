@@ -141,7 +141,7 @@ def Session::deliver-plan(self, plan-file: path, tasks-dir: path, impl-agent: Ag
 def implement-tasks-prompt(plan-file: path, tasks-dir: path, impl-model: text, review-model: text, jobs: int) -> text =
   let jobs-prompt =
     if jobs > 0 =>
-      "Use at most %{jobs} subagents in parallel in separate independent worktrees. Parallelize as much as possible. Remember to remove the worktrees you created when merged and no longer needed."
+      "Use at most %{jobs} parallel subagents in independent worktrees. Parallelize as much as possible. Remember to remove the worktrees you created when merged and no longer needed."
     else =>
       "Launch subagents sequentially one at a time, not in parallel."
   """

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -620,6 +621,37 @@ default-agent = { agent = "claude", model = "opus" }
         rendered = normalized_manifest(manifest).decode()
 
         assert rendered.index("a = 2") < rendered.index("b = 1")
+
+    @pytest.mark.parametrize(
+        "literal",
+        [
+            "1.5",
+            "1.0",
+            "-0.0",
+            "1e-7",
+            "1e20",
+            "1.00000000000000000001",
+            "123456789012345678901234567891.0",
+            "1e400",
+            "1e-400",
+        ],
+    )
+    def test_normalized_manifest_round_trips_exact_decimal_config(self, literal: str) -> None:
+        manifest = load_manifest_text(
+            self._HEADER
+            + f"[config]\nscalar = {literal}\narray = [{literal}]\n"
+            + f"records = [{{ value = {literal} }}]\n[config.nested]\nvalue = {literal}\n"
+        )
+
+        rendered = normalized_manifest(manifest).decode()
+        restored = load_manifest_text(rendered)
+
+        value = restored.config["scalar"]
+        assert isinstance(value, Decimal)
+        assert value == Decimal(literal)
+        assert value.is_signed() == Decimal(literal).is_signed()
+        assert restored.config == manifest.config
+        assert normalized_manifest(restored).decode() == rendered
 
     def test_archive_round_trips_config(self, tmp_path: Path) -> None:
         root = tmp_path / "review_tools"

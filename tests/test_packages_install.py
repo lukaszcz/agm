@@ -10,6 +10,7 @@ import shutil
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 
@@ -3474,6 +3475,28 @@ def test_install_directory_accepts_a_nan_valued_config_leaf(tmp_path: Path) -> N
 
     value = installed.manifest.config["p"]
     assert isinstance(value, float) and math.isnan(value)
+
+
+@pytest.mark.parametrize("from_archive", [False, True])
+def test_install_round_trips_exact_decimal_config(tmp_path: Path, from_archive: bool) -> None:
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[config]\np = 1.00000000000000000001\n',
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "@param let p: decimal = 0.0\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    if from_archive:
+        archive = tmp_path / "package.agmpkg"
+        write_archive(source, archive)
+        installed = install_archive(archive, home=tmp_path / "home", env={})
+    else:
+        installed = install_directory(source, home=tmp_path / "home", env={})
+
+    assert installed.manifest.config == {"p": Decimal("1.00000000000000000001")}
 
 
 def test_reinstalling_a_directory_with_a_nan_config_leaf_succeeds(tmp_path: Path) -> None:

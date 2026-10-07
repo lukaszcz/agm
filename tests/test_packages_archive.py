@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 from collections import Counter
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import IO, cast
 
@@ -69,6 +70,49 @@ def test_write_archive_is_deterministic_and_independent_of_git_directory(tmp_pat
         ]
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
         assert all((info.external_attr >> 16) == 0o100644 for info in archive.infolist())
+
+
+@pytest.mark.parametrize("literal", ["1.5", "1e-07", "1e+20", "-0.0"])
+def test_extract_existing_archive_with_finite_float_config(tmp_path: Path, literal: str) -> None:
+    prefix = "review_tools-1.2.3/"
+    contents = {
+        "package.toml": (
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+            f"[config]\ntimeout = {literal}\n"
+        ).encode(),
+        "src/main.agl": b"program def main() -> unit = ()\n",
+    }
+    contents["RECORD"] = serialize_record(
+        tuple(
+            RecordEntry(name, hashlib.sha256(value).hexdigest()) for name, value in contents.items()
+        )
+    ).encode()
+    archive = tmp_path / "existing.agmpkg"
+    write_zip(archive, [(prefix + name, value) for name, value in sorted(contents.items())])
+
+    extracted = extract_archive(archive, tmp_path / "extracted")
+
+    assert extracted.manifest.config == {"timeout": Decimal(literal)}
+
+
+def test_archive_round_trips_exact_decimal_config(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    manifest = root / "package.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "[config]\np = 1.00000000000000000001\nvalues = [1e400, 1e-400]\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "package.agmpkg"
+
+    created = write_archive(root, archive)
+    extracted = extract_archive(archive, tmp_path / "extracted")
+
+    assert extracted == created
+    assert extracted.manifest.config == {
+        "p": Decimal("1.00000000000000000001"),
+        "values": [Decimal("1e400"), Decimal("1e-400")],
+    }
 
 
 def test_write_archive_excludes_private_vcs_cache_archive_and_ignored_files(tmp_path: Path) -> None:

@@ -1,0 +1,26 @@
+import std/json
+import std/toml
+import std/toml::TomlParseError
+import std/value
+
+# A number token no value can hold -- an exponent past any decimal, a
+# non-finite TOML float, or an integral decimal outside the decimal range
+# narrowed to `int` -- is rejected by each boundary with its own error: `as?`
+# yields `None`, `try-parse` yields `Err`, `json::parse` raises
+# `JsonParseError`, and `toml::parse` raises `TomlParseError`. A `json` value
+# itself may hold a finite number of any magnitude, and an integer literal of
+# any length is an exact `int`.
+program def main(token: text, copies: int = 1) -> unit =
+  let input = token.repeat(copies)
+  print((input as? decimal).is-none())
+  print((input as? int).is-none())
+  print(value::try-parse::[json](input).is-err())
+  print(value::try-parse::[int](input).is-err())
+  try
+    let _ = json::parse(input)
+    print("json parsed")
+  catch JsonParseError => print("json parse error")
+  try
+    let document = toml::parse("x = %{input}")
+    print((document.get("x") as? int).is-none())
+  catch TomlParseError => print("toml parse error")

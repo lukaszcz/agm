@@ -1,0 +1,50 @@
+# `is` sees through an alias to the declaration it denotes: an alias of a
+# member record, of an applied inline member, of a referenced record, and of
+# an exception each test exactly that declaration.
+
+enum Plain
+  | Ready
+  | Wait(n: int)
+
+type W = Plain::Wait
+
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type FM = Slot[int]::Filled
+
+record R
+  r: int
+
+enum WithR
+  | ::R
+  | Other
+
+type RA = R
+
+exception Oops extends Exception
+  code: int
+
+exception Deeper extends Oops
+  depth: int
+
+exception Unrelated extends Exception
+
+type F = Oops
+
+def failure(n: int) -> Exception =
+  if
+    | n > 1 => Deeper(message = "deep", code = n, depth = 2)
+    | n > 0 => Oops(message = "oops", code = n)
+    | else => Unrelated(message = "other")
+
+program def main(n: int) -> unit =
+  let plain: Plain = if n > 0 => W(n = n) else => Plain::Ready
+  let slot: Slot[int] = if n > 0 => FM(value = n) else => Slot::Empty
+  let with-r: WithR = if n > 0 => RA(r = n) else => WithR::Other
+  print("%{plain is W} %{plain is not W} %{slot is FM} %{slot is not FM} %{with-r is RA}")
+  try
+    raise failure(n)
+  catch _ as e =>
+    print("%{e is F} %{e is not F} %{e is Deeper}")

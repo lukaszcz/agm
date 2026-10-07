@@ -1,0 +1,30 @@
+# A `{Eq T}`/`{Hashable T}` constraint block admits `==`, `in`, and array
+# self-equality on the bound type variable — and on `array[T]`, which nests
+# it — at every instantiation. `Hashable` implies `Eq`. A host param drives
+# one instantiation so the same generic body runs on different runtime
+# values (erasure). Also covers a bound reaching a method's receiver
+# parameter and a lambda closing over a bound type variable.
+record Box[T]
+  value: T
+
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+def same-list[T]{Eq T}(xs: array[T], ys: array[T]) -> bool = xs == ys
+def contains[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
+def Box::same[T]{Eq T}(self, other: Box[T]) -> bool = self.value == other.value
+def make-checker[T]{Eq T}(v: T) -> (T) -> bool = fn(x: T) -> bool => x == v
+
+program def main(seed: int) -> unit =
+  print(same(seed, seed))
+  print(same(seed, seed + 1))
+  print(same("a", "a"))
+  print(same("a", "b"))
+  print(same-list([seed, seed + 1], [seed, seed + 1]))
+  print(same-list([seed, seed + 1], [seed]))
+  print(contains(seed, [seed, seed + 1, seed + 2]))
+  print(contains(seed + 9, [seed, seed + 1, seed + 2]))
+  print(contains("y", ["x", "y", "z"]))
+  print(Box(value = seed).same(Box(value = seed)))
+  print(Box(value = seed).same(Box(value = seed + 1)))
+  let check = make-checker(seed)
+  print(check(seed))
+  print(check(seed + 1))

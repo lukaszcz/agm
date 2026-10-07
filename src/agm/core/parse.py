@@ -7,7 +7,7 @@ import re
 from threading import TIMEOUT_MAX
 
 
-def format_timeout(seconds: float) -> str:
+def format_timeout(seconds: float | decimal.Decimal) -> str:
     """Render parsed seconds in syntax accepted by :func:`parse_timeout`."""
     return f"{format(decimal.Decimal(str(seconds)), 'f')}s"
 

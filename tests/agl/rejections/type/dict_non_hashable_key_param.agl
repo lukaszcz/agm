@@ -1,0 +1,2 @@
+program def main(counts: dict[array[int], text]) -> unit =
+  print counts

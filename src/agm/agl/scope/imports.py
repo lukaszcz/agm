@@ -1,60 +1,56 @@
-"""Contribution-based import environments and qualified resolution."""
+"""Contribution-based import environments and the qualifier routes they name.
+
+Surfaces keep everything an import brings, ``hiding`` included: what a
+``hiding`` removes is told by identity (:attr:`ImportEnv.decl_hiding`, the
+:class:`ImportWay` a member is reached by) where a reading is decided, never by
+filtering a surface.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Collection, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.modules.ids import ModuleId, spell_declaration
+from agm.agl.scope.symbols import MissRepair, UnknownMemberError
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
-    EnumDef,
-    ExceptionDef,
     ImportDecl,
     ImportItem,
-    QualifierChain,
-    RecordDef,
 )
-from agm.agl.syntax.nodes import TypeAlias as TypeAliasDecl
 from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
     "EMPTY_IMPORT_ENV",
+    "Exposure",
+    "ItemDeclaration",
     "ImportEnv",
     "ImportTarget",
+    "ImportWay",
     "BareRoute",
     "ModuleContribution",
     "NameAtom",
     "PathAtom",
     "QName",
-    "QualResolution",
-    "QualResolutionAmbiguous",
-    "QualResolutionFound",
-    "QualResolutionMissingMember",
-    "QualResolutionUnknownQualifier",
     "ScopeOrigins",
     "SingleTarget",
     "WildcardTarget",
-    "ambiguous_qualification_message",
+    "alias_prefix",
     "build_import_env",
+    "validate_import_items",
+    "target_modules",
     "contribution_routes",
     "matching_atoms",
-    "qualification_repair_guidance",
     "qualifier_candidates",
-    "qualifier_contributes",
+    "qualifier_exposures",
+    "qualifier_member_ways",
     "qualifier_members",
     "qualifier_scope_paths",
-    "render_qualifier",
-    "resolve_alias_target",
-    "resolve_qualified",
-    "resolve_qualified_member",
-    "declares_bare_constructor",
-    "try_resolve_qualified_member",
+    "unqualified_exposures",
 ]
 
 PathAtom: TypeAlias = tuple[str, ...]
@@ -63,31 +59,32 @@ PathAtom: TypeAlias = tuple[str, ...]
 NameAtom: TypeAlias = str | PathAtom
 QName: TypeAlias = tuple[ModuleId, NameAtom]
 ScopeOrigins: TypeAlias = frozenset[QName]
-BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
 
 
-def declares_bare_constructor(
-    qnames: Iterable[QName],
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
-) -> bool:
-    """Whether one of *qnames* is a record or exception declaring its bare name.
+@dataclass(frozen=True, slots=True)
+class ImportWay:
+    """One way an import declaration reaches a declaration.
 
-    An enum member's bare spelling is an injected convenience that stays
-    reachable qualified, so on an import surface it yields to a same-named
-    record or exception constructor, whichever module declares it.
+    ``withheld`` holds the declarations the imported module's export ``hiding``
+    removes beneath the atom the import brought it by; it belongs to that way
+    alone, whatever other atom or module exports the same declaration.
     """
-    return any(
-        isinstance(all_public_types.get(qname), (RecordDef, ExceptionDef)) for qname in qnames
-    )
+
+    node_id: int
+    withheld: frozenset[QName] = frozenset()
+
+
+Exposure: TypeAlias = tuple[NameAtom, QName, frozenset[ImportWay]]
+"""A path imports expose, what it names, and the ways import declarations reach it."""
+BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
 
 
 def _path_sort_key(atom: NameAtom) -> str:
     return "::".join(_path(atom))
 
 
-def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
-    """Render a source qualifier with its slash route and optional anchor."""
-    return ("/" if anchored else "") + "/".join(qualifier)
+def _origin_sort_key(qname: QName) -> tuple[str, str]:
+    return qname[0].path_str(), _path_sort_key(qname[1])
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,30 +104,6 @@ class WildcardTarget:
 ImportTarget = SingleTarget | WildcardTarget
 
 
-def qualification_repair_guidance() -> str:
-    """Return the common, source-level repairs for a qualifier ambiguity."""
-    return (
-        "Use a :: anchor to select the current module, hiding to remove a conflicting member, "
-        "a longer suffix or a /-anchored path to select a module, or as to give one import "
-        "a distinct name."
-    )
-
-
-def ambiguous_qualification_message(
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    candidates: tuple[ModuleId, ...],
-    *,
-    anchored: bool = False,
-) -> str:
-    """Render the common repair-oriented diagnostic for a shared verdict."""
-    rendered = render_qualifier(qualifier, anchored=anchored)
-    paths = ", ".join(module.display() for module in candidates)
-    name = "::".join(_path(member))
-    message = f"'{rendered}::{name}' is ambiguous across imported modules: {paths}."
-    return f"{message} {qualification_repair_guidance()}"
-
-
 def _frozen_routes(
     routes: Mapping[tuple[str, ...], set[ModuleId]],
 ) -> Mapping[tuple[str, ...], tuple[ModuleId, ...]]:
@@ -143,85 +116,125 @@ def _frozen_routes(
 
 
 @dataclass(frozen=True, slots=True)
+class RouteSurface:
+    """What one import route -- an alias, or the module path -- brings from a module.
+
+    ``decls`` are the import declarations forming the route, ``member_ways``
+    the ways they reach each member by.
+    """
+
+    members: Mapping[NameAtom, QName] = field(default_factory=dict)
+    scope_paths: frozenset[NameAtom] = frozenset()
+    member_ways: Mapping[NameAtom, frozenset[ImportWay]] = field(default_factory=dict)
+    decls: frozenset[int] = frozenset()
+
+
+_NO_SURFACE = RouteSurface()
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleContribution:
-    """One imported module's route-keyed declaration and named-scope contribution."""
+    """One imported module's route-keyed declaration and named-scope contribution.
+
+    ``routes`` maps each alias, and ``None`` for the module path, to what it
+    brings; ``exports`` is everything the module exports.
+    """
 
     module: ModuleId
     members: Mapping[NameAtom, QName]
     path_enabled: bool
     aliases: frozenset[str]
-    path_members: Mapping[NameAtom, QName] = field(default_factory=dict)
-    alias_members: Mapping[str, Mapping[NameAtom, QName]] = field(default_factory=dict)
-    path_scope_paths: frozenset[NameAtom] = frozenset()
-    alias_scope_paths: Mapping[str, frozenset[NameAtom]] = field(default_factory=dict)
+    routes: Mapping[str | None, RouteSurface] = field(default_factory=dict)
+    exports: Mapping[NameAtom, QName] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         members: Mapping[NameAtom, QName] = MappingProxyType(
             {atom: self.members[atom] for atom in sorted(self.members, key=_path_sort_key)}
         )
-        path_members: Mapping[NameAtom, QName] = MappingProxyType(
+        ordered: list[str | None] = [None] if None in self.routes else []
+        ordered.extend(sorted(route for route in self.routes if route is not None))
+        routes: Mapping[str | None, RouteSurface] = MappingProxyType(
             {
-                atom: self.path_members[atom]
-                for atom in sorted(self.path_members, key=_path_sort_key)
-            }
-        )
-        alias_members: Mapping[str, Mapping[NameAtom, QName]] = MappingProxyType(
-            {
-                alias: MappingProxyType(
-                    {
-                        atom: self.alias_members[alias][atom]
-                        for atom in sorted(self.alias_members[alias], key=_path_sort_key)
-                    }
+                route: replace(
+                    self.routes[route],
+                    members=MappingProxyType(
+                        {
+                            atom: self.routes[route].members[atom]
+                            for atom in sorted(self.routes[route].members, key=_path_sort_key)
+                        }
+                    ),
                 )
-                for alias in sorted(self.alias_members)
-            }
-        )
-        alias_scope_paths: Mapping[str, frozenset[NameAtom]] = MappingProxyType(
-            {
-                alias: frozenset(self.alias_scope_paths[alias])
-                for alias in sorted(self.alias_scope_paths)
+                for route in ordered
             }
         )
         object.__setattr__(self, "members", members)
-        object.__setattr__(self, "path_members", path_members)
-        object.__setattr__(self, "alias_members", alias_members)
-        object.__setattr__(self, "alias_scope_paths", alias_scope_paths)
+        object.__setattr__(self, "routes", routes)
+
+
+@dataclass(frozen=True, slots=True)
+class ItemDeclaration:
+    """The declaration one tail or ``hiding`` item names in one imported *module*.
+
+    ``declaration`` is the export the item's path, or its longest prefix
+    naming an exported alias, selects; ``beneath`` is the rest of the path,
+    read beneath that alias's target by scope. ``item`` and ``span`` spell
+    a path naming nothing. ``withheld`` is what the module's export ``hiding``
+    removes beneath that alias.
+    """
+
+    module: ModuleId
+    item: PathAtom
+    declaration: QName
+    beneath: PathAtom
+    span: SourceSpan
+    withheld: frozenset[QName] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
 class ImportEnv:
     """Pure contribution environment, including structured public paths.
 
-    ``decl_bare`` holds, per region-scoped import declaration (keyed by its
-    ``node_id``), exactly the atoms *that declaration alone* contributes
-    bare. It is kept separate from ``unqualified`` -- the module-wide bare
-    table a root-position tailed import feeds -- so a scoped import's bare
-    names can be snapshotted onto its own region instead of leaking to the
-    whole module; its qualifier route still flows through ``contributions``.
-    Each atom maps to
-    every origin it draws from a wildcard's expansion, exactly like
-    ``unqualified``: two modules exposing the same bare name is deferred to
-    the name's first use, not raised here. ``unqualified_scope_routes`` and
-    ``decl_bare_scope_routes`` carry the parallel namespace-only contribution
-    for scopes that have no declaration member to put in a bare table.
+    ``decl_bare_ways`` holds, per region-scoped import declaration (keyed by its
+    ``node_id``), exactly the atoms *that declaration alone* contributes bare,
+    each with its origins and the ways reaching them. It is kept separate from
+    ``unqualified`` -- the module-wide bare table a root-position tailed import
+    feeds -- so a scoped import's bare names can be snapshotted onto its own
+    region instead of leaking to the whole module; its qualifier route still
+    flows through ``contributions``. Each atom maps to every origin it draws
+    from a wildcard's expansion, exactly like ``unqualified``: two modules
+    exposing the same bare name is deferred to the name's first use, not raised
+    here. ``decl_scope_routes`` carries, per tailed declaration at the root or
+    in a region, the parallel namespace-only contribution for scopes that have
+    no declaration member to put in a bare table. ``unqualified_ways`` holds
+    the ways import declarations reach each root bare atom's origins by, as
+    :attr:`RouteSurface.member_ways` does a route's members.
+    ``decl_hiding`` holds the declarations each tailed or routed declaration's
+    ``hiding`` names, which scope removes from every spelling it contributes.
+    ``decl_tail_beneath`` holds, per tailed declaration, each spelling a tail
+    item naming a path beneath an exported alias exposes, with the items;
+    scope reads the path beneath the target.
     """
 
     contributions: Mapping[ModuleId, ModuleContribution]
     unqualified: Mapping[NameAtom, frozenset[QName]]
-    decl_bare: Mapping[int, Mapping[NameAtom, frozenset[QName]]] = field(default_factory=dict)
+    decl_bare_ways: Mapping[int, Mapping[NameAtom, Mapping[QName, frozenset[ImportWay]]]] = field(
+        default_factory=dict
+    )
     unqualified_routes: Mapping[NameAtom, frozenset[BareRoute]] = field(default_factory=dict)
     decl_bare_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
-    unqualified_scope_routes: Mapping[NameAtom, frozenset[BareRoute]] = field(default_factory=dict)
-    decl_bare_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
+    decl_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
-    facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
+    unqualified_ways: Mapping[NameAtom, Mapping[QName, frozenset[ImportWay]]] = field(
+        default_factory=dict
+    )
+    decl_hiding: Mapping[int, tuple[ItemDeclaration, ...]] = field(default_factory=dict)
+    decl_tail_beneath: Mapping[int, Mapping[NameAtom, frozenset[ItemDeclaration]]] = field(
+        default_factory=dict
+    )
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
-    # Where each imported module was first named in this module's source, so a
-    # complaint about what an import no longer provides can point at it.
-    decl_spans: Mapping[ModuleId, SourceSpan] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -239,11 +252,13 @@ class ImportEnv:
         unqualified: Mapping[NameAtom, frozenset[QName]] = MappingProxyType(
             {atom: self.unqualified[atom] for atom in sorted(self.unqualified, key=_path_sort_key)}
         )
-        decl_bare: Mapping[int, Mapping[NameAtom, frozenset[QName]]] = MappingProxyType(
-            {
-                node_id: MappingProxyType(dict(members))
-                for node_id, members in self.decl_bare.items()
-            }
+        decl_bare_ways: Mapping[int, Mapping[NameAtom, Mapping[QName, frozenset[ImportWay]]]] = (
+            MappingProxyType(
+                {
+                    node_id: MappingProxyType(dict(members))
+                    for node_id, members in self.decl_bare_ways.items()
+                }
+            )
         )
         object.__setattr__(self, "contributions", contributions)
         object.__setattr__(self, "unqualified", unqualified)
@@ -256,35 +271,20 @@ class ImportEnv:
                 for node_id, routes in self.decl_bare_routes.items()
             }
         )
-        unqualified_scope_routes: Mapping[NameAtom, frozenset[BareRoute]] = MappingProxyType(
-            dict(self.unqualified_scope_routes)
+        decl_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = MappingProxyType(
+            {
+                node_id: MappingProxyType(dict(routes))
+                for node_id, routes in self.decl_scope_routes.items()
+            }
         )
-        decl_bare_scope_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = (
-            MappingProxyType(
-                {
-                    node_id: MappingProxyType(dict(routes))
-                    for node_id, routes in self.decl_bare_scope_routes.items()
-                }
-            )
-        )
-        object.__setattr__(self, "decl_bare", decl_bare)
+        object.__setattr__(self, "decl_bare_ways", decl_bare_ways)
         object.__setattr__(self, "unqualified_routes", unqualified_routes)
         object.__setattr__(self, "decl_bare_routes", decl_bare_routes)
-        object.__setattr__(self, "unqualified_scope_routes", unqualified_scope_routes)
-        object.__setattr__(self, "decl_bare_scope_routes", decl_bare_scope_routes)
+        object.__setattr__(self, "decl_scope_routes", decl_scope_routes)
         scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = MappingProxyType(
             dict(self.scope_origins_by_route)
         )
         object.__setattr__(self, "scope_origins_by_route", scope_origins_by_route)
-        decl_spans: Mapping[ModuleId, SourceSpan] = MappingProxyType(dict(self.decl_spans))
-        object.__setattr__(self, "decl_spans", decl_spans)
-        facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = MappingProxyType(
-            {
-                alias: MappingProxyType(dict(sorted(self.facade_aliases[alias].items())))
-                for alias in sorted(self.facade_aliases)
-            }
-        )
-        object.__setattr__(self, "facade_aliases", facade_aliases)
         suffix: dict[tuple[str, ...], set[ModuleId]] = {}
         anchored: dict[tuple[str, ...], set[ModuleId]] = {}
         for module, contribution in contributions.items():
@@ -305,87 +305,161 @@ class ImportEnv:
 EMPTY_IMPORT_ENV = ImportEnv(contributions={}, unqualified={})
 
 
-@dataclass(frozen=True, slots=True)
-class QualResolutionFound:
-    module: ModuleId
-    qname: QName
+@dataclass(slots=True)
+class _RouteAccumulator:
+    members: dict[NameAtom, QName] = field(default_factory=dict)
+    scope_paths: set[NameAtom] = field(default_factory=set)
+    member_ways: dict[NameAtom, set[ImportWay]] = field(default_factory=dict)
+    decls: set[int] = field(default_factory=set)
 
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionUnknownQualifier:
-    qualifier: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionMissingMember:
-    qualifier: tuple[str, ...]
-    member: NameAtom
-    candidates: tuple[ModuleId, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class QualResolutionAmbiguous:
-    qualifier: tuple[str, ...]
-    member: NameAtom
-    candidates: tuple[ModuleId, ...]
-
-
-QualResolution = (
-    QualResolutionFound
-    | QualResolutionUnknownQualifier
-    | QualResolutionMissingMember
-    | QualResolutionAmbiguous
-)
+    def freeze(self) -> RouteSurface:
+        """The surface accumulated."""
+        return RouteSurface(
+            self.members,
+            frozenset(self.scope_paths),
+            _frozen(self.member_ways),
+            frozenset(self.decls),
+        )
 
 
 @dataclass(slots=True)
 class _ContributionAccumulator:
-    members: dict[NameAtom, QName]
-    path_enabled: bool
-    aliases: set[str]
-    path_members: dict[NameAtom, QName]
-    alias_members: dict[str, dict[NameAtom, QName]]
-    path_scope_paths: set[NameAtom]
-    alias_scope_paths: dict[str, set[NameAtom]]
+    members: dict[NameAtom, QName] = field(default_factory=dict)
+    path_enabled: bool = False
+    routes: dict[str | None, _RouteAccumulator] = field(default_factory=dict)
 
 
-def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
+def matching_atoms(surface: Iterable[NameAtom], prefix: PathAtom) -> tuple[NameAtom, ...]:
     """Return every atom of *surface* that a selection *prefix* reaches."""
     return tuple(atom for atom in surface if _path(atom)[: len(prefix)] == prefix)
 
 
 def _selected_public_atoms(
     items: tuple[ImportItem, ...],
-    module: ModuleId,
-    exports: Mapping[NameAtom, QName],
-    scope_exports: Mapping[NameAtom, ScopeOrigins],
-    span: SourceSpan,
+    exports: Iterable[NameAtom],
+    scope_exports: Iterable[NameAtom],
 ) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
-    """Expand selected declaration atoms and independent scope identities."""
+    """Expand selected declaration atoms and independent scope identities.
+
+    An item naming nothing selects nothing (:func:`validate_import_items`).
+    """
     matched_exports: dict[NameAtom, None] = {}
     matched_scopes: dict[NameAtom, None] = {}
     for item in items:
         prefix = _item_path(item)
-        declarations = matching_atoms(exports, prefix)
-        scopes = matching_atoms(scope_exports, prefix)
-        if not declarations and not scopes:
-            rendered = "::".join(prefix)
-            raise AglScopeError(
-                f"name {rendered!r} is not exported by module {module.display()!r}", span=span
-            )
-        for atom in declarations:
+        for atom in matching_atoms(exports, prefix):
             matched_exports[atom] = None
-        for atom in scopes:
+        for atom in matching_atoms(scope_exports, prefix):
             matched_scopes[atom] = None
     return tuple(matched_exports), tuple(matched_scopes)
 
 
+def validate_import_items(
+    decls: tuple[ImportDecl, ...],
+    targets: Mapping[int, ImportTarget],
+    exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
+    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
+    aliases: Collection[QName],
+) -> None:
+    """Reject the first ``hiding`` or tail item of *decls* naming nothing its module exports.
+
+    An item beneath one of the exported *aliases* names a path beneath the
+    alias's target, which scope reads.
+    """
+    for decl in decls:
+        for module in target_modules(targets[decl.node_id]):
+            module_exports = exports[module]
+            for item in (*decl.hidden, *(decl.tail or ())):
+                prefix = _item_path(item)
+                if (
+                    not matching_atoms(module_exports, prefix)
+                    and not matching_atoms(scope_exports[module], prefix)
+                    and alias_prefix(prefix, module_exports, aliases) is None
+                ):
+                    raise UnknownMemberError(
+                        spell_declaration(module, prefix),
+                        span=decl.span,
+                        repair=MissRepair.NOT_EXPORTED,
+                    )
+
+
+def alias_prefix(
+    path: PathAtom, exports: Mapping[NameAtom, QName], aliases: Collection[QName]
+) -> tuple[QName, PathAtom] | None:
+    """The exported alias the longest proper prefix of *path* names, and the rest; if any."""
+    for end in range(len(path) - 1, 0, -1):
+        qname = exports.get(_atom(path[:end]))
+        if qname is not None and qname in aliases:
+            return qname, path[end:]
+    return None
+
+
+def _item_declarations(
+    items: tuple[ImportItem, ...],
+    module: ModuleId,
+    exports: Mapping[NameAtom, QName],
+    scopes: Mapping[NameAtom, ScopeOrigins],
+    aliases: Collection[QName],
+    span: SourceSpan,
+) -> tuple[ItemDeclaration, ...]:
+    """The declarations *items* name in *module*: an export, a path beneath an alias, or a scope.
+
+    A scope is named by its own path; what lies beneath it is removed with it.
+    """
+    named: list[ItemDeclaration] = []
+    for item in items:
+        path = _item_path(item)
+        exported = exports.get(_atom(path))
+        found = (exported, ()) if exported is not None else alias_prefix(path, exports, aliases)
+        if found is not None:
+            named.append(ItemDeclaration(module, path, *found, span))
+        named.extend(
+            ItemDeclaration(module, path, origin, (), span)
+            for origin in sorted(scopes.get(_atom(path), ()), key=_origin_sort_key)
+        )
+    return tuple(named)
+
+
+def _tail_beneath_exposures(
+    items: tuple[ImportItem, ...],
+    module: ModuleId,
+    exports: Mapping[NameAtom, QName],
+    withheld: Mapping[NameAtom, frozenset[QName]],
+    aliases: Collection[QName],
+    span: SourceSpan,
+) -> dict[NameAtom, set[ItemDeclaration]]:
+    """The spellings tail *items* naming a path beneath an alias *module* exports expose.
+
+    Each exposes its path, and a renamed one its rename too; each carries what
+    the module's export ``hiding`` withholds beneath the alias (*withheld*).
+    """
+    exposures: dict[NameAtom, set[ItemDeclaration]] = {}
+    for item in items:
+        path = _item_path(item)
+        if matching_atoms(exports, path):
+            continue
+        beneath = alias_prefix(path, exports, aliases)
+        if beneath is None:
+            continue
+        alias, rest = beneath
+        named = ItemDeclaration(
+            module,
+            path,
+            alias,
+            rest,
+            span,
+            withheld.get(_atom(path[: len(path) - len(rest)]), frozenset()),
+        )
+        spellings: list[PathAtom] = [path] if item.rename is None else [path, (item.rename,)]
+        for exposed in spellings:
+            exposures.setdefault(_atom(exposed), set()).add(named)
+    return exposures
+
+
 def _tail_exposures(
-    decl: ImportDecl,
-    hidden: set[NameAtom],
-    selected: tuple[NameAtom, ...],
+    decl: ImportDecl, selected: tuple[NameAtom, ...]
 ) -> tuple[tuple[NameAtom, NameAtom], ...]:
-    """Return the bare spellings a tailed import exposes, paired with their source paths.
+    """Return the bare spellings a tailed import exposes of *selected*, paired with their sources.
 
     Serves both namespaces: declarations look their ``QName`` up from the
     module's export map, named scopes carry only the surface path.
@@ -394,8 +468,6 @@ def _tail_exposures(
         return ()
     result: dict[tuple[NameAtom, NameAtom], None] = {}
     for source in selected:
-        if source in hidden:
-            continue
         result[(source, source)] = None
         source_path = _path(source)
         for item in decl.tail:
@@ -406,7 +478,8 @@ def _tail_exposures(
     return tuple(result)
 
 
-def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
+def target_modules(target: ImportTarget) -> tuple[ModuleId, ...]:
+    """The modules an import of *target* names."""
     return (
         (target.module,)
         if isinstance(target, SingleTarget)
@@ -414,102 +487,144 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
     )
 
 
+def _with_vanished_ancestors(
+    source: NameAtom,
+    origins: ScopeOrigins,
+    exports: Mapping[NameAtom, QName],
+    scopes: Mapping[NameAtom, ScopeOrigins],
+) -> ScopeOrigins:
+    """*origins*, an unexported atom *source*'s declarations, and the scopes and types above them.
+
+    Those of its prefixes neither *exports* nor *scopes* hold: what an importer
+    derives as the qualifier of *source* is as removed as *source*. A prefix
+    corresponds to the origin's prefix aligned from the end, as the origin may
+    be spelled by a region or a rename.
+    """
+    path = _path(source)
+    vanished = [
+        length
+        for length in range(1, len(path))
+        if _atom(path[:length]) not in exports and _atom(path[:length]) not in scopes
+    ]
+    return origins | frozenset(
+        (module, _atom(origin_path[:kept]))
+        for module, atom in origins
+        for origin_path in (_path(atom),)
+        for length in vanished
+        if 0 < (kept := len(origin_path) - len(path) + length) < len(origin_path)
+    )
+
+
+_NOTHING_WITHHELD: Mapping[ModuleId, Mapping[NameAtom, frozenset[QName]]] = MappingProxyType({})
+
+
 def build_import_env(
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
     exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
-    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]] | None = None,
+    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
+    aliases: Collection[QName] = (),
+    withheld: Mapping[ModuleId, Mapping[NameAtom, frozenset[QName]]] = _NOTHING_WITHHELD,
 ) -> ImportEnv:
     """Build route and implicit-tail contributions for import declarations.
 
     A region-scoped declaration still contributes qualifier routes module-wide,
-    but its implicit tail's bare atoms are recorded in ``decl_bare`` so the
-    scope pass can narrow them to that region.
+    but its implicit tail's bare atoms are recorded in ``decl_bare_ways`` so the
+    scope pass can narrow them to that region. *aliases* are the program's
+    type aliases, beneath whose exports a ``hiding`` item may name a path.
+    *withheld* holds, per module, what its export ``hiding`` removes beneath
+    each re-exported atom: every atom an import brings is a way of its own
+    (:class:`ImportWay`), carrying what that atom withholds. An atom there the
+    module does not export is one its export ``hiding`` removed, with its
+    declarations: the import brings it like any export, withholding them.
     """
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
-    root_bare: dict[NameAtom, set[QName]] = {}
-    decl_bare: dict[int, dict[NameAtom, set[QName]]] = {}
+    root_bare: dict[NameAtom, dict[QName, set[ImportWay]]] = {}
+    decl_bare: dict[int, dict[NameAtom, dict[QName, set[ImportWay]]]] = {}
     root_bare_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_bare_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
-    root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
-    facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
-    canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
+    decl_hiding: dict[int, list[ItemDeclaration]] = {}
+    decl_tail_beneath: dict[int, dict[NameAtom, set[ItemDeclaration]]] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
-    decl_spans: dict[ModuleId, SourceSpan] = {}
-    public_scopes = scope_exports or {}
     for decl in decls:
         target = targets[decl.node_id]
-        modules = _targets(target)
-        wildcard_origin_node_id = (
-            canonical_wildcard_node_ids.setdefault(decl, decl.node_id)
-            if isinstance(target, WildcardTarget)
-            else decl.wildcard_origin_node_id
-        )
-        if decl.alias is not None and wildcard_origin_node_id is not None:
-            facade_aliases.setdefault(decl.alias, {}).setdefault(
-                wildcard_origin_node_id, set()
-            ).update(modules)
+        modules = target_modules(target)
         for module in modules:
-            decl_spans.setdefault(module, decl.span)
-            module_exports = exports.get(module, {})
-            module_scopes = public_scopes.get(module, {})
-            hidden_exports, hidden_scopes = _selected_public_atoms(
-                decl.hidden, module, module_exports, module_scopes, decl.span
+            module_exports = exports[module]
+            module_scopes = scope_exports[module]
+            module_withheld = withheld.get(module, {})
+            unexported = {
+                source: origins
+                for source, origins in module_withheld.items()
+                if source not in module_exports
+            }
+            named = _item_declarations(
+                decl.hidden, module, module_exports, module_scopes, aliases, decl.span
             )
+            if named:
+                decl_hiding.setdefault(decl.node_id, []).extend(named)
+            # Each atom the import brings, what it names, and what the module's
+            # export ``hiding`` removes beneath it.
+            reached: dict[NameAtom, dict[QName, frozenset[QName]]] = {
+                source: {qname: module_withheld.get(source, frozenset())}
+                for source, qname in module_exports.items()
+            }
+            for source, origins in unexported.items():
+                reached[source] = dict.fromkeys(
+                    sorted(origins, key=_origin_sort_key),
+                    _with_vanished_ancestors(source, origins, module_exports, module_scopes),
+                )
             if decl.tail is None:
                 selected_exports: tuple[NameAtom, ...] = ()
                 selected_scopes: tuple[NameAtom, ...] = ()
             elif not decl.tail:
-                selected_exports = tuple(module_exports)
+                selected_exports = tuple(reached)
                 selected_scopes = tuple(module_scopes)
             else:
                 selected_exports, selected_scopes = _selected_public_atoms(
-                    decl.tail, module, module_exports, module_scopes, decl.span
+                    decl.tail, reached, module_scopes
                 )
-            hidden = set(hidden_exports)
-            hidden_scope_paths = set(hidden_scopes)
-            acc = accumulators.setdefault(
-                module,
-                _ContributionAccumulator({}, False, set(), {}, {}, set(), {}),
-            )
+                beneath = _tail_beneath_exposures(
+                    decl.tail, module, module_exports, module_withheld, aliases, decl.span
+                )
+                for exposed, items in beneath.items():
+                    decl_tail_beneath.setdefault(decl.node_id, {}).setdefault(
+                        exposed, set()
+                    ).update(items)
+            acc = accumulators.setdefault(module, _ContributionAccumulator())
             if decl.alias is None:
-                route_members = acc.path_members
-                route_scope_paths = acc.path_scope_paths
                 acc.path_enabled = True
-            else:
-                route_members = acc.alias_members.setdefault(decl.alias, {})
-                route_scope_paths = acc.alias_scope_paths.setdefault(decl.alias, set())
-                acc.aliases.add(decl.alias)
-            for source, qname in module_exports.items():
-                if source not in hidden:
+            brought = acc.routes.setdefault(decl.alias, _RouteAccumulator())
+            brought.decls.add(decl.node_id)
+            for source, by_qname in reached.items():
+                for qname, withheld_by_source in by_qname.items():
                     acc.members[source] = qname
-                    route_members[source] = qname
-            visible_scope_paths = tuple(
-                source for source in module_scopes if source not in hidden_scope_paths
-            )
-            route_scope_paths.update(visible_scope_paths)
-            for source in visible_scope_paths:
-                scope_origins_by_route[(module, _path(source))] = module_scopes[source]
-            for exposed, source in _tail_exposures(decl, hidden, selected_exports):
-                qname = module_exports[source]
-                route = (module, _path(source))
-                if decl.scope_path:
-                    decl_bare.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(qname)
-                    decl_bare_routes.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(
-                        route
+                    brought.members[source] = qname
+                    brought.member_ways.setdefault(source, set()).add(
+                        ImportWay(decl.node_id, withheld_by_source)
                     )
-                else:
-                    root_bare.setdefault(exposed, set()).add(qname)
-                    root_bare_routes.setdefault(exposed, set()).add(route)
-            for exposed, source in _tail_exposures(decl, hidden_scope_paths, selected_scopes):
+            brought.scope_paths.update(module_scopes)
+            for source in module_scopes:
+                scope_origins_by_route[(module, _path(source))] = module_scopes[source]
+            for exposed, source in _tail_exposures(decl, selected_exports):
                 route = (module, _path(source))
-                destination = (
-                    decl_scope_routes.setdefault(decl.node_id, {})
-                    if decl.scope_path
-                    else root_scope_routes
+                for qname, withheld_by_source in reached[source].items():
+                    way = ImportWay(decl.node_id, withheld_by_source)
+                    if decl.scope_path:
+                        decl_bare.setdefault(decl.node_id, {}).setdefault(exposed, {}).setdefault(
+                            qname, set()
+                        ).add(way)
+                        decl_bare_routes.setdefault(decl.node_id, {}).setdefault(
+                            exposed, set()
+                        ).add(route)
+                    else:
+                        root_bare.setdefault(exposed, {}).setdefault(qname, set()).add(way)
+                        root_bare_routes.setdefault(exposed, set()).add(route)
+            for exposed, source in _tail_exposures(decl, selected_scopes):
+                decl_scope_routes.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(
+                    (module, _path(source))
                 )
-                destination.setdefault(exposed, set()).add(route)
 
     contributions: dict[ModuleId, ModuleContribution] = {}
     for module, acc in accumulators.items():
@@ -517,17 +632,21 @@ def build_import_env(
             module,
             acc.members,
             acc.path_enabled,
-            frozenset(acc.aliases),
-            acc.path_members,
-            acc.alias_members,
-            frozenset(acc.path_scope_paths),
-            {alias: frozenset(scope_paths) for alias, scope_paths in acc.alias_scope_paths.items()},
+            frozenset(route for route in acc.routes if route is not None),
+            {route: surface.freeze() for route, surface in acc.routes.items()},
+            exports[module],
         )
     return ImportEnv(
         contributions=contributions,
         unqualified={name: frozenset(qnames) for name, qnames in root_bare.items()},
-        decl_bare={
-            node_id: {atom: frozenset(qnames) for atom, qnames in members.items()}
+        unqualified_ways={name: _frozen(qnames) for name, qnames in root_bare.items()},
+        decl_hiding={node_id: tuple(named) for node_id, named in decl_hiding.items()},
+        decl_tail_beneath={
+            node_id: {exposed: frozenset(items) for exposed, items in exposures.items()}
+            for node_id, exposures in decl_tail_beneath.items()
+        },
+        decl_bare_ways={
+            node_id: {atom: _frozen(qnames) for atom, qnames in members.items()}
             for node_id, members in decl_bare.items()
         },
         unqualified_routes={atom: frozenset(routes) for atom, routes in root_bare_routes.items()},
@@ -535,23 +654,16 @@ def build_import_env(
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_bare_routes.items()
         },
-        unqualified_scope_routes={
-            atom: frozenset(routes) for atom, routes in root_scope_routes.items()
-        },
-        decl_bare_scope_routes={
+        decl_scope_routes={
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_scope_routes.items()
         },
-        facade_aliases={
-            alias: {
-                origin_node_id: frozenset(modules)
-                for origin_node_id, modules in declarations.items()
-            }
-            for alias, declarations in facade_aliases.items()
-        },
         scope_origins_by_route=scope_origins_by_route,
-        decl_spans=decl_spans,
     )
+
+
+def _frozen[K, V](ways: Mapping[K, set[V]]) -> dict[K, frozenset[V]]:
+    return {key: frozenset(found) for key, found in ways.items()}
 
 
 def qualifier_candidates(
@@ -583,14 +695,7 @@ def _matching_contribution_routes(
 ) -> tuple[str | None, ...]:
     """Return matching alias names, using ``None`` for the module-path route."""
     routes: list[str | None] = []
-    if (
-        not anchored
-        and len(qualifier) == 1
-        and (
-            qualifier[0] in contribution.alias_members
-            or qualifier[0] in contribution.alias_scope_paths
-        )
-    ):
+    if not anchored and len(qualifier) == 1 and qualifier[0] in contribution.routes:
         routes.append(qualifier[0])
     path_matches = (
         qualifier == contribution.module.segments
@@ -605,192 +710,81 @@ def _matching_contribution_routes(
     return tuple(routes)
 
 
-def _route_members(contribution: ModuleContribution, route: str | None) -> Mapping[NameAtom, QName]:
-    """Project one import route's declaration surface; ``None`` selects the path route."""
-    return contribution.path_members if route is None else contribution.alias_members.get(route, {})
-
-
-def _route_scope_paths(contribution: ModuleContribution, route: str | None) -> frozenset[NameAtom]:
-    """Project one import route's named-scope surface; ``None`` selects the path route."""
-    return (
-        contribution.path_scope_paths
-        if route is None
-        else contribution.alias_scope_paths.get(route, frozenset())
-    )
-
-
-def _member_qname(
-    contribution: ModuleContribution,
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    *,
-    anchored: bool,
-) -> QName | None:
-    """Find a member through the declaration routes named by *qualifier*."""
-    member_path = _path(member)
-    qnames = {
-        qname
-        for route in _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        for exposed, qname in _route_members(contribution, route).items()
-        if _path(exposed) == member_path
-    }
-    return next(iter(qnames)) if len(qnames) == 1 else None
+def _qualifier_routes(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool
+) -> Iterator[tuple[ModuleId, tuple[RouteSurface, ...]]]:
+    """Yield each module *qualifier* names with the surfaces of its matching import routes."""
+    for module in qualifier_candidates(env, qualifier, anchored=anchored):
+        contribution = env.contributions[module]
+        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
+        yield module, tuple(contribution.routes.get(route, _NO_SURFACE) for route in routes)
 
 
 def qualifier_members(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
 ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
     """Return each imported route's public members without choosing a route."""
-    members: list[tuple[ModuleId, Mapping[NameAtom, QName]]] = []
-    for module in qualifier_candidates(env, qualifier, anchored=anchored):
-        contribution = env.contributions[module]
-        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        merged = {
-            atom: qname
-            for route in routes
-            for atom, qname in _route_members(contribution, route).items()
-        }
-        if routes:
-            members.append((module, MappingProxyType(merged)))
-    return tuple(members)
+    return tuple(
+        (
+            module,
+            MappingProxyType(
+                {atom: qname for surface in surfaces for atom, qname in surface.members.items()}
+            ),
+        )
+        for module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
+        if surfaces
+    )
+
+
+def qualifier_member_ways(
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
+) -> dict[QName, frozenset[ImportWay]]:
+    """Return what each import route *qualifier* names reaches as *member*.
+
+    Each with the ways import declarations contribute it on those routes.
+    """
+    found: dict[QName, frozenset[ImportWay]] = {}
+    for _module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored):
+        for surface in surfaces:
+            qname = surface.members.get(member)
+            if qname is not None:
+                found[qname] = found.get(qname, frozenset()) | surface.member_ways[member]
+    return found
+
+
+def qualifier_exposures(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
+) -> Iterator[Exposure]:
+    """Yield every member the import routes *qualifier* names reach."""
+    exposed = {
+        member: qualifier_member_ways(env, qualifier, member, anchored=anchored)
+        for _module, members in qualifier_members(env, qualifier, anchored=anchored)
+        for member in members
+    }
+    for member, reached in exposed.items():
+        for qname, ways in reached.items():
+            yield member, qname, ways
+
+
+def unqualified_exposures(env: ImportEnv) -> Iterator[Exposure]:
+    """Yield every root bare atom the root-position import tails expose."""
+    for atom, reached in env.unqualified_ways.items():
+        for qname, ways in reached.items():
+            yield atom, qname, ways
 
 
 def qualifier_scope_paths(
     env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
-) -> tuple[tuple[ModuleId, frozenset[NameAtom]], ...]:
-    """Return named-scope identities visible through each matching import route."""
-    result: list[tuple[ModuleId, frozenset[NameAtom]]] = []
-    for module in qualifier_candidates(env, qualifier, anchored=anchored):
-        contribution = env.contributions[module]
-        routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        scope_paths = frozenset(
-            path for route in routes for path in _route_scope_paths(contribution, route)
-        )
-        result.append((module, scope_paths))
-    return tuple(result)
+) -> tuple[tuple[ModuleId, frozenset[NameAtom], frozenset[ImportWay]], ...]:
+    """Return named-scope identities visible through each matching import route.
 
-
-def qualifier_contributes(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> bool:
-    return any(
-        _member_qname(env.contributions[module], qualifier, member, anchored=anchored) is not None
-        for module in qualifier_candidates(env, qualifier, anchored=anchored)
-    )
-
-
-def try_resolve_qualified_member(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> QName | None:
-    """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
-    result = resolve_qualified(env, qualifier, member, anchored=anchored)
-    return result.qname if isinstance(result, QualResolutionFound) else None
-
-
-def resolve_alias_target(
-    name: str,
-    qualifier: QualifierChain | None,
-    *,
-    self_module_id: ModuleId | None,
-    import_env: ImportEnv,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
-    scope_path: PathAtom = (),
-) -> RecordDef | EnumDef | ExceptionDef | TypeAliasDecl | None:
-    """Resolve one type-alias target reference through a module's import environment.
-
-    Shared by the scope resolver and the program-level cross-module constructor
-    pre-pass so both judge a type alias's constructibility (see
-    :func:`~agm.agl.scope.symbols.alias_denotes_constructible_type`) the same
-    way for a target reached through an import rather than a same-module
-    declaration.
-
-    For an unqualified *name*, tries *self_module_id*'s own declaration under
-    *scope_path* first (when *self_module_id* is given — a caller that
-    already checked richer local state passes ``self_module_id=None`` to skip
-    this step), then the unqualified name exposed by *import_env*'s import
-    tails. For a qualified *name*, resolves through the ordinary
-    qualified-member route.
-
-    Returns ``None`` for anything it cannot resolve — an ambiguous
-    unqualified name or an unknown route — which the caller treats as
-    "presumed constructible".
+    Each with the ways the import declarations of those routes reach them by.
     """
-    if qualifier is None or not qualifier.segments:
-        if self_module_id is not None:
-            local = all_public_types.get((self_module_id, _atom((*scope_path, name))))
-            if local is not None:
-                return local
-        qnames = import_env.unqualified.get(name)
-        if qnames is None or len(qnames) != 1:
-            return None
-        (qname,) = qnames
-        return all_public_types.get(qname)
-    qualified = try_resolve_qualified_member(
-        import_env,
-        qualifier.route_segments,
-        name,
-        anchored=qualifier.anchored,
+    return tuple(
+        (
+            module,
+            frozenset(path for surface in surfaces for path in surface.scope_paths),
+            frozenset(ImportWay(node_id) for surface in surfaces for node_id in surface.decls),
+        )
+        for module, surfaces in _qualifier_routes(env, qualifier, anchored=anchored)
     )
-    if qualified is None:
-        return None
-    return all_public_types.get(qualified)
-
-
-def resolve_qualified_member(
-    env: ImportEnv,
-    qualifier: tuple[str, ...],
-    member: NameAtom,
-    *,
-    anchored: bool = False,
-    unknown_qualifier: Callable[[str], Exception],
-    missing_member: Callable[[str], Exception],
-    ambiguous: Callable[[str], Exception],
-) -> QName:
-    result = resolve_qualified(env, qualifier, member, anchored=anchored)
-    if isinstance(result, QualResolutionFound):
-        return result.qname
-    rendered = render_qualifier(qualifier, anchored=anchored)
-    if isinstance(result, QualResolutionUnknownQualifier):
-        raise unknown_qualifier(rendered)
-    if isinstance(result, QualResolutionMissingMember):
-        raise missing_member(rendered)
-    raise ambiguous(
-        ambiguous_qualification_message(qualifier, member, result.candidates, anchored=anchored)
-    )
-
-
-def resolve_qualified(
-    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
-) -> QualResolution:
-    candidates = qualifier_candidates(env, qualifier, anchored=anchored)
-    route_members = tuple(
-        (module, qname)
-        for module in candidates
-        if (qname := _member_qname(env.contributions[module], qualifier, member, anchored=anchored))
-        is not None
-    )
-    bare_atom = _atom((*qualifier, *_path(member)))
-    bare_qnames = frozenset() if anchored else env.unqualified.get(bare_atom, frozenset())
-
-    if route_members:
-        route_qnames = {qname for _module, qname in route_members}
-        if len(route_qnames | bare_qnames) > 1:
-            modules = {module for module, _qname in route_members}
-            modules.update(module for module, _atom in bare_qnames)
-            return QualResolutionAmbiguous(
-                qualifier, member, tuple(sorted(modules, key=ModuleId.path_str))
-            )
-        module, qname = route_members[0]
-        return QualResolutionFound(module, qname)
-    if bare_qnames:
-        if len(bare_qnames) > 1:
-            return QualResolutionAmbiguous(
-                qualifier,
-                member,
-                tuple(sorted((module for module, _atom in bare_qnames), key=ModuleId.path_str)),
-            )
-        qname = next(iter(bare_qnames))
-        return QualResolutionFound(qname[0], qname)
-    if candidates:
-        return QualResolutionMissingMember(qualifier, member, candidates)
-    return QualResolutionUnknownQualifier(qualifier)

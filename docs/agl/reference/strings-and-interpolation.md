@@ -153,9 +153,9 @@ enabled; with `--no-stdlib`, import a route to the method first.
 | ---------- | ----------- |
 | `text` | verbatim (no quotes) |
 | `int`, `decimal`, `bool` | plain scalar text |
-| `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
+| `json` | compact JSON by default (nested inside another value, or via `render`, its strings escape `%` and `${` as in a text literal); use `render(value, pretty = true)` for indented display |
 | `array[E]` | `[e1, e2, …]` — AgL array syntax |
-| `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
+| `dict[K, V]` | `{k1: value1, k2: value2}` — AgL dict syntax, each key in value syntax: a `text` key quoted (`{"a": 1}`), any other key as it renders (`{1: "one"}`, `{Color::Red: 1}`) |
 | record | `TypeName(v1, v2, f3 = value3, …)` — AgL constructor form, positional fields first (see note below). Fieldless: bare `TypeName` (no parens) — a nullary constructor is an auto-value, so its bare spelling round-trips as written. |
 | enum | inline member: same constructor form, qualified `TypeName::Member(…)`; fieldless inline member: `TypeName::Member` (no parens). A referenced member retains its record's own display form. |
 | exception | `TypeName(v1, v2, f3 = value3, …)` — same constructor form, positional fields spanning the whole `extends` chain (base fields first) |
@@ -170,7 +170,11 @@ AgL structured values (`array`, `dict`, record, enum, exception) always render o
 a **single line** — no injected newlines. A `json` value renders as **compact**
 (single-line) JSON whether it is nested inside another structured value or
 interpolated directly; use `render(value, pretty = true)` for indented,
-multi-line output.
+multi-line output. A `json` string holding `%` or `${` renders those as `\%` and `\${` when the
+`json` is nested in another value or rendered by `render` (default
+`quote-strings = true`), so that output is AgL value syntax rather than pure
+JSON; a `json` printed or interpolated directly, or rendered with
+`quote-strings = false`, is pure JSON.
 
 For when a rendered record or enum value parses back to an equal value, see
 [Value syntax](host-environment.md#value-syntax).
@@ -182,7 +186,8 @@ Scalar text conventions:
   notation — with trailing zeros dropped (`1.50` → `1.5`, `1E+2` → `100`).
 - Nested `text` values (a `text` field inside a record, array element, etc.)
   are emitted as a quoted AgL string literal with full JSON escaping plus
-  `\%` for percent signs, so they cannot be mis-read as interpolation syntax.
+  `\%` for percent signs and `\${` for `${`, so they cannot be mis-read as
+  interpolation syntax. A nested `json` string is escaped the same way.
 
 No boundary tags or other wrappers are added around interpolated values.
 
@@ -241,4 +246,4 @@ commands. See [Shell execution](shell-execution.md) for details.
 - Unterminated string, unterminated interpolation, unknown escape — lexical
   errors.
 - An empty `$` literal, or one written inside brackets — lexical errors (see
-  [The `$` literal](#the--literal) above).
+  [The `$` literal](#the-literal) above).

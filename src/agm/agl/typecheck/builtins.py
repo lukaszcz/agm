@@ -8,17 +8,19 @@ delegates the built-in dispatch branches to the public entry points.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
 from agm.agl.scope.symbols import BindingRef, BuiltinKind, ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
-from agm.agl.semantics.type_table import DeclId, parse_classification
+from agm.agl.semantics.type_table import DeclId, TypeDef, parse_classification
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -41,11 +43,10 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     BoolLit,
-    Call,
+    CompleteCall,
     Expr,
     NamedArg,
     StringLit,
-    VarRef,
 )
 from agm.agl.syntax.resources import ResourceError, resource_path
 from agm.agl.syntax.spans import SourceSpan
@@ -151,6 +152,15 @@ class BuiltinCheckCtx(Protocol):
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
+
+    def _register_bound_obligation(
+        self,
+        bounds: ConstraintBounds,
+        type_args: Mapping[str, Type],
+        *,
+        span: SourceSpan,
+        subject: str,
+    ) -> None: ...
 
     def _active_inference_engine(self) -> InferenceEngine: ...
 
@@ -320,14 +330,14 @@ class BuiltinCallChecker:
 
     # --- print ---
 
-    def check_print(self, node: Call) -> Type:
+    def check_print(self, node: CompleteCall) -> Type:
         arg = self._single_positional_argument(node, "print")
         self._check_arg_with_optional_explicit_target(node, arg, "print")
         return UnitType()
 
     # --- render ---
 
-    def check_render(self, node: Call) -> Type:
+    def check_render(self, node: CompleteCall) -> Type:
         if len(node.args) != 1:
             raise AglTypeError(
                 "render() requires exactly one positional argument.",
@@ -349,16 +359,16 @@ class BuiltinCallChecker:
 
     # --- copy / shallow_copy ---
 
-    def check_copy(self, node: Call) -> Type:
+    def check_copy(self, node: CompleteCall) -> Type:
         arg = self._single_positional_argument(node, "copy")
         return self._check_arg_with_optional_explicit_target(node, arg, "copy")
 
-    def check_shallow_copy(self, node: Call) -> Type:
+    def check_shallow_copy(self, node: CompleteCall) -> Type:
         arg = self._single_positional_argument(node, "shallow-copy")
         return self._check_arg_with_optional_explicit_target(node, arg, "shallow-copy")
 
     def _check_arg_with_optional_explicit_target(
-        self, node: Call, arg_expr: Expr, name: str
+        self, node: CompleteCall, arg_expr: Expr, name: str
     ) -> Type:
         """Check *arg_expr*, honoring an optional explicit ``::[T]`` type argument.
 
@@ -371,17 +381,32 @@ class BuiltinCallChecker:
         """
         explicit = self._resolve_explicit_target(node, name)
         if explicit is None:
-            return self._ctx._check_expr(arg_expr, expected=None)
-        arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
-        self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
-        return explicit
+            result = self._ctx._check_expr(arg_expr, expected=None)
+        else:
+            arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
+            self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
+            result = explicit
+        self._register_declared_bound(node, name, result)
+        return result
+
+    def _register_declared_bound(self, node: CompleteCall, name: str, target: Type) -> None:
+        """Check *name*'s declared ``{…}`` constraint block, if any, against *target*.
+
+        A direct call to a generic built-in free function resolves its own
+        declaration the same way a method call resolves the receiver's: by
+        ``node.callee``'s binding, never a copy of the declared signature.
+        """
+        ref = self._ctx._binding_for(node.callee.node_id)
+        sig = self._ctx._env.function_signature_of(ref.decl_node_id)
+        self._ctx._register_bound_obligation(
+            sig.bounds, {sig.type_params[0]: target}, span=node.span, subject=name
+        )
 
     # --- Session statics ---
 
-    def check_session_open(self, node: Call) -> Type:
+    def check_session_open(self, node: CompleteCall) -> Type:
         """Type-check ``Session::open(agent, transport?, name?, sandbox?, env?)``."""
-        session_transport = self.contract_type("SessionTransport")
-        assert isinstance(session_transport, EnumType)
+        session_transport = self.contract_enum("SessionTransport")
         transport = self._ctx._env.type_table.option_handle(session_transport)
         # Resolved whenever 'std/env' is loaded, whether the call names 'env'
         # or supplies it positionally: a standard library without 'std/env'
@@ -427,7 +452,7 @@ class BuiltinCallChecker:
             self.contract_type("Session"),
         )
 
-    def check_session_default(self, node: Call) -> Type:
+    def check_session_default(self, node: CompleteCall) -> Type:
         """Type-check the nullary ``Session::default()`` static."""
         return self._check_static_call(
             node,
@@ -438,7 +463,9 @@ class BuiltinCallChecker:
 
     # --- Session methods ---
 
-    def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+    def check_session_ask(
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
         """Type-check ``Session.ask`` with its receiver-owned agent and fixed sandbox mode."""
         for forbidden, label in (
             ("agent", "an explicit agent"),
@@ -450,7 +477,7 @@ class BuiltinCallChecker:
         return self.check_ask(node, expected=expected)
 
     def check_session_compact(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         return self._check_static_call(
             node,
@@ -460,20 +487,22 @@ class BuiltinCallChecker:
         )
 
     def check_session_reset(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         return self._check_session_nullary(node, "Session::reset")
 
-    def check_session_fork(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+    def check_session_fork(
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
         return self._check_static_call(node, "Session::fork", (), receiver_type)
 
     def check_session_stats(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         return self._check_session_nullary(node, "Session::stats", result="SessionStats")
 
     def check_session_set_name(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         return self._check_static_call(
             node,
@@ -483,11 +512,13 @@ class BuiltinCallChecker:
         )
 
     def check_session_close(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         return self._check_session_nullary(node, "Session::close")
 
-    def _check_session_nullary(self, node: Call, name: str, *, result: str | None = None) -> Type:
+    def _check_session_nullary(
+        self, node: CompleteCall, name: str, *, result: str | None = None
+    ) -> Type:
         return self._check_static_call(
             node,
             name,
@@ -497,7 +528,7 @@ class BuiltinCallChecker:
 
     def _check_static_call(
         self,
-        node: Call,
+        node: CompleteCall,
         name: str,
         params: tuple[ParamSpec, ...],
         result: Type,
@@ -541,14 +572,14 @@ class BuiltinCallChecker:
 
     # --- resources ---
 
-    def check_resource(self, node: Call) -> Type:
+    def check_resource(self, node: CompleteCall) -> Type:
         try:
             resource_path(node, is_directory=False)
         except ResourceError as exc:
             raise AglTypeError(str(exc), span=node.span) from exc
         return TextType()
 
-    def check_resource_dir(self, node: Call) -> Type:
+    def check_resource_dir(self, node: CompleteCall) -> Type:
         try:
             resource_path(node, is_directory=True)
         except ResourceError as exc:
@@ -557,7 +588,7 @@ class BuiltinCallChecker:
 
     # --- parse / try-parse ---
 
-    def check_parse(self, node: Call, *, expected: Type | None) -> Type:
+    def check_parse(self, node: CompleteCall, *, expected: Type | None) -> Type:
         """Type-check ``std/value::parse[T](value)``: same static rule as ``value as T``
         (see ``semantics.type_table.parse_classification`` for the one divergence).
 
@@ -575,7 +606,7 @@ class BuiltinCallChecker:
             "'parse' needs an explicit '::[T]' type argument or a known expected type.",
         )
 
-    def check_try_parse(self, node: Call, *, expected: Type | None) -> Type:
+    def check_try_parse(self, node: CompleteCall, *, expected: Type | None) -> Type:
         """Type-check ``std/value::try-parse[T](value)`` -> ``Result[T, ValueParseError]``.
 
         ``T`` comes from an explicit ``::[T]`` type argument, or else from a
@@ -584,10 +615,8 @@ class BuiltinCallChecker:
         ``Result[T, ValueParseError]`` shape to substitute ``T`` into, so this
         never hand-constructs the ``Result`` type.
         """
-        assert isinstance(node.callee, VarRef)  # only VarRef callees reach a builtin kind
         ref = self._ctx._binding_for(node.callee.node_id)
-        signature = self._ctx._env.get_function_signature_by_node_id(ref.decl_node_id)
-        assert signature is not None and len(signature.type_params) == 1
+        signature = self._ctx._env.function_signature_of(ref.decl_node_id)
         type_param = signature.type_params[0]
         explicit = self._resolve_explicit_target(node, "try-parse")
         target_type = self._resolved_parse_target(
@@ -618,7 +647,7 @@ class BuiltinCallChecker:
         return target
 
     def _check_parse_like(
-        self, node: Call, name: str, target_type: Type | None, missing_hint: str
+        self, node: CompleteCall, name: str, target_type: Type | None, missing_hint: str
     ) -> Type:
         """Shared static rule for ``parse``/``try-parse``: the same rule as a cast
         from ``text`` (see ``semantics.type_table.parse_classification``).
@@ -667,7 +696,7 @@ class BuiltinCallChecker:
         return expected.type_args[index]
 
     @staticmethod
-    def _single_positional_argument(node: Call, name: str) -> Expr:
+    def _single_positional_argument(node: CompleteCall, name: str) -> Expr:
         """Require and return *node*'s sole positional argument."""
         if len(node.args) != 1 or node.named_args:
             raise AglTypeError(
@@ -678,7 +707,7 @@ class BuiltinCallChecker:
     # --- ask ---
 
     def check_ask(
-        self, node: Call, *, expected: Type | None, receiver_type: Type | None = None
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type | None = None
     ) -> Type:
         """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``.
 
@@ -721,12 +750,12 @@ class BuiltinCallChecker:
     # --- ask-request ---
 
     def check_agent_ask_request(
-        self, node: Call, *, expected: Type | None, receiver_type: Type
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
     ) -> Type:
         """Type-check ``Agent.ask-request`` using its receiver as the agent."""
         return self.check_ask_request(node, receiver_type=receiver_type)
 
-    def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
+    def check_ask_request(self, node: CompleteCall, *, receiver_type: Type | None = None) -> Type:
         """Type-check the side-effect-free ``ask-request`` builder.
 
         The builder mirrors ``ask``'s whole call surface — target type argument
@@ -754,7 +783,7 @@ class BuiltinCallChecker:
 
     def _register_ask_like_obligation(
         self,
-        node: Call,
+        node: CompleteCall,
         *,
         target_type: Type,
         result_type: Type,
@@ -792,13 +821,13 @@ class BuiltinCallChecker:
 
     def _validate_ask_like_arguments(
         self,
-        node: Call,
+        node: CompleteCall,
         callee: str,
         *,
         allowed_named: frozenset[str],
         receiver_type: Type | None = None,
         agent_request_type: RecordType | None = None,
-    ) -> dict[str, NamedArg]:
+    ) -> dict[str, NamedArg[Expr]]:
         """Check syntax and value arguments that do not need the target type.
 
         *allowed_named* is the caller's permitted named-argument set: ``ask``
@@ -841,7 +870,7 @@ class BuiltinCallChecker:
             agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
         if receiver_type is not None and callee == "ask-request":
-            self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)
+            self._ctx._assert_assignable(receiver_type, expected_agent_type, node.span)
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)
@@ -921,7 +950,7 @@ class BuiltinCallChecker:
 
     # --- exec ---
 
-    def check_exec(self, node: Call, *, expected: Type | None) -> Type:
+    def check_exec(self, node: CompleteCall, *, expected: Type | None) -> Type:
         if not self._ctx._caps.supports_shell_exec:
             raise AglTypeError("The host does not support 'exec' (shell) calls.", span=node.span)
 
@@ -977,7 +1006,7 @@ class BuiltinCallChecker:
             )
         return env_type_def.handle()
 
-    def _check_exec_spawn_options(self, named: dict[str, NamedArg]) -> None:
+    def _check_exec_spawn_options(self, named: dict[str, NamedArg[Expr]]) -> None:
         """Check the non-codec ``exec`` options against their stdlib types."""
         if "env" in named:
             env_type = self._resolve_environ_type("exec", named["env"].span)
@@ -1002,7 +1031,7 @@ class BuiltinCallChecker:
                 actual, sandbox_type, named["sandbox"].span, named["sandbox"].value
             )
 
-    def _check_parse_error_retries_option(self, named: dict[str, NamedArg]) -> None:
+    def _check_parse_error_retries_option(self, named: dict[str, NamedArg[Expr]]) -> None:
         """Check a ``parse-error-retries`` argument as an ordinary ``int`` expression."""
         if "parse-error-retries" not in named:
             return
@@ -1035,11 +1064,15 @@ class BuiltinCallChecker:
         declared = self._ctx._env.type_table.builtin_declaration(name)
         if declared is not None:
             return declared.handle()
-        canonical = BUILTIN_PRELUDE_TYPES.get(name)
-        assert isinstance(canonical, (RecordType, EnumType, ExceptionType)), (
-            f"{name!r} has no canonical builtin prelude type"
-        )
-        return canonical
+        return BUILTIN_PRELUDE_TYPES[name]
+
+    def contract_record(self, name: str) -> RecordType:
+        """:meth:`contract_type` for a ``builtin record`` contract *name*."""
+        return cast(RecordType, self.contract_type(name))
+
+    def contract_enum(self, name: str) -> EnumType:
+        """:meth:`contract_type` for a ``builtin enum`` contract *name*."""
+        return cast(EnumType, self.contract_type(name))
 
     def _resolve_host_record_contract(self, name: str, *, span: SourceSpan) -> RecordType:
         """Resolve *name*'s host record contract, rejecting it if incoherent.
@@ -1051,8 +1084,7 @@ class BuiltinCallChecker:
         ``builtin record`` in the canonical prelude, so the resolved handle is
         always a ``RecordType``.
         """
-        contract_type = self.contract_type(name)
-        assert isinstance(contract_type, RecordType), f"{name!r} is not a builtin record contract"
+        contract_type = self.contract_record(name)
         self._check_host_contract_coherent(contract_type, span=span)
         return contract_type
 
@@ -1087,18 +1119,11 @@ class BuiltinCallChecker:
         returns ``None`` and this is skipped.
         """
         table = self._ctx._env.type_table
-        typedef = table.get_by_id(exc_type.decl_id)
-        assert typedef is not None, "compiler bug: caught exception is not registered"
-        if not typedef.is_builtin:
+        if not table.typedef_of(exc_type.decl_id).is_builtin:
             return
         self._check_host_contract_coherent(exc_type, span=span)
-        live_declaration = table.builtin_declaration(exc_type.name)
-        assert live_declaration is not None, "compiler bug: builtin exception is not live"
-        live_handle = live_declaration.handle()
-        assert isinstance(live_handle, ExceptionType), (
-            f"{exc_type.name!r} is registered as a builtin exception name but its live "
-            "declaration is not an exception"
-        )
+        # The caught declaration is itself a live ``builtin exception`` of this name.
+        live_handle = cast(TypeDef, table.builtin_declaration(exc_type.name)).exception_handle()
         if live_handle == exc_type:
             return
         caught_spelling = spell_declaration(
@@ -1155,7 +1180,7 @@ class BuiltinCallChecker:
 
     # --- shared explicit-target resolver for --
 
-    def _resolve_explicit_target(self, node: Call, builtin_name: str) -> Type | None:
+    def _resolve_explicit_target(self, node: CompleteCall, builtin_name: str) -> Type | None:
         """Resolve a built-in call with an explicit ``::[T]`` argument.
 
         Returns the resolved ``Type`` when ``node.type_args`` is non-empty, or
@@ -1219,7 +1244,7 @@ class BuiltinCallChecker:
 
     # --- shared parse-option handling (ask / exec) ---
 
-    def _parse_options(self, named: dict[str, NamedArg]) -> tuple[str | None, bool | None]:
+    def _parse_options(self, named: dict[str, NamedArg[Expr]]) -> tuple[str | None, bool | None]:
         """Validate static option syntax without selecting a target-dependent codec."""
         format_name: str | None = None
         if "format" in named:
@@ -1241,7 +1266,7 @@ class BuiltinCallChecker:
 
     @staticmethod
     def _collect_parse_option_spans(
-        named: dict[str, NamedArg],
+        named: dict[str, NamedArg[Expr]],
     ) -> tuple[tuple[str, SourceSpan], ...]:
         """Capture the spans of the parse-shaping named args for later diagnostics."""
         return tuple(
@@ -1275,7 +1300,6 @@ class BuiltinCallChecker:
             self._ctx, obligation.target_type, codec_name, obligation.span, use=use
         )
         spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
-        assert not contains_inference_var(spec.target_type)
         self._ctx._record_contract_spec(obligation.node_id, spec)
         self._warn_noop_parse_error_retries_on_text(obligation)
         return spec
@@ -1296,16 +1320,15 @@ class BuiltinCallChecker:
             # `builtin record ExecResult` declaration names (see
             # `contract_type`), so a scoped declaration is
             # recognized at its own path rather than the root canonical one.
-            is_structured = target_type == self.contract_type("ExecResult")
-            if not is_structured:
+            exec_result = self.contract_record("ExecResult")
+            if target_type != exec_result:
                 self._record_parsed_contract(obligation, use="an exec output type")
                 return
             # ``exec`` will mint an ``ExecResult`` record directly: apply the
             # same host-coherence check as ``ask``/``ask-request`` (currently
             # vacuous, since none of ``ExecResult``'s own fields are nominal,
             # but applied uniformly so a future field cannot regress silently).
-            assert isinstance(target_type, RecordType)
-            self._check_host_contract_coherent(target_type, span=obligation.span)
+            self._check_host_contract_coherent(exec_result, span=obligation.span)
             if obligation.has_parse_shaping_option:
                 option_name, offending_span = obligation.first_parse_option()
                 raise AglTypeError(

@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "user_function_call_reports_callee_line",
+      "params": {"mode": "function"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "ArithmeticError", "line": 5}
+      }
+    },
+    {
+      "name": "extern_callback_reports_lambda_line",
+      "params": {"mode": "callback"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "ArithmeticError", "line": 14}
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+# A bare `dict[K, V]` receiver matches any dict, binding both K and V from
+# the concrete receiver; a `dict[_, V]` wildcard receiver binds only V. A
+# method needs `{Hashable K}` only where it actually hashes (`has`/`at`);
+# `count-keys`/`values-len` iterate without hashing and stay unbound. `conv`
+# carries its own type parameter `[U]` alongside the receiver's.
+
+def dict[K, V]::count-keys(self) -> int =
+  var n: int = 0
+  for _k in self do
+    n := n + 1
+  done
+  n
+
+def dict[K, V]::has{Hashable K}(self, key: K) -> bool = key in self
+
+def dict[K, V]::at{Hashable K}(self, key: K) -> V = self[key]
+
+def dict[K, V]::conv[U](self, f: (V) -> U) -> int = 0
+
+def dict[_, V]::values-len(self) -> int = self.count-keys()
+
+def one(v: text) -> int = 1
+
+def two(v: int) -> int = 2
+
+program def main(use-int-key: bool) -> unit =
+  if use-int-key =>
+    let d: dict[int, text] = {}
+    print(d.count-keys())
+    print(d.has(3))
+    print(d.values-len())
+    print(d.conv(one))
+  else =>
+    let t: dict[text, int] = {"a": 1}
+    print(t.count-keys())
+    print(t.has("a"))
+    print(t.at("a"))
+    print(t.values-len())
+    print(t.conv(two))

@@ -11,16 +11,23 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import (
     ImportEnv,
-    ModuleContribution,
-    QualResolutionFound,
-    QualResolutionMissingMember,
     SingleTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_member_ways,
 )
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import (
+    TypeArgumentsError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.typecheck import AglTypeError
+from agm.agl.typecheck.program import check_program
+from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.module_graph import build_inline_entry_graph, resolve_inline_entry
+from tests.agl.qualifier_support import graph_verdict, inline_verdict
 
 Outcome = Literal["accepted", "scope", "typecheck"]
 
@@ -47,6 +54,7 @@ def _import_env(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: {atom: (module, atom) for atom in public_atoms}},
+        {module: {}},
     )
 
 
@@ -70,32 +78,25 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 
 def _module_outcome(source: str) -> Outcome:
-    from agm.agl.typecheck import AglTypeError
-    from tests.agl.ir_harness import base_caps
-    from tests.agl.module_graph import resolve_and_check_inline_entry
+    """A phase-accurate verdict: which phase, if any, first rejects *source*.
 
-    try:
-        resolve_and_check_inline_entry(source, base_caps())
-    except AglScopeError:
-        return "scope"
-    except AglTypeError:
-        return "typecheck"
-    return "accepted"
+    *source* is a tiny inline snippet; its graph is built through
+    :func:`~tests.agl.module_graph.build_inline_entry_graph` and classified
+    by :func:`~tests.agl.qualifier_support.graph_verdict`.
+    """
+    graph, _import_node_id = build_inline_entry_graph(source)
+    phase, _cls, _span, _identity = graph_verdict(graph)
+    if phase == "matchcompile":
+        raise AssertionError(f"unexpected matchcompile phase for {source!r}")
+    return phase
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
-    from agm.agl.typecheck import AglTypeError
-    from agm.agl.typecheck.program import check_program
-    from tests.agl.ir_harness import base_caps, make_graph_from_files
-
-    try:
-        resolved = resolve_program(make_graph_from_files(tmp_path, modules))
-        check_program(resolved, base_caps())
-    except AglScopeError:
-        return "scope"
-    except AglTypeError:
-        return "typecheck"
-    return "accepted"
+    """A phase-accurate verdict: which call raised, not which class."""
+    phase, _cls, _span, _identity = inline_verdict(tmp_path, modules)
+    if phase == "matchcompile":
+        raise AssertionError(f"unexpected matchcompile phase for {modules!r}")
+    return phase
 
 
 @pytest.mark.parametrize(
@@ -112,7 +113,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
             "enum Color\n  | Red\nlet value: Color = Color::Red\n"
             "case value of | Nope::Red => 1 | _ => 2",
             "scope",
-            "typecheck",
+            "scope",
         ),
         (
             "enum Color\n  | Red\n::Missing::Red",
@@ -121,7 +122,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
                 "case value of | ::Missing::Red => 1 | _ => 2"
             ),
             "scope",
-            "typecheck",
+            "scope",
         ),
         (
             "enum Color\n  | Red\nColor::Gone",
@@ -130,7 +131,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
                 "case value of | Color::Gone => 1 | _ => 2"
             ),
             "scope",
-            "typecheck",
+            "scope",
         ),
     ],
 )
@@ -144,9 +145,7 @@ def test_expression_and_pattern_qualifier_verdicts_remain_in_parity(
     assert _module_outcome(pattern) == pattern_outcome
 
 
-def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
-    tmp_path: Path,
-) -> None:
+def test_own_type_beats_module_route_in_both_positions(tmp_path: Path) -> None:
     expression = {
         "entry": "import pkg/Foo\nenum Foo\n  | local\nFoo::local",
         "pkg/Foo": "def local() -> int = 1",
@@ -162,17 +161,208 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
         "pkg/Foo": "def local() -> int = 1",
     }
 
-    assert _program_outcome(tmp_path / "expression", expression) == "scope"
-    assert _program_outcome(tmp_path / "pattern", pattern) == "typecheck"
+    assert _program_outcome(tmp_path / "expression", expression) == "accepted"
+    assert _program_outcome(tmp_path / "pattern", pattern) == "accepted"
+
+
+@pytest.mark.parametrize(
+    ("annotation", "member"),
+    (
+        ("types::Color", "enum Color = Red | Green"),
+        ("types::Box[int]", "enum Box[T] = Box(value: T)"),
+    ),
+    ids=("bare-owner", "applied-owner"),
+)
+def test_type_parameter_shadowing_a_real_module_route_is_rejected(
+    tmp_path: Path, annotation: str, member: str
+) -> None:
+    """A type parameter's name can coincide with an actually-imported module's.
+
+    ``def f[types](x: types::Color)`` names the type parameter, not the
+    ``types`` module, exactly as a type parameter shadowing a purely local
+    name does -- the module import makes no difference to the verdict.
+    """
+    modules = {
+        "entry": f"import types\ndef f[types](x: {annotation}) -> int = 1",
+        "types": member,
+    }
+
+    assert _program_outcome(tmp_path, modules) == "scope"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import one/types\ndef f[one](x: one/types::Color) -> int = 1",
+        "import one/types\ndef f[one](x: int) -> int =\n  let c = one/types::Color::Red\n  1",
+        "import one/types\ndef f[one](x: int) = one/types::Color::Red",
+    ),
+    ids=("annotation", "value", "one-liner"),
+)
+def test_type_parameter_never_shadows_a_slash_module_route(tmp_path: Path, entry: str) -> None:
+    """A ``/``-containing qualifier segment always names a module route.
+
+    ``one/types::Color`` spells the imported ``one/types`` module's route, not
+    the type parameter ``one`` -- a route segment can only ever coincide with a
+    type parameter's bare name, never with its own ``/``-joined spelling, so
+    the type-parameter shadowing rule must not reject it.
+    """
+    modules = {
+        "entry": entry,
+        "one/types": "enum Color\n  | Red",
+    }
+
+    assert _program_outcome(tmp_path, modules) == "accepted"
+
+
+def _needle_span(entry: str, locate: str, span_len: int) -> tuple[int, int, int]:
+    """Compute (start_line, start_col, end_col) for *locate*'s last occurrence in *entry*.
+
+    The reported span covers only *locate*'s first *span_len* characters --
+    a scope row's shadowed segment is shorter than the qualifier locating it.
+    """
+    offset = entry.rindex(locate)
+    prefix = entry[:offset]
+    line = prefix.count("\n") + 1
+    col = offset - prefix.rfind("\n")
+    return line, col, col + span_len
+
+
+@pytest.mark.parametrize(
+    ("entry", "phase", "locate"),
+    (
+        (
+            "import types\ndef f[types](x: int) = fn(y: types::Color) => 1",
+            "scope",
+            "types::Color",
+        ),
+        (
+            "import types\ndef S::f[types](x: int) = fn(y: types::Color) => 1",
+            "scope",
+            "types::Color",
+        ),
+        (
+            "import types\n\nscope S\n  def f[types](x: int) = fn(y: types::Color) => 1\nend S",
+            "scope",
+            "types::Color",
+        ),
+        (
+            "import types\ndef f[types](x: int) -> int = types::Color::Red",
+            "scope",
+            "types::Color::Red",
+        ),
+        (
+            "import types\nrecord Box\n  v: int\n"
+            "def Box::m[types](self) = fn(y: types::Color) => 1",
+            "scope",
+            "types::Color",
+        ),
+        (
+            "import lib\ndef f(x: lib::SlotA[int]) -> int = "
+            "case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0",
+            "typecheck",
+            "lib::SlotA[text]::FilledA(value)",
+        ),
+        (
+            "import lib\nprogram def main(x: lib::SlotA[int]) -> unit = "
+            "print(case x of | lib::SlotA[text]::FilledA(value) => 1 | _ => 0)",
+            "typecheck",
+            "lib::SlotA[text]::FilledA(value)",
+        ),
+    ),
+    ids=(
+        "plain-def",
+        "scoped-shorthand-def",
+        "scope-region-def",
+        "value-position-return",
+        "method-def",
+        "plain-def-case",
+        "program-def-case",
+    ),
+)
+def test_a_one_liner_def_body_validates_its_qualifier_chains(
+    tmp_path: Path, entry: str, phase: Outcome, locate: str
+) -> None:
+    """A ``def`` whose body is a bare expression, never a ``Block``, still
+    validates every qualifier chain reachable only through that body: a
+    lambda parameter's type-parameter shadowing, a bare value chain, and an
+    ill-typed constructor pattern -- across a plain, scoped-shorthand,
+    scope-region, method, and ``program`` ``def``.
+
+    A scope-phase row's precise class is :class:`UnknownQualifierError`, at
+    the shadowed qualifier's span; a typecheck-phase row's is
+    :class:`AglTypeError`, at the whole rejected pattern's span.
+    """
+    modules = {
+        "entry": entry,
+        "types": "enum Color\n  | Red\n  | Green",
+        "lib": "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA",
+    }
+    graph = make_graph_from_files(tmp_path, modules)
+    expected_line, expected_start_col, expected_end_col = _needle_span(entry, locate, len(locate))
+
+    if phase == "scope":
+        with pytest.raises(UnknownQualifierError) as scope_excinfo:
+            resolve_program(graph)
+        span = scope_excinfo.value.span
+    else:
+        resolved = resolve_program(graph)
+        with pytest.raises(AglTypeError) as type_excinfo:
+            check_program(resolved, base_caps())
+        span = type_excinfo.value.span
+
+    assert span is not None
+    assert (span.start_line, span.start_col, span.end_col) == (
+        expected_line,
+        expected_start_col,
+        expected_end_col,
+    )
+
+
+_NESTED_SCOPE_MODULE = (
+    "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\nend S\n"
+)
+
+
+_REGION_PREFIX = "scope S\n  enum Color | Blue | Red\n\n  scope P\n    record Q\n  end P\n\n"
+
+
+@pytest.mark.parametrize("binder", ("let", "var"))
+@pytest.mark.parametrize(
+    ("annotation", "value", "error", "needle"),
+    (
+        ("P[int]::Q", "P::Q", TypeArgumentsError, "P[int]"),
+        ("Color::Nope", "Color::Blue", UnknownMemberError, "Color::Nope"),
+    ),
+    ids=("type-args-on-scope-segment", "unknown-enum-member"),
+)
+def test_scoped_binder_shorthand_matches_its_region_form(
+    binder: str, annotation: str, value: str, error: type[AglScopeError], needle: str
+) -> None:
+    """A root ``let S::x`` or ``var S::x`` binder validates its annotation inside ``S``,
+    exactly as ``scope S ... let x ... end S`` does: same phase, same precise class, and
+    a span over the same rejected sub-expression -- not the whole annotation or binder.
+    """
+    shorthand = f"{_NESTED_SCOPE_MODULE}{binder} S::x: {annotation} = {value}\n"
+    region = f"{_REGION_PREFIX}  {binder} x: {annotation} = {value}\nend S\n"
+    for source in (shorthand, region):
+        with pytest.raises(AglScopeError) as excinfo:
+            resolve_inline_entry(source)
+        assert type(excinfo.value) is error
+        span = excinfo.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col, span.end_col) == _needle_span(
+            source, needle, len(needle)
+        )
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:
     module = ModuleId.from_path("Pal")
     env = _import_env("Pal", ("public", ("Secret", "hidden")), tail=(_item("public"),))
 
-    assert resolve_qualified(env, ("Pal",), ("Secret", "hidden")) == QualResolutionFound(
-        module, (module, ("Secret", "hidden"))
-    )
+    assert set(qualifier_member_ways(env, ("Pal",), ("Secret", "hidden"))) == {
+        (module, ("Secret", "hidden"))
+    }
 
 
 def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -> None:
@@ -192,7 +382,7 @@ def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -
         "pal": "enum Color\n  | Red",
     }
 
-    assert _program_outcome(tmp_path, modules) == "typecheck"
+    assert _program_outcome(tmp_path, modules) == "scope"
 
 
 def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path) -> None:
@@ -202,67 +392,16 @@ def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path)
             "import pal\nlet value: pal::Color = pal::Color::Red\n"
             "case value of | pal::Color::Red => 1 | _ => 2"
         ),
-        "pal": "enum Color\n  | Red",
+        "pal": "enum Color\n  | Red\n  | Green",
     }
 
     assert _program_outcome(tmp_path, modules) == "accepted"
 
 
-def test_ambiguous_imported_owner_is_rejected_by_scope(tmp_path: Path) -> None:
-    modules = {
-        "entry": "import one/types\nimport two/types\nlet value = types::Color::Red\nvalue",
-        "one/types": "enum Color\n  | Red",
-        "two/types": "enum Color\n  | Red",
-    }
-
-    assert _program_outcome(tmp_path, modules) == "scope"
-
-
-def test_typecheck_import_member_query_uses_the_shared_route_environment() -> None:
-    from agm.agl.typecheck.env import TypeEnvironment
-
-    module = ModuleId.from_path("pkg/types")
-    import_env = ImportEnv(
-        contributions={
-            module: ModuleContribution(
-                module=module,
-                members={},
-                path_enabled=True,
-                aliases=frozenset(),
-                path_members={"Color": (module, "Color")},
-            )
-        },
-        unqualified={},
-    )
-    env = TypeEnvironment(import_env=import_env)
-
-    assert env.has_qualified_import_member(_qualifier("types"), "Color")
-    assert not env.has_qualified_import_member(_qualifier("types"), "Missing")
-    assert not TypeEnvironment().has_qualified_import_member(_qualifier("types"), "Color")
-
-
-def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:
+def test_import_hiding_keeps_a_qualified_owner_in_the_route_surface() -> None:
+    module = ModuleId.from_path("Pal")
     env = _import_env("Pal", ("public", ("Secret", "hidden")), hidden=(_item("Secret"),))
 
-    assert isinstance(
-        resolve_qualified(env, ("Pal",), ("Secret", "hidden")), QualResolutionMissingMember
-    )
-
-
-def test_ambiguous_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
-    tmp_path: Path,
-) -> None:
-    modules = {
-        "entry": (
-            "import one/types\n"
-            "import two/types\n"
-            "enum Local\n"
-            "  | ok\n"
-            "let value: Local = Local::ok\n"
-            "value is types::Color::Red"
-        ),
-        "one/types": "enum Color\n  | Red",
-        "two/types": "enum Color\n  | Red",
+    assert set(qualifier_member_ways(env, ("Pal",), ("Secret", "hidden"))) == {
+        (module, ("Secret", "hidden"))
     }
-
-    assert _program_outcome(tmp_path, modules) == "typecheck"

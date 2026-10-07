@@ -1,0 +1,5 @@
+def dict[text, V]::sz(self) -> int = 0
+
+program def main() -> unit =
+  let d: dict[int, text] = {}
+  print(d.sz())

@@ -99,7 +99,7 @@ class TestReservedEnumMemberIds:
         """No name-keyed fallback: a member name that happens to match some
         other reserved type name (here ``Session``) must not silently alias
         that unrelated type's identity."""
-        with pytest.raises(AssertionError, match="not a reserved enum member"):
+        with pytest.raises(KeyError):
             require_reserved_enum_member_id("SessionTransport", "Session")
 
 

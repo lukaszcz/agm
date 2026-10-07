@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import decimal
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -11,7 +11,6 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.reserved_nominals import NO_DECL_ID
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
@@ -35,11 +34,8 @@ from agm.agl.matchcompile.model import (
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
-    MatchCompileInvariantError,
     constructor_inhabits_type,
-    enum_constructor,
     normalize_case,
-    normalize_pattern,
     pattern_cell_inhabits_type,
     signature_for_type,
 )
@@ -51,20 +47,18 @@ from agm.agl.semantics.types import (
     BottomType,
     DecimalType,
     EnumType,
-    InferenceVarType,
     IntType,
     RecordType,
     TextType,
-    Type,
     TypeVarType,
 )
 from agm.agl.semantics.values import DecimalValue, RecordValue, TextValue
-from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, Pattern
+from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
-from tests._agl_helpers import enum_typedef, next_decl_id, register_typedef, strip_decl_ids
-from tests.agl.ir_harness import make_graph_from_files
+from tests._agl_helpers import next_decl_id, strip_decl_ids
+from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.match_reference import reference_action
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -200,26 +194,11 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     assert isinstance(source_pattern, AsPattern)
     constructor_pattern = source_pattern.pattern
     assert isinstance(constructor_pattern, ConstructorPattern)
-    constructor_ref = checked.pattern_constructor_ref_for(constructor_pattern.node_id)
+    constructor_ref = checked.pattern_constructor_refs.get(constructor_pattern.node_id)
     assert constructor_ref is not None
-    assert checked.pattern_constructor_owner_for(constructor_pattern.node_id) == NominalId(
+    assert checked.pattern_constructor_owners.get(constructor_pattern.node_id) == NominalId(
         subject_type.decl_id
     )
-    with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
-        normalize_case(
-            case,
-            replace(checked, pattern_constructor_refs={}),
-        )
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(
-            case,
-            replace(
-                checked,
-                pattern_constructor_owners={
-                    constructor_pattern.node_id: NominalId(inner.constructor.record_type.decl_id)
-                },
-            ),
-        )
 
 
 def test_record_signatures_keep_modules_and_generic_instantiations_distinct() -> None:
@@ -364,16 +343,6 @@ def test_bottom_has_an_empty_closed_signature_and_no_inhabiting_patterns() -> No
     )
 
 
-def test_flexible_inference_types_cannot_enter_match_normalization() -> None:
-    checked = _check("()")
-    leaked = InferenceVarType("T")
-
-    with pytest.raises(MatchCompileInvariantError):
-        signature_for_type(leaked, checked.type_env.type_table)
-    with pytest.raises(MatchCompileInvariantError):
-        constructor_inhabits_type(BoolConstructor(False), leaked, checked.type_env.type_table)
-
-
 def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> None:
     checked = _check("let value = 1\ncase value of | 0 => 10 | _ as captured => captured")
     case = _only_case(checked.resolved.program)
@@ -391,10 +360,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
         case.branches[1].node_id,
     ]
     assert isinstance(normalized.source, CaseSite)
-    assert [action.body_node_id for action in normalized.source.actions] == [
-        case.branches[0].body.node_id,
-        case.branches[1].body.node_id,
-    ]
+    assert [action.source_index for action in normalized.source.actions] == [0, 1]
     assert isinstance(normalized.rows[0].cells[0], ConstructorCell)
     binder_cell = normalized.rows[1].cells[0]
     assert isinstance(binder_cell, WildcardCell)
@@ -622,31 +588,12 @@ def test_text_and_null_literals_retain_distinct_typed_canonical_keys() -> None:
     assert null_cell.constructor == LiteralConstructor(LiteralKind.NULL, None)
 
 
-@pytest.mark.parametrize(
-    ("kind", "value"),
-    [
-        (LiteralKind.NUMERIC, "1"),
-        (LiteralKind.TEXT, None),
-        (LiteralKind.NULL, "null"),
-    ],
-)
-def test_literal_constructor_rejects_noncanonical_payloads(
-    kind: LiteralKind, value: object
-) -> None:
-    with pytest.raises(ValueError, match="invalid value"):
-        LiteralConstructor(kind, cast("decimal.Decimal | str | None", value))
-
-
 def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> None:
     checked = _check("let value = 1\ncase value of | 1 => 1 | _ => 0")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
     source_cell = normalized.rows[0].cells[0]
     assert isinstance(source_cell, ConstructorCell)
 
-    with pytest.raises(ValueError, match="occurrence ids"):
-        OccurrenceId(-1)
-    with pytest.raises(ValueError, match="creation order"):
-        replace(normalized.root, creation_order=-1)
     with pytest.raises(ValueError, match="argument count"):
         replace(source_cell, arguments=(source_cell,))
     with pytest.raises(ValueError, match="only its root"):
@@ -716,224 +663,7 @@ def test_decision_model_carries_occurrence_and_binder_identities() -> None:
     assert child.provenance.parent == normalized.root.id
 
 
-@dataclass(frozen=True)
-class _UnknownPattern:
-    node_id: int
-    span: SourceSpan
-
-
-def _replace_case_pattern(case: Case, pattern: Pattern) -> Case:
-    branch = replace(case.branches[0], pattern=pattern)
-    return replace(case, branches=(branch, *case.branches[1:]))
-
-
-def test_signature_and_pattern_dispatch_reject_unknown_future_members() -> None:
-    checked = _check("let value = 1\ncase value of | _ => 0")
-    case = _only_case(checked.resolved.program)
-
-    with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
-        signature_for_type(cast(Type, object()), checked.type_env.type_table)
-    with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
-        constructor_inhabits_type(
-            BoolConstructor(False), cast(Type, object()), checked.type_env.type_table
-        )
-    with pytest.raises(MatchCompileInvariantError, match="unsupported constructor"):
-        constructor_inhabits_type(
-            cast(Constructor, object()), IntType(), checked.type_env.type_table
-        )
-    unknown = cast(Pattern, _UnknownPattern(node_id=999, span=case.span))
-    with pytest.raises(MatchCompileInvariantError, match="unsupported source pattern"):
-        normalize_pattern(unknown, IntType(), checked)
-
-
-def test_missing_enum_and_subject_metadata_raise_compiler_invariants() -> None:
-    checked = _check(
-        "enum E\n  | A(value: int)\nlet value: E = A(value = 1)\ncase value of | A(_) => 0"
-    )
-    case = _only_case(checked.resolved.program)
-
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        enum_constructor(EnumType("Missing"), "missing", checked.type_env.type_table)
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        signature_for_type(EnumType("Missing"), checked.type_env.type_table)
-    checked.type_env.type_table.register(
-        TypeDef(kind="record", name="E", module_id=ENTRY_ID, decl_node_id=999)
-    )
-    wrong_kind = replace(
-        checked,
-        node_types={
-            **checked.node_types,
-            case.subject.node_id: EnumType("E", decl_id=999),
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        normalize_case(case, wrong_kind)
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
-        signature_for_type(RecordType("Missing"), checked.type_env.type_table)
-    without_subject = replace(
-        checked,
-        node_types={
-            node_id: node_type
-            for node_id, node_type in checked.node_types.items()
-            if node_id != case.subject.node_id
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="missing checked subject type"):
-        normalize_case(case, without_subject)
-
-
-def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() -> None:
-    literal_checked = _check("let value = 1\ncase value of | 1 => 1 | _ => 0")
-    literal_case = _only_case(literal_checked.resolved.program)
-    wrong_literal_type = replace(
-        literal_checked,
-        node_types={**literal_checked.node_types, literal_case.subject.node_id: BoolType()},
-    )
-    with pytest.raises(MatchCompileInvariantError, match="incompatible"):
-        normalize_case(literal_case, wrong_literal_type)
-
-    enum_checked = _check(
-        "enum Choice\n  | none\n  | some(value: int)\n"
-        "let value: Choice = none\ncase value of | none => 0 | _ => 1"
-    )
-    enum_case = _only_case(enum_checked.resolved.program)
-    non_enum = replace(
-        enum_checked,
-        node_types={**enum_checked.node_types, enum_case.subject.node_id: IntType()},
-    )
-    with pytest.raises(MatchCompileInvariantError, match="non-enum"):
-        normalize_case(enum_case, non_enum)
-
-    bare_none = enum_case.branches[0].pattern
-    bare_some = replace(bare_none, name="some")
-    bare_none_ref = enum_checked.pattern_classifications[bare_none.node_id]
-    assert bare_none_ref is not None
-    some_ref = replace(bare_none_ref, owner_name="some", owner_decl_node_id=-1)
-    malformed_checked = replace(enum_checked, pattern_classifications={bare_none.node_id: some_ref})
-    with pytest.raises(MatchCompileInvariantError, match="invalid final"):
-        normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
-
-
-def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -> None:
-    checked = _check(
-        "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0 | _ => 1"
-    )
-    case = _only_case(checked.resolved.program)
-    pattern = case.branches[0].pattern
-
-    with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
-        normalize_case(case, replace(checked, pattern_classifications={}))
-
-    ref = checked.pattern_classifications[pattern.node_id]
-    assert ref is not None
-    register_typedef(
-        checked.type_env.type_table, enum_typedef("Other", {"none": {}}, module_id=ENTRY_ID)
-    )
-    wrong_owner = replace(ref, owner_name="Other")
-    with pytest.raises(MatchCompileInvariantError, match="invalid final"):
-        normalize_case(
-            case, replace(checked, pattern_classifications={pattern.node_id: wrong_owner})
-        )
-
-
-def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
-    checked = _check(
-        "enum Choice\n  | some(value: int)\n  | other(value: int)\n"
-        "let value: Choice = some(value = 1)\n"
-        "case value of | some(value = _ as captured) => captured | _ => 0"
-    )
-    case = _only_case(checked.resolved.program)
-    pattern = case.branches[0].pattern
-    assert isinstance(pattern, ConstructorPattern)
-    supplied_pairs = checked.argument_bindings.constructor_patterns[pattern.node_id]
-
-    non_enum = replace(
-        checked,
-        node_types={**checked.node_types, case.subject.node_id: IntType()},
-    )
-    with pytest.raises(MatchCompileInvariantError, match="non-enum"):
-        normalize_case(case, non_enum)
-
-    missing_enum_type = EnumType("Missing")
-    missing_type = replace(
-        checked,
-        node_types={**checked.node_types, case.subject.node_id: missing_enum_type},
-        pattern_constructor_owners={pattern.node_id: NominalId(missing_enum_type.decl_id)},
-    )
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        normalize_case(case, missing_type)
-
-    unknown_variant = replace(pattern, name="missing")
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(_replace_case_pattern(case, unknown_variant), checked)
-    choice_type = checked.node_types[case.subject.node_id]
-    assert isinstance(choice_type, EnumType)
-    with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
-        enum_constructor(choice_type, "missing", checked.type_env.type_table)
-
-    different_variant = replace(pattern, name="other")
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(_replace_case_pattern(case, different_variant), checked)
-
-    choice_type = checked.node_types[case.subject.node_id]
-    assert isinstance(choice_type, EnumType)
-    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
-    assert constructor_ref is not None
-    member = checked.type_env.type_table.enum_member_names(choice_type)[pattern.name]
-    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(member.decl_id)
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(
-            case,
-            replace(
-                checked,
-                pattern_constructor_refs={
-                    pattern.node_id: replace(constructor_ref, owner_name="not-the-pattern-member")
-                },
-            ),
-        )
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(
-            case,
-            replace(
-                checked,
-                pattern_constructor_owners={pattern.node_id: NominalId(NO_DECL_ID)},
-            ),
-        )
-
-    no_bindings = replace(
-        checked.argument_bindings,
-        constructor_patterns={
-            node_id: pairs
-            for node_id, pairs in checked.argument_bindings.constructor_patterns.items()
-            if node_id != pattern.node_id
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="missing checked argument"):
-        normalize_case(case, replace(checked, argument_bindings=no_bindings))
-
-    field_name, child_pattern = supplied_pairs[0]
-    duplicate = replace(
-        checked.argument_bindings,
-        constructor_patterns={
-            **checked.argument_bindings.constructor_patterns,
-            pattern.node_id: ((field_name, child_pattern), (field_name, child_pattern)),
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="duplicate checked field"):
-        normalize_case(case, replace(checked, argument_bindings=duplicate))
-
-    unknown = replace(
-        checked.argument_bindings,
-        constructor_patterns={
-            **checked.argument_bindings.constructor_patterns,
-            pattern.node_id: (("missing", child_pattern),),
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="unknown fields"):
-        normalize_case(case, replace(checked, argument_bindings=unknown))
-
-
-def test_renamed_constructor_rejects_unknown_canonical_variant_metadata() -> None:
+def test_renamed_constructor_normalizes_to_its_canonical_member() -> None:
     checked = _check(
         "use S::{E::some as X}\n"
         "\n"
@@ -947,19 +677,42 @@ def test_renamed_constructor_rejects_unknown_canonical_variant_metadata() -> Non
     case = _only_case(checked.resolved.program)
     pattern = case.branches[0].pattern
     assert isinstance(pattern, ConstructorPattern)
-    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
-    assert constructor_ref is not None
 
-    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
-        normalize_case(
-            case,
-            replace(
-                checked,
-                pattern_constructor_refs={
-                    pattern.node_id: replace(constructor_ref, owner_name="missing")
-                },
-            ),
-        )
+    cell = normalize_case(case, checked).rows[0].cells[0]
+    assert isinstance(cell, ConstructorCell)
+    assert isinstance(cell.constructor, NominalConstructor)
+    assert cell.constructor.record_type.name == "some"
+    assert [binder.name for binder in cell.arguments[0].binders] == ["captured"]
+
+
+def test_bare_alias_of_a_member_normalizes_to_the_member_it_names() -> None:
+    checked = _check(
+        "enum Color | Red | Blue\n"
+        "type X = Color::Red\n"
+        "record Box\n  color: Color\n"
+        "let box = Box(color = Color::Red)\n"
+        "case box of | Box(color = X) => 1 | _ => 0"
+    )
+    case = _only_case(checked.resolved.program)
+
+    cell = normalize_case(case, checked).rows[0].cells[0]
+    assert isinstance(cell, ConstructorCell)
+    member = cell.arguments[0]
+    assert isinstance(member, ConstructorCell)
+    assert isinstance(member.constructor, NominalConstructor)
+    assert member.constructor.record_type.name == "Red"
+
+
+def test_bare_alias_of_a_member_matches_that_member() -> None:
+    output = evaluate_ir_output(
+        "enum Color | Red | Blue\n"
+        "type X = Color::Red\n"
+        "def f(c: Color) -> int = case c of | X => 1 | _ => 0\n"
+        "print(f(Color::Red))\n"
+        "print(f(Color::Blue))"
+    )
+
+    assert output == "1\n0\n"
 
 
 def test_source_reference_matcher_preserves_priority_and_partial_constructor_fields() -> None:

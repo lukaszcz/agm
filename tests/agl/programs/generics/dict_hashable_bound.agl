@@ -1,0 +1,35 @@
+# A `{Hashable K}` bound on a generic dict helper is checked once against
+# the function's own body (indexing, indexed assignment, and `in` each need
+# Hashable K) and re-checked at every call site against the caller's
+# concrete key type -- reusing the same instantiation-bound-obligation
+# machinery every other generic bound check goes through, for two different
+# Hashable key types.
+
+enum Color
+  | Red
+  | Blue
+
+def lookup[K, V]{Hashable K}(d: dict[K, V], key: K) -> V = d[key]
+
+def store[K, V]{Hashable K}(d: dict[K, V], key: K, value: V) -> unit =
+  d[key] := value
+
+def has-key[K, V]{Hashable K}(d: dict[K, V], key: K) -> bool = key in d
+
+program def main(use-enum-key: bool) -> unit =
+  if use-enum-key =>
+    let by-color: dict[Color, text] = {}
+    print(has-key(by-color, Red))
+    try
+      let _ = lookup(by-color, Red)
+      print "unreachable"
+    catch KeyError as e =>
+      print "missing: %{e.key}"
+  else =>
+    var by-int: dict[int, text] = {}
+    print(has-key(by-int, 42))
+    try
+      store(by-int, 42, "x")
+      print "unreachable"
+    catch KeyError as e =>
+      print "missing: %{e.key}"

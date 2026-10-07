@@ -17,12 +17,19 @@ if TYPE_CHECKING:
         SourceSpan,
         format_diagnostic,
     )
-    from agm.agl.pipeline import PipelineDriver, PreparedProgram, RunError, RunResult
+    from agm.agl.pipeline import (
+        ArgumentPreflightFailure,
+        PipelineDriver,
+        PreparedProgram,
+        RunError,
+        RunResult,
+    )
     from agm.agl.runtime.agents import AgentFn
 
 __all__ = [
     "AgentFn",
     "AglError",
+    "ArgumentPreflightFailure",
     "Diagnostic",
     "format_diagnostic",
     "PipelineDriver",
@@ -39,6 +46,7 @@ __all__ = [
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AgentFn": ("agm.agl.runtime.agents", "AgentFn"),
     "AglError": ("agm.agl.diagnostics", "AglError"),
+    "ArgumentPreflightFailure": ("agm.agl.pipeline", "ArgumentPreflightFailure"),
     "Diagnostic": ("agm.agl.diagnostics", "Diagnostic"),
     "format_diagnostic": ("agm.agl.diagnostics", "format_diagnostic"),
     "PipelineDriver": ("agm.agl.pipeline", "PipelineDriver"),

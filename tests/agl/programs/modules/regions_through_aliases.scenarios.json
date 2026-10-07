@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "small_side_has_a_sharp_corner",
+      "module_roots": [
+        "program_modules/modules/regions_through_aliases"
+      ],
+      "params": {
+        "side": 2
+      },
+      "expect": {
+        "stdout": "12 15 21 12\ntrue 2\n3\n"
+      }
+    },
+    {
+      "name": "large_side_has_a_blunt_corner",
+      "module_roots": [
+        "program_modules/modules/regions_through_aliases"
+      ],
+      "params": {
+        "side": 5
+      },
+      "expect": {
+        "stdout": "30 36 51 30\nfalse 2\n3\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# A template argument that folds through a module constant is itself
+# constant; a positional and a named spelling of the same folded argument
+# collide statically instead of only at run time.
+record Tag
+  label: text
+
+let five = 5
+
+program def main() -> unit =
+  let m = {Tag("%{five}"): 1, Tag(label = "%{five}"): 2}
+  print m

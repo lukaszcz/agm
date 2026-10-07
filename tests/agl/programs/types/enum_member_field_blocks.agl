@@ -46,8 +46,8 @@ def total(tree: Tree[int]) -> int =
 
 def describe(reply: Net::Reply) -> text =
   case reply of
-    | Ok(body) => "ok: %{body}"
-    | Failed(code, reason) => "failed %{code}: %{reason}"
+    | Net::Reply::Ok(body) => "ok: %{body}"
+    | Net::Reply::Failed(code, reason) => "failed %{code}: %{reason}"
 
 program def main(mode: text, size: int) -> unit =
   if

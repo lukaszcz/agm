@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "one_doubles_before_painting",
+      "module_roots": [
+        "program_modules/modules/type_names_beside_values"
+      ],
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "102\n"
+      }
+    },
+    {
+      "name": "zero_paints_the_base",
+      "module_roots": [
+        "program_modules/modules/type_names_beside_values"
+      ],
+      "params": {
+        "start": 0
+      },
+      "expect": {
+        "stdout": "100\n"
+      }
+    }
+  ]
+}

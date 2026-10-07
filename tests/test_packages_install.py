@@ -10,6 +10,7 @@ import shutil
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1028,7 +1029,7 @@ def test_uninstall_cleans_an_interrupted_tombstone_after_a_different_reinstall(
     monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
     second_source = _package(tmp_path / "second", "alpha", "2.0.0")
     (second_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
-        'program def main() -> string = "replacement"\n', encoding="utf-8"
+        'program def main() -> text = "replacement"\n', encoding="utf-8"
     )
     second = install_directory(second_source, home=home, env={})
     new_provenance = second.root.parent / ".provenance" / "2.0.0.toml"
@@ -2857,11 +2858,11 @@ def test_url_dependency_hands_verified_archive_to_the_installer(
     )
     fetched: list[str] = []
 
-    def fake_fetch(**kwargs: object) -> None:
+    def fake_fetch(**kwargs: object) -> object:
         fetched.append(str(kwargs["requirement"]))
         handoff = kwargs["handoff"]
         assert callable(handoff)
-        handoff(archive)
+        return handoff(archive)
 
     monkeypatch.setattr(package_fetch, "fetch_archive", fake_fetch)
     installed = install_directory(source, home=tmp_path / "home", env={})
@@ -3367,22 +3368,6 @@ def test_dry_run_url_dependency_never_fetches_or_creates_scratch(
     assert not (tmp_path / "dry-home").exists()
 
 
-def test_url_fetch_refuses_when_the_fetch_handoff_does_not_install(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _package(
-        tmp_path / "source",
-        "alpha",
-        "1.0.0",
-        '\n[dependencies]\nbravo = { version = "1", url = "https://example.test/bravo.agmpkg", '
-        'hash = "sha256=' + "0" * 64 + '" }\n',
-    )
-    monkeypatch.setattr(package_fetch, "fetch_archive", lambda **_: None)
-
-    with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
-        install_directory(source, home=tmp_path / "home", env={})
-
-
 def test_url_fetch_scratch_creation_failure_names_the_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3490,6 +3475,28 @@ def test_install_directory_accepts_a_nan_valued_config_leaf(tmp_path: Path) -> N
 
     value = installed.manifest.config["p"]
     assert isinstance(value, float) and math.isnan(value)
+
+
+@pytest.mark.parametrize("from_archive", [False, True])
+def test_install_round_trips_exact_decimal_config(tmp_path: Path, from_archive: bool) -> None:
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[config]\np = 1.00000000000000000001\n',
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "@param let p: decimal = 0.0\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    if from_archive:
+        archive = tmp_path / "package.agmpkg"
+        write_archive(source, archive)
+        installed = install_archive(archive, home=tmp_path / "home", env={})
+    else:
+        installed = install_directory(source, home=tmp_path / "home", env={})
+
+    assert installed.manifest.config == {"p": Decimal("1.00000000000000000001")}
 
 
 def test_reinstalling_a_directory_with_a_nan_config_leaf_succeeds(tmp_path: Path) -> None:

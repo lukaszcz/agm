@@ -29,7 +29,7 @@
       "params": {"mode": 4},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },
@@ -38,7 +38,7 @@
       "params": {"mode": 5},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },
@@ -51,10 +51,19 @@
       }
     },
     {
-      "name": "from_entries_keeps_the_last_value_for_a_duplicate_key",
+      "name": "from_entries_raises_on_a_duplicate_key_by_default",
       "params": {"mode": 7},
       "expect": {
-        "stdout": "{\"k\": 3, \"j\": 2}\n",
+        "stdout": "",
+        "raises": {"type": "DuplicateKeyError", "fields": {"key": "\"k\""}},
+        "calls": {}
+      }
+    },
+    {
+      "name": "set_adds_and_replaces_entries",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "{\"one\": 10, \"two\": 2}\n",
         "calls": {}
       }
     }

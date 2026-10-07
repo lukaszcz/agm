@@ -1,0 +1,7 @@
+import shapes
+use shapes::{Slot}
+
+type X = Slot[int]
+
+program def main() -> unit =
+  print(X)

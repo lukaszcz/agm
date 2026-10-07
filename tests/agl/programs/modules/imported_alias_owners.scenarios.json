@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_start_selects_members_and_constructors",
+      "module_roots": [
+        "program_modules/modules/imported_alias_owners"
+      ],
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "1 true 2\ntrue false\n[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]\n1 true\n"
+      }
+    },
+    {
+      "name": "non_positive_start_selects_the_other_member",
+      "module_roots": [
+        "program_modules/modules/imported_alias_owners"
+      ],
+      "params": {
+        "start": 0
+      },
+      "expect": {
+        "stdout": "0 false 1\ntrue false\n[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n0 true\n"
+      }
+    }
+  ]
+}

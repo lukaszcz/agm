@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "int_keyed_dict",
+      "params": {"use-int-key": true},
+      "expect": {
+        "stdout": "0\nfalse\n0\n0\n"
+      }
+    },
+    {
+      "name": "text_keyed_dict",
+      "params": {"use-int-key": false},
+      "expect": {
+        "stdout": "1\ntrue\n1\n1\n0\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "declared_spelling_reads_the_settled_exports",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias/declared_spelling"
+      ],
+      "expect": {
+        "stdout": "2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "alias_spelling_reads_the_settled_exports",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias/alias_spelling"
+      ],
+      "expect": {
+        "stdout": "2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "method_at_the_target_path_is_called_on_its_value",
+      "module_roots": [
+        "program_modules/modules/import_cycle_through_alias/method_call"
+      ],
+      "expect": {
+        "stdout": "3\n",
+        "calls": {}
+      }
+    }
+  ]
+}

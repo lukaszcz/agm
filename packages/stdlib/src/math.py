@@ -6,7 +6,12 @@ import decimal
 import functools
 from collections.abc import Callable
 
-from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
+from agl import nominals
+
+from agm.agl.runtime.boundary import raise_arithmetic_error
+from agm.util.decimal import AGL_DECIMAL_CONTEXT, integral_to_int
+
+ArithmeticError = nominals.std.errors.ArithmeticError
 
 
 def _in_agl_context[**P, R](operation: Callable[P, R]) -> Callable[P, R]:
@@ -26,7 +31,7 @@ def int_pow(value: int, exponent: int) -> int:
 
 @_in_agl_context
 def _to_integral(value: decimal.Decimal, rounding: str) -> int:
-    return int(value.to_integral_value(rounding=rounding))
+    return integral_to_int(value.to_integral_value(rounding=rounding))
 
 
 def floor(value: decimal.Decimal) -> int:
@@ -39,7 +44,10 @@ def ceil(value: decimal.Decimal) -> int:
 
 @_in_agl_context
 def round(value: decimal.Decimal, digits: int) -> decimal.Decimal:
-    return value.quantize(decimal.Decimal(1).scaleb(-digits))
+    try:
+        return value.quantize(decimal.Decimal(1).scaleb(-digits))
+    except decimal.DecimalException as exc:
+        raise_arithmetic_error(ArithmeticError, "round", exc)
 
 
 @_in_agl_context
@@ -49,7 +57,10 @@ def sqrt(value: decimal.Decimal) -> decimal.Decimal:
 
 @_in_agl_context
 def pow(value: decimal.Decimal, exponent: int) -> decimal.Decimal:
-    return value**exponent
+    try:
+        return value**exponent
+    except decimal.DecimalException as exc:
+        raise_arithmetic_error(ArithmeticError, "pow", exc)
 
 
 __all__ = ["ceil", "floor", "int_pow", "pow", "round", "sqrt"]

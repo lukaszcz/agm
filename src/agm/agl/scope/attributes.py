@@ -353,15 +353,16 @@ class _Recognizer:
             (JSON_NAME_ATTRIBUTE, invalid_json_name),
         ):
             attribute_node = recognized.nodes.get(attribute)
-            text = recognized.text_of(attribute)
-            if text is not None:
-                assert attribute_node is not None
-                invalid = invalid_text(text)
-                if invalid is not None:
-                    raise AglScopeError(
-                        f"Attribute '@{attribute}' argument {text!r} {invalid}.",
-                        span=attribute_node.span,
-                    )
+            if attribute_node is None:
+                texts[attribute] = None
+                continue
+            text = recognized.texts[attribute]
+            invalid = invalid_text(text)
+            if invalid is not None:
+                raise AglScopeError(
+                    f"Attribute '@{attribute}' argument {text!r} {invalid}.",
+                    span=attribute_node.span,
+                )
             texts[attribute] = text
         if texts[NAME_ATTRIBUTE] is None and texts[JSON_NAME_ATTRIBUTE] is None:
             return

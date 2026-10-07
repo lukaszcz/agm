@@ -2,7 +2,7 @@
 
 Each target parameter reaches the companion as an immutable ``TypeContract``
 tree (kind, label, self-contained schema, doc, nominal class, fields, members,
-items, values), built once per contract and resolved into a possibly cyclic
+items, keys, values), built once per contract and resolved into a possibly cyclic
 graph for a recursive target. A companion constructs its trusted result from
 the tree's nominal classes. The underlying ``ContractValue`` is non-data.
 """
@@ -18,13 +18,13 @@ from types import ModuleType
 
 import pytest
 
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import TargetContractRequest
 from agm.agl.ir.ids import ContractId
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.boundary import BoundaryViolation, encode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, WalkTags, value_to_json_obj
 from agm.agl.runtime.type_contracts import TypeContract, build_type_contract
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
@@ -97,7 +97,7 @@ def build(contract, question):
     if kind == "array":
         return agl.array([build(contract.items, question)])
     if kind == "dict":
-        return agl.dict({{"k": build(contract.values, question)}})
+        return agl.dict({{build(contract.keys, question): build(contract.values, question)}})
     if kind == "enum":
         return build(next(iter(contract.members.values())), question)
     return contract.nominal(
@@ -196,7 +196,21 @@ class TestDeliveredContents:
 
     def test_dict_values(self, probe: ModuleType, tmp_path: Path) -> None:
         contract = _only(probe, 'let d: dict[text, int] = capture("q")\n0', tmp_path)
-        assert (contract.kind, contract.values.kind, contract.items) == ("dict", "int", None)
+        assert (contract.kind, contract.keys.kind, contract.values.kind, contract.items) == (
+            "dict",
+            "text",
+            "int",
+            None,
+        )
+
+    def test_dict_keys_of_any_hashable_type(self, probe: ModuleType, tmp_path: Path) -> None:
+        contract = _only(probe, _TEAM + 'let d: dict[Team, int] = capture("q")\n0', tmp_path)
+        assert (contract.keys.kind, contract.keys.nominal) == ("enum", probe.agl.Team)
+        assert contract.keys.members.keys() == {"billing", "Technical"}
+
+    def test_non_dict_has_no_keys_contract(self, probe: ModuleType, tmp_path: Path) -> None:
+        contract = _only(probe, 'let a: array[int] = capture("q")\n0', tmp_path)
+        assert contract.keys is None
 
     def test_root_label_is_the_target_spelling(self, probe: ModuleType, tmp_path: Path) -> None:
         contract = _only(
@@ -235,7 +249,7 @@ class TestDeliveredContents:
         program = lower_extern_program(
             _DECLS + _TREE + 'let tree: Tree = capture("q")\n0', _COMPANION, tmp_path
         )
-        (request,) = program.contracts.values()
+        (request,) = program.target_contracts.values()
         classes = defaultdict(lambda: object)
         contract = build_type_contract(
             dataclasses.replace(request, target_type_label="Forest"), classes
@@ -293,7 +307,8 @@ class TestConstruction:
             ("bool", "true"),
             ("json", '{"q": "q"}'),
             ("array[int]", "[7]"),
-            ("dict[text, int]", '{"k": 7}'),
+            ("dict[text, int]", '{"q": 7}'),
+            ("dict[int, text]", '{7: "q"}'),
             ("Option[int]", "Option::None"),
         ],
     )
@@ -369,11 +384,16 @@ class TestRepl:
 class TestContractValueIsNotData:
     def test_render_rejects(self) -> None:
         with pytest.raises(AglNonDataValue):
-            render_value(ContractValue(ContractId(0)), ValueDescriptors(nominals={}, functions={}))
+            render_value(
+                ContractValue(ContractId(0)),
+                ValueDescriptors(nominals={}, functions={}, exception_field_encodes={}),
+            )
 
     def test_serialize_rejects(self) -> None:
         with pytest.raises(AglNonDataValue):
-            value_to_json_obj(ContractValue(ContractId(0)))
+            value_to_json_obj(
+                ContractValue(ContractId(0)), tags=WalkTags(member_tags={}, field_names={})
+            )
 
     def test_compares_by_identity_only(self) -> None:
         contract = ContractValue(ContractId(0))
@@ -383,7 +403,8 @@ class TestContractValueIsNotData:
     def test_crosses_only_into_an_extern_call(self) -> None:
         with pytest.raises(BoundaryViolation):
             encode_boundary_value(
-                ContractValue(ContractId(0)), ValueDescriptors(nominals={}, functions={})
+                ContractValue(ContractId(0)),
+                ValueDescriptors(nominals={}, functions={}, exception_field_encodes={}),
             )
 
     def test_companion_cannot_return_a_contract(self, tmp_path: Path) -> None:
@@ -398,13 +419,14 @@ class TestContractValueIsNotData:
 def test_nested_ordinary_extern_call_resolves_no_outer_contract(tmp_path: Path) -> None:
     """A contract reaching a nested non-type-directed call is a boundary violation."""
     program = lower_extern_program(_DECLS + 'let n: int = capture("q")\n0', _COMPANION, tmp_path)
-    (contract_id,) = program.contracts
+    (contract_id,) = program.target_contracts
     registry = ExternRegistry()
-    descriptors = ValueDescriptors(nominals={}, functions={})
+    descriptors = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
     nested: list[object] = []
 
     def invoke(
-        fn: Callable[..., object], contracts: Mapping[ContractId, ContractRequest] | None = None
+        fn: Callable[..., object],
+        contracts: Mapping[ContractId, TargetContractRequest] | None = None,
     ) -> Value:
         return registry.invoke(
             "call",
@@ -421,6 +443,6 @@ def test_nested_ordinary_extern_call_resolves_no_outer_contract(tmp_path: Path) 
         except AglRaise as exc:
             nested.append(exc)
 
-    assert isinstance(invoke(outer, program.contracts), UnitValue)
+    assert isinstance(invoke(outer, program.target_contracts), UnitValue)
     (outcome,) = nested
     assert isinstance(outcome, AglRaise)

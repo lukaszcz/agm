@@ -1,0 +1,96 @@
+# A missing dict key raises `KeyError` whose `key` is the key rendered in AgL
+# value syntax -- a text key quoted and escaped, every other key in its own
+# spelling -- so it parses back to an equal key: `parse::[K](e.key)` for a
+# non-text key, and as a quoted literal inside value syntax for a text key
+# (a top-level `parse::[text]` takes its input verbatim). Indexing, indexed
+# assignment, and the `std/dict` and `std/json` lookups all agree.
+
+import std/json
+
+enum Color
+  | Red
+  | Tint(level: int)
+
+record Point
+  x: int
+  y: int
+
+program def main(mode: text) -> unit =
+  case mode of
+    | "text" =>
+        let d: dict[text, int] = {"a": 1}
+        let missing = "say \"hi\" 100%"
+        try
+          let _ = d[missing]
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[array[text]]("[%{e.key}]") == [missing])
+    | "text_assign" =>
+        var d: dict[text, int] = {"a": 1}
+        try
+          d["b c"] := 2
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[array[text]]("[%{e.key}]"))
+    | "int" =>
+        let d: dict[int, text] = {1: "one"}
+        try
+          let _ = d[-42]
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[int](e.key) == -42)
+    | "enum" =>
+        let d: dict[Color, int] = {Red: 1}
+        let missing: Color = Tint(level = 2)
+        try
+          let _ = d[missing]
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[Color](e.key) == missing)
+    | "nullary_enum" =>
+        var d: dict[Color, int] = {Tint(level = 1): 1}
+        let missing: Color = Red
+        try
+          d[missing] := 2
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[Color](e.key) == missing)
+    | "record" =>
+        let d: dict[Point, text] = {Point(x = 0, y = 0): "origin"}
+        try
+          let _ = d[Point(x = 1, y = -2)]
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[Point](e.key) == Point(x = 1, y = -2))
+    | "dict_get" =>
+        let d: dict[text, int] = {"a": 1}
+        try
+          let _ = d.get("missing key")
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[array[text]]("[%{e.key}]"))
+    | "dict_remove" =>
+        var d: dict[text, int] = {"a": 1}
+        try
+          let _ = d.remove("gone")
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[array[text]]("[%{e.key}]"))
+    | "json_get" =>
+        let j = json::parse("{\"a\": 1}")
+        try
+          let _ = j.get("b\"c")
+          print "unreachable"
+        catch KeyError as e =>
+          print(e.key)
+          print(parse::[array[text]]("[%{e.key}]"))
+    | _ =>
+        print "unknown mode"

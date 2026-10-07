@@ -16,13 +16,24 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope import (
     AglScopeError,
     BuiltinKind,
     ModuleResolution,
 )
-from agm.agl.scope.symbols import BinderKind, BindingRef, ReceiverOwner, ScopeNode
+from agm.agl.scope.symbols import (
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    BinderKind,
+    BindingRef,
+    DeclaredOrigin,
+    ReceiverOwner,
+    ScopeNode,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
@@ -46,7 +57,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NameTarget,
     Param,
-    PatternField,
     Program,
     RecordDef,
     ScopeRegion,
@@ -238,9 +248,7 @@ def _ref(r: ModuleResolution, name: str, occurrence: int = -1) -> BindingRef:
 def _root_type_names(r: ModuleResolution) -> frozenset[str]:
     """Return the bare names of *r*'s root-level type declarations.
 
-    Mirrors what a REPL host threads as ``ambient_type_names`` into a later
-    entry's resolution: root paths in ``declared_type_paths`` are exactly the
-    single-segment ones.
+    Root paths in ``declared_type_paths`` are exactly the single-segment ones.
     """
     return frozenset(path[0] for path in r.declared_type_paths if len(path) == 1)
 
@@ -802,13 +810,10 @@ class TestScopedBindingUsePrecedence:
 
 
 class TestScopedConstructorCandidateUnion:
-    """``_owned_scope_constructor_candidates`` unions every same-named candidate.
+    """A bare constructor pattern's candidates union every same-named constructor in scope.
 
-    A scope's own directly-declared constructor and every child enum's
-    variant sharing a name are all candidates, in declaration order, rather
-    than whichever the resolver happens to find first while scanning a set
-    -- ``_type_declarations`` is a plain list, so the result no longer
-    depends on ``PYTHONHASHSEED``.
+    A scope's own directly-declared constructor, every child enum's variant
+    sharing its name, and each enclosing scope layer's are all candidates.
     """
 
     def _pattern(self, resolved: ModuleResolution) -> ConstructorPattern:
@@ -861,8 +866,8 @@ class TestScopedConstructorCandidateUnion:
         owners = {(candidate.owner_path, candidate.owner_name) for candidate in candidates}
         assert owners == {(("Config",), "V"), (("Config", "E"), "V")}
 
-    def test_outward_walk_prefers_the_nearest_scope_layer(self) -> None:
-        """A nested scope's own same-named record shadows an ancestor's."""
+    def test_outward_walk_collects_every_scope_layer(self) -> None:
+        """A nested scope's own same-named record and an ancestor's are both candidates."""
         resolved = parse_and_resolve(
             "scope A\n"
             "  record Item\n"
@@ -888,7 +893,28 @@ class TestScopedConstructorCandidateUnion:
         assert isinstance(pattern, ConstructorPattern)
         candidates = resolved.pattern_constructor_candidates[pattern.node_id]
         owners = {candidate.owner_path for candidate in candidates}
-        assert owners == {("A", "B")}
+        assert owners == {("A",), ("A", "B")}
+
+
+class TestMissingLocalScopeMember:
+    """A plain scope lacking the member fails alike in value, pattern and ``is`` position."""
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "Paint::Missing",
+            "c is Paint::Missing",
+            "case c of\n  | Paint::Missing => 1\n  | _ => 2",
+        ),
+        ids=("value", "is", "pattern"),
+    )
+    def test_is_a_scope_error_in_every_position(self, use: str) -> None:
+        error = reject_scope(
+            "scope Paint\n  enum Col = Red | Blue\nend Paint\n\n"
+            f"let c: Paint::Col = Paint::Col::Red\n{use}\n"
+        )
+
+        assert type(error) is UnknownMemberError
 
 
 class TestConstructorCandidateDeduplication:
@@ -1174,8 +1200,8 @@ class TestLetBindingScope:
         scope = resolved.scope_nodes[("A",)]
         assert "_" not in scope.bindings
 
-    def test_unimported_qualified_constructor_pattern_stays_a_checker_concern(self) -> None:
-        parse_and_resolve("let value = 1\ncase value of | missing::packet(_) => 1")
+    def test_unimported_qualified_constructor_pattern_fails_as_its_value_does(self) -> None:
+        reject_scope("let value = 1\ncase value of | missing::packet(_) => 1")
 
 
 class TestWildcardBinders:
@@ -1835,6 +1861,7 @@ class TestParseTryParseNonReservedClassification:
         reserved bare-name override (which would resolve silently to
         ``std/value::parse`` with no ambiguity at all)."""
         err = reject_scope('import std/json\nuse std/json::*\nlet x = parse("{}")\nx')
+        assert type(err) is AmbiguousQualificationError
         message = str(err)
         assert "ambiguous" in message
         assert "std/json::parse" in message
@@ -2099,28 +2126,35 @@ class TestMethodReceiverClassification:
         }
 
     @pytest.mark.parametrize(
-        ("source", "alias", "target"),
+        ("source", "later"),
         (
-            ("type Count = int\ndef Count::value(self) -> int = 1", "Count", "int"),
+            ("type Count = int -> int\ndef Count::value(self) -> int = 1", "Count"),
             (
-                "record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
-                "Alias",
-                "Target",
+                "def Count::value(self) -> int = 1\ntype Count = int -> int",
+                "type Count = int -> int",
             ),
-            # The alias below the method is still an alias scope: receiver
-            # classification reads the whole module, not the text above it.
-            ("def Count::value(self) -> int = 1\ntype Count = int", "Count", "int"),
+            ("record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1", "Alias"),
+            (
+                "def Alias::value(self) -> int = 1\ntype Alias = Target\nrecord Target",
+                "type Alias = Target",
+            ),
+            (
+                "record Target\ntype Via = Target\ntype Alias = Via\n"
+                "def Alias::value(self) -> int = 1",
+                "Alias",
+            ),
         ),
-        ids=("alias-above", "alias-target-above", "alias-below"),
+        ids=("structural-above", "structural-below", "above", "below", "chain"),
     )
-    def test_alias_scope_receiver_is_rejected_with_its_target(
-        self, source: str, alias: str, target: str
+    def test_a_method_beneath_an_own_alias_is_rejected_where_the_pair_completes(
+        self, source: str, later: str
     ) -> None:
         err = reject_scope(source)
 
-        _, message = diag(err)
-        assert alias in message
-        assert target in message
+        assert type(err) is AglScopeError
+        assert err.span is not None
+        start = source.rindex(later)
+        assert (err.span.start_offset, err.span.end_offset) == (start, start + len(later))
 
     def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:
         resolved = parse_and_resolve(
@@ -2298,6 +2332,21 @@ class TestCaseScoping:
         r = parse_and_resolve("let x = 1\ncase x of\n  | _ => 0\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
+    def test_case_constructor_pattern_with_field(self) -> None:
+        resolved = parse_and_resolve(
+            "record Fail\n  issues: int\nlet x = Fail(issues = 1)\n"
+            "case x of | Fail(issues = issues) => issues"
+        )
+        issues_ref = _find_varref(resolved.program, "issues")
+        assert resolved.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
+
+
+class TestIsTestScoping:
+    def test_is_test_resolved(self) -> None:
+        resolved = parse_and_resolve("enum Status\n  | Pass\nlet x: Status = Pass\nx is Pass")
+        x_ref = _find_varref(resolved.program, "x")
+        assert resolved.resolution[x_ref.node_id].kind == BinderKind.let_binding
+
 
 # ---------------------------------------------------------------------------
 # Try/catch scoping
@@ -2371,35 +2420,15 @@ class TestParentScopeSeam:
         assert ref.name == "k"
         assert ref.mutable is False
 
-    def test_constructor_binding_with_no_candidates_does_not_error(self) -> None:
-        """A constructor_binding from a parent scope with no ambient candidates
-        is resolved (scope pass succeeds) but constructor_refs is NOT populated.
-        This covers the len(candidates)==0 branch in _resolve_varref."""
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        session_scope = prior.root_scope
-        # No ambient_constructor_candidates passed → candidates is empty for 'Pass'.
-        entry = resolve_entry(
-            "Pass()",
-            parent_scope=session_scope,
-        )
-        # Scope resolution succeeds but does NOT populate constructor_refs.
-        from agm.agl.syntax.nodes import Call as _Call
-
-        call_node = entry.program.body.items[0]
-        assert isinstance(call_node, _Call)
-        assert isinstance(call_node.callee, VarRef)
-        # Without ambient candidates, constructor_refs is not populated.
-        assert call_node.callee.node_id not in entry.constructor_refs
-
     def test_ambient_nullary_variant_retains_bare_pattern_metadata(self) -> None:
-        prior = parse_and_resolve("enum Flag\n  | mark\nmark()")
+        prior = parse_and_resolve_repl("enum Flag\n  | mark\nmark()")
         entry = resolve_entry(
             "enum Packet\n"
             "  | packet(left: int, right: int)\n"
             "let item = packet(1, 2)\n"
             "case item of | packet(mark, _ as mark) => mark",
             parent_scope=prior.root_scope,
-            ambient_constructor_candidates=prior.constructor_candidates,
+            retained_type_owners=prior.type_owners,
         )
 
         assert entry.constructor_candidates["mark"][0].can_match_bare_pattern
@@ -2482,32 +2511,24 @@ class TestParentScopeSeam:
 
         with pytest.raises(AglScopeError):
             if candidate_source == "ambient":
-                prior = parse_and_resolve(f"{declaration}\n{value}")
+                prior = parse_and_resolve_repl(f"{declaration}\n{value}")
                 resolve_entry(
                     entry_source,
                     parent_scope=prior.root_scope,
-                    ambient_constructor_candidates=prior.constructor_candidates,
-                    ambient_type_names=_root_type_names(prior),
+                    retained_type_owners=prior.type_owners,
                 )
             else:
                 parse_and_resolve(f"{declaration}\n{entry_source}")
 
-    def test_ambient_constructor_candidates_resolve_prior_entry_ctor(self) -> None:
-        """Constructor from a prior REPL entry resolves via ambient_constructor_candidates."""
-        from agm.agl.scope.symbols import ConstructorRef
-
+    def test_retained_type_owners_resolve_prior_entry_ctor(self) -> None:
+        """Constructor from a prior REPL entry resolves via its retained type owners."""
         # Simulate a prior entry that declared enum Review | Pass | Fail.
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        # Build ambient candidates from the prior entry's resolution.
-        ambient: dict[str, tuple[ConstructorRef, ...]] = {
-            name: crefs for name, crefs in prior.constructor_candidates.items()
-        }
+        prior = parse_and_resolve_repl("enum Review\n  | Pass\n  | Fail\nPass()")
         # New entry references Pass() with a parent scope that has the constructor binding.
-        session_scope = prior.root_scope
         entry = resolve_entry(
             "Pass()",
-            parent_scope=session_scope,
-            ambient_constructor_candidates=ambient,
+            parent_scope=prior.root_scope,
+            retained_type_owners=prior.type_owners,
         )
         # The VarRef/Call for Pass() must be in constructor_refs.
         from agm.agl.syntax.nodes import Call as _Call
@@ -2536,21 +2557,14 @@ class TestParentScopeSeam:
         # Field access on a parameter creates no constructor reference.
         assert fa_node.node_id not in entry.constructor_refs
 
-    def test_ambient_type_names_resolve_qualified_prior_entry_ctor(self) -> None:
-        """Qualified constructor from a prior REPL entry resolves via ambient_type_names."""
-        from agm.agl.scope.symbols import ConstructorRef
-
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        ambient_candidates: dict[str, tuple[ConstructorRef, ...]] = {
-            name: crefs for name, crefs in prior.constructor_candidates.items()
-        }
-        ambient_type_names = _root_type_names(prior)
-        session_scope = prior.root_scope
+    def test_retained_type_owners_resolve_qualified_prior_entry_ctor(self) -> None:
+        """Qualified constructor from a prior REPL entry resolves via its retained type owners."""
+        prior = parse_and_resolve_repl("enum Review\n  | Pass\n  | Fail\nPass()")
         entry = resolve_entry(
             "Review::Pass()",
-            parent_scope=session_scope,
-            ambient_constructor_candidates=ambient_candidates,
-            ambient_type_names=ambient_type_names,
+            parent_scope=prior.root_scope,
+            retained_type_owners=prior.type_owners,
+            retained_scope_nodes=prior.scope_nodes,
         )
         from agm.agl.syntax.nodes import Call as _Call
         from agm.agl.syntax.nodes import VarRef as _VarRef
@@ -2685,7 +2699,7 @@ class TestDirectASTConstruction:
     def test_try_with_catch_binder(self) -> None:
         err_use = _make_varref("err")
         clause = CatchClause(
-            exc_type="SomeError",
+            exc_type="Exception",
             binding="err",
             body=err_use,
             span=_sp(),
@@ -2784,22 +2798,6 @@ class TestDirectASTConstruction:
         r = resolve_program(let_n, expr)
         assert r.resolution[n_ref.node_id].kind == BinderKind.let_binding
 
-    def test_is_test_resolved(self) -> None:
-        from agm.agl.syntax.nodes import IsTest
-
-        let_x = _make_let("x", _make_intlit(1))
-        x_ref = _make_varref("x")
-        expr = IsTest(
-            expr=x_ref,
-            qualifier=None,
-            variant="Pass",
-            negated=False,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(let_x, expr)
-        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
-
     def test_field_access_on_varref(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         x_ref = _make_varref("x")
@@ -2855,31 +2853,6 @@ class TestDirectASTConstruction:
         r = resolve_program(let_x, case_node)
         assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_slot
 
-    def test_case_constructor_pattern_with_field(self) -> None:
-        let_x = _make_let("x", _make_intlit(1))
-        sub_pattern = VarPattern(name="issues", span=_sp(), node_id=_nid())
-        pf = PatternField(name="issues", pattern=sub_pattern, span=_sp(), node_id=_nid())
-        ctor_pattern = ConstructorPattern(
-            qualifier=None, name="Fail", positional=(), named=(pf,), span=_sp(), node_id=_nid()
-        )
-        issues_ref = _make_varref("issues")
-        branch = CaseBranch(
-            pattern=ctor_pattern,
-            body=issues_ref,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        from agm.agl.syntax.nodes import Case
-
-        case_node = Case(
-            subject=_make_varref("x"),
-            branches=(branch,),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(let_x, case_node)
-        assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
-
     def test_as_pattern_binds_even_when_name_is_a_constructor(self) -> None:
         resolved = parse_and_resolve(
             "enum E\n  | A\nlet value = A()\ncase value of | A() as A => A"
@@ -2902,24 +2875,10 @@ class TestDirectASTConstruction:
         reject_scope("case 0 of | _ as captured as captured => captured")
 
     def test_duplicate_pattern_var_rejected(self) -> None:
-        let_x = _make_let("x", _make_intlit(1))
-        sub1 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
-        sub2 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
-        pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
-        pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
-        ctor_pat = ConstructorPattern(
-            qualifier=None,
-            name="Pair",
-            positional=(),
-            named=(pf1, pf2),
-            span=_sp(5),
-            node_id=_nid(),
+        err = reject_scope(
+            "record Pair\n  a: int\n  b: int\nlet x = Pair(a = 1, b = 2)\n"
+            "case x of | Pair(a = dup, b = dup) => ()"
         )
-        branch = CaseBranch(pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid())
-        from agm.agl.syntax.nodes import Case
-
-        case_node = Case(subject=_make_varref("x"), branches=(branch,), span=_sp(5), node_id=_nid())
-        err = reject_program(let_x, case_node)
         assert "dup" in err.to_diagnostic().message
 
     def test_pattern_var_shadows_outer_accepted(self) -> None:
@@ -3357,14 +3316,14 @@ class TestConstructorBindings:
         assert "B" in msg
 
     def test_ambiguous_mentions_qualification(self) -> None:
-        """Ambiguity error tells the user to qualify the reference."""
+        """Ambiguity error carries both declared origins and a concrete repair spelling."""
         err = reject_scope("enum Option\n  | some\nenum Other\n  | some\nsome\n")
-        msg = err.to_diagnostic().message
-        names = quoted_names(msg)
-        # The ambiguous reference, then both owners, then the repair spelling.
-        assert names[0] == "some"
-        assert {"Option::some", "Other::some"} <= set(names)
-        assert names[-1] == "Option::some", "the repair is a concrete qualified spelling"
+        assert isinstance(err, AmbiguousConstructorError)
+        assert set(err.origins) == {
+            DeclaredOrigin((ENTRY_ID, ("Option", "some"))),
+            DeclaredOrigin((ENTRY_ID, ("Other", "some"))),
+        }
+        assert err.repair == "Option::some"
 
     # ---  regression: payload / type-args / context do NOT disambiguate ---
 
@@ -3532,34 +3491,6 @@ class TestConstructorBindings:
         case = resolved.program.body.items[-1]
         assert case.branches[0].pattern.node_id in resolved.pattern_constructor_candidates
 
-    # --- Enum name is NOT a value (only variants are) ---
-
-    def test_enum_name_used_as_value_is_undefined(self) -> None:
-        """The enum name itself is NOT a value binding — only its variants are.
-
-        default_stdlib=False: this program declares its own ``Option``, which
-        collides with the default prelude's ``std/option::Option[T]``.
-        The point of this test is purely local ("does a bare reference to a
-        locally-declared enum's own name resolve as a value"), independent of
-        any module graph, so nothing else needs to be in scope.
-        """
-        err = reject_scope(
-            "enum Option\n  | none\n  | some\nlet x = Option\nx\n", default_stdlib=False
-        )
-        msg = err.to_diagnostic().message
-        assert "Option" in msg
-        assert "not defined" in msg.lower()
-
-    def test_uppercase_enum_name_not_value(self) -> None:
-        """Enum name 'Option' (uppercase) is still not a value binding.
-
-        default_stdlib=False for the same reason as
-        test_enum_name_used_as_value_is_undefined above.
-        """
-        err = reject_scope("enum Option\n  | None\n  | Some\nOption\n", default_stdlib=False)
-        msg = err.to_diagnostic().message
-        assert "Option" in msg
-
     # --- Case-neutral: lowercase and uppercase behave identically ---
 
     def test_lowercase_constructor_resolves_same_as_uppercase(self) -> None:
@@ -3676,31 +3607,29 @@ class TestConstructorBindings:
         r = parse_and_resolve("type MyInt = int\n()")
         assert "MyInt" in _root_type_names(r)
 
-    def test_alias_with_unresolvable_unqualified_target_is_presumed_constructible(
-        self,
-    ) -> None:
-        """A standalone module has no import environment.
+    def test_alias_with_unresolvable_unqualified_target_is_rejected(self) -> None:
+        """An unqualified target naming no declaration and no built-in type is unknown.
 
-        An alias whose unqualified target names no local declaration cannot be
-        resolved through an import either (there is none to try), so the
-        alias falls back to the permissive "presumed constructible" default
-        and keeps its own variant-less constructor candidate.
+        Scope decides it where the alias is declared, used or not.
         """
-        r = parse_and_resolve("type Local = Undeclared\n()\n")
-        candidates = r.constructor_candidates["Local"]
-        assert candidates[0].owner_path == ()
+        source = "type Local = Undeclared\n()\n"
+        with pytest.raises(AglTypeError) as raised:
+            parse_and_resolve(source)
+        error = raised.value
+        assert type(error) is AglTypeError
+        assert error.span is not None
+        assert source[error.span.start_offset : error.span.end_offset] == "Undeclared"
 
-    def test_alias_with_unresolvable_qualified_target_is_presumed_constructible(
-        self,
-    ) -> None:
-        """Same as above, for a module-qualified target.
+    def test_alias_with_unresolvable_qualified_target_is_rejected(self) -> None:
+        """Unlike a bare name, a qualified target names a definite route.
 
-        A standalone module has no import environment to resolve the
-        qualifier through, so the alias is presumed constructible.
+        A standalone module has no import environment, so ``pal`` never
+        names an import: unlike an unqualified target (which scope cannot
+        distinguish from a forward reference), scope decides this
+        definitively and rejects it, rather than presuming it constructible.
         """
-        r = parse_and_resolve("type Local = pal::Something\n()\n")
-        candidates = r.constructor_candidates["Local"]
-        assert candidates[0].owner_path == ()
+        with pytest.raises(UnknownQualifierError):
+            parse_and_resolve("type Local = pal::Something\n()\n")
 
     def test_declared_type_names_excludes_variants(self) -> None:
         """Enum variant names are NOT root-level type names (they are values)."""

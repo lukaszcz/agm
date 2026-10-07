@@ -270,7 +270,7 @@ class TestRehydrationParity:
                         param.node_id
                     ) == cm.type_env.get_binding_type(param.node_id)
 
-    def test_named_type_and_template_queries_match(
+    def test_declared_type_template_queries_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
     ) -> None:
         for mid in _non_entry_module_ids(compiled):
@@ -278,14 +278,9 @@ class TestRehydrationParity:
             cm = compiled.checked.modules[mid]
             for item in static_type_items(cm.resolved.program.body.items):
                 scope_path = tuple(segment.name for segment in item.scope_path)
-                with rehydrated_module.type_env.type_scope(scope_path):
-                    re_named = rehydrated_module.type_env.resolve_named_type(item.name)
-                with cm.type_env.type_scope(scope_path):
-                    cm_named = cm.type_env.resolve_named_type(item.name)
-                assert re_named == cm_named
-                assert rehydrated_module.type_env.source_type_template_qname(
+                assert rehydrated_module.type_env.declared_type_template(
                     mid, item.name, scope_path=scope_path
-                ) == cm.type_env.source_type_template_qname(mid, item.name, scope_path=scope_path)
+                ) == cm.type_env.declared_type_template(mid, item.name, scope_path=scope_path)
 
     def test_static_let_and_var_binding_types_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
@@ -307,27 +302,20 @@ class TestRehydrationParity:
         for mid in _non_entry_module_ids(compiled):
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
-            assert rehydrated_module.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()
-            assert (
-                rehydrated_module.type_env.blocked_enum_variants()
-                == cm.type_env.blocked_enum_variants()
-            )
             assert rehydrated_module.type_env.all_generic_types() == cm.type_env.all_generic_types()
 
-    def test_rehydration_reseals_a_complete_image(
+    def test_rehydrated_module_reproduces_its_image(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
     ) -> None:
-        """A rehydrated module is sealed and its own image equals the original.
+        """A rehydrated module's own image equals the original.
 
-        ``rehydrate`` ends with ``seal()``: the environment is frozen, and a
-        further ``image()`` call on the rehydrated module -- covering every
+        A further ``image()`` call on the rehydrated module -- covering every
         field, including ``interface`` -- reproduces the image it was built
         from.
         """
         for mid in _non_entry_module_ids(compiled):
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
-            assert rehydrated_module.type_env.is_sealed
             assert rehydrated_module.image() == cm.image()
 
 
@@ -390,14 +378,7 @@ def _is_vacuous(value: object) -> bool:
             or value.constructor_patterns
         )
     if isinstance(value, ModuleTypeInterface):
-        return not (
-            value.types
-            or value.generics
-            or value.aliases
-            or value.constructors
-            or value.field_kinds
-            or value.definitions
-        )
+        return not (value.types or value.generics or value.aliases or value.definitions)
     if isinstance(value, EnvironmentFacts):
         return len(value.entries) == 0
     return False
@@ -498,17 +479,10 @@ class TestPublishedModuleSurface:
 
 class TestJournalNeverStartsOutsideProgramChecking:
     def test_repl_seed_environment_is_never_journaled(self) -> None:
-        """A REPL session's seed env is only ever copied from, never mutated.
-
-        ``seed_from`` requires a sealed source; a real session env is sealed
-        by the ``check_program`` run that produced it. Sealing it directly
-        here (skipping ``begin_facts``) is the minimal environment that
-        satisfies that precondition without itself having journaled.
-        """
+        """A REPL session's seed env is only ever copied from, never journaled into."""
         seed_env = TypeEnvironment()
         seed_env.seal()
         resolve_and_check_repl_entry(
             "def value() -> int = 1", base_caps(), seed_env=seed_env, default_stdlib=False
         )
-        with pytest.raises(AssertionError):
-            seed_env.own_facts()
+        assert seed_env.own_facts() == EnvironmentFacts()

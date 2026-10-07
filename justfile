@@ -13,6 +13,14 @@ default:
 setup:
     uv sync --locked --python 3.14 --group dev
 
+# Build the Markdown documentation into site/
+docs-build:
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs build --strict
+
+# Serve the documentation with live reload on all interfaces
+docs-serve *args:
+    NO_MKDOCS_2_WARNING=1 uv run --locked --group docs mkdocs serve --strict --dev-addr 0.0.0.0:8000 {{args}}
+
 check_coverage := "100"
 
 # Measure coverage through sys.monitoring rather than the C trace function.

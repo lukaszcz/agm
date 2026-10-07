@@ -7,7 +7,8 @@ import itertools
 import os
 import queue
 import subprocess
-from decimal import Decimal, InvalidOperation
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from typing import IO, cast
 
@@ -17,10 +18,10 @@ from agm.agent.session import (
     SessionAskError,
     SessionAskRequest,
     SessionHostError,
-    SessionOpenRequest,
     rpc,
 )
-from agm.agent.spec import AgentClaude, AgentPi
+from agm.agent.session.protocol import BackendSettings
+from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentOutputPhase
 from agm.sandbox.request import SandboxLimits
 from tests._agl_helpers import (
@@ -119,6 +120,12 @@ def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
         },
         {"raw": '{"type":"message_update"}'},
         {"raw": '{"type":"response","id":"$id","command":"prompt","success":true,"x":NaN}'},
+        {
+            "raw": (
+                '{"type":"response","id":"$id","command":"prompt","success":true,'
+                '"x":1e99999999999999999999}'
+            )
+        },
         {"raw": '{"type":"response","id":"$id","id":"again","command":"prompt","success":true}'},
         {
             "raw": (
@@ -296,14 +303,9 @@ def test_bounded_records_output_and_stderr(tmp_path: Path, monkeypatch: pytest.M
         backend.ask(SessionAskRequest("hello"))
     backend.close()
 
-    class Unwritable:
-        stdin: io.BufferedWriter | None = None
-
-    child = _child(Unwritable())
+    child = _child(object())
     child.stderr.append(b"x" * (rpc._MAX_STDERR_BYTES + 1))
     assert len(child.stderr.data) == rpc._MAX_STDERR_BYTES
-    with pytest.raises(BrokenPipeError):
-        rpc._write_command(child, {"type": "prompt"})
 
 
 def test_stderr_reassembles_a_multibyte_character_split_across_chunks() -> None:
@@ -419,12 +421,9 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         rpc._require_not_cancelled({"data": {"cancelled": True}}, "fork")
     with pytest.raises(rpc._RpcProtocolError):
         rpc._validate_response({"type": "response", "id": "", "command": "x", "success": True})
-    assert rpc._finite_decimal("1.5") is not None
-    assert rpc._finite_decimal(True) is None
-    assert rpc._finite_decimal("NaN") is None
 
     class Process:
-        stdin = None
+        stdin = io.BytesIO()
 
         def __init__(self) -> None:
             self.calls = 0
@@ -444,28 +443,6 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
             raise ProcessLookupError
 
     rpc._terminate(_child(Process()))
-
-    class NoPipes:
-        pid = 999_999_999
-        stdin = None
-        stdout = io.BytesIO()
-        stderr = io.BytesIO()
-
-        def poll(self) -> int:
-            return 0
-
-        def wait(self, timeout: float | None = None) -> int:
-            del timeout
-            return 0
-
-    def no_pipes(*args: object, **kwargs: object) -> NoPipes:
-        return NoPipes()
-
-    monkeypatch.setattr(subprocess, "Popen", no_pipes)
-    with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={})
-        )
 
 
 def test_sandboxed_spawn_follows_the_process_working_directory(
@@ -488,8 +465,11 @@ def test_sandboxed_spawn_follows_the_process_working_directory(
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home)).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={}, sandbox=SandboxLimits())
+        rpc.PiRpcSessionBackend.open(
+            AgentPi("", "", ""),
+            BackendSettings(
+                get_sandbox_context=session_sandbox_context(home), env={}, sandbox=SandboxLimits()
+            ),
         )
     assert spawned["cwd"] == Path.cwd()
 
@@ -505,18 +485,20 @@ def test_sandboxed_spawn_with_removed_working_directory_is_a_session_error(
     monkeypatch.chdir(gone)
     gone.rmdir()
     with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home)).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={}, sandbox=SandboxLimits())
+        rpc.PiRpcSessionBackend.open(
+            AgentPi("", "", ""),
+            BackendSettings(
+                get_sandbox_context=session_sandbox_context(home), env={}, sandbox=SandboxLimits()
+            ),
         )
 
 
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
-    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    with pytest.raises(SessionHostError):
-        backend.open(SessionOpenRequest(AgentClaude("model", "high"), "rpc", env={}))
+    backend = rpc.PiRpcSessionBackend(
+        _child(object()),
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
 
-    with pytest.raises(InvalidOperation):
-        rpc._parse_json_float("1e999999999999999999999999")
     with pytest.raises(rpc._RpcProtocolError):
         rpc._validate_response({"id": "id", "command": "", "success": True})
     with pytest.raises(rpc._RpcProtocolError):
@@ -572,7 +554,6 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         "contextUsage": empty_context,
     }
     assert rpc._stats_from_response({"data": missing_percent}).context_percent == Decimal("0")
-    assert rpc._finite_decimal("invalid") is None
 
     class RunningProcess:
         stdin = cast(io.BufferedWriter, io.BytesIO())
@@ -591,7 +572,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
     child.stdout_buffer.clear()
-    backend._idle_timeout = 0
+    backend._settings = replace(backend._settings, idle_timeout=0)
     with pytest.raises(rpc._RpcIdleTimeout):
         backend._next_line(child)
 
@@ -614,12 +595,11 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(subprocess, "Popen", fail_popen)
     with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={})
+        rpc.PiRpcSessionBackend.open(
+            AgentPi("", "", ""),
+            BackendSettings(get_sandbox_context=unavailable_sandbox_context, env={}),
         )
 
-    with pytest.raises(ValueError):
-        rpc._parse_json_float("Infinity")
     assert (
         rpc._terminal_prompt_failure(
             {"type": "compaction_end", "result": "kept", "willRetry": False}
@@ -779,26 +759,26 @@ def test_stderr_reader_closes_a_stopped_child_stream() -> None:
     assert child.stderr_reader_done.is_set()
 
 
-def test_open_rejects_an_already_live_child_and_dead_child_is_cleared(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    RpcStub(tmp_path, monkeypatch)
-    backend = open_backend()
-    with pytest.raises(SessionHostError):
-        backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "again", env={}))
-    backend.close()
-
+def test_dead_child_is_cleared(killed_groups: list[int]) -> None:
     class DeadProcess:
         stdin = cast(io.BufferedWriter, io.BytesIO())
 
         def poll(self) -> int:
             return 1
 
-    backend._child = _child(DeadProcess())
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 1
+
+    dead = _child(DeadProcess())
+    backend = rpc.PiRpcSessionBackend(
+        dead,
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
     with pytest.raises(SessionHostError):
         backend.compact("")
     assert backend._child is None
-    backend._kill_dead_child(_child(DeadProcess()))
+    assert killed_groups == [dead.process.pid]
 
 
 @pytest.mark.parametrize(
@@ -905,10 +885,12 @@ def test_fork_after_clone_failure_retains_replacement_parent(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
-    backend._child = source
+    backend = rpc.PiRpcSessionBackend(
+        source,
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
     source_states = iter([{"data": {"sessionId": "parent"}}, {}])
 
     def send(
@@ -921,12 +903,12 @@ def test_fork_after_clone_failure_retains_replacement_parent(
             return next(source_states), []
         return {"data": {"cancelled": False}}, []
 
-    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+    def spawn(agent: AgentPi, command: list[str], operation: str, *_args: object) -> rpc._RpcChild:
         del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
-    monkeypatch.setattr(backend, "_spawn", spawn)
+    monkeypatch.setattr(rpc, "_spawn", spawn)
     with pytest.raises(SessionHostError):
         backend.fork()
     assert backend._child is replacement
@@ -945,10 +927,12 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
-    backend._child = source
+    backend = rpc.PiRpcSessionBackend(
+        source,
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
 
     def send(
         self: rpc.PiRpcSessionBackend, operation: str, payload: dict[str, object], **kwargs: object
@@ -957,12 +941,12 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
         session_id = "parent" if self is backend else "wrong"
         return {"data": {"sessionId": session_id}}, []
 
-    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+    def spawn(agent: AgentPi, command: list[str], operation: str, *_args: object) -> rpc._RpcChild:
         del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
-    monkeypatch.setattr(backend, "_spawn", spawn)
+    monkeypatch.setattr(rpc, "_spawn", spawn)
     with pytest.raises(SessionHostError):
         backend.fork()
     assert backend._child is source
@@ -982,10 +966,12 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
-    backend._child = source
+    backend = rpc.PiRpcSessionBackend(
+        source,
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
     calls: list[tuple[object, str]] = []
 
     def send(
@@ -997,12 +983,12 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
             return {"data": {"cancelled": False}}, []
         return {"data": {"sessionId": "parent"}}, []
 
-    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+    def spawn(agent: AgentPi, command: list[str], operation: str, *_args: object) -> rpc._RpcChild:
         del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
-    monkeypatch.setattr(backend, "_spawn", spawn)
+    monkeypatch.setattr(rpc, "_spawn", spawn)
     with pytest.raises(SessionHostError):
         backend.fork()
     assert [operation for _, operation in calls] == ["get_state", "get_state", "clone", "get_state"]
@@ -1020,11 +1006,13 @@ def test_fork_spawn_failure_does_not_move_the_live_parent(
     original = backend._child
     assert original is not None
 
-    def fail_spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+    def fail_spawn(
+        agent: AgentPi, command: list[str], operation: str, *_args: object
+    ) -> rpc._RpcChild:
         del agent, command
         raise SessionHostError("no", operation)
 
-    monkeypatch.setattr(backend, "_spawn", fail_spawn)
+    monkeypatch.setattr(rpc, "_spawn", fail_spawn)
     with pytest.raises(SessionHostError):
         backend.fork()
     assert backend._child is original
@@ -1091,9 +1079,37 @@ def test_malformed_payload_reports_the_protocol_violation_not_the_child_exit(
     backend.close()
 
 
+def _stats_with(cost: object, percent: object) -> dict[str, object]:
+    return {
+        "data": {
+            "tokens": {"input": 1, "output": 2},
+            "cost": cost,
+            "contextUsage": {"percent": percent},
+        }
+    }
+
+
+@pytest.mark.parametrize("value", [True, "NaN", "invalid", "1e1000000", Decimal("1e-1000030")])
+@pytest.mark.parametrize("field", ["cost", "percent"])
+def test_stats_reject_malformed_or_out_of_range_numbers(field: str, value: object) -> None:
+    """A stats number that is not a finite decimal within the AgL range is malformed."""
+    response = _stats_with(value, 1) if field == "cost" else _stats_with(1, value)
+    with pytest.raises(rpc._RpcProtocolError):
+        rpc._stats_from_response(response)
+
+
+def test_stats_accept_textual_and_decimal_numbers() -> None:
+    stats = rpc._stats_from_response(_stats_with("1.5", Decimal("2.5")))
+    assert (stats.cost, stats.context_percent) == (Decimal("1.5"), Decimal("2.5"))
+
+
 def test_malformed_payload_is_reported_when_no_child_remains() -> None:
     """A closed session still reports why the payload was rejected."""
-    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    backend = rpc.PiRpcSessionBackend(
+        _child(object()),
+        BackendSettings(idle_timeout=None, get_sandbox_context=unavailable_sandbox_context, env={}),
+    )
+    backend._child = None
 
     with pytest.raises(SessionHostError) as raised:
         backend._parse_operation_response({}, "get_session_stats", rpc._required_session_id)

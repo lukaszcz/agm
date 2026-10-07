@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "hashable_bound_permits_literal_and_runtime_duplicate_raises",
+      "expect": {
+        "stdout": "2\ndup: 1\n"
+      }
+    }
+  ]
+}

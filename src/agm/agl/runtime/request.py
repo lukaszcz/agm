@@ -11,7 +11,7 @@ from agm.agl.ir.ids import Location
 
 if TYPE_CHECKING:
     from agm.agent.spec import AgentSpec
-    from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
+    from agm.agl.runtime.contract import OutputContract
     from agm.sandbox.request import SandboxLimits
 
 ValidationErrorCategory = Literal[
@@ -102,7 +102,7 @@ class AgentRequest:
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
-    output_contract: "OutputContract | TypelessOutputContract | None" = None
+    output_contract: "OutputContract | None" = None
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
     output_callback: AgentOutputCallback | None = field(default=None, repr=False, compare=False)

@@ -92,7 +92,7 @@ the line directly above it.
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
                 ("as" NAME | "::" tail)? [hiding_clause]
-use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
+use_decl    ::= "use" use_target ("::" tail [hiding_clause] | "as" ref_name)
 export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
 tail          ::= "*" | braces | path_atom ["as" ref_name]
@@ -319,7 +319,7 @@ type_expr ::= "unit"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -330,7 +330,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
 type_list ::= type_expr ("," type_expr)* ","?
 
 qualifier_chain   ::= "::" qualifier_segment*
@@ -341,18 +341,20 @@ qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
 
 `name "[" … "]"` is an applied type: a generic declaration instantiated at
 concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
-`array[T]` and `dict[text, V]` are the same form.
+`array[T]` and `dict[K, V]` are the same form.
 
 ## Function declarations
 
 ```ebnf
-func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
-builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" (name | "text") "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
+constraint_block ::= "{" constraint ("," constraint)* ","? "}"
+constraint       ::= ("Eq" | "Hashable") name
 param_list      ::= param ("," param)* ","?
 param           ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
@@ -374,12 +376,17 @@ full zone semantics. No required
 positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
+A `constraint_block` bounding one or more type parameters `Eq` or `Hashable`
+may follow — after the type parameters, or after the method name when there
+are none of its own (a builtin receiver: `array[E]::name{Eq E}`) — and may
+bound a receiver parameter as well as the declaration's own; see
+[Constraint blocks](generics.md#constraint-blocks).
 
 All three function declaration forms accept the same `func_decl_head` surface.
 A builtin receiver may be declared in any module and must use the bare generic
-form (`array[E]` or `dict[text, V]`); see [Methods](functions.md#methods).
-`extern_func_def` is never followed by a body;
-it declares a function implemented by a companion Python file (see
+form (`array[E]` or `dict[K, V]`) or `dict[text, V]`; see
+[Methods](functions.md#methods). `extern_func_def` is never followed by a
+body; it declares a function implemented by a companion Python file (see
 [Python FFI](ffi.md)) rather than an AgL expression.
 
 ## Infix declarations
@@ -396,12 +403,12 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from a builtin, a local
-operator declaration, an operator made bare-visible by an import wildcard or
-tail, or a member made bare by a `use` declaration; a plain qualified import
-does not make its fixity available. A chain cannot mix `infixl` and `infixr`
-operators at the same priority: parenthesize one side or assign distinct
-priorities.
+the `+`/`-` level. The operator after `prio` is looked up at the module root
+like any operator name. An operator use takes the fixity that the module
+declaring the selected operator declares for it; see [Operator
+precedence](lexical-structure.md#operator-precedence). A chain cannot mix
+`infixl` and `infixr` operators at the same priority: parenthesize one side or
+assign distinct priorities.
 
 ## Bindings and mutation
 
@@ -460,7 +467,7 @@ targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there; a field
 assignment likewise accepts any record-typed postfix receiver, provided its
-field is marked `var`. See [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+field is marked `var`. See [Bindings and scope](bindings-and-scope.md#destructive-assignment)
 for which roots are legal and the evaluation order. Each opening `[` must be
 adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
 while `xs [0]` is not.
@@ -750,8 +757,7 @@ constructors) and is triggered solely by the parameter's zone.
 array_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
-dict_entry   ::= STRING ":" element_expr    (* no interpolation in keys *)
-               | field_name ":" element_expr (* shorthand for the string key *)
+dict_entry   ::= element_expr ":" element_expr
 ```
 
 `element_expr` excludes bare record updates — see [Calls](#calls).
@@ -776,7 +782,7 @@ not permitted inside `%{…}`.
 A `$` template's payload (its `verbatim_text`) is specified in
 [Lexical structure](lexical-structure.md#verbatim-literals); its
 interpolation semantics are in
-[Strings and interpolation](strings-and-interpolation.md#the--literal).
+[Strings and interpolation](strings-and-interpolation.md#the-literal).
 
 ```agl
 program def main() -> unit =

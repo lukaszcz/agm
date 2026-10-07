@@ -6,47 +6,54 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
-from agm.agl.eval.conversions import run_recipe
 from agm.agl.eval.ir_interpreter import _apply_coercion
 from agm.agl.ir import contracts
 from agm.agl.ir.contracts import (
     ArrayEncode,
-    ConversionRecipe,
-    ConversionStrategy,
     DictEncode,
     EncodeDefinition,
     EncodePlan,
     EnumEncode,
     ExceptionEncode,
+    ExceptionFieldEncode,
     FieldEncode,
     RecordEncode,
     RefEncode,
     ScalarEncode,
+    ScalarKind,
     TypeParameterEncode,
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import ToJson
-from agm.agl.ir.program import ValueDescriptors
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
+from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.serialize import (
+    WalkTags,
     dumps_exact,
     encode_value,
     value_to_json_obj,
 )
 from agm.agl.semantics.external_names import ExternalName
-from agm.agl.semantics.type_table import TypeDef
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
+    BoolType,
+    DecimalType,
     DictType,
     EnumType,
     ExceptionType,
     IntType,
+    JsonType,
     RecordType,
+    TextType,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -62,14 +69,47 @@ from agm.agl.semantics.values import (
 from agm.agl.type_schema import (
     _build_template_encode_plan,
     build_encode_plan,
+    build_exception_field_encodes,
     build_param_decoder,
 )
-from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
+from agm.agl.zones import ParamZone
+from tests._agl_helpers import (
+    derive_schema,
+    enum_type,
+    enum_typedef,
+    next_decl_id,
+    record_type,
+    type_table_for,
+)
 from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_with_agents,
     evaluate_ir_with_externs,
 )
+
+#: The exception field-encode table of a program declaring no exceptions.
+_NO_EXCEPTIONS: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
+
+
+def _walk_tags_from(type_table: TypeTable, *handles: "RecordType | ExceptionType") -> WalkTags:
+    """Build :class:`WalkTags` from *handles*' real fields/JSON-names, read off *type_table*."""
+    from agm.agl.lower.nominal_descriptors import exception_descriptor, record_descriptor
+    from agm.agl.runtime.serialize import _walk_tags
+
+    nominals = {}
+    for handle in handles:
+        typedef = type_table.typedef_of(handle.decl_id)
+        descriptor = (
+            exception_descriptor(
+                typedef, handle, type_table, bears_name_path=False, field_defaults={}
+            )
+            if isinstance(handle, ExceptionType)
+            else record_descriptor(
+                typedef, handle, type_table, bears_name_path=False, field_defaults={}
+            )
+        )
+        nominals[descriptor.nominal] = descriptor
+    return _walk_tags(nominals)
 
 
 def test_contracts_exports_array_encode() -> None:
@@ -120,6 +160,7 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
         decl_node_id=problem_id,
     )
     table = type_table_for(item_def, choice_def, problem_def)
+    exceptions = {NominalId(problem_id): build_exception_field_encodes(problem, table)}
     item_value = RecordValue(NominalId(item.decl_id), {"value": IntValue(7)})
     choice_value = RecordValue(
         nominal=NominalId(choice_def.members[1].decl_id),
@@ -127,25 +168,26 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
     )
     problem_value = ExceptionValue(NominalId(problem.decl_id), {"choice": choice_value})
 
-    assert value_to_json_obj(choice_value) == {"items": [{"value": 7}]}
-    assert encode_value(build_encode_plan(choice, table), choice_value) == {
+    tags = _walk_tags_from(table, item, choice_def.members[1])
+    assert value_to_json_obj(choice_value, tags=tags) == {"items": [{"value": 7}]}
+    assert encode_value(build_encode_plan(choice, table), choice_value, _NO_EXCEPTIONS) == {
         "$case": "Many",
         "items": [{"value": 7}],
     }
-    assert encode_value(build_encode_plan(problem, table), problem_value) == {
+    assert encode_value(build_encode_plan(problem, table), problem_value, exceptions) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
     # The template builder is what a growing source gets; on a source both
     # builders accept it must agree, exception root and enum slot alike.
-    assert encode_value(_build_template_encode_plan(problem, table), problem_value) == {
+    assert encode_value(_build_template_encode_plan(problem, table), problem_value, exceptions) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
 
 
 def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
-    scalar = EncodePlan(ScalarEncode())
+    scalar = EncodePlan(ScalarEncode(ScalarKind.INT))
     assert [
-        encode_value(scalar, value)
+        encode_value(scalar, value, _NO_EXCEPTIONS)
         for value in (
             TextValue("text"),
             IntValue(2),
@@ -156,94 +198,35 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     ] == ["text", 2, Decimal("2.5"), True, {"raw": None}]
 
     assert encode_value(
-        EncodePlan(ArrayEncode(ScalarEncode())), ArrayValue([IntValue(1), IntValue(2)])
+        EncodePlan(ArrayEncode(ScalarEncode(ScalarKind.INT))),
+        ArrayValue([IntValue(1), IntValue(2)]),
+        _NO_EXCEPTIONS,
     ) == [1, 2]
-    assert encode_value(EncodePlan(DictEncode(ScalarEncode())), DictValue({"n": IntValue(3)})) == {
-        "n": 3
-    }
+    assert encode_value(
+        EncodePlan(DictEncode(ScalarEncode(ScalarKind.TEXT), ScalarEncode(ScalarKind.INT))),
+        DictValue({"n": IntValue(3)}),
+        _NO_EXCEPTIONS,
+    ) == {"n": 3}
 
     enum = EncodePlan(
         EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
     )
-    member = RecordValue(nominal=NominalId(2), fields={})
-    assert encode_value(enum, member) == "Member"
-    # One fielded member makes every member of the enum a tagged object.
-    tagged = EncodePlan(
-        EnumEncode(
-            NominalId(1),
-            (
-                VariantEncode("Member", "Member", NominalId(2), ()),
-                VariantEncode(
-                    "Other", "Other", NominalId(3), (FieldEncode("x", "x", ScalarEncode()),)
-                ),
-            ),
-        )
+    assert (
+        encode_value(enum, RecordValue(nominal=NominalId(2), fields={}), _NO_EXCEPTIONS) == "Member"
     )
-    assert encode_value(tagged, member) == {"$case": "Member"}
-    assert encode_value(tagged, RecordValue(nominal=NominalId(3), fields={"x": IntValue(1)})) == {
-        "$case": "Other",
-        "x": 1,
-    }
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
     assert _apply_coercion(IntValue(1), ToJson()) == JsonValue(1)
-    with pytest.raises(AssertionError, match="scalar encode"):
-        _apply_coercion(ArrayValue([]), ToJson())
-
-
-def test_to_json_recipe_requires_the_lowered_encode_plan() -> None:
-    with pytest.raises(AssertionError, match="requires an encode plan"):
-        run_recipe(
-            ConversionRecipe(
-                strategy=ConversionStrategy.TO_JSON,
-                source_label="int",
-                target_label="json",
-            ),
-            IntValue(1),
-            ValueDescriptors(nominals={}, functions={}),
-        )
-
-
-def test_encode_plan_reports_malformed_static_plans() -> None:
-    scalar = ScalarEncode()
-    enum = EnumEncode(NominalId(1), (VariantEncode("A", "A", NominalId(2), ()),))
-    cases = (
-        (scalar, ArrayValue([])),
-        (ArrayEncode(scalar), IntValue(1)),
-        (DictEncode(scalar), IntValue(1)),
-        (RecordEncode(NominalId(1), ()), IntValue(1)),
-        (RecordEncode(NominalId(1), ()), RecordValue(NominalId(2), {})),
-        (ExceptionEncode(NominalId(1), ()), IntValue(1)),
-        (ExceptionEncode(NominalId(1), ()), ExceptionValue(NominalId(2), {})),
-        (enum, RecordValue(nominal=NominalId(1), fields={})),
-        (enum, RecordValue(nominal=NominalId(1), fields={})),
-        (enum, RecordValue(nominal=NominalId(3), fields={})),
-        (enum, IntValue(1)),
-    )
-    for schema, value in cases:
-        with pytest.raises(AssertionError):
-            encode_value(EncodePlan(schema), value)
-
-    for plan in (
-        EncodePlan(RefEncode("missing")),
-        EncodePlan(
-            RefEncode("first"),
-            (
-                EncodeDefinition("first", 0, RefEncode("second")),
-                EncodeDefinition("second", 0, RefEncode("first")),
-            ),
-        ),
-    ):
-        with pytest.raises(AssertionError):
-            encode_value(plan, IntValue(1))
 
 
 def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
     """A parameterized definition encodes its slots through the caller's arguments."""
     pair = NominalId(1)
     plan = EncodePlan(
-        root=RefEncode("Pair", (ScalarEncode(), ArrayEncode(ScalarEncode()))),
+        root=RefEncode(
+            "Pair", (ScalarEncode(ScalarKind.INT), ArrayEncode(ScalarEncode(ScalarKind.INT)))
+        ),
         definitions=(
             EncodeDefinition(
                 "Pair",
@@ -262,14 +245,26 @@ def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
         pair, {"first": IntValue(1), "second": ArrayValue([IntValue(2), IntValue(3)])}
     )
 
-    assert encode_value(plan, value) == {"first": 1, "second": [2, 3]}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"first": 1, "second": [2, 3]}
+
+
+def test_encode_plan_follows_forwarding_definitions_to_their_body() -> None:
+    """A definition whose body is a bare reference forwards to the referenced body."""
+    plan = EncodePlan(
+        root=RefEncode("Alias"),
+        definitions=(
+            EncodeDefinition("Alias", 0, RefEncode("Target")),
+            EncodeDefinition("Target", 0, ArrayEncode(ScalarEncode(ScalarKind.INT))),
+        ),
+    )
+
+    assert encode_value(plan, ArrayValue([IntValue(1)]), _NO_EXCEPTIONS) == [1]
 
 
 def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> None:
     """An argument is rewritten out of the caller's parameter space before it binds."""
     outer = NominalId(1)
     record = NominalId(2)
-    exception = NominalId(3)
     enum = NominalId(4)
     member = NominalId(5)
     # ``Outer`` hands ``Inner`` a composite written in terms of ITS OWN
@@ -278,16 +273,15 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
     # inside the composite it was given.
     cases = (
         (ArrayEncode(TypeParameterEncode(0)), ArrayValue([IntValue(4)]), [4]),
-        (DictEncode(TypeParameterEncode(0)), DictValue({"n": IntValue(5)}), {"n": 5}),
+        (
+            DictEncode(ScalarEncode(ScalarKind.TEXT), TypeParameterEncode(0)),
+            DictValue({"n": IntValue(5)}),
+            {"n": 5},
+        ),
         (
             RecordEncode(record, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
             RecordValue(record, {"value": IntValue(1)}),
             {"value": 1},
-        ),
-        (
-            ExceptionEncode(exception, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
-            ExceptionValue(exception, {"value": IntValue(2)}),
-            {"value": 2},
         ),
         (
             EnumEncode(
@@ -309,7 +303,7 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
     )
     for composite, value, expected in cases:
         plan = EncodePlan(
-            root=RefEncode("Outer", (ScalarEncode(),)),
+            root=RefEncode("Outer", (ScalarEncode(ScalarKind.INT),)),
             definitions=(
                 EncodeDefinition("Inner", 1, TypeParameterEncode(0)),
                 EncodeDefinition(
@@ -321,23 +315,9 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
                 ),
             ),
         )
-        assert encode_value(plan, RecordValue(outer, {"held": value})) == {"held": expected}
-
-
-def test_encode_plan_reports_malformed_parameterized_plans() -> None:
-    """An unbound parameter or a mis-applied definition is an internal-invariant violation."""
-    box = EncodeDefinition("Box", 1, ScalarEncode())
-    cases = (
-        # A parameter at the root, where nothing binds it.
-        EncodePlan(TypeParameterEncode(0)),
-        # A reference supplying no argument for the definition's parameter.
-        EncodePlan(RefEncode("Box"), (box,)),
-        # An argument naming a parameter the referring position does not have.
-        EncodePlan(RefEncode("Box", (TypeParameterEncode(0),)), (box,)),
-    )
-    for plan in cases:
-        with pytest.raises(AssertionError):
-            encode_value(plan, IntValue(1))
+        assert encode_value(plan, RecordValue(outer, {"held": value}), _NO_EXCEPTIONS) == {
+            "held": expected
+        }
 
 
 def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None:
@@ -399,7 +379,7 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
             '[{"$case": "Empty"}, {"$case": "One", "box": {"item": {}}}]',
         ),
         (
-            DictType(choice),
+            DictType(TextType(), choice),
             DictValue({"primary": one_value}),
             '{"primary": {"$case": "One", "box": {"item": {}}}}',
         ),
@@ -427,7 +407,9 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
 
     for typ, value, legacy_bytes in cases:
         assert (
-            dumps_exact(encode_value(build_encode_plan(typ, table), value), indent=None)
+            dumps_exact(
+                encode_value(build_encode_plan(typ, table), value, _NO_EXCEPTIONS), indent=None
+            )
             == legacy_bytes
         )
 
@@ -457,9 +439,9 @@ def test_encode_bytes_are_preserved_across_agent_request_and_parameter_boundarie
         build_param_decoder(choice, table),
         '{"$case": "One", "value": 2}',
     )
-    assert dumps_exact(encode_value(build_encode_plan(choice, table), decoded), indent=None) == (
-        '{"$case": "One", "value": 2}'
-    )
+    assert dumps_exact(
+        encode_value(build_encode_plan(choice, table), decoded, _NO_EXCEPTIONS), indent=None
+    ) == ('{"$case": "One", "value": 2}')
 
 
 def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
@@ -554,7 +536,10 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                         FieldEncode(
                             "plain",
                             "plain",
-                            RecordEncode(member, (FieldEncode("value", "value", ScalarEncode()),)),
+                            RecordEncode(
+                                member,
+                                (FieldEncode("value", "value", ScalarEncode(ScalarKind.INT)),),
+                            ),
                         ),
                         FieldEncode(
                             "selected",
@@ -566,13 +551,24 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                                         "Shared",
                                         "Shared",
                                         member,
-                                        (FieldEncode("value", "value", ScalarEncode()),),
+                                        (
+                                            FieldEncode(
+                                                "value", "value", ScalarEncode(ScalarKind.INT)
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),
                         ),
-                        FieldEncode("items", "items", ArrayEncode(ScalarEncode())),
-                        FieldEncode("by-name", "by-name", DictEncode(ScalarEncode())),
+                        FieldEncode("items", "items", ArrayEncode(ScalarEncode(ScalarKind.INT))),
+                        FieldEncode(
+                            "by-name",
+                            "by-name",
+                            DictEncode(
+                                ScalarEncode(ScalarKind.TEXT),
+                                ScalarEncode(ScalarKind.INT),
+                            ),
+                        ),
                     ),
                 ),
             ),
@@ -591,6 +587,7 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                 "by-name": DictValue({"n": IntValue(2)}),
             },
         ),
+        _NO_EXCEPTIONS,
     ) == {
         "plain": {"value": 7},
         "selected": {"$case": "Shared", "value": 7},
@@ -608,6 +605,11 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
     exception.fields["cause"] = exception
     member = RecordValue(NominalId(4), {})
     member.fields["next"] = member
+    exceptions = {
+        NominalId(2): (
+            ExceptionFieldEncode("cause", "cause", EncodePlan(ExceptionEncode(NominalId(2)))),
+        )
+    }
 
     plans = (
         (
@@ -625,21 +627,7 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
             ),
             record,
         ),
-        (
-            EncodePlan(
-                RefEncode("Problem"),
-                (
-                    EncodeDefinition(
-                        "Problem",
-                        0,
-                        ExceptionEncode(
-                            NominalId(2), (FieldEncode("cause", "cause", RefEncode("Problem")),)
-                        ),
-                    ),
-                ),
-            ),
-            exception,
-        ),
+        (EncodePlan(ExceptionEncode(NominalId(2))), exception),
         (
             EncodePlan(
                 RefEncode("Link"),
@@ -667,7 +655,7 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
 
     for plan, value in plans:
         with pytest.raises(AglCyclicValue):
-            encode_value(plan, value)
+            encode_value(plan, value, exceptions)
 
 
 def test_encode_plan_allows_a_record_diamond() -> None:
@@ -682,30 +670,25 @@ def test_encode_plan_allows_a_record_diamond() -> None:
                 FieldEncode(
                     "left",
                     "left",
-                    RecordEncode(leaf, (FieldEncode("value", "value", ScalarEncode()),)),
+                    RecordEncode(
+                        leaf, (FieldEncode("value", "value", ScalarEncode(ScalarKind.INT)),)
+                    ),
                 ),
                 FieldEncode(
                     "right",
                     "right",
-                    RecordEncode(leaf, (FieldEncode("value", "value", ScalarEncode()),)),
+                    RecordEncode(
+                        leaf, (FieldEncode("value", "value", ScalarEncode(ScalarKind.INT)),)
+                    ),
                 ),
             ),
         )
     )
 
-    assert encode_value(plan, value) == {"left": {"value": 1}, "right": {"value": 1}}
-
-
-def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
-    from agm.agl.semantics.types import TypeVarType
-
-    table = type_table_for()
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(TypeVarType("T"), table)
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(RecordType("Ghost", decl_id=999), table)
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(UnitType(), table)
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {
+        "left": {"value": 1},
+        "right": {"value": 1},
+    }
 
 
 def test_template_encode_plan_uses_renamed_field() -> None:
@@ -726,7 +709,7 @@ def test_template_encode_plan_uses_renamed_field() -> None:
 
     plan = _build_template_encode_plan(box, table)
 
-    assert encode_value(plan, value) == {"payload": 9}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"payload": 9}
 
 
 def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
@@ -751,9 +734,385 @@ def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
     )
 
 
-def test_encode_plan_rejects_a_non_json_type() -> None:
-    with pytest.raises(AssertionError, match="unencodable"):
-        build_encode_plan(UnitType(), type_table_for())
+# ---------------------------------------------------------------------------
+# `as json` encoding by dict key form (text object / stringified object / entries array)
+# ---------------------------------------------------------------------------
+
+
+class TestDictKeyFormJsonSchemaCrossCheck:
+    """The actual ``as json`` output for each dict key form validates against
+    ``derive_schema``'s own JSON Schema for the same ``(type, table)`` pair --
+    an independent, external check (the ``jsonschema`` library) that the
+    encoder and the schema deriver never silently drift apart.
+    """
+
+    def _cross_checked(self, typ: DictType, table: TypeTable, value: DictValue) -> object:
+        schema = derive_schema(typ, table)
+        Draft202012Validator.check_schema(schema)
+        encoded = encode_value(build_encode_plan(typ, table), value, _NO_EXCEPTIONS)
+        Draft202012Validator(schema).validate(encoded)
+        return encoded
+
+    def test_text_key_object_form(self) -> None:
+        value = DictValue()
+        value.insert(TextValue("k"), TextValue("v"))
+        assert self._cross_checked(
+            DictType(key=TextType(), value=TextType()), type_table_for(), value
+        ) == {"k": "v"}
+
+    def test_all_nullary_enum_key_stringified_form_honors_json_name_and_name(self) -> None:
+        """A ``@json-name`` member and a ``@name``-only member both stringify by their
+        effective tag (``@json-name`` direct; ``@name`` falling back to it)."""
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a_member = RecordType(name="A", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=a_id)
+        b_member = RecordType(name="B", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=b_id)
+        a_def = TypeDef(
+            kind="record",
+            name="A",
+            module_id=ENTRY_ID,
+            scope_path=("Choice",),
+            external_name=ExternalName(json_name="x"),
+            decl_node_id=a_id,
+        )
+        b_def = TypeDef(
+            kind="record",
+            name="B",
+            module_id=ENTRY_ID,
+            scope_path=("Choice",),
+            external_name=ExternalName(name="bee"),
+            decl_node_id=b_id,
+        )
+        enum_id = next_decl_id()
+        choice_def = TypeDef(
+            kind="enum",
+            name="Choice",
+            module_id=ENTRY_ID,
+            members=(a_member, b_member),
+            decl_node_id=enum_id,
+        )
+        table = type_table_for(a_def, b_def, choice_def)
+        choice = EnumType(name="Choice", module_id=ENTRY_ID, decl_id=enum_id)
+        value = DictValue()
+        value.insert(RecordValue(NominalId(a_id), {}), TextValue("va"))
+        value.insert(RecordValue(NominalId(b_id), {}), TextValue("vb"))
+        assert self._cross_checked(DictType(key=choice, value=TextType()), table, value) == {
+            "x": "va",
+            "bee": "vb",
+        }
+
+    def test_int_key_object_form(self) -> None:
+        value = DictValue()
+        value.insert(IntValue(1), TextValue("a"))
+        assert self._cross_checked(
+            DictType(key=IntType(), value=TextType()), type_table_for(), value
+        ) == {"1": "a"}
+
+    def test_bool_key_object_form(self) -> None:
+        value = DictValue()
+        value.insert(BoolValue(True), TextValue("t"))
+        assert self._cross_checked(
+            DictType(key=BoolType(), value=TextType()), type_table_for(), value
+        ) == {"true": "t"}
+
+    def test_json_key_entries_form(self) -> None:
+        value = DictValue()
+        value.insert(JsonValue(5), TextValue("j"))
+        assert self._cross_checked(
+            DictType(key=JsonType(), value=TextType()), type_table_for(), value
+        ) == [{"key": 5, "value": "j"}]
+
+    def test_record_key_entries_form(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType(), "y": IntType()})
+        table = type_table_for(point_def)
+        value = DictValue()
+        value.insert(
+            RecordValue(NominalId(point.decl_id), {"x": IntValue(1), "y": IntValue(2)}),
+            TextValue("p"),
+        )
+        assert self._cross_checked(DictType(key=point, value=TextType()), table, value) == [
+            {"key": {"x": 1, "y": 2}, "value": "p"}
+        ]
+
+    def test_mixed_enum_key_entries_form(self) -> None:
+        shape, shape_def = enum_type("Shape", {"Square": {}, "Circle": {"radius": IntType()}})
+        table = type_table_for(shape_def)
+        value = DictValue()
+        value.insert(RecordValue(NominalId(shape_def.members[0].decl_id), {}), TextValue("s"))
+        value.insert(
+            RecordValue(NominalId(shape_def.members[1].decl_id), {"radius": IntValue(1)}),
+            TextValue("c"),
+        )
+        assert self._cross_checked(DictType(key=shape, value=TextType()), table, value) == [
+            {"key": {"$case": "Square"}, "value": "s"},
+            {"key": {"$case": "Circle", "radius": 1}, "value": "c"},
+        ]
+
+    def test_decimal_key_stringified_form(self) -> None:
+        value = DictValue()
+        value.insert(DecimalValue(Decimal("1.50")), TextValue("a"))
+        assert self._cross_checked(
+            DictType(key=DecimalType(), value=TextType()), type_table_for(), value
+        ) == {"1.50": "a"}
+
+    def test_hoisted_enum_key_stringified_form_honors_json_name_and_name(self) -> None:
+        """``Color`` occurs twice here (as both the dict's key and its value), so
+        it is hoisted into its own ``$defs`` entry; the stringified wire form
+        still honors each member's effective JSON tag (``@json-name`` direct,
+        ``@name`` falling back to it) once resolved through the hoist."""
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a_member = RecordType(name="A", module_id=ENTRY_ID, scope_path=("Color",), decl_id=a_id)
+        b_member = RecordType(name="B", module_id=ENTRY_ID, scope_path=("Color",), decl_id=b_id)
+        a_def = TypeDef(
+            kind="record",
+            name="A",
+            module_id=ENTRY_ID,
+            scope_path=("Color",),
+            external_name=ExternalName(json_name="x"),
+            decl_node_id=a_id,
+        )
+        b_def = TypeDef(
+            kind="record",
+            name="B",
+            module_id=ENTRY_ID,
+            scope_path=("Color",),
+            external_name=ExternalName(name="bleu"),
+            decl_node_id=b_id,
+        )
+        enum_id = next_decl_id()
+        color_def = TypeDef(
+            kind="enum",
+            name="Color",
+            module_id=ENTRY_ID,
+            members=(a_member, b_member),
+            decl_node_id=enum_id,
+        )
+        color = EnumType(name="Color", module_id=ENTRY_ID, decl_id=enum_id)
+        table = type_table_for(a_def, b_def, color_def)
+        value = DictValue()
+        value.insert(RecordValue(NominalId(a_id), {}), RecordValue(NominalId(b_id), {}))
+        value.insert(RecordValue(NominalId(b_id), {}), RecordValue(NominalId(a_id), {}))
+        assert self._cross_checked(DictType(key=color, value=color), table, value) == {
+            "x": "bleu",
+            "bleu": "x",
+        }
+
+    def test_option_enum_key_entries_form(self) -> None:
+        """``Option[Color]``'s ``Some`` variant carries a field, so the key is
+        not all-nullary even though ``Color`` alone would stringify -- giving
+        the entries wire form."""
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a_member = RecordType(name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_id=a_id)
+        b_member = RecordType(name="Blue", module_id=ENTRY_ID, scope_path=("Color",), decl_id=b_id)
+        a_def = TypeDef(
+            kind="record", name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_node_id=a_id
+        )
+        b_def = TypeDef(
+            kind="record",
+            name="Blue",
+            module_id=ENTRY_ID,
+            scope_path=("Color",),
+            decl_node_id=b_id,
+        )
+        enum_id = next_decl_id()
+        color_def = TypeDef(
+            kind="enum",
+            name="Color",
+            module_id=ENTRY_ID,
+            members=(a_member, b_member),
+            decl_node_id=enum_id,
+        )
+        color = EnumType(name="Color", module_id=ENTRY_ID, decl_id=enum_id)
+        option_color = EnumType(
+            name="Option",
+            type_args=(color,),
+            module_id=RESERVED_ID,
+            decl_id=require_reserved_nominal_id("Option"),
+        )
+        table = type_table_for(a_def, b_def, color_def)
+        some_id = NominalId(require_reserved_enum_member_id("Option", "Some"))
+        none_id = NominalId(require_reserved_enum_member_id("Option", "None"))
+        value = DictValue()
+        value.insert(
+            RecordValue(some_id, {"value": RecordValue(NominalId(a_id), {})}), TextValue("r")
+        )
+        value.insert(RecordValue(none_id, {}), TextValue("n"))
+        assert self._cross_checked(DictType(key=option_color, value=TextType()), table, value) == [
+            {"key": {"$case": "Some", "value": "Red"}, "value": "r"},
+            {"key": {"$case": "None"}, "value": "n"},
+        ]
+
+    def test_hoisted_record_key_entries_form(self) -> None:
+        """A record key occurring twice (as both the dict's key and its value)
+        is hoisted into its own ``$defs`` entry; the entries wire form still
+        round-trips both occurrences correctly."""
+        point, point_def = record_type("Point", {"x": IntType(), "y": IntType()})
+        table = type_table_for(point_def)
+        value = DictValue()
+        value.insert(
+            RecordValue(NominalId(point.decl_id), {"x": IntValue(1), "y": IntValue(2)}),
+            RecordValue(NominalId(point.decl_id), {"x": IntValue(3), "y": IntValue(4)}),
+        )
+        assert self._cross_checked(DictType(key=point, value=point), table, value) == [
+            {"key": {"x": 1, "y": 2}, "value": {"x": 3, "y": 4}}
+        ]
+
+
+def test_dict_key_resolves_through_a_ref_encode_before_choosing_its_wire_form() -> None:
+    """A dict key stored via ``$defs`` (``RefEncode``) resolves to its concrete shape first."""
+    point = NominalId(1)
+    plan = EncodePlan(
+        root=DictEncode(RefEncode("Point"), ScalarEncode(ScalarKind.TEXT)),
+        definitions=(
+            EncodeDefinition(
+                "Point",
+                0,
+                RecordEncode(
+                    point,
+                    (
+                        FieldEncode("x", "x", ScalarEncode(ScalarKind.INT)),
+                        FieldEncode("y", "y", ScalarEncode(ScalarKind.INT)),
+                    ),
+                ),
+            ),
+        ),
+    )
+    value = DictValue()
+    value.insert(RecordValue(point, {"x": IntValue(1), "y": IntValue(2)}), TextValue("p"))
+
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == [{"key": {"x": 1, "y": 2}, "value": "p"}]
+
+
+def test_growing_polymorphic_recursive_json_cast_own_key_parameter_uses_entries_form() -> None:
+    """A growing template's dict field keyed by its own type parameter resolves at each depth.
+
+    Here the parameter's instantiation (``Pair[int, int]``) is a record, so the
+    dict's wire form is the entries array.
+    """
+    result = evaluate_ir(
+        "record Pair[A, B]\n"
+        "  first: A\n"
+        "  second: B\n"
+        "enum Perfect[T]\n"
+        "  | Single(value: dict[T, text])\n"
+        "  | Succ(next: Perfect[Pair[T, T]])\n"
+        "let inner-key = Pair(first = 1, second = 2)\n"
+        'let p: Perfect[int] = Succ(next = Single(value = {inner-key: "a"}))\n'
+        "let encoded = p as json\n"
+        "()\n"
+    )
+
+    encoded = result["encoded"]
+    assert isinstance(encoded, JsonValue)
+    assert encoded.raw == {
+        "$case": "Succ",
+        "next": {
+            "$case": "Single",
+            "value": [{"key": {"first": 1, "second": 2}, "value": "a"}],
+        },
+    }
+
+
+def test_growing_polymorphic_recursive_json_cast_stringifies_its_own_key_parameter() -> None:
+    """A growing template's own type-parameter key still
+    stringifies correctly once resolved at a depth where it instantiates to a scalar."""
+    result = evaluate_ir(
+        "record Pair[A, B]\n"
+        "  first: A\n"
+        "  second: B\n"
+        "enum Perfect[T]\n"
+        "  | Single(value: dict[T, text])\n"
+        "  | Succ(next: Perfect[Pair[T, T]])\n"
+        'let p: Perfect[int] = Single(value = {1: "a"})\n'
+        "let encoded = p as json\n"
+        "()\n"
+    )
+
+    encoded = result["encoded"]
+    assert isinstance(encoded, JsonValue)
+    assert encoded.raw == {"$case": "Single", "value": {"1": "a"}}
+
+
+def test_growing_template_stringifies_an_all_nullary_enum_key_with_json_name() -> None:
+    """A growing template's dict field keyed by a fixed (non-parameter) all-nullary
+    enum stringifies by each member's effective JSON tag, in the encoded output."""
+    red_id = next_decl_id()
+    blue_id = next_decl_id()
+    red_member = RecordType(name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_id=red_id)
+    blue_member = RecordType(
+        name="Blue", module_id=ENTRY_ID, scope_path=("Color",), decl_id=blue_id
+    )
+    red_def = TypeDef(
+        kind="record", name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_node_id=red_id
+    )
+    blue_def = TypeDef(
+        kind="record",
+        name="Blue",
+        module_id=ENTRY_ID,
+        scope_path=("Color",),
+        external_name=ExternalName(json_name="bleu"),
+        decl_node_id=blue_id,
+    )
+    color_id = next_decl_id()
+    color_def = TypeDef(
+        kind="enum",
+        name="Color",
+        module_id=ENTRY_ID,
+        members=(red_member, blue_member),
+        decl_node_id=color_id,
+    )
+    color = EnumType(name="Color", module_id=ENTRY_ID, decl_id=color_id)
+
+    _, pair_def = record_type(
+        "Pair", {"first": TypeVarType("A"), "second": TypeVarType("B")}, type_params=("A", "B")
+    )
+    pair_of_t = RecordType(
+        name="Pair",
+        type_args=(TypeVarType("T"), TypeVarType("T")),
+        module_id=ENTRY_ID,
+        decl_id=pair_def.decl_node_id,
+    )
+
+    perfect_id = next_decl_id()
+    perfect_def = enum_typedef(
+        "Perfect",
+        {
+            "Single": {"value": DictType(key=color, value=TypeVarType("T"))},
+            "Succ": {
+                "next": EnumType(
+                    name="Perfect", type_args=(pair_of_t,), module_id=ENTRY_ID, decl_id=perfect_id
+                )
+            },
+        },
+        type_params=("T",),
+        decl_id=perfect_id,
+    )
+    table = type_table_for(red_def, blue_def, color_def, pair_def, perfect_def)
+    perfect = EnumType(
+        name="Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=perfect_id
+    )
+    single_id = perfect_def.members[0].decl_id
+
+    plan = _build_template_encode_plan(perfect, table)
+
+    perfect_definition = next(
+        d for d in plan.definitions if d.key == f"n{perfect_id}" and isinstance(d.body, EnumEncode)
+    )
+    single_variant = next(v for v in perfect_definition.body.variants if v.name == "Single")
+    dict_encode = single_variant.fields[0].schema
+    assert isinstance(dict_encode, DictEncode)
+
+    value = DictValue()
+    value.insert(RecordValue(NominalId(red_id), {}), IntValue(1))
+    value.insert(RecordValue(NominalId(blue_id), {}), IntValue(2))
+    single_value = RecordValue(NominalId(single_id), {"value": value})
+
+    assert encode_value(plan, single_value, _NO_EXCEPTIONS) == {
+        "$case": "Single",
+        "value": {"Red": 1, "bleu": 2},
+    }
 
 
 def test_encode_plan_handles_recursive_containers() -> None:
@@ -764,6 +1123,7 @@ def test_encode_plan_handles_recursive_containers() -> None:
         name="Recursive",
         module_id=ENTRY_ID,
         fields=(("children", ArrayType(recursive)),),
+        field_kinds=(ParamZone.STANDARD,),
         decl_node_id=recursive_id,
     )
     value = RecordValue(
@@ -775,14 +1135,16 @@ def test_encode_plan_handles_recursive_containers() -> None:
         },
     )
 
-    plan = build_encode_plan(recursive, type_table_for(recursive_def))
+    table = type_table_for(recursive_def)
+    plan = build_encode_plan(recursive, table)
 
     assert isinstance(plan.root, RefEncode)
-    assert encode_value(plan, value) == value_to_json_obj(value)
+    tags = _walk_tags_from(table, recursive)
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == value_to_json_obj(value, tags=tags)
 
 
-def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj() -> None:
-    """A renamed field's key diverges from ``value_to_json_obj``, which keeps declared names."""
+def test_encode_plan_and_untyped_walk_agree_on_effective_json_name() -> None:
+    """A renamed field's effective JSON key is the same whether encoded or walked untyped."""
     decl_id = next_decl_id()
     renamed = RecordType(name="Renamed", decl_id=decl_id)
     renamed_def = TypeDef(
@@ -790,16 +1152,18 @@ def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj()
         name="Renamed",
         module_id=ENTRY_ID,
         fields=(("value", IntType()),),
+        field_kinds=(ParamZone.STANDARD,),
         field_external_names=(("value", ExternalName(json_name="val")),),
         decl_node_id=decl_id,
     )
     value = RecordValue(NominalId(decl_id), {"value": IntValue(3)})
 
-    plan = build_encode_plan(renamed, type_table_for(renamed_def))
+    table = type_table_for(renamed_def)
+    plan = build_encode_plan(renamed, table)
+    tags = _walk_tags_from(table, renamed)
 
-    assert encode_value(plan, value) == {"val": 3}
-    assert value_to_json_obj(value) == {"value": 3}
-    assert encode_value(plan, value) != value_to_json_obj(value)
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"val": 3}
+    assert value_to_json_obj(value, tags=tags) == {"val": 3}
 
 
 def test_encode_plan_uses_member_external_name_as_tag() -> None:
@@ -824,7 +1188,7 @@ def test_encode_plan_uses_member_external_name_as_tag() -> None:
 
     plan = build_encode_plan(choice, table)
 
-    assert encode_value(plan, value) == "uno"
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == "uno"
 
 
 def test_encode_plan_json_name_overrides_name_for_field() -> None:
@@ -843,7 +1207,7 @@ def test_encode_plan_json_name_overrides_name_for_field() -> None:
 
     plan = build_encode_plan(renamed, type_table_for(renamed_def))
 
-    assert encode_value(plan, value) == {"val": 3}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"val": 3}
 
 
 def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
@@ -868,10 +1232,11 @@ def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
     )
     table = type_table_for(base_def, derived_def)
     value = ExceptionValue(NominalId(derived_id), {"code": IntValue(4)})
+    exceptions = {NominalId(derived_id): build_exception_field_encodes(derived, table)}
 
     plan = build_encode_plan(derived, table)
 
-    assert encode_value(plan, value) == {"error-code": 4}
+    assert encode_value(plan, value, exceptions) == {"error-code": 4}
 
 
 def test_encode_plan_renames_field_in_generic_record() -> None:
@@ -891,7 +1256,7 @@ def test_encode_plan_renames_field_in_generic_record() -> None:
 
     plan = build_encode_plan(box, type_table_for(box_def))
 
-    assert encode_value(plan, value) == {"payload": 9}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"payload": 9}
 
 
 def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
@@ -918,7 +1283,7 @@ def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
     plan = build_encode_plan(recursive, type_table_for(recursive_def))
 
     assert isinstance(plan.root, RefEncode)
-    assert encode_value(plan, value) == {"kids": [{"kids": []}]}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"kids": [{"kids": []}]}
 
 
 def test_encode_definition_keys_match_the_schema_and_decode_defs_keys() -> None:

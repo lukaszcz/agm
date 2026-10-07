@@ -86,7 +86,7 @@
       "params": {"mode": 9},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}}
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}}
       }
     },
     {
@@ -94,7 +94,7 @@
       "params": {"mode": 10},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}}
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}}
       }
     }
   ]

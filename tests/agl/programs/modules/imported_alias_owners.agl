@@ -1,0 +1,46 @@
+# Aliases reached through imports qualify constructors exactly as local ones
+# do: a local alias of an imported enum selects its members, an alias another
+# module declares keeps the target its own module selects, and a record or
+# exception is qualified by its own name or by any alias or `use` name that
+# leads to it.
+import shapes
+import aliases
+use shapes::{P as Q, F, Oops, Point}
+
+type LE = shapes::Plain
+
+type L = shapes::Point
+
+def waits(plain: LE) -> int =
+  case plain of
+    | LE::Wait(n) => n
+    | LE::Ready => 0
+
+def x-of(point: Point) -> int =
+  case point of
+    | Q::Q(x) => x
+
+program def main(start: int) -> unit =
+  let plain: LE = if start > 0 => LE::Wait(n = start) else => LE::Ready
+  let wait: (int) -> LE = LE::Wait
+  print("%{waits(plain)} %{plain is LE::Wait} %{waits(wait(start + 1))}")
+  let slot: shapes::Slot[int] = aliases::LS::Filled(value = start)
+  print("%{slot is aliases::LS::Filled} %{slot is aliases::LS::Empty}")
+  let points = [
+    Q::Q(x = start),
+    Q::P(x = start + 1),
+    Q::Point(x = start + 2),
+    L::L(x = start + 3),
+    L::Point(x = start + 4),
+    shapes::Point::Point(x = start + 5),
+    Point::Point(x = start + 6),
+    aliases::LP::LP(x = start + 7),
+    aliases::LP::P(x = start + 8),
+    shapes::P::P(x = start + 9),
+    aliases::AP::AP(x = start + 10)
+  ]
+  print(points.map(x-of))
+  try
+    raise F::F(message = "failed", code = start)
+  catch Oops as e =>
+    print("%{e.code} %{e is F}")

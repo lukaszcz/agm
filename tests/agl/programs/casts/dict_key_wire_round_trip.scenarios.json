@@ -1,0 +1,103 @@
+{
+  "scenarios": [
+    {
+      "name": "text_keys_round_trip",
+      "params": {
+        "mode": 1
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "int_keys_round_trip",
+      "params": {
+        "mode": 2
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "decimal_keys_round_trip",
+      "params": {
+        "mode": 3
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "bool_keys_round_trip",
+      "params": {
+        "mode": 4
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "enum_by_tag_keys_round_trip",
+      "params": {
+        "mode": 5
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "mixed_enum_keys_round_trip",
+      "params": {
+        "mode": 6
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "record_keys_round_trip",
+      "params": {
+        "mode": 7
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "option_keys_round_trip",
+      "params": {
+        "mode": 8
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "nested_in_record_keys_round_trip",
+      "params": {
+        "mode": 9
+      },
+      "expect": {
+        "stdout": "true\n"
+      }
+    },
+    {
+      "name": "empty_keys_round_trip",
+      "params": {
+        "mode": 10
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    },
+    {
+      "name": "json_keys_round_trip",
+      "params": {
+        "mode": 11
+      },
+      "expect": {
+        "stdout": "true\ntrue\n"
+      }
+    }
+  ]
+}

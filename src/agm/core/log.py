@@ -190,19 +190,6 @@ def prepare_log_file(
     mkdir(log_file.parent, parents=True, exist_ok=True)
 
 
-def _jsonl_default(obj: object) -> str:
-    """JSON serializer for types not handled by the stdlib encoder.
-
-    Raises ``TypeError`` for any unsupported type — including ``Decimal``.
-    There is a single numeric convention for the DSL, and it lives in
-    ``agm.agl.runtime.serialize.dumps_exact`` (unquoted exact fixed-point text).
-    Emitting a ``Decimal`` here would quote it as a JSON string and silently
-    diverge from that convention, so callers MUST pre-serialize any
-    ``Decimal``-bearing values before passing the record in (F2).
-    """
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
-
-
 def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:
     """Append *record* as a single JSONL line to *path*.
 
@@ -214,12 +201,12 @@ def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:
     non-stdlib-JSON type) raises ``TypeError``.  The single numeric convention
     lives in the DSL serializer (``agm.agl.runtime.serialize.dumps_exact``);
     callers MUST pre-serialize ``Decimal``-bearing values to exact text before
-    calling this (F2).
+    calling this.
 
     If *path* is ``None`` this is a no-op (logging disabled).
     """
     if path is None:
         return
     obj: dict[str, object] = {k: v for k, v in record.items()}
-    line = json.dumps(obj, default=_jsonl_default, ensure_ascii=False) + "\n"
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
     append_text(path, line, encoding="utf-8")

@@ -5,6 +5,20 @@ AGM workspaces, opening tmux sessions, running setup scripts, executing
 commands with sandbox settings, and running AgL agent workflows — as whole programs (`agm exec`)
 or in an interactive REPL (`agm repl`).
 
+## Documentation
+
+Start at the [documentation landing page](docs/index.md) for the language reference,
+command reference, and architecture guide. Sources remain Markdown under `docs/`.
+
+Run `just docs-build` to build into `site/`, or `just docs-serve` for a live preview at
+<http://0.0.0.0:8000>, accessible over the LAN at `http://<host-ip>:8000`.
+These commands install the locked documentation dependencies;
+pass server options with `just docs-serve --dev-addr 127.0.0.1:8080`.
+
+Read the Docs uses `.readthedocs.yaml` and `mkdocs.yml`. Import this repository into
+[Read the Docs](https://app.readthedocs.org/) to enable hosted builds. Navigation is
+defined in `mkdocs.yml`; relative Markdown links work across all three components.
+
 ## Requirements
 
 - `git`

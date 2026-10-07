@@ -1,0 +1,35 @@
+# An uncaught runtime failure is reported at its own failing expression's
+# source line, never at a preceding `let`'s line in the same function body.
+# Regression: the evaluator used to fall back to the enclosing block's own
+# span (effectively its first `let`) for any raise that had no closer span
+# of its own -- a missing/duplicate dict key, an out-of-range array index,
+# division by zero, a failed nominal cast -- whenever no intervening call,
+# `ask`, or `exec` node re-attributed it first.
+exception Foo
+exception Bar
+
+program def main(mode: text) -> unit =
+  let a = 1
+  let b = 2
+  if
+    | mode == "key" =>
+        let d: dict[text, int] = {}
+        let x = 1
+        print d["missing"]
+    | mode == "duplicate-key" =>
+        let k = "x"
+        let y = 1
+        print {k: 1, k: 2}
+    | mode == "index" =>
+        let xs: array[int] = []
+        let y = 1
+        print xs[5]
+    | mode == "division" =>
+        let n: int = 1
+        let z: int = 0
+        print(n / z)
+    | mode == "cast" =>
+        let e: Exception = Foo(message = "boom")
+        let y = 1
+        print(e as Bar)
+    | else => ()

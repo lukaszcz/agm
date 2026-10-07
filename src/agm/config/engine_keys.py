@@ -65,7 +65,7 @@ class EngineKeySpec:
     name: str
     kind: EngineKeyKind
     consumer: EngineKeyConsumer
-    config_attr: str | None = None
+    config_attr: str
     default: object = None
     has_default: bool = True
     register: str | None = None

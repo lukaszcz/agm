@@ -7,7 +7,7 @@ from dataclasses import replace
 import agm.agl.syntax as syntax
 from agm.agl.attributes import PARAM_ATTRIBUTE
 from agm.agl.syntax.nodes import Item, Program, static_function_items
-from agm.agl.syntax.visitor import walk
+from agm.agl.syntax.visitor import SyntaxNode, walk
 
 _ROOT_DECLARATIONS = (
     syntax.FuncDef,
@@ -29,38 +29,74 @@ def _binding_names(binding: syntax.LetDecl | syntax.VarDecl) -> frozenset[str]:
     return frozenset({binding.name})
 
 
-def _collect_binder(node: object, names: set[str]) -> None:
-    """Record every name *node* can introduce as a binder."""
-    if isinstance(
-        node,
-        (syntax.Param, syntax.LetDecl, syntax.VarDecl, syntax.VarPattern, syntax.AsPattern),
-    ):
-        names.add(node.name)
+def _pattern_names(pattern: syntax.Pattern) -> frozenset[str]:
+    """The names *pattern* binds."""
+    names: set[str] = set()
+
+    def visit(node: object) -> None:
+        if isinstance(node, (syntax.VarPattern, syntax.AsPattern)):
+            names.add(node.name)
+
+    walk(pattern, visit)
+    return frozenset(names)
+
+
+def _shield(scope: SyntaxNode, names: frozenset[str], shielded: set[int]) -> None:
+    """Record the bare references to *names* inside *scope*, which a binder of theirs encloses."""
+
+    def visit(node: object) -> None:
+        if (
+            isinstance(node, (syntax.VarRef, syntax.NameTarget))
+            and node.qualifier is None
+            and node.name in names
+        ):
+            shielded.add(node.node_id)
+
+    walk(scope, visit)
+
+
+def _shield_binders(node: object, shielded: set[int]) -> None:
+    """Record the bare references *node*'s own lexical binders enclose.
+
+    A binder encloses only what it is visible to: a parameter the body (not
+    the defaults), a loop variable the loop body, a pattern or ``catch``
+    binding its branch, a block's ``let``/``var`` the items after it. A region
+    binding declares a scope path, not a lexical binder.
+    """
+    if isinstance(node, (syntax.FuncDef, syntax.Lambda)) and node.body is not None:
+        _shield(node.body, frozenset(param.name for param in node.params), shielded)
     elif isinstance(node, syntax.Loop) and node.for_var is not None:
-        names.add(node.for_var)
+        _shield(node.body, frozenset({node.for_var}), shielded)
+    elif isinstance(node, syntax.CaseBranch):
+        _shield(node.body, _pattern_names(node.pattern), shielded)
     elif isinstance(node, syntax.CatchClause) and node.binding is not None:
-        names.add(node.binding)
+        _shield(node.body, frozenset({node.binding}), shielded)
+    elif isinstance(node, syntax.Block):
+        bound: frozenset[str] = frozenset()
+        for item in node.items:
+            _shield(item, bound, shielded)
+            if isinstance(item, (syntax.LetDecl, syntax.VarDecl)):
+                bound |= {item.name}
 
 
 def _free_names(item: Item) -> frozenset[str]:
-    """Names *item* reads from its surroundings, over-approximating its binders.
+    """Names *item* may read from the module root.
 
     A read is a ``VarRef`` or an assignment target anywhere in the subtree,
-    matched by member name so a qualified spelling matches its binding. Any
-    name a binder introduces in the same subtree is dropped: the reference may
-    be to that binder rather than to the enclosing binding.
+    matched by member name so a qualified spelling matches its binding. Only a
+    bare read that a lexical binder of its name encloses is dropped: it can
+    never reach the root.
     """
-    references: set[str] = set()
-    binders: set[str] = set()
+    references: dict[int, str] = {}
+    shielded: set[int] = set()
 
     def visit(node: object) -> None:
         if isinstance(node, (syntax.VarRef, syntax.NameTarget)):
-            references.add(node.name)
-        else:
-            _collect_binder(node, binders)
+            references[node.node_id] = node.name
+        _shield_binders(node, shielded)
 
     walk(item, visit)
-    return frozenset(references - binders)
+    return frozenset(name for node_id, name in references.items() if node_id not in shielded)
 
 
 def _root_retained(items: tuple[Item, ...]) -> frozenset[int]:

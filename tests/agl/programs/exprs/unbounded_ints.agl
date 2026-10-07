@@ -1,0 +1,20 @@
+import std/math
+import std/value
+
+# An `int` is unbounded: one of any length prints, renders `as text` and
+# `as json`, interpolates, and round-trips through value syntax and JSON, and
+# an integral `decimal` of any length within the decimal range narrows to it.
+program def main(exponent: int) -> unit =
+  let power = 10.pow(exponent)
+  let digits = power as text
+  print power
+  print(digits.size())
+  print(digits == "%{power}")
+  print((power as json) == value::parse::[json](digits))
+  print(((power as json) as int) == power)
+  print(value::parse::[int](digits) == power)
+  print(value::parse::[array[int]]("[%{power - 1}]") == [power - 1])
+  let wide = 10.0.pow(exponent)
+  print((wide as int) == power)
+  print(((wide as json) as int) == power)
+  print((wide + 0.5).floor() == power)

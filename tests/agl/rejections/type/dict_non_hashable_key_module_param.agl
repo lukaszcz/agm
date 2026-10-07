@@ -1,0 +1,4 @@
+@param let counts: dict[array[int], text] = {}
+
+program def main() -> unit =
+  print counts

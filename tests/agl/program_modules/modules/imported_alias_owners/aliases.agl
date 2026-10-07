@@ -1,0 +1,7 @@
+import shapes
+
+type LS = shapes::Slot[int]
+
+type LP = shapes::P
+
+type AP = /shapes::Point

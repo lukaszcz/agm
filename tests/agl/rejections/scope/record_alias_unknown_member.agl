@@ -1,0 +1,7 @@
+record Point
+  x: int
+
+type P = Point
+
+program def main() -> unit =
+  print(P::Foo(x = 1))

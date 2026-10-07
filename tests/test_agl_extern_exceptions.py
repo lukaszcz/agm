@@ -16,7 +16,7 @@ from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRe
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, IrClosureValue, TextValue, Value
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class _NominalConstructor(Protocol):
@@ -37,7 +37,7 @@ def _raising_proxy(window: ExternCallWindow, problem: ExceptionValue) -> AglCall
 
     return AglCallableProxy(
         arity=0,
-        closure=IrClosureValue(FunctionId(1), ()),
+        function=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
     )
@@ -102,6 +102,7 @@ def test_companion_can_raise_a_synthesized_exception_through_the_carrier() -> No
                 declared_name="Problem",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "detail"),
+                field_json_names=("message", "detail"),
             )
         },
     )
@@ -147,6 +148,7 @@ def test_carrier_name_is_reserved_when_an_agl_exception_uses_it(tmp_path: Path) 
                 declared_name="AglException",
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
+                field_json_names=("message",),
             )
         },
     )

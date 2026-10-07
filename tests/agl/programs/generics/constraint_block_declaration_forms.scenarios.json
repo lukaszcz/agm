@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "runs_like_an_unconstrained_generic",
+      "params": {
+        "seed": 10
+      },
+      "expect": {
+        "stdout": "1\na\n1\n10\n10\n10\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "runs_like_an_unconstrained_generic_different_seed",
+      "params": {
+        "seed": 100
+      },
+      "expect": {
+        "stdout": "1\na\n1\n100\n100\n100\n",
+        "calls": {}
+      }
+    }
+  ]
+}

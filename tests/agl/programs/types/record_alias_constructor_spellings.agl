@@ -1,0 +1,24 @@
+# A record's own name qualifies its constructor, and an alias of the record
+# is qualified by its own name or by the record's; the same spellings match
+# in patterns.
+
+record Point
+  x: int
+
+type P = Point
+
+type Near = P
+
+def x-of(point: P) -> int =
+  case point of
+    | P::P(x) => x
+
+def near-x(point: Near) -> int =
+  case point of
+    | Near::Point(x) => x
+
+program def main(start: int) -> unit =
+  let points = [Point::Point(x = start), P::P(x = start + 1), P::Point(x = start + 2)]
+  let near = Near::Near(x = start + 3)
+  print(points.map(x-of))
+  print("%{near-x(near)} %{near == Point(x = start + 3)}")

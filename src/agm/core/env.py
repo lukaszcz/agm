@@ -26,6 +26,11 @@ def resolve_env(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
     return os.environ if env is None else env
 
 
+def resolve_home(env: Mapping[str, str] | None = None) -> Path:
+    """Return the invoking user's home directory as *env* (or the process) sees it."""
+    return Path(resolve_env(env).get("HOME", "~"))
+
+
 def help_width() -> int:
     """Return the column count AGM's hand-rendered help wraps to.
 

@@ -17,9 +17,13 @@ import re
 from collections.abc import Callable, Sequence
 from typing import cast
 
+from agm.util.decimal import parse_json_decimal, reject_json_constant
+
 __all__ = [
     "LoneSurrogateError",
     "holds_surrogate",
+    "json_object_unique",
+    "loads_exact_json",
     "loads_json",
     "require_scalar_text",
     "surrogate_index",
@@ -94,6 +98,14 @@ def visible_text(text: str) -> str:
     return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
+def json_object_unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """``object_pairs_hook`` building a dict that rejects a duplicate member name."""
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("duplicate JSON object key")
+    return result
+
+
 def loads_json(
     doc: str,
     *,
@@ -109,8 +121,8 @@ def loads_json(
     the result can only have come from such an escape, so the escape pattern
     gates the walk and the walk decides.
 
-    Raises :exc:`json.JSONDecodeError`, which every caller already maps to its
-    own typed error.
+    Raises :exc:`ValueError` -- :exc:`json.JSONDecodeError` or whatever a
+    hook raises -- which every caller maps to its own typed error.
     """
     result: object = json.loads(
         doc,
@@ -122,3 +134,13 @@ def loads_json(
     if match is not None and holds_surrogate(result):
         raise json.JSONDecodeError("lone surrogate escape", doc, match.start())
     return result
+
+
+def loads_exact_json(doc: str) -> object:
+    """:func:`loads_json` with exact decimals, no non-finite constants, unique member names."""
+    return loads_json(
+        doc,
+        parse_float=parse_json_decimal,
+        parse_constant=reject_json_constant,
+        object_pairs_hook=json_object_unique,
+    )

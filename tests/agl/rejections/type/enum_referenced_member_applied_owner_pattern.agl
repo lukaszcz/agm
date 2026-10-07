@@ -1,0 +1,11 @@
+record Saved
+  id: int
+
+enum Stored[T] = ::Saved | Fresh(value: T)
+
+def describe(stored: Stored[int]) -> int =
+  case stored of
+    | Stored[int]::Saved(id) => id
+    | Stored[int]::Fresh(value) => value
+
+program def main() -> unit = print(describe(Saved(id = 1)))

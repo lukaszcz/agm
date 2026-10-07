@@ -49,6 +49,15 @@
       "expect": {
         "stdout": "\"not json at all\"\nparse error\nnot json at all\nhas_message: true\n"
       }
+    },
+    {
+      "name": "duplicate_member_name_raises_json_parse_error",
+      "params": {
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "\"{\\\"a\\\": 1, \\\"a\\\": 2}\"\nparse error\n{\"a\": 1, \"a\": 2}\nhas_message: true\n"
+      }
     }
   ]
 }

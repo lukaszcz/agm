@@ -1,0 +1,13 @@
+# A template hole that reads a nullary constructor (rather than a `let`
+# constant) folds to no comparable text at compile time -- constant folding
+# only chases a `let` initializer -- so two such keys are checked for
+# duplicates only at run time.
+enum Color
+  | Red
+
+program def main() -> unit =
+  try
+    let counts: dict[text, int] = {"%{Red}": 1, "%{Red}": 2}
+    print counts
+  catch DuplicateKeyError as e =>
+    print "dup: %{e.key}"

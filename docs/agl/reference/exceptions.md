@@ -157,8 +157,13 @@ CastError(message = "cannot parse \"x\" as int", source-type = "text", target-ty
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
-rendering rules. Use `e as json` to obtain the JSON object of the exception's
-fields; use `e as text` to obtain the same AgL-form string.
+rendering rules. Use `e as json` to obtain the JSON object of the fields of
+*e*'s runtime exception type (see [Nominal types
+`as json`](types.md#nominal-types-as-json-structural-encoding)); use `e as
+text` to obtain the same AgL-form string. A field value with no JSON
+representation (such as a function or a cyclic value) makes the cast raise
+`CastError` (`as?` yields `None`); only the report of an uncaught exception
+replaces such a field with a marker.
 
 ## `try` / `catch`
 
@@ -473,10 +478,15 @@ scrutinee: json        # structural JSON encoding of the rejected value
 
 ### `ArithmeticError`
 
-Raised by division by zero.
+Raised by decimal arithmetic or int-to-decimal conversion that overflows the
+fixed decimal context's range, divides by zero, or is otherwise invalid
+([Numbers: int and decimal](types.md#numbers-int-and-decimal)), and by a
+`std/math` decimal function whose own result does the same — `round`, for
+instance, when its result would need more than 28 digits.
 
 ```text
-operation: text    # the operator, e.g. "/"
+operation: text    # the operator, conversion, or std/math function name,
+                    # e.g. "/", "as decimal", or "pow"
 ```
 
 ### `TypeError`
@@ -502,7 +512,29 @@ length: int
 ### `KeyError`
 
 Raised by missing dictionary keys during indexing or indexed dictionary
-assignment.
+assignment, and by standard-library lookups of a missing dictionary or JSON
+object key. `key` is always `text`: the missing key rendered in AgL value
+syntax, exactly as it renders inside a dict
+([Rendering](strings-and-interpolation.md#uniform-rendering-rules)); as AgL
+string literals, a missing `"a"` gives `"\"a\""`, `42` gives `"42"`,
+`Color::Red` gives `"Color::Red"`, and `Point(x = 1, y = 2)` gives
+`"Point(x = 1, y = 2)"`. The rendering parses back to an equal key:
+`parse::[K](e.key)` for any non-`text` key type `K` that `parse` accepts, and
+as a quoted text literal wherever value syntax reads one (a top-level
+`parse::[text]` takes its input verbatim). Exception keys, and keys containing
+exceptions, render but do not parse.
+
+```text
+key: text
+```
+
+### `DuplicateKeyError`
+
+Raised by a dict literal whose key expressions compute an equal key twice at
+run time (two constant keys that are equal are a static error instead), and by
+`std/dict::from-entries` meeting an equal key under its default `Raise` policy.
+`key`
+is always `text`, rendered as for [`KeyError`](#keyerror).
 
 ```text
 key: text
@@ -569,9 +601,11 @@ and parses.
 ### `JsonParseError`
 
 A `std/json` parsing function received text that is not a well-formed JSON
-document, including a document holding a lone `\uD800`-`\uDFFF` escape. An
-adjacent high and low escape pair is not lone: it denotes one character and
-parses.
+document, including a document with a duplicate object member name or one
+holding a lone `\uD800`-`\uDFFF` escape. An adjacent high and low escape pair
+is not lone: it denotes one character and parses. A number a `json` value
+cannot hold (`NaN`, an infinity, or one no `decimal` can hold) is rejected the
+same way ([Numbers](types.md#numbers-int-and-decimal)).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -580,7 +614,8 @@ raw: text   # the input text that failed to parse
 ### `TomlParseError`
 
 A `std/toml` parsing function received text that is not a well-formed TOML
-document.
+document, or one holding a number a `json` value cannot hold (`inf`, `nan`,
+or one no `decimal` can hold).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -589,9 +624,8 @@ raw: text   # the input text that failed to parse
 ### `TomlRenderError`
 
 `std/toml::render` received a JSON value that TOML cannot represent: a
-non-object root, a value containing `null`, an integer outside TOML's signed
-64-bit range, or a signaling/payload `decimal` NaN. It carries only the base
-fields.
+non-object root, a value containing `null`, or an integer outside TOML's
+signed 64-bit range. It carries only the base fields.
 
 ```text
 (base fields only)
@@ -649,6 +683,7 @@ how equality and tracing treat one.
 | ------ | --------- |
 | Out-of-range array/text index access, array indexed assignment, or an absent `array::index-of`/`text::index-of` search | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
+| A dict literal computes an equal key twice at run time, or `std/dict::from-entries` meets an equal key under `Raise` | `DuplicateKeyError` |
 | Agent transport failure, including agent output that is not valid UTF-8 | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
 | Failing shell command (parsed or unit form), or shell output that is not valid UTF-8 (any form) | `ExecError` |
@@ -661,17 +696,17 @@ how equality and tracing treat one.
 | Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, non-positive range `for` step (`by k` with `k ≤ 0`), or negative `parse-error-retries` write or call option | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
-| Division by zero | `ArithmeticError` |
+| Division by zero, a decimal result outside the fixed context's range, or an `int`-to-`decimal` conversion outside that range | `ArithmeticError` |
 | Engine-setting write the host rejects (unparseable `timeout`, blank `trace-file`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
-| `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |
+| `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape, or holds a number a `json` value cannot hold | `JsonParseError` |
 | `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
 | `std/path` or `std/os` host text that is not valid Unicode | `EncodingError` |
 | `std/os::edit`/`std/os::open` — nothing to launch, or the launched process exited non-zero | `LaunchError` |
 | `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
-| `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
-| `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
+| `std/toml` parsing — input is not well-formed TOML, or holds a number a `json` value cannot hold | `TomlParseError` |
+| `std/toml` rendering — root is not an object, a value is `null`, or an integer is outside signed 64-bit range | `TomlRenderError` |
 | `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle, including a record-closed cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |

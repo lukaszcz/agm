@@ -29,7 +29,7 @@ _INDEX_ERROR = NominalId(9_600_002)
 _OPTION = NominalId(9_600_003)
 _OPTION_NONE = NominalId(9_600_004)
 _OPTION_SOME = NominalId(9_600_005)
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class _TimeCompanion(Protocol):
@@ -74,6 +74,7 @@ def _companion(
                 declared_name="TimeParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
             _INDEX_ERROR: NominalDescriptor(
                 nominal=_INDEX_ERROR,
@@ -82,6 +83,7 @@ def _companion(
                 declared_name="IndexError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "index", "length"),
+                field_json_names=("message", "index", "length"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },

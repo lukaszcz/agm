@@ -9,8 +9,9 @@ import pytest
 
 from agm.agl import artifact_cache, artifact_storage
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintKind
 from agm.agl.lower.program import lower_program
-from agm.agl.matchcompile import compile_program_matches
+from agm.agl.matchcompile import NonExhaustiveIssue, compile_program_matches, render_witness
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import build_repl_graph, parse_entry_module
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
@@ -104,6 +105,40 @@ def test_field_default_survives_the_module_cache_disk_round_trip(
 
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "3\n"
+
+
+def _library_witnesses(root: Path, library: str) -> list[str]:
+    """The witnesses of the non-exhaustive ``case`` of module ``lib``, spelled where written."""
+    modules = {
+        "entry": "import lib\n",
+        "lib": library,
+        "other": "enum Color\n  | Red\n  | Blue\n",
+    }
+    graph = make_file_graph_from_files(root, modules)
+    resolved = resolve_program(graph)
+    issues = compile_program_matches(check_program(resolved, base_caps())).issues
+    return [
+        render_witness(issue.witness, resolved.speller(issue.module_id))
+        for issue in issues
+        if isinstance(issue, NonExhaustiveIssue)
+    ]
+
+
+def test_a_witness_of_a_cached_module_is_spelled_as_when_it_was_first_resolved(
+    tmp_path: Path,
+) -> None:
+    """A cached module's rejected ``case`` is spelled at its own region, from memory or disk."""
+    header = "import other\nscope S\n  use other::Color\n"
+    arms = "  def f(v: Color) -> int = case v of | Red => 0@@\nend S\n"
+    artifact_cache.clear_retained_artifacts()
+    cold = _library_witnesses(tmp_path / "cold", header + arms.replace("@@", ""))
+    memory = _library_witnesses(tmp_path / "memory", header + arms.replace("@@", ""))
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+    disk = _library_witnesses(tmp_path / "disk", header + arms.replace("@@", ""))
+
+    assert cold == memory == disk == ["Blue"]
+    completed = header + arms.replace("@@", f" | {cold[0]} => 1")
+    assert _library_witnesses(tmp_path / "completed", completed) == []
 
 
 def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
@@ -371,6 +406,32 @@ def test_config_attribute_program_config_targets_round_trip_through_the_checked_
     assert round_tripped.program_config_targets == original
 
 
+def test_constraint_block_bounds_round_trip_through_the_checked_cache(tmp_path: Path) -> None:
+    """A generic declaration's constraint block survives the disk-backed checked-module cache."""
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import helper\n\nprogram def main() -> unit = ()\n",
+            "helper": "def same[T]{Eq T}(a: T, b: T) -> bool = a == b\n",
+        },
+    )
+    resolved_program = resolve_program(graph)
+    caps = base_caps()
+    retainable = artifact_cache.retained_module_sources(graph)
+    checked = check_program(resolved_program, caps)
+    artifact_cache.retain_checked_modules(retainable, caps, checked.modules)
+    artifact_cache.clear_retained_artifacts()
+
+    restored = artifact_cache.retained_checked_modules(retainable, caps)
+
+    helper_id = next(mid for mid in graph.modules if mid != graph.entry_id)
+    original = checked.modules[helper_id].function_signatures["same"].bounds
+    round_tripped = restored[helper_id]
+    assert isinstance(round_tripped, CheckedModuleImage)
+    assert original == {"T": frozenset({ConstraintKind.EQ})}
+    assert round_tripped.function_signatures["same"].bounds == original
+
+
 def test_a_params_flip_invalidates_a_warm_checked_module_cache(tmp_path: Path) -> None:
     """A cross-module ``@config`` target's ``@param``-ness is rechecked, not cached stale."""
     entry_source = "import helper\n\n@config(helper::value = 2)\nprogram def main() -> unit = ()\n"
@@ -531,17 +592,11 @@ def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
 
     for item in static_type_items(cm.resolved.program.body.items):
         scope_path = tuple(segment.name for segment in item.scope_path)
-        with rehydrated.type_env.type_scope(scope_path):
-            re_named = rehydrated.type_env.resolve_named_type(item.name)
-        with cm.type_env.type_scope(scope_path):
-            cm_named = cm.type_env.resolve_named_type(item.name)
-        assert re_named == cm_named
-        assert rehydrated.type_env.source_type_template_qname(
+        assert rehydrated.type_env.declared_type_template(
             lib_id, item.name, scope_path=scope_path
-        ) == cm.type_env.source_type_template_qname(lib_id, item.name, scope_path=scope_path)
+        ) == cm.type_env.declared_type_template(lib_id, item.name, scope_path=scope_path)
 
-    # enum forms / generic types: registries populated by the same header loop.
-    assert rehydrated.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()
+    # generic types: a registry populated by the same header loop.
     assert rehydrated.type_env.all_generic_types() == cm.type_env.all_generic_types()
 
 
@@ -717,7 +772,7 @@ def test_a_corrupted_binding_replay_fails_a_rehydrated_module_via_env_assert_clo
     """``TypeEnvironment.assert_closed()`` catches a broken-journal binding leak.
 
     A rehydrated module is never added to ``check_program``'s
-    ``reused_modules``, so ``assert_checked_module_closed`` validates it like a
+    ``reused_modules``, so ``assert_checked_module_output_closed`` validates it like a
     freshly checked one -- specifically, the ``module.type_env.assert_closed()``
     half of that check, since ``set_binding_type`` mutates the type
     environment, not any of the ``CheckedModule`` fields
@@ -770,7 +825,7 @@ def test_a_corrupted_node_types_entry_fails_a_rehydrated_module_via_output_close
     the sibling test above corrupts a binding instead, which that other check
     alone catches. Wrapping ``retained_checked_modules`` to inject a stray
     inference variable into a served image's ``node_types`` proves the two
-    checks ``_assert_checked_module_closed`` runs cover disjoint data: this
+    checks ``assert_checked_module_output_closed`` runs cover disjoint data: this
     corruption is invisible to ``env.assert_closed()`` and is caught only by
     ``assert_checked_output_closed``.
     """
@@ -824,19 +879,19 @@ def test_an_in_memory_reused_module_skips_closure_validation(
     It is the very object an earlier ``check_program`` call already sealed and
     validated; re-walking it on every subsequent compilation that imports it
     would be pure waste. Only a rehydrated or freshly checked module reaches
-    ``_assert_checked_module_closed``.
+    ``assert_checked_module_output_closed``.
     """
     calls: list[ModuleId] = []
     from agm.agl.typecheck import program as program_module
 
-    original = program_module._assert_checked_module_closed
+    original = program_module.assert_checked_module_output_closed
 
     def spied_assert_checked_module_closed(module: CheckedModule) -> None:
         calls.append(module.module_id)
         original(module)
 
     monkeypatch.setattr(
-        program_module, "_assert_checked_module_closed", spied_assert_checked_module_closed
+        program_module, "assert_checked_module_output_closed", spied_assert_checked_module_closed
     )
 
     graph = make_inline_graph_from_files(

@@ -1,0 +1,54 @@
+# Dict literal keys are ordinary expressions of the key type: interpolated
+# text, constructor applications (named and positional), variables, and
+# arithmetic (mode 1); directed key-type coercion, e.g. an int literal into a
+# decimal key (mode 2); a computed duplicate raising catchable
+# `DuplicateKeyError` with its key rendered, versus two computed keys that
+# happen not to collide (mode 3, parameterized by a/b); bool, json (`null`),
+# and positional-constructor keys (mode 4). A constant key whose static
+# signature collides (a negated module constant, a folded template, a
+# builtin call, a positional/named constructor application, ...) is a
+# static error instead, covered by dedicated rejection fixtures.
+
+enum Color
+  | Red
+  | Blue
+
+record Point
+  x: int
+  y: int
+
+program def main(mode: int, a: int, b: int) -> unit =
+  case mode of
+    | 1 =>
+        let prefix = "k"
+        let by-color: dict[Color, int] = {Red: 1, Blue: 2}
+        let by-int: dict[int, text] = {1: "one", 1 + 1: "two"}
+        let by-point: dict[Point, text] = {Point(x = 0, y = 0): "origin"}
+        let by-text: dict[text, int] = {"%{prefix}-a": 1}
+        print(by-color[Red])
+        print(by-color[Blue])
+        print(by-int[1])
+        print(by-int[2])
+        print(by-point[Point(x = 0, y = 0)])
+        print(by-text["k-a"])
+    | 2 =>
+        let by-decimal: dict[decimal, text] = {1: "one", 2: "two"}
+        print(by-decimal[1.0])
+        print(by-decimal[2.0])
+    | 3 =>
+        try
+          let m = {a: "a", b: "b"}
+          print(m[a])
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | 4 =>
+        let by-bool: dict[bool, int] = {true: 1, false: 2}
+        let by-json: dict[json, int] = {null: 1, 5: 2}
+        let by-point-pos: dict[Point, int] = {Point(1, 2): 3}
+        print(by-bool[true])
+        print(by-bool[false])
+        print(by-json[null])
+        print(by-json[5])
+        print(by-point-pos[Point(1, 2)])
+    | _ =>
+        ()

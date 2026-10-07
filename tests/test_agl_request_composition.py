@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 
 from agm.agent.spec import AgentCommand
-from agm.agl.runtime.contract import TypelessOutputContract
+from agm.agl.runtime.codec import JsonCodec
+from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.request import (
     AgentRequest,
     ValidationError,
@@ -21,9 +22,9 @@ from agm.agl.runtime.request import (
 
 @pytest.mark.parametrize("strict_json", [False, True])
 def test_initial_prompt_includes_the_format_contract_for_each_json_mode(strict_json: bool) -> None:
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=strict_json,
         format_instructions="Return an integer as JSON.",
         json_schema=None,
@@ -53,9 +54,9 @@ def test_initial_prompt_without_a_format_contract_is_just_the_original_prompt() 
 def test_corrective_follow_up_contains_feedback_without_recomposing_the_initial_prompt(
     strict_json: bool,
 ) -> None:
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=strict_json,
         format_instructions="Return an integer as JSON.",
         json_schema=None,

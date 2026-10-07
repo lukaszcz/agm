@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "red_selects_the_first_member_of_each_owner",
+      "params": {
+        "pick": "red"
+      },
+      "expect": {
+        "stdout": "true\nfalse\nred\nt red\ntrue\ntrue\nfalse\npixel 7\ntrue\nfalse\nup 3\n2\nmember red\n"
+      }
+    },
+    {
+      "name": "blue_selects_through_the_aliases",
+      "params": {
+        "pick": "blue"
+      },
+      "expect": {
+        "stdout": "false\ntrue\nblue\nt blue\nfalse\nfalse\ntrue\nblank\nfalse\ntrue\ndown\n2\nmember red\n"
+      }
+    },
+    {
+      "name": "other_reaches_the_root_member",
+      "params": {
+        "pick": "other"
+      },
+      "expect": {
+        "stdout": "false\ntrue\nblue\nt blue\nfalse\nfalse\nfalse\nempty\nfalse\ntrue\ndown\n2\nmember red\n"
+      }
+    }
+  ]
+}

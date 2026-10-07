@@ -1,0 +1,80 @@
+# A declaration's own type parameter is a "key parameter" -- one whose
+# instantiation the checker requires to be Hashable -- only when a dict key
+# position genuinely depends on it: never through a compound argument whose
+# own body ignores it (a record whose fields never mention it, or an enum
+# whose members carry no field), so a non-Hashable argument (`array[int]`)
+# is still accepted through such a phantom parameter.
+
+record Tagged[T]
+  x: int
+
+record Box[K]
+  d: dict[K, int]
+
+record BoxOfWrapped[K]
+  d: dict[Wrap[K], int]
+
+record Wrap[T]
+  x: T
+
+enum E[T]
+  | A
+  | B
+
+record OuterPhantomField[T]
+  d: dict[Tagged[T], int]
+
+record OuterPhantomArgument[T]
+  b: Box[Tagged[T]]
+
+record OuterNestedWrap[T]
+  b: BoxOfWrapped[Wrap[T]]
+
+record OuterEnumParam[T]
+  d: dict[E[T], int]
+
+record Outer[K]
+  b: Box[int]
+  v: K
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        # T never appears in Tagged's own fields, so Tagged[T] is Hashable
+        # for any T -- even array[int], which is never itself Hashable.
+        let o: OuterPhantomField[array[int]] = OuterPhantomField(d = {Tagged(x = 1): 2})
+        print(o as json)
+    | 2 =>
+        # T only reaches Box's key parameter through Tagged[T], whose own
+        # body never uses T, so T is not a key parameter of this Outer.
+        let o: OuterPhantomArgument[array[int]] = OuterPhantomArgument(b = Box(d = {}))
+        print(o as json)
+    | 3 =>
+        # Wrap[K] as BoxOfWrapped's key nests two levels deep; encoding a
+        # real key value proves the wire form and the type check agree.
+        let o: OuterNestedWrap[int] = OuterNestedWrap(
+          b = BoxOfWrapped(d = {Wrap(x = Wrap(x = 1)): 3})
+        )
+        print(o as json)
+    | 4 =>
+        # A generic enum's own nullary member, instantiated and used as a
+        # dict key, stringifies exactly like a non-generic enum's.
+        let k: E[int] = A
+        let o: OuterEnumParam[int] = OuterEnumParam(d = {k: 1})
+        print(o as json)
+    | 5 =>
+        # T never appears in E's own variants (both nullary), so E[T] is
+        # Hashable for any T -- even array[int] -- exactly like a phantom
+        # parameter of a record.
+        let k: E[array[int]] = A
+        let o: OuterEnumParam[array[int]] = OuterEnumParam(d = {k: 1})
+        print(o as json)
+    | 6 =>
+        # Outer's own `K` never reaches a key position -- `b: Box[int]` fixes
+        # Box's OWN, same-named `K` to `int`, unrelated to Outer's `K`, and
+        # `v: K` is a plain field, not a key -- so a non-Hashable argument
+        # (`array[int]`) is accepted despite the name collision.
+        let o: Outer[array[int]] = Outer(b = Box(d = {1: 2}), v = [1])
+        print(o as json)
+    | _ =>
+        print(()) # unreachable in scenarios

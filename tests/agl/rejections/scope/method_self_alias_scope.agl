@@ -1,3 +1,0 @@
-type Count = int
-
-def Count::bad(self) -> int = 1

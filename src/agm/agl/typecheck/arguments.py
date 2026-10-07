@@ -5,7 +5,7 @@ a kind-annotated parameter list against a call's positional + named
 arguments.  It is generic over the argument-item type ``T`` so the same
 function can serve:
 
-- Call expressions (``T = Expr``) — used by the checker and the lowerer.
+- Call arguments (``T`` an expression or placeholder) — used by the checker.
 - Constructor patterns (``T = Pattern``) — used by the pattern checker.
 
 The zone-binding algorithm itself is pure (no AST, span, or checker
@@ -40,7 +40,7 @@ from typing import Generic, TypeVar, assert_never
 
 from agm.agl.semantics import arguments as pure
 from agm.agl.syntax.nodes import (
-    Expr,
+    CallArg,
     NamedArg,
     Pattern,
     PatternField,
@@ -212,15 +212,15 @@ def _to_agl_type_error(
 # ---------------------------------------------------------------------------
 
 
-def bind_constructor_args(
+def bind_constructor_args[A: CallArg](
     field_kinds: tuple[tuple[str, ParamZone], ...],
-    positional: Sequence[Expr],
-    named: Sequence[NamedArg],
+    positional: Sequence[A],
+    named: Sequence[NamedArg[A]],
     *,
     has_default: tuple[bool, ...],
     call_span: SourceSpan,
     context_desc: str,
-) -> dict[str, Expr]:
+) -> dict[str, A]:
     """Bind positional and named arguments for a record/enum/exception constructor.
 
     Builds the :class:`BindParam` list from *field_kinds* and *has_default*,
@@ -232,8 +232,8 @@ def bind_constructor_args(
     Parameters
     ----------
     field_kinds:
-        Ordered ``(field_name, ParamZone)`` pairs from the constructor's
-        field-kinds registry — produced by ``get_constructor_field_kinds``.
+        Ordered ``(field_name, ParamZone)`` pairs of the constructor's fields
+        (``TypeTable.field_kinds``).
     positional:
         Positional argument expressions in source order.
     named:
@@ -249,7 +249,7 @@ def bind_constructor_args(
 
     Returns
     -------
-    An ordered ``{field_name: Expr}`` dict mapping each field the call
+    An ordered ``{field_name: argument}`` dict mapping each field the call
     supplies (explicitly or through the bare-name shorthand) to its bound
     argument expression.  A field omitted because it has a default is absent
     from the dict — the caller falls back to the field's own default.
@@ -264,7 +264,7 @@ def bind_constructor_args(
         BindParam(name=fname, kind=fkind, has_default=default)
         for (fname, fkind), default in zip(field_kinds, has_default, strict=True)
     )
-    named_bns: list[BoundName[Expr]] = [
+    named_bns: list[BoundName[A]] = [
         BoundName(name=na.name, value=na.value, span=na.span) for na in named
     ]
     binding = bind_arguments(
@@ -288,14 +288,14 @@ def bind_constructor_args(
 # ---------------------------------------------------------------------------
 
 
-def bind_call_args(
+def bind_call_args[A: CallArg](
     params: Sequence[ParamSpec],
-    positional: Sequence[Expr],
-    named: Sequence[NamedArg],
+    positional: Sequence[A],
+    named: Sequence[NamedArg[A]],
     *,
     call_span: SourceSpan,
     context_desc: str,
-) -> tuple[Expr | None, ...]:
+) -> tuple[A | None, ...]:
     """Bind positional and named arguments for a function call against *params*.
 
     Builds the :class:`BindParam` list from a function's :class:`ParamSpec`

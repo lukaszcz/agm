@@ -195,7 +195,7 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
 
     for typ, value, schema_bytes, value_bytes in cases:
         assert _compact_json(derive_schema(typ, table)) == schema_bytes
-        encoded = encode_value(build_encode_plan(typ, table), value)
+        encoded = encode_value(build_encode_plan(typ, table), value, {})
         assert dumps_exact(encoded, indent=None) == value_bytes
 
 
@@ -221,9 +221,9 @@ def test_record_and_enum_slots_keep_shared_members_distinct_on_the_wire() -> Non
     table = type_table_for(shared_def, rr_def, rr_prime_def)
     value = RecordValue(NominalId(shared.decl_id), {"value": IntValue(7)})
 
-    encoded_record = encode_value(build_encode_plan(shared, table), value)
-    encoded_rr = encode_value(build_encode_plan(rr, table), value)
-    encoded_rr_prime = encode_value(build_encode_plan(rr_prime, table), value)
+    encoded_record = encode_value(build_encode_plan(shared, table), value, {})
+    encoded_rr = encode_value(build_encode_plan(rr, table), value, {})
+    encoded_rr_prime = encode_value(build_encode_plan(rr_prime, table), value, {})
 
     assert encoded_record == {"value": 7}
     assert encoded_rr == {"$case": "Shared", "value": 7}

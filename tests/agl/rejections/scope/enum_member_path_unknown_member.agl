@@ -1,0 +1,5 @@
+enum Signal
+  | Ready
+
+program def main() -> unit =
+  print(Signal::Ready::missing)

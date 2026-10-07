@@ -97,11 +97,6 @@ def loc(source_id: SourceId = SID0) -> Location:
 LOC = loc()
 
 
-def test_literal_case_keys_reject_non_finite_decimals() -> None:
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal("sNaN"))
-
-
 # ---------------------------------------------------------------------------
 # ids.py — SourceId, SymbolId, FunctionId, ContractId
 # ---------------------------------------------------------------------------
@@ -359,7 +354,7 @@ class TestContainsKind:
         assert ContainsKind.TEXT
 
     def test_exhaustive(self) -> None:
-        assert {m.name for m in ContainsKind} == {"ARRAY", "DICT", "TEXT"}
+        assert {m.name for m in ContainsKind} == {"ARRAY", "DICT", "DICT_INT_NEEDLE", "TEXT"}
 
 
 # ---------------------------------------------------------------------------

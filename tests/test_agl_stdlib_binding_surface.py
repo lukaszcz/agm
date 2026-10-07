@@ -69,7 +69,7 @@ def _exported_bindings(module_name: str) -> tuple[frozenset[str], dict[str, str]
     key an importer really gets rather than the attribute text.
     """
     source = (STDLIB_MODULES_DIR / f"{module_name}.agl").read_text(encoding="utf-8")
-    program = parse_program(source, filename=f"{module_name}.agl")
+    program = parse_program(source)
     options = recognize_attributes(program, declares_receiver=lambda _node: False).params
     qualified = list(_qualified_exported_bindings(program.body.items, ()))
     names = frozenset(name for name, _ in qualified)

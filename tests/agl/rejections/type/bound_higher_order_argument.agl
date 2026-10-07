@@ -1,0 +1,7 @@
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+def apply(f: ((int) -> int, (int) -> int) -> bool, x: (int) -> int, y: (int) -> int) -> bool =
+  f(x, y)
+def double(n: int) -> int = n * 2
+
+program def main() -> unit =
+  print(apply(same, double, double))

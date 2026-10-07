@@ -1,0 +1,5 @@
+import shapes
+
+program def main() -> unit =
+  case shapes::Point(x = 1) of
+    | shapes::Slot[int]::Filled(value) => print value

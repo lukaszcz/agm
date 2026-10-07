@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.pipeline import RunResult
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.imports import SingleTarget, build_import_env
-from agm.agl.scope.resolver import _Resolver
+from agm.agl.scope.symbols import AmbiguousQualificationError
 from agm.agl.syntax import (
     BuiltinVarDecl,
     EnumDef,
@@ -31,6 +31,7 @@ from agm.agl.syntax import (
 from tests._agl_helpers import run_inline_code
 from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
+from tests.agl.qualifier_support import span_text
 
 
 def _declaration(source: str) -> Item:
@@ -212,8 +213,11 @@ def test_let_binder_path_shorthand_combines_with_enclosing_region_path() -> None
 
 
 def test_var_binder_path_rejects_a_module_route_segment() -> None:
-    with pytest.raises(AglSyntaxError, match="'::'"):
-        parse_program("var std/config::retries = 0")
+    source = "var std/config::retries = 0"
+    with pytest.raises(AglSyntaxError) as exc_info:
+        parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == "std/config::"
 
 
 def test_var_binder_path_rejects_a_type_applied_segment() -> None:
@@ -379,8 +383,10 @@ def test_use_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
     ),
 )
 def test_use_declarations_are_rejected_outside_module_and_scope_regions(source: str) -> None:
-    with pytest.raises(AglSyntaxError, match="only allowed at module root or in scope regions"):
+    with pytest.raises(AglSyntaxError) as exc_info:
         parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == "use Point::*"
 
 
 @pytest.mark.parametrize(
@@ -423,26 +429,28 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
 
 
 def test_use_rejects_operator_alias_for_scope_route() -> None:
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AglTypeError):
         resolve_inline_entry(
             "use Point as >>\n\nscope Point\n  def distance() -> int = 1\nend Point"
         )
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "route"),
     (
-        "use foo::bar/baz::x",
-        "use foo::/bar::x",
-        "use ::foo/bar::x",
+        ("use foo::bar/baz::x", "bar/baz::"),
+        ("use foo::/bar::x", "/bar::"),
+        ("use ::foo/bar::x", "foo/bar::"),
     ),
     ids=("route-segment", "anchored-segment", "current-module-route"),
 )
-def test_use_rejects_a_module_route_after_the_target_head(source: str) -> None:
+def test_use_rejects_a_module_route_after_the_target_head(source: str, route: str) -> None:
     """Only a use target's head is a module route; every segment after it
     names a scope, so a separator there is a syntax error wherever it sits."""
-    with pytest.raises(AglSyntaxError, match="'::'"):
+    with pytest.raises(AglSyntaxError) as exc_info:
         parse_program(source)
+
+    assert span_text(source, exc_info.value.span) == route
 
 
 def test_use_contributes_local_scope_members() -> None:
@@ -462,55 +470,65 @@ def test_used_scope_members_clash_at_their_use_site() -> None:
         "scope Vector\n  def distance() -> int = 2\nend Vector\n\ndistance()"
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         resolve_inline_entry(source)
 
 
-def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
+def _run_with_modules(tmp_path: Path, modules: dict[str, str], entry: str) -> RunResult:
+    root = tmp_path / "modules"
+    root.mkdir()
+    for name, source in modules.items():
+        write_module_file(root, name, source)
+    return run_inline_code(
+        PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None),
+        entry,
+        roots=RootSet(roots=frozenset({root})),
+        default_stdlib=False,
+    )
+
+
+def test_use_reaches_a_scope_made_nameable_by_an_import_tail(tmp_path: Path) -> None:
     """A use target follows the same bare contribution a qualifier follows."""
-    program = parse_program("import library::{Scope}\nuse Scope::*\nvisible")
-    import_decl, _use_decl, _visible = program.body.items
-    assert isinstance(import_decl, ImportDecl)
-    library = ModuleId.from_path("library")
-    scope_member = ("Scope", "visible")
-    import_env = build_import_env(
-        (import_decl,),
-        {import_decl.node_id: SingleTarget(library)},
-        {library: {scope_member: (library, scope_member)}},
+    result = _run_with_modules(
+        tmp_path,
+        {"library": "scope Scope\n  def visible() -> int = 1\nend Scope"},
+        "import library::{Scope}\nuse Scope::*\nlet x: int = visible()\n()",
     )
 
-    resolved = _Resolver(
-        module_id=ENTRY_ID,
-        import_env=import_env,
-        all_public_types={},
-        allow_root_statements=True,
-    ).run(program)
-
-    assert any(ref.name == "visible" for ref in resolved.resolution.values())
+    assert result.ok
 
 
-def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous() -> None:
-    program = parse_program("import one::{Scope}\nimport two::{Scope}\nuse Scope::*")
-    first_import, second_import, _use_decl = program.body.items
-    assert isinstance(first_import, ImportDecl)
-    assert isinstance(second_import, ImportDecl)
-    one = ModuleId.from_path("one")
-    two = ModuleId.from_path("two")
-    scope_member = ("Scope", "visible")
-    import_env = build_import_env(
-        (first_import, second_import),
+@pytest.mark.parametrize(("body", "ok"), (("()", True), ("visible()", False)))
+def test_use_combines_equally_nameable_bare_scope_targets(
+    tmp_path: Path, body: str, ok: bool
+) -> None:
+    """Both targets combine; the path both declare is ambiguous where used."""
+    result = _run_with_modules(
+        tmp_path,
         {
-            first_import.node_id: SingleTarget(one),
-            second_import.node_id: SingleTarget(two),
+            "one": "scope Scope\n  def visible() -> int = 1\nend Scope",
+            "two": "scope Scope\n  def visible() -> int = 2\nend Scope",
         },
-        {
-            one: {scope_member: (one, scope_member)},
-            two: {scope_member: (two, scope_member)},
-        },
+        f"import one::{{Scope}}\nimport two::{{Scope}}\nuse Scope::*\n{body}",
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
-        _Resolver(module_id=ENTRY_ID, import_env=import_env, all_public_types={}).run(program)
+    assert result.ok is ok
+    assert len(result.diagnostics) == (0 if ok else 1)
+
+
+@pytest.mark.parametrize(("member", "ok"), (("Idle", True), ("Saved", False)))
+def test_use_of_an_enum_reaches_only_its_inline_members(
+    tmp_path: Path, member: str, ok: bool
+) -> None:
+    """A referenced member stays at its own path, outside the used enum's scope."""
+    result = _run_with_modules(
+        tmp_path,
+        {"library": "record Saved\n\nenum Status =\n  | ::Saved\n  | Idle"},
+        f"import library\nuse library::Status\nlet x = Status::{member}\n()",
+    )
+
+    assert result.ok is ok
+    assert len(result.diagnostics) == (0 if ok else 1)
 
 
 @pytest.mark.parametrize(
@@ -589,16 +607,21 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("entry", "library"),
+    ("entry", "library", "rejected"),
     (
-        ("import library::Point::distance\n()", "record Point"),
-        ("export library hiding Point::distance\n()", "record Point"),
-        ("import library\n()", "import dependency::Point::distance\ndef value() -> int = 0"),
+        ("import library::Point::distance\n()", "record Point", "entry"),
+        ("export library hiding Point::distance\n()", "record Point", "entry"),
+        (
+            "import library\n()",
+            "import dependency::Point::distance\ndef value() -> int = 0",
+            "library",
+        ),
     ),
 )
 def test_production_pipeline_validates_path_atoms_against_public_content(
-    tmp_path: Path, entry: str, library: str
+    tmp_path: Path, entry: str, library: str, rejected: str
 ) -> None:
+    """The one diagnostic spans the whole item naming the missing path."""
     root = tmp_path / "modules"
     root.mkdir()
     write_module_file(root, "library", library)
@@ -613,8 +636,13 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     )
 
     assert not result.ok
-    assert len(result.diagnostics) == 1
-    assert "is not exported" in result.diagnostics[0].message
+    (diagnostic,) = result.diagnostics
+    source, label = (
+        (entry, "<code>") if rejected == "entry" else (library, str(root / "library.agl"))
+    )
+    item = source.splitlines()[0]
+    assert diagnostic.source_label == label
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 1, len(item) + 1)
 
 
 # ---------------------------------------------------------------------------

@@ -225,7 +225,9 @@ def test_extern_defaults_work_for_direct_calls(tmp_path: Path) -> None:
     assert result["direct"] == IntValue(3)
 
 
-def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> None:
+def test_indirect_extern_call_uses_the_default_for_an_omitted_trailing_argument(
+    tmp_path: Path,
+) -> None:
     from agm.agl.ir import (
         ExecutableModule,
         ExecutableProgram,
@@ -244,7 +246,6 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
         SymbolDescriptor,
         SymbolId,
     )
-    from agm.agl.ir.validate import InvalidIrError
 
     companion = tmp_path / "companion.py"
     companion.write_text("def increment(value, step): return value + step\n")
@@ -265,42 +266,39 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
         impl=ExternFunctionBody(name="increment", companion_name="increment"),
     )
 
-    def program(arguments: tuple[int, ...]) -> ExecutableProgram:
-        return ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={
-                ENTRY_ID: ExecutableModule(
-                    module_id=ENTRY_ID,
-                    initializers=(
-                        IrBind(location, function_symbol, IrMakeClosure(location, function_id, ())),
-                        IrBind(location, closure_symbol, IrLoad(location, function_symbol)),
-                        IrBind(
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID,
+                initializers=(
+                    IrBind(location, function_symbol, IrMakeClosure(location, function_id, ())),
+                    IrBind(location, closure_symbol, IrLoad(location, function_symbol)),
+                    IrBind(
+                        location,
+                        result_symbol,
+                        IrIndirectCall(
                             location,
-                            result_symbol,
-                            IrIndirectCall(
-                                location,
-                                IrLoad(location, closure_symbol),
-                                tuple(IrConstInt(location, value) for value in arguments),
-                            ),
+                            IrLoad(location, closure_symbol),
+                            (IrConstInt(location, 10),),
                         ),
                     ),
-                )
-            },
-            symbols={
-                function_symbol: SymbolDescriptor(function_symbol, False, "increment", ENTRY_ID),
-                closure_symbol: SymbolDescriptor(closure_symbol, False, None, ENTRY_ID),
-                result_symbol: SymbolDescriptor(result_symbol, False, "result", ENTRY_ID),
-            },
-            nominals={},
-            sources={source_id: SourceFile("<test>", "x")},
-            functions={function_id: descriptor},
-        )
+                ),
+            )
+        },
+        symbols={
+            function_symbol: SymbolDescriptor(function_symbol, False, "increment", ENTRY_ID),
+            closure_symbol: SymbolDescriptor(closure_symbol, False, None, ENTRY_ID),
+            result_symbol: SymbolDescriptor(result_symbol, False, "result", ENTRY_ID),
+        },
+        nominals={},
+        sources={source_id: SourceFile("<test>", "x")},
+        functions={function_id: descriptor},
+    )
 
     registry = ExternRegistry()
     registry.load_companion(ENTRY_ID, companion)
-    assert IrInterpreter(program((10,)), extern_registry=registry).run()["result"] == IntValue(11)
-    with pytest.raises(InvalidIrError, match="missing argument"):
-        IrInterpreter(program(()), extern_registry=registry).run()
+    assert IrInterpreter(program, extern_registry=registry).run()["result"] == IntValue(11)
 
 
 def test_check_only_never_imports_the_companion(tmp_path: Path) -> None:

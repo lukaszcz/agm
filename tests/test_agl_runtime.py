@@ -16,19 +16,28 @@ from __future__ import annotations
 
 import os
 import pathlib
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import pytest
 
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
+from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode, ScalarKind
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
+from agm.agl.ir.program import (
+    NominalDescriptor,
+    NominalKind,
+    ValueDescriptors,
+    VariantDescriptor,
+)
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
+from agm.agl.runtime.serialize import WalkTags
 from agm.agl.semantics.types import Type
+from agm.agl.semantics.values import ExceptionValue
 from agm.agl.typecheck import AglTypeError
 from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import (
@@ -42,13 +51,17 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.pipeline import PreparedProgram
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.semantics.values import IrClosureValue
+    from agm.agl.semantics.values import IrClosureValue, Value
 
 # ---------------------------------------------------------------------------
 # Rendering helpers: build a minimal ValueDescriptors for ad-hoc test values.
 # ---------------------------------------------------------------------------
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
+
+#: A ``value_to_json_obj`` walk with no enum-tag or field-json-name metadata,
+#: for tests exercising bare untagged serialization.
+_NO_WALK_TAGS = WalkTags(member_tags={}, field_names={})
 
 
 def _named(
@@ -57,6 +70,8 @@ def _named(
     *,
     kind: NominalKind = NominalKind.RECORD,
     positional_fields: tuple[str, ...] = (),
+    fields: tuple[str, ...] = (),
+    field_json_names: tuple[str, ...] = (),
 ) -> NominalDescriptor:
     """A NominalDescriptor whose derived display_name is *name* (accepts "A::B" spellings)."""
     *scope, declared = name.split("::")
@@ -67,12 +82,50 @@ def _named(
         declared_name=declared,
         kind=kind,
         positional_fields=positional_fields,
+        fields=fields,
+        field_json_names=field_json_names,
     )
+
+
+def _walk_tags_for(*named_nominals: NominalDescriptor) -> WalkTags:
+    """Build :class:`WalkTags` from real descriptors, the way a program's own table would."""
+    from agm.agl.runtime.serialize import _walk_tags
+
+    return _walk_tags({d.nominal: d for d in named_nominals})
 
 
 def _descriptors(*named_nominals: NominalDescriptor) -> ValueDescriptors:
     """A ValueDescriptors view over the given nominal descriptors, no functions."""
-    return ValueDescriptors(nominals={d.nominal: d for d in named_nominals}, functions={})
+    return ValueDescriptors(
+        nominals={d.nominal: d for d in named_nominals}, functions={}, exception_field_encodes={}
+    )
+
+
+def _scalar_kind_of(value: Value) -> ScalarKind:
+    """The :class:`ScalarKind` matching *value*'s own scalar runtime type."""
+    from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
+
+    if isinstance(value, TextValue):
+        return ScalarKind.TEXT
+    if isinstance(value, IntValue):
+        return ScalarKind.INT
+    if isinstance(value, DecimalValue):
+        return ScalarKind.DECIMAL
+    if isinstance(value, BoolValue):
+        return ScalarKind.BOOL
+    return ScalarKind.JSON
+
+
+def _scalar_field_encodes(
+    exc: ExceptionValue,
+) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
+    """The field-encode table of a hand-built exception whose fields are all scalars."""
+    return {
+        exc.nominal: tuple(
+            ExceptionFieldEncode(name, name, EncodePlan(ScalarEncode(_scalar_kind_of(value))))
+            for name, value in exc.fields.items()
+        )
+    }
 
 
 def _preflight_builtin_nominal(
@@ -512,7 +565,7 @@ class TestUncaughtAgentCallErrorSpan:
         tmp_path: "pathlib.Path",
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """End to end: ``agm exec`` prints ``at line N`` to stderr (exit 2)."""
+        """End to end: ``agm exec`` prints ``at <file>:N:C`` to stderr (exit 2)."""
         from agm.agl.runtime.agents import AgentCallHostError
         from agm.cli_support.args import ExecArgs
         from agm.commands.exec import run as exec_run
@@ -547,7 +600,7 @@ class TestUncaughtAgentCallErrorSpan:
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
         assert "AgentCallError" in err
-        assert "line 3" in err
+        assert f"{agl_file.name}:3:" in err
 
 
 class TestDiagnosticType:
@@ -939,6 +992,35 @@ class TestDecimalSerialization:
         captured = capsys.readouterr()
         assert captured.out.strip() == "0.1"
 
+    def test_json_decimal_switches_to_exponent_form_above_the_fixed_point_bound(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import decimal
+
+        # `str` alone is not a bound: with exponent <= 0 it stays in plain
+        # form regardless of how far the coefficient's zeros are from the
+        # decimal point, so a huge exponent-0 coefficient like this one would
+        # otherwise force a huge fixed-point expansion. Exercised through the
+        # public `json` rendering path (`print` on a `json`-typed decimal),
+        # not the private `_decimal_text` helper.
+        rt = PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None)
+        result = run_inline_code(rt, "let x: json = (10.pow(20000) as decimal) as json\nprint x")
+        assert result.ok is True
+        text = capsys.readouterr().out.strip()
+        assert text == "1E+20000"
+        assert decimal.Decimal(text) == decimal.Decimal(10) ** 20000
+
+    def test_json_decimal_keeps_small_fixed_point_output_unchanged(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None)
+        source = (
+            "let a: json = (1.50 as json)\nlet b: json = (100 as decimal) as json\nprint a\nprint b"
+        )
+        result = run_inline_code(rt, source)
+        assert result.ok is True
+        assert capsys.readouterr().out.splitlines() == ["1.50", "100"]
+
     def test_run_error_preserves_decimal_exactness(self) -> None:
         import decimal
 
@@ -953,7 +1035,9 @@ class TestDecimalSerialization:
             },
         )
         nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
-        err = exception_value_to_run_error(exc, nominals=nominals)
+        err = exception_value_to_run_error(
+            exc, nominals=nominals, exception_field_encodes=_scalar_field_encodes(exc)
+        )
         assert err.fields["amount"] == decimal.Decimal("0.1")
         assert isinstance(err.fields["amount"], decimal.Decimal)
 
@@ -1291,7 +1375,9 @@ class TestRenderValue:
             result_label="int",
         )
         closure = IrClosureValue(function_id=function_id, captures=())
-        descriptors = ValueDescriptors(nominals={}, functions={function_id: function_desc})
+        descriptors = ValueDescriptors(
+            nominals={}, functions={function_id: function_desc}, exception_field_encodes={}
+        )
 
         assert render_value(closure, descriptors) == "<function: (?, ?) -> int>"
 
@@ -1785,29 +1871,35 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import BoolValue
 
-        assert value_to_json_obj(BoolValue(True)) is True
-        assert value_to_json_obj(BoolValue(False)) is False
+        assert value_to_json_obj(BoolValue(True), tags=_NO_WALK_TAGS) is True
+        assert value_to_json_obj(BoolValue(False), tags=_NO_WALK_TAGS) is False
 
     def test_dict_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import DictValue, IntValue
 
-        result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}))
+        result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}), tags=_NO_WALK_TAGS)
         assert result == {"a": 1}
 
     def test_record_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import IntValue, RecordValue
 
-        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={"x": IntValue(5)}))
+        tags = _walk_tags_for(_named(NominalId(1), "R", fields=("x",), field_json_names=("x",)))
+        result = value_to_json_obj(
+            RecordValue(nominal=NominalId(1), fields={"x": IntValue(5)}), tags=tags
+        )
         assert result == {"x": 5}
 
     def test_enum_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import RecordValue, TextValue
 
+        tags = _walk_tags_for(
+            _named(NominalId(1), "E::V", fields=("msg",), field_json_names=("msg",))
+        )
         result = value_to_json_obj(
-            RecordValue(nominal=NominalId(1), fields={"msg": TextValue("hi")})
+            RecordValue(nominal=NominalId(1), fields={"msg": TextValue("hi")}), tags=tags
         )
         assert result == {"msg": "hi"}
 
@@ -1815,18 +1907,29 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import RecordValue
 
-        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={}))
+        tags = _walk_tags_for(_named(NominalId(1), "E::V"))
+        result = value_to_json_obj(RecordValue(nominal=NominalId(1), fields={}), tags=tags)
         assert result == {}
 
     def test_exception_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
+        tags = _walk_tags_for(
+            _named(
+                NominalId(1),
+                "Boom",
+                kind=NominalKind.EXCEPTION,
+                fields=("message",),
+                field_json_names=("message",),
+            )
+        )
         result = value_to_json_obj(
             ExceptionValue(
                 nominal=NominalId(1),
                 fields={"message": TextValue("oops")},
-            )
+            ),
+            tags=tags,
         )
         assert result == {"message": "oops"}
 
@@ -1839,11 +1942,21 @@ class TestSerialize:
         record.fields["next"] = record
         exception = ExceptionValue(NominalId(2), {})
         exception.fields["cause"] = exception
+        tags = _walk_tags_for(
+            _named(NominalId(1), "Node", fields=("next",), field_json_names=("next",)),
+            _named(
+                NominalId(2),
+                "Problem",
+                kind=NominalKind.EXCEPTION,
+                fields=("cause",),
+                field_json_names=("cause",),
+            ),
+        )
 
         with pytest.raises(AglCyclicValue):
-            value_to_json_obj(record)
+            value_to_json_obj(record, tags=tags)
         with pytest.raises(AglCyclicValue):
-            value_to_json_obj(exception)
+            value_to_json_obj(exception, tags=tags)
 
     def test_record_diamond_serializes_each_shared_child(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -1851,8 +1964,17 @@ class TestSerialize:
 
         shared = RecordValue(NominalId(1), {"value": IntValue(1)})
         pair = RecordValue(NominalId(2), {"left": shared, "right": shared})
+        tags = _walk_tags_for(
+            _named(NominalId(1), "Leaf", fields=("value",), field_json_names=("value",)),
+            _named(
+                NominalId(2), "Pair", fields=("left", "right"), field_json_names=("left", "right")
+            ),
+        )
 
-        assert value_to_json_obj(pair) == {"left": {"value": 1}, "right": {"value": 1}}
+        assert value_to_json_obj(pair, tags=tags) == {
+            "left": {"value": 1},
+            "right": {"value": 1},
+        }
 
     @pytest.mark.parametrize(
         ("obj", "indent", "expected"),
@@ -1877,41 +1999,12 @@ class TestSerialize:
 
 
 # ---------------------------------------------------------------------------
-# Output contracts: codec resolution
-# ---------------------------------------------------------------------------
-
-
-class TestMaterializeContractMissingCodec:
-    """A contract naming an unregistered codec cannot be materialized."""
-
-    def test_missing_codec_raises_value_error(self) -> None:
-        from agm.agl.runtime.codec import TextCodec
-        from agm.agl.runtime.contract import materialize_contract
-        from agm.agl.semantics.types import TextType
-        from agm.agl.typecheck.env import OutputContractSpec
-
-        spec = OutputContractSpec(
-            target_type=TextType(),
-            codec_name="nonexistent_codec",
-            strict_json=None,
-        )
-        with pytest.raises(ValueError, match="nonexistent_codec"):
-            materialize_contract(spec, {"text": TextCodec()})
-
-
-# ---------------------------------------------------------------------------
 # engine_config.py — host engine seeds and engine-key defaults
 # ---------------------------------------------------------------------------
 
 
 class TestEngineSettingDefaults:
     """The host side owns defaults only for the keys it can actually decode."""
-
-    def test_unknown_engine_seed_is_rejected(self) -> None:
-        from agm.agl.runtime.engine_config import build_engine_config_seeds
-
-        with pytest.raises(ValueError, match="engine key"):
-            build_engine_config_seeds({"unknown": True})
 
     def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
         """``default-agent`` is declared by ``std/config``, not fabricated by the host."""
@@ -1926,22 +2019,7 @@ class TestEngineSettingDefaults:
 
 
 class TestRuntimeErrorPaths:
-    """An unexpected failure in any pipeline stage is reported as a diagnostic."""
-
-    def test_unexpected_parse_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while parsing is reported instead of crashing."""
-        import agm.agl.modules.loader as parser_mod
-
-        def bad_parse(*args: object, **kwargs: object) -> object:
-            raise RuntimeError("unexpected parse error")
-
-        monkeypatch.setattr(parser_mod, "parse_program_seeded", bad_parse)
-        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
-        result = run_inline_code(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected parse error" in d.message for d in result.diagnostics)
+    """Language failures surface as diagnostics or run errors; internal failures propagate."""
 
     def test_tab_warning_included_even_on_parse_failure(self) -> None:
         """Tab advisories come from the lexer's single scan, so they survive a
@@ -1954,55 +2032,6 @@ class TestRuntimeErrorPaths:
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
-
-    def test_unexpected_scope_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while resolving scopes is reported instead of crashing."""
-        import agm.agl.scope.program as scope_mod
-
-        def bad_resolve(program: object, **_: object) -> object:
-            raise RuntimeError("unexpected scope error")
-
-        monkeypatch.setattr(scope_mod, "resolve_program", bad_resolve)
-        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
-        result = run_inline_code(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected scope error" in d.message for d in result.diagnostics)
-
-    def test_unexpected_typecheck_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while typechecking is reported instead of crashing."""
-        import agm.agl.typecheck.program as tc_mod
-
-        def bad_check(resolved: object, caps: object, **_: object) -> object:
-            raise RuntimeError("unexpected type error")
-
-        monkeypatch.setattr(tc_mod, "check_program", bad_check)
-        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
-        result = run_inline_code(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected type error" in d.message for d in result.diagnostics)
-
-    def test_contract_error_returns_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Contract materialization error → ok=False with contract error diagnostic."""
-        import agm.agl.pipeline as runtime_mod
-
-        monkeypatch.setattr(
-            runtime_mod,
-            "materialize_ir_contracts",
-            lambda executable, codecs: (
-                {},
-                [Diagnostic(message="Contract error: bad contract", line=1)],
-            ),
-        )
-        rt = PipelineDriver(
-            resolve_agent_spec=None, agent_dispatcher=lambda req: "ok", get_sandbox_context=None
-        )
-        result = run_inline_code(rt, 'ask "hi"')
-        assert result.ok is False
-        assert any("bad contract" in d.message for d in result.diagnostics)
 
     def test_uncaught_agl_raise_in_run(self) -> None:
         """AglRaise propagating from the interpreter → RunResult with error."""
@@ -2158,17 +2187,36 @@ class TestRuntimeErrorPaths:
                 "none_val": JsonValue(None),
             },
         )
+        rec_descriptor = NominalDescriptor(
+            nominal=NominalId(2),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="R",
+            kind=NominalKind.RECORD,
+            fields=("f",),
+            field_json_names=("f",),
+        )
         nominals = {
             d.nominal: d
             for d in (
                 _named(NominalId(1), "AgentParseError"),
-                _named(NominalId(2), "R"),
+                rec_descriptor,
                 _named(NominalId(3), "E::V"),
                 _named(NominalId(4), "Inner"),
-                _named(NominalId(5), "Node"),
+                _named(NominalId(5), "Node", fields=("next",), field_json_names=("next",)),
             )
         }
-        error = exception_value_to_run_error(exc_val, nominals=nominals)
+        # No field of this hand-built exception has a JSON plan, so each is
+        # reported through the value-directed walk.
+        error = exception_value_to_run_error(
+            exc_val,
+            nominals=nominals,
+            exception_field_encodes={
+                exc_val.nominal: tuple(
+                    ExceptionFieldEncode(name, name, None) for name in exc_val.fields
+                )
+            },
+        )
         assert isinstance(error, RunError)
         assert error.type_name == "AgentParseError"
         assert error.fields["message"] == "failed"
@@ -2183,6 +2231,135 @@ class TestRuntimeErrorPaths:
         assert error.fields["enum_val"] == {}
         assert error.fields["cyclic_record"] == "<cyclic value>"
         assert isinstance(error.fields["exc_val"], dict)
+
+    def test_exception_value_to_run_error_reports_non_text_keyed_dict_fields_as_entries(
+        self,
+    ) -> None:
+        """A dict field keyed by enum/bool/record/``json`` (no static plan) reports as a
+        ``[{"key": ..., "value": ...}]`` array through the untyped JSON walk -- never a
+        lossy ``str()``-collapsed object, which would silently merge distinct keys.
+        """
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import (
+            BoolValue,
+            DictValue,
+            ExceptionValue,
+            IntValue,
+            JsonValue,
+            RecordValue,
+        )
+
+        flags = DictValue()
+        flags.insert(BoolValue(True), IntValue(1))
+        points = DictValue()
+        points.insert(RecordValue(NominalId(2), {"x": IntValue(1), "y": IntValue(2)}), IntValue(1))
+        colors = DictValue()
+        colors.insert(RecordValue(NominalId(3), {}), IntValue(1))
+        js = DictValue()
+        js.insert(JsonValue(1), IntValue(1))
+        js.insert(JsonValue("1"), IntValue(2))
+
+        exc_val = ExceptionValue(
+            nominal=NominalId(1),
+            fields={"flags": flags, "points": points, "colors": colors, "js": js},
+        )
+        color_enum = NominalDescriptor(
+            nominal=NominalId(4),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="Color",
+            kind=NominalKind.ENUM,
+            variants=(VariantDescriptor("Red", (), NominalId(3), "Red", ()),),
+        )
+        point_descriptor = NominalDescriptor(
+            nominal=NominalId(2),
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_json_names=("x", "y"),
+        )
+        nominals = {
+            d.nominal: d
+            for d in (
+                _named(NominalId(1), "Boom"),
+                point_descriptor,
+                _named(NominalId(3), "Color::Red"),
+                color_enum,
+            )
+        }
+        error = exception_value_to_run_error(
+            exc_val,
+            nominals=nominals,
+            exception_field_encodes={
+                NominalId(1): tuple(
+                    ExceptionFieldEncode(name, name, None) for name in exc_val.fields
+                )
+            },
+        )
+        assert error.fields["flags"] == [{"key": True, "value": 1}]
+        assert error.fields["points"] == [{"key": {"x": 1, "y": 2}, "value": 1}]
+        assert error.fields["colors"] == [{"key": {"$case": "Red"}, "value": 1}]
+        assert error.fields["js"] == [
+            {"key": 1, "value": 1},
+            {"key": "1", "value": 2},
+        ]
+
+    def test_run_error_source_unset_when_location_source_id_unmapped(self) -> None:
+        """A ``Location`` span with no matching ``sources`` entry leaves ``source`` unset.
+
+        ``line``/``col`` are still populated from the span; only the display
+        name resolution is skipped (e.g. a caller with no sources table).
+        """
+        from agm.agl.ir.ids import Location, SourceId
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import ExceptionValue, TextValue
+
+        exc = ExceptionValue(nominal=NominalId(1), fields={"message": TextValue("bad")})
+        nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
+        span = Location(
+            source_id=SourceId(0), start_offset=0, end_offset=1, start_line=3, start_col=5
+        )
+
+        error = exception_value_to_run_error(
+            exc, nominals=nominals, span=span, exception_field_encodes=_scalar_field_encodes(exc)
+        )
+
+        assert error.line == 3
+        assert error.col == 5
+        assert error.source is None
+
+    def test_run_error_source_from_frontend_span_label(self) -> None:
+        """A ``SourceSpan`` span (a caller with only a frontend span) reports its own label.
+
+        Unlike a ``Location``, a ``SourceSpan`` already carries its display
+        label directly, so no ``sources`` table is needed to resolve it.
+        """
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import ExceptionValue, TextValue
+        from agm.agl.syntax.spans import SourceId as FrontendSourceId
+        from agm.agl.syntax.spans import SourceSpan
+
+        exc = ExceptionValue(nominal=NominalId(1), fields={"message": TextValue("bad")})
+        nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
+        span = SourceSpan(
+            start_line=2,
+            start_col=3,
+            end_line=2,
+            end_col=8,
+            start_offset=10,
+            end_offset=15,
+            source=FrontendSourceId("/tmp/mod.agl"),
+        )
+
+        error = exception_value_to_run_error(
+            exc, nominals=nominals, span=span, exception_field_encodes=_scalar_field_encodes(exc)
+        )
+
+        assert error.line == 2
+        assert error.col == 3
+        assert error.source == "/tmp/mod.agl"
 
     def test_convert_host_value_json_type_accepts_any(self) -> None:
         from agm.agl.runtime.engine_config import convert_host_value
@@ -2636,10 +2813,10 @@ class TestDeriveSchema:
         assert derive_schema(JsonType(), type_table_for()) == {}
 
     def test_dict_type(self) -> None:
-        from agm.agl.semantics.types import DictType, IntType
+        from agm.agl.semantics.types import DictType, IntType, TextType
         from tests._agl_helpers import derive_schema
 
-        result = derive_schema(DictType(value=IntType()), type_table_for())
+        result = derive_schema(DictType(key=TextType(), value=IntType()), type_table_for())
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
@@ -2660,34 +2837,6 @@ class TestDeriveSchema:
         result = derive_schema(typ, type_table_for(typedef))
         assert "oneOf" in result
         assert len(result["oneOf"]) == 2
-
-    def test_exception_type_raises(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="MyErr"), type_table_for())
-
-    def test_unit_type_raises(self) -> None:
-        from agm.agl.semantics.types import UnitType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="UnitType"):
-            derive_schema(UnitType(), type_table_for())
-
-    def test_function_type_raises(self) -> None:
-        from agm.agl.semantics.types import FunctionType, TextType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="FunctionType"):
-            derive_schema(FunctionType(params=(TextType(),), result=TextType()), type_table_for())
-
-    def test_bottom_type_raises(self) -> None:
-        from agm.agl.semantics.types import BottomType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="BottomType"):
-            derive_schema(BottomType(), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -2768,21 +2917,6 @@ class TestBuildParamDecoder:
         decoder = build_param_decoder(typ, type_table_for())
         assert decoder.target_type_label == repr(typ)
 
-    def test_undecodable_type_raises_type_error(self) -> None:
-        """Unit/agent/exception types raise TypeError (via derive_schema)."""
-        from agm.agl.semantics.types import UnitType
-        from agm.agl.type_schema import build_param_decoder
-
-        with pytest.raises(TypeError):
-            build_param_decoder(UnitType(), type_table_for())
-
-    def test_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
-        from agm.agl.type_schema import build_param_decoder
-
-        with pytest.raises(TypeError):
-            build_param_decoder(ExceptionType(name="MyErr"), type_table_for())
-
 
 class TestBuildFormatInstructions:
     """Format instructions tell the agent what JSON shape to return."""
@@ -2813,7 +2947,7 @@ class TestBuildFormatInstructions:
 
 
 class TestSerializeOpaqueValues:
-    """Unit, agent, constructor, function, and iterator values have no JSON
+    """Unit, agent, constructor, and function values have no JSON
     representation — each raises :class:`AglNonDataValue` with the matching
     user-facing ``kind``."""
 
@@ -2822,7 +2956,7 @@ class TestSerializeOpaqueValues:
         from agm.agl.semantics.values import UnitValue
 
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(UnitValue())
+            value_to_json_obj(UnitValue(), tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "unit"
 
     def test_constructor_value_raises(self) -> None:
@@ -2831,7 +2965,7 @@ class TestSerializeOpaqueValues:
 
         ctor = ConstructorValue(nominal=NominalId(1))
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(ctor)
+            value_to_json_obj(ctor, tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "constructor"
 
     def test_ir_closure_value_raises(self) -> None:
@@ -2842,16 +2976,8 @@ class TestSerializeOpaqueValues:
 
         ir_closure = IrClosureValue(function_id=FunctionId(0), captures=())
         with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(ir_closure)
+            value_to_json_obj(ir_closure, tags=_NO_WALK_TAGS)
         assert exc_info.value.kind == "function"
-
-    def test_iterator_value_raises(self) -> None:
-        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
-        from agm.agl.semantics.values import IteratorValue
-
-        with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(IteratorValue(elements=[]))
-        assert exc_info.value.kind == "iterator"
 
     def test_marker_text_matches_kind(self) -> None:
         """``degraded_marker`` produces the same text every degrade site relies on."""
@@ -2884,34 +3010,6 @@ class TestIrHostMetadata:
         )
         assert not json_result.ok
         assert "JSON" in json_result.diagnostics[0].message
-
-    def test_missing_ir_codec_materialization_is_diagnostic(self) -> None:
-        from agm.agl.ir.contracts import ContractRequest
-        from agm.agl.ir.ids import ContractId
-        from agm.agl.ir.program import ExecutableProgram
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.runtime.contract import materialize_ir_contracts
-
-        request = ContractRequest(
-            codec_name="missing",
-            strict_json=None,
-            json_schema=None,
-            decode=None,
-            target_type_label="text",
-            structured_exec=False,
-            format_instructions="",
-        )
-        executable = ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={},
-            symbols={},
-            nominals={},
-            sources={},
-            contracts={ContractId(0): request},
-        )
-        contracts, errors = materialize_ir_contracts(executable, {})
-        assert contracts == {}
-        assert "missing" in errors[0].message
 
     def test_integral_decimal_decodes_to_int(self) -> None:
         from decimal import Decimal
@@ -3464,28 +3562,55 @@ class TestPrepareProgramFailures:
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
-    def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglError exception during graph loading is captured as a diagnostic."""
+    @pytest.mark.parametrize(
+        "make_unreadable",
+        (
+            lambda path: path.write_bytes(b"\xff\xfe not utf-8 \x80"),
+            lambda path: path.mkdir(),
+        ),
+        ids=("undecodable", "directory"),
+    )
+    def test_prepare_program_reports_an_unreadable_module_file(
+        self, tmp_path: pathlib.Path, make_unreadable: Callable[[pathlib.Path], object]
+    ) -> None:
+        """A module file that cannot be read as text is a load diagnostic."""
+        make_unreadable(tmp_path / "broken.agl")
+        roots = agl_roots(tmp_path.resolve())
+
+        prepared = prepare_inline_code("import broken\n()", entry_path=None, roots=roots)
+
+        assert prepared.resolved is None
+        assert prepared.diagnostics
+
+    @pytest.mark.parametrize(
+        "stage",
+        ("agm.agl.modules.loader.build_repl_graph", "agm.agl.scope.program.resolve_program"),
+    )
+    def test_prepare_program_propagates_an_internal_failure(
+        self, tmp_path: pathlib.Path, stage: str
+    ) -> None:
+        """An internal frontend failure is a crash, never a program diagnostic."""
         from unittest.mock import patch
 
         roots = agl_roots(tmp_path.resolve())
-        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
-            prepared = prepare_inline_code("let x = 1\nx", entry_path=None, roots=roots)
-        assert len(prepared.diagnostics) >= 1
-        assert "boom" in prepared.diagnostics[0].message
-
-    def test_prepare_program_generic_exception_during_resolve(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglScopeError exception during resolve_program is captured."""
-        from unittest.mock import patch
-
-        roots = agl_roots(tmp_path.resolve())
-        with patch(
-            "agm.agl.scope.program.resolve_program",
-            side_effect=RuntimeError("resolve fail"),
+        with (
+            patch(stage, side_effect=RuntimeError("internal")),
+            pytest.raises(RuntimeError),
         ):
-            prepared = prepare_inline_code("let x = 1\nx", entry_path=None, roots=roots)
-        assert len(prepared.diagnostics) >= 1
-        assert "resolve fail" in prepared.diagnostics[0].message
+            prepare_inline_code("let x = 1\nx", entry_path=None, roots=roots)
+
+    def test_typecheck_propagates_an_internal_failure(self) -> None:
+        """An internal type-checker failure escapes the file pipeline."""
+        from unittest.mock import patch
+
+        prepared = prepare_inline_code("let x = 1\nx", entry_path=None, roots=agl_roots())
+        with (
+            patch("agm.agl.typecheck.program.check_program", side_effect=RuntimeError("internal")),
+            pytest.raises(RuntimeError),
+        ):
+            PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None).discover_programs(
+                prepared
+            )
 
 
 class TestDiscoverProgramsFailures:
@@ -3561,36 +3686,6 @@ class TestDiscoverProgramsFailures:
             ).discover_programs(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
-
-    def test_run_typecheck_program_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
-        """_run_typecheck_program captures generic exceptions as diagnostics."""
-        from unittest.mock import MagicMock, patch
-
-        from agm.agl.pipeline import PreparedProgram
-
-        roots = agl_roots()
-        # Build a PreparedProgram with a fake resolved so we reach check_program.
-        fake_rg = MagicMock()
-        fake_rg.warnings = ()
-        fake_rg.modules = {}
-
-        pg = PreparedProgram(
-            source="let x = 1",
-            entry_path=None,
-            roots=roots,
-            resolved=fake_rg,
-            diagnostics=(),
-            warnings=(),
-        )
-        rt = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
-        with patch(
-            "agm.agl.typecheck.program.check_program",
-            side_effect=RuntimeError("graph type crash"),
-        ):
-            # discover_programs will call _run_typecheck_program internally.
-            discovery = rt.discover_programs(pg)
-        assert len(discovery.diagnostics) >= 1
-        assert "graph type crash" in discovery.diagnostics[0].message
 
 
 class TestRunPreparedEdgeCases:

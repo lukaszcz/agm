@@ -20,10 +20,6 @@ Two materialization entry points feed the same ``OutputContract`` shape:
 Both produce ``OutputContract`` objects exposing the same runtime surface
 (``target_type_label``, ``codec``, ``strict_json``, ``format_instructions``,
 ``json_schema``, ``decode``, ``structured_exec``).
-
-``TypelessOutputContract`` is a separate, lighter carrier for the same
-display fields (no live ``codec``) used where no host codec registry is in
-scope at all (see ``eval/effects.py``'s ``ask``-display fallback).
 """
 
 from __future__ import annotations
@@ -32,42 +28,23 @@ import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
-from agm.agl.diagnostics import Diagnostic
-from agm.agl.ir.contracts import ContractRequest, DecodeSchema
-from agm.agl.runtime.codec import OutputCodec
-from agm.agl.semantics.types import (
-    ArrayType,
-    BoolType,
-    DecimalType,
-    DictType,
-    EnumType,
-    IntType,
-    JsonType,
-    RecordType,
-    TextType,
-    Type,
-    UnitType,
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    CustomContractRequest,
+    DecodeSchema,
+    JsonContractRequest,
+    UnitContractRequest,
 )
+from agm.agl.runtime.codec import OutputCodec
+from agm.agl.semantics.types import Type
 from agm.agl.typecheck.env import OutputContractSpec
 
 if TYPE_CHECKING:
     from agm.agl.ir.ids import ContractId
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.semantics.type_table import TypeTable
-
-
-@dataclass(frozen=True, slots=True)
-class TypelessOutputContract:
-    """Agent-facing contract materialized from typeless execution IR metadata."""
-
-    target_type: str
-    codec_name: str
-    strict_json: bool | None
-    format_instructions: str
-    json_schema: object
-    structured_exec: bool = False
 
 
 @dataclass(slots=True)
@@ -125,18 +102,20 @@ def materialize_ir_contract(
     typeless payload, and this execution-time path merely pairs that payload
     with the live codec implementation.
     """
-    if request.is_unit:
+    if isinstance(request, UnitContractRequest):
         return None
-    codec = codecs.get(request.codec_name)
-    if codec is None:
-        raise ValueError(
-            f"No codec registered for codec_name={request.codec_name!r}. "
-            "This is a host-configuration error."
-        )
+    codec = codecs[request.codec_name]
     format_instructions = request.format_instructions
-    schema = None if request.json_schema is None else cast(object, json.loads(request.json_schema))
-    decode = request.decode
-    defs = request.defs
+    if isinstance(request, JsonContractRequest | CustomContractRequest):
+        schema = (
+            None if request.json_schema is None else cast(object, json.loads(request.json_schema))
+        )
+        decode = request.decode
+        defs = request.defs
+    else:
+        schema = None
+        decode = None
+        defs = ()
     return OutputContract(
         target_type_label=request.target_type_label,
         codec=codec,
@@ -151,30 +130,27 @@ def materialize_ir_contract(
 
 def materialize_ir_contracts(
     executable: "ExecutableProgram", codecs: Mapping[str, OutputCodec]
-) -> "tuple[dict[ContractId, OutputContract], list[Diagnostic]]":
+) -> "dict[ContractId, OutputContract]":
     """Materialize every host codec contract exclusively from linked IR metadata.
 
-    Loops :func:`materialize_ir_contract` over ``executable.contracts``,
-    collecting a diagnostic per contract that names an unregistered codec
-    rather than raising: a host-configuration error surfaces as a normal
-    pre-execution diagnostic instead of an exception. Shared by
-    ``PipelineDriver._execute_ir`` and the REPL's ``entry_pipeline``.
+    Shared by ``PipelineDriver._execute_ir`` and the REPL's ``entry_pipeline``.
     """
     materialized: "dict[ContractId, OutputContract]" = {}
-    errors: list[Diagnostic] = []
     for contract_id, request in executable.contracts.items():
-        try:
-            contract = materialize_ir_contract(request, codecs)
-        except ValueError as exc:
-            errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
-            continue
+        contract = materialize_ir_contract(request, codecs)
         if contract is not None:
             materialized[contract_id] = contract
-    return materialized, errors
+    return materialized
+
+
+class _LegacyContractHook(Protocol):
+    """A custom codec whose contract hook predates the ``type_table`` argument."""
+
+    def make_contract(self, type_ref: Type) -> OutputContract: ...
 
 
 def _call_make_contract(
-    codec: OutputCodec, type_ref: Type, type_table: "TypeTable | None"
+    codec: OutputCodec, type_ref: Type, type_table: "TypeTable"
 ) -> OutputContract:
     """Call a codec's contract hook, accepting the legacy one-argument form."""
     try:
@@ -193,43 +169,15 @@ def _call_make_contract(
     if accepts_type_table_kw:
         return codec.make_contract(type_ref, type_table=type_table)
     if not has_varargs and len(positional) <= 1:
-        return codec.make_contract(type_ref)
+        # The inspected signature takes the target type alone.
+        return cast(_LegacyContractHook, codec).make_contract(type_ref)
     return codec.make_contract(type_ref, type_table)
-
-
-def _target_type_for_request(request: ContractRequest) -> Type:
-    """Return the checked target type for legacy custom-codec parse hooks."""
-    if request.target_type is not None:
-        return cast(Type, request.target_type)
-    kind = request.target_type_kind or request.target_type_label
-    if kind == "text":
-        return TextType()
-    if kind == "int":
-        return IntType()
-    if kind == "decimal":
-        return DecimalType()
-    if kind == "bool":
-        return BoolType()
-    if kind == "json":
-        return JsonType()
-    if kind == "array":
-        return ArrayType(JsonType())
-    if kind == "dict":
-        return DictType(JsonType())
-    # These two build a handle from a bare label string with no declaration
-    # in hand, so they name no declaration: decl_id keeps its NO_DECL_ID
-    # default.
-    if kind == "record":
-        return RecordType(request.target_type_label)
-    if kind == "enum":
-        return EnumType(request.target_type_label)
-    return UnitType()
 
 
 def materialize_contract(
     spec: OutputContractSpec,
     codecs: Mapping[str, OutputCodec],
-    type_table: "TypeTable | None" = None,
+    type_table: "TypeTable",
 ) -> OutputContract:
     """Build an ``OutputContract`` from a static ``OutputContractSpec``.
 
@@ -243,9 +191,6 @@ def materialize_contract(
 
     For ``structured_exec`` specs, returns a passthrough text contract without
     consulting the codec table (the codec field is unused for structured exec).
-
-    Raises ``ValueError`` if the codec is not found (host-configuration error,
-    not an AgL exception).
     """
     if spec.structured_exec:
         from agm.agl.runtime.codec import TextCodec
@@ -259,12 +204,7 @@ def materialize_contract(
             decode=None,
             structured_exec=True,
         )
-    codec = codecs.get(spec.codec_name)
-    if codec is None:
-        raise ValueError(
-            f"No codec registered for codec_name={spec.codec_name!r}. "
-            "This is a host-configuration error."
-        )
+    codec = codecs[spec.codec_name]
     # Delegate format_instructions/json_schema/decode derivation to the codec.
     base = _call_make_contract(codec, spec.target_type, type_table)
     # Overlay the per-call strict_json from the spec (the codec's make_contract

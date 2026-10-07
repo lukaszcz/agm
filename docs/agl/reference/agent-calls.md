@@ -115,7 +115,7 @@ let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
 A `$` literal
-([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+([Strings and interpolation](strings-and-interpolation.md#the-literal)) may
 supply the same single argument, inline or as a block; explicit type
 arguments — on either the free function or a receiver method — and
 target-type inference work exactly as for a quoted prompt:
@@ -139,7 +139,7 @@ the short-lived session for its receiver. Use `ask(...)` or
 `%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
 environment hole — and pipe the result when chaining is needed, as in
 `print <| ask $ …`
-([Strings and interpolation](strings-and-interpolation.md#the--literal)).
+([Strings and interpolation](strings-and-interpolation.md#the-literal)).
 
 ## Agents as values
 
@@ -451,6 +451,10 @@ The all-permissions and don't-ask/auto-approve framing above applies only to
 flag is ever added, so `Native` and `Disabled` differ only in sandboxing, and
 `Sandbox` runs the agent under its own default permissions.
 
+Sandboxed Codex agents run with `--no-daemon`, so their executor stays inside
+the sandbox instead of using a shared host daemon. This applies to asks,
+sessions, and interactive chats; Codex must support that flag.
+
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = reviewer.ask("Review %{a}", sandbox = Native)
@@ -525,6 +529,7 @@ rules:
    plain object with no `"$case"` tag.
 7. Unknown fields are rejected.
 8. Missing fields without a declared default are rejected.
+9. A dict takes its key type's [wire form](types.md#dict-wire-forms).
 
 Example — for
 
@@ -576,10 +581,17 @@ mechanically from the target type:
 | `bool` | `{"type": "boolean"}` |
 | `json` | `{}` (any JSON value) |
 | `array[T]` | `{"type": "array", "items": <T>}` |
-| `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
+| `dict[K, V]`, `K` `text` or a text alias | `{"type": "object", "additionalProperties": <V>}` |
+| `dict[K, V]`, `K` an `int`, `decimal`, `bool`, or plain enum | as above plus `"propertyNames"`: a number-text `pattern`, `{"enum": ["true", "false"]}`, or `{"enum": [<tags>]}` |
+| `dict[K, V]`, any other `Hashable` `K` | `{"type": "array", "items": <a closed object with required "key" and "value">}` |
 | record | object schema: `additionalProperties: false`, `required` lists every field without a declared default, per-field `properties` keyed by effective JSON name |
 | plain enum | `{"enum": [<tag>, …]}` listing the members' effective JSON tags; when any constructor carries `@doc`, instead `oneOf` of per-member `{"const": <tag>}` schemas, each with its constructor's `@doc` as `description` when present |
 | any other enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
+
+A target that reaches a dict must have a key that is `Hashable` and itself
+decodable (never a type variable or an exception); any other is a static
+error. The key's wire form is described under
+[dict wire forms](types.md#dict-wire-forms).
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a
@@ -598,14 +610,14 @@ type. For a JSON-typed target the instructions embed the actual JSON Schema
 precise, authoritative shape rather than a prose paraphrase. They are
 equivalent to:
 
-```text
+````text
 Return exactly one JSON value conforming to the following JSON Schema.
 Do not include Markdown, prose, or code fences.
 
 ```json
 <derived JSON Schema>
 ```
-```
+````
 
 For the permissive `json` type (schema `{}`) only the behavioural preamble is
 emitted, since there is no shape to convey.
@@ -634,6 +646,11 @@ response, then validates it strictly:
 
 If the response contains two or more top-level JSON values, recovery fails
 as ambiguous. Schema validation is always strict regardless of lenient mode.
+
+Recovery repairs format damage but never resolves ambiguous content: an
+object that repeats a member name is rejected in both lenient and strict
+modes, including a repaired one such as `Here: {"a": 1, "a": 2,}`. The
+response then counts as unparseable, so it is retried like any other.
 
 When the target is a plain enum and the value recovered above is not one of
 its members, the whole response is searched for its member tags. A response

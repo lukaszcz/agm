@@ -168,20 +168,6 @@ class TestProgramSignatureFuse:
         # name, not position.
         assert diagnostics[0].line == 2
 
-    def test_missing_info_for_a_declared_parameter_is_a_compiler_bug(self) -> None:
-        param, _info = _param_and_info(
-            "name", ParamZone.POSITIONAL_ONLY, TextType(), required=True, line=1
-        )
-        with pytest.raises(AssertionError, match="compiler bug"):
-            ProgramSignature.fuse(params=(param,), infos=(), span=_span(_PROGRAM_LINE))
-
-    def test_extra_info_absent_from_signature_is_a_compiler_bug(self) -> None:
-        _param, info = _param_and_info(
-            "name", ParamZone.POSITIONAL_ONLY, TextType(), required=True, line=1
-        )
-        with pytest.raises(AssertionError, match="compiler bug"):
-            ProgramSignature.fuse(params=(), infos=(info,), span=_span(_PROGRAM_LINE))
-
 
 class TestBindProgramArgumentsSuccess:
     """Successful bindings across zones, sources, and default use."""
@@ -474,6 +460,19 @@ class TestDecodeParamValue:
     def test_rejects_non_json_shaped_native_value(self) -> None:
         with pytest.raises(ValueError, match="JSON-compatible"):
             decode_param_value(_decoder(IntType()), {1, 2, 3})
+
+    @pytest.mark.parametrize(
+        ("target", "raw"),
+        [
+            (JsonType(), float("inf")),
+            (JsonType(), {"rate": [Decimal("-Infinity")]}),
+            (DecimalType(), Decimal("NaN")),
+            (_option_type(JsonType()), OptionSome(float("nan"))),
+        ],
+    )
+    def test_rejects_a_native_non_finite_number(self, target: AglType, raw: object) -> None:
+        with pytest.raises(ValueError):
+            decode_param_value(_decoder(target), raw)
 
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers

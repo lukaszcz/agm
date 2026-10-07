@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": ["missing", "not exported"]}}
+{"diagnostic": {"line": 1, "message_contains": ["std/prelude::missing", "no visible member"]}}

@@ -2,7 +2,7 @@
 
 Every host-supplied text value (program-parameter tokens, ``@opt-env``
 variables, TOML config strings, engine-setting literals) is either strict
-JSON or one AgL value-syntax literal (``agm.agl.value_syntax``).
+JSON that decodes into its slot or one AgL value-syntax literal (``agm.agl.value_syntax``).
 :func:`value_node_to_json` converts an already-read
 :class:`~agm.agl.value_syntax.nodes.ValueNode` into the JSON-native Python
 object (``None``/``bool``/``int``/``Decimal``/``str``/``list``/``dict``) the
@@ -16,7 +16,8 @@ result flows through the SAME normalize + JSON-Schema-validate +
 it: a ``text`` target is taken verbatim, the standard ``Agent`` enum reads
 its own text conventions (a tagged JSON object, an ``Agent`` member
 constructor call, shorthand, or -- optionally -- a verbatim command), and
-every other target reads strict JSON, falling back to value syntax.
+every other target reads strict JSON when that decodes into the slot, else
+value syntax.
 :func:`host_param_text_to_json` is its host parameter/config form, and
 :func:`host_data_to_json` reads native config data by applying that form to
 every string nested in it.
@@ -24,9 +25,9 @@ every string nested in it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import assert_never, cast
+from typing import Literal, assert_never, cast
 
 from agm.agent.spec import AgentCommand
 from agm.agent.values import AgentShorthandError, agent_spec_shape, parse_agent_shorthand
@@ -34,26 +35,30 @@ from agm.agl.ir.contracts import (
     ArrayDecode,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     FieldDecode,
     RecordDecode,
-    RefDecode,
     ScalarDecode,
     ScalarKind,
     VariantDecode,
     is_plain_enum,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.runtime.convert import (
     StrictJsonParseError,
+    decode_value,
     parse_json_strict,
-    resolve_decode_ref,
+    resolve_decode,
 )
+from agm.agl.runtime.serialize import JsonShaped, stringified_key_text
 from agm.agl.semantics.arguments import (
     ArgumentBindingError,
     ArgumentBindingErrorKind,
     BindParam,
     bind_arguments,
 )
+from agm.agl.semantics.values import UNIT_VALUE, Value
 from agm.agl.value_syntax.errors import ValueSyntaxError
 from agm.agl.value_syntax.nodes import (
     ArrayNode,
@@ -97,13 +102,6 @@ class ValueDecodeError(ValueError):
         super().__init__(text)
 
 
-def _resolve(schema: DecodeSchema, defs: DefsMap) -> DecodeSchema:
-    """Resolve a possible ``RefDecode`` root to its non-reference body."""
-    if not isinstance(schema, RefDecode):
-        return schema
-    return resolve_decode_ref(schema.key, defs)
-
-
 def _node_kind(node: ValueNode) -> str:
     """A short, human-facing description of *node*'s own shape, for error messages."""
     match node:
@@ -137,29 +135,30 @@ def value_node_to_json(
     accepts any non-constructor literal, recursively, heterogeneous; an
     array/dict slot expects the matching bracketed literal; a record/enum
     slot expects a constructor naming the type (or its ``@name`` alias),
-    whose arguments bind through the shared zone binder. *defs* resolves a
+    whose arguments bind through the shared zone binder. A dict inside a
+    ``json`` slot takes text keys only. *defs* resolves a
     ``RefDecode`` node exactly like :func:`~agm.agl.runtime.convert.decode_value`.
 
     :raises ValueDecodeError: on any type/shape mismatch.
     """
-    resolved = _resolve(schema, defs)
-    if isinstance(resolved, ScalarDecode):
-        return _convert_scalar(node, resolved.kind)
-    if isinstance(resolved, ArrayDecode):
-        if not isinstance(node, ArrayNode):
-            raise ValueDecodeError(f"expected an array, got {_node_kind(node)}", node.start)
-        return [value_node_to_json(item, resolved.elem, defs) for item in node.items]
-    if isinstance(resolved, DictDecode):
-        if not isinstance(node, DictNode):
-            raise ValueDecodeError(f"expected a dict, got {_node_kind(node)}", node.start)
-        return _convert_dict_entries(node, lambda v: value_node_to_json(v, resolved.value, defs))
-    if isinstance(resolved, RecordDecode):
-        return _convert_record(node, resolved, defs)
-    if isinstance(resolved, EnumDecode):
-        return _convert_enum(node, resolved, defs)
-    raise AssertionError(  # pragma: no cover -- _resolve never returns a RefDecode
-        f"value_decode: unresolved schema {resolved!r}"
-    )
+    resolved = resolve_decode(schema, defs)
+    match resolved:
+        case ScalarDecode(kind=kind):
+            return _convert_scalar(node, kind)
+        case ArrayDecode(elem=elem):
+            if not isinstance(node, ArrayNode):
+                raise ValueDecodeError(f"expected an array, got {_node_kind(node)}", node.start)
+            return [value_node_to_json(item, elem, defs) for item in node.items]
+        case DictDecode(key_form=key_form, key=key_schema, value=value_schema):
+            if not isinstance(node, DictNode):
+                raise ValueDecodeError(f"expected a dict, got {_node_kind(node)}", node.start)
+            return _convert_dict(node, key_form, key_schema, value_schema, defs)
+        case RecordDecode():
+            return _convert_record(node, resolved, defs)
+        case EnumDecode():
+            return _convert_enum(node, resolved, defs)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def _convert_scalar(node: ValueNode, kind: ScalarKind) -> object:
@@ -197,19 +196,56 @@ def _convert_json(node: ValueNode) -> object:
     if isinstance(node, ArrayNode):
         return [_convert_json(item) for item in node.items]
     if isinstance(node, DictNode):
-        return _convert_dict_entries(node, _convert_json)
+        return _object_of(
+            (cast(str, _convert_scalar(e.key, ScalarKind.TEXT)), _convert_json(e.value), e.start)
+            for e in node.entries
+        )
     raise ValueDecodeError("a constructor is not valid inside json", node.start)
 
 
-def _convert_dict_entries(
-    node: DictNode, convert: Callable[[ValueNode], object]
-) -> dict[str, object]:
-    """Build a dict from *node*'s entries via *convert*, rejecting a duplicate key."""
+def _convert_dict(
+    node: DictNode,
+    key_form: DictKeyForm,
+    key_schema: DecodeSchema,
+    value_schema: DecodeSchema,
+    defs: DefsMap,
+) -> object:
+    """Convert a dict *node* into the JSON wire shape *key_form* names."""
+    return _dict_wire(
+        key_form,
+        (
+            (
+                value_node_to_json(entry.key, key_schema, defs),
+                value_node_to_json(entry.value, value_schema, defs),
+                entry.start,
+            )
+            for entry in node.entries
+        ),
+    )
+
+
+def _dict_wire(key_form: DictKeyForm, pairs: Iterable[tuple[object, object, int | None]]) -> object:
+    """Lay converted ``(key, value, offset)`` *pairs* out in the wire shape *key_form* names."""
+    match key_form:
+        case DictKeyForm.OBJECT_TEXT:
+            return _object_of((cast(str, key), value, at) for key, value, at in pairs)
+        case DictKeyForm.OBJECT_STRINGIFIED:
+            return _object_of(
+                (stringified_key_text(cast(JsonShaped, key)), value, at) for key, value, at in pairs
+            )
+        case DictKeyForm.ENTRIES:
+            return [{"key": key, "value": value} for key, value, _ in pairs]
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _object_of(pairs: Iterable[tuple[str, object, int | None]]) -> dict[str, object]:
+    """Build an object from ``(wire key, value, offset)`` *pairs*, rejecting a repeated key."""
     result: dict[str, object] = {}
-    for entry in node.entries:
-        if entry.key in result:
-            raise ValueDecodeError(f"duplicate dict key {entry.key!r}", entry.start)
-        result[entry.key] = convert(entry.value)
+    for key, value, at in pairs:
+        if key in result:
+            raise ValueDecodeError(f"duplicate dict key {key!r}", at)
+        result[key] = value
     return result
 
 
@@ -323,6 +359,17 @@ def _convert_ctor_args(
     return result
 
 
+#: `_convert_ctor_args` checks a named argument against the field alias map
+#: before calling `bind_arguments`, so UNKNOWN_NAME never reaches `_binding_error`.
+type _CtorBindingErrorKind = Literal[
+    ArgumentBindingErrorKind.MISSING_REQUIRED,
+    ArgumentBindingErrorKind.DUPLICATE,
+    ArgumentBindingErrorKind.POSITIONAL_ONLY_BY_NAME,
+    ArgumentBindingErrorKind.TOO_MANY_POSITIONAL,
+    ArgumentBindingErrorKind.POSITIONAL_IN_NAMED_ONLY,
+]
+
+
 def _binding_error(
     exc: ArgumentBindingError,
     node: CtorNode,
@@ -337,7 +384,10 @@ def _binding_error(
         offset = named[exc.named_index][1].start
     else:
         offset = node.start
-    match exc.kind:
+    # Every named argument's name is checked against the field alias map
+    # before `bind_arguments` runs, so UNKNOWN_NAME never reaches here.
+    kind = cast(_CtorBindingErrorKind, exc.kind)
+    match kind:
         case ArgumentBindingErrorKind.MISSING_REQUIRED:
             message = f"{type_label} is missing field {exc.name!r}"
         case ArgumentBindingErrorKind.DUPLICATE:
@@ -348,9 +398,6 @@ def _binding_error(
             message = f"{type_label} given too many arguments"
         case ArgumentBindingErrorKind.POSITIONAL_IN_NAMED_ONLY:
             message = f"{type_label} arguments must be supplied by name"
-        case ArgumentBindingErrorKind.UNKNOWN_NAME:  # pragma: no cover
-            # Unreachable: names are resolved against the field alias map before binding.
-            message = f"{type_label} has no field {exc.name!r}"
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
     return ValueDecodeError(message, offset)
@@ -363,7 +410,7 @@ def _some_variant(schema: DecodeSchema, defs: DefsMap) -> VariantDecode:
     pass anything else -- so its shape is looked up directly rather than
     re-checked here.
     """
-    resolved = cast(EnumDecode, _resolve(schema, defs))
+    resolved = cast(EnumDecode, resolve_decode(schema, defs))
     return next(v for v in resolved.variants if v.name == "Some")
 
 
@@ -393,26 +440,52 @@ def host_text_to_json(
     verbatim command; without the fallback, text matching none of those is a
     :class:`ValueDecodeError`. Malformed native shorthand (see
     :func:`parse_agent_shorthand`) is an error even with the fallback.
-    Every other target reads strict JSON, falling back to AgL value syntax;
-    a failure of both reports both reasons, JSON and value syntax alike,
-    since either could be what the writer intended.
+    Every other target reads strict JSON when it parses AND decodes against
+    *schema* (:func:`_fits_schema`), else AgL value syntax -- so JSON text that
+    is not a wire value of the slot (``{}`` for an entries-form dict) still
+    gets its value-syntax reading, at every depth of nested host strings. Text
+    that is not JSON and is no value either reports both reasons; JSON that
+    fits nowhere is returned as parsed, for the caller's own decode to reject
+    with its precise message.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.TEXT:
         return text
     if isinstance(resolved, EnumDecode) and resolved.host_agent:
         return _decode_agent_text(
             text, resolved, defs, agent_command_fallback=agent_command_fallback
         )
+    json_error: str | None
     try:
-        return parse_json_strict(text)
+        parsed = parse_json_strict(text)
     except StrictJsonParseError as exc:
         json_error = exc.message
+    else:
+        json_error = None
+        if _fits_schema(parsed, resolved, defs):
+            return parsed
     try:
-        node = read_value(text)
-    except ValueSyntaxError as exc:
+        return value_node_to_json(read_value(text), resolved, defs)
+    except (ValueSyntaxError, ValueDecodeError) as exc:
+        if json_error is None:
+            return parsed
+        if isinstance(exc, ValueDecodeError):
+            raise
         raise ValueDecodeError(f"{exc.message}; as JSON: {json_error}", exc.start) from exc
-    return value_node_to_json(node, resolved, defs)
+
+
+def _shape_only_default(_nominal: NominalId, _index: int) -> Value:
+    """Stand in for a defaulted field's value: a wire-shape check never needs the real one."""
+    return UNIT_VALUE
+
+
+def _fits_schema(parsed: object, schema: DecodeSchema, defs: DefsMap) -> bool:
+    """Return whether JSON *parsed* decodes into *schema* (defaults checked by shape only)."""
+    try:
+        decode_value(schema, parsed, defs, default_resolver=_shape_only_default)
+    except ValueError:
+        return False
+    return True
 
 
 def host_param_text_to_json(text: str, schema: DecodeSchema, defs: DefsMap = _EMPTY_DEFS) -> object:
@@ -421,7 +494,7 @@ def host_param_text_to_json(text: str, schema: DecodeSchema, defs: DefsMap = _EM
     :func:`host_text_to_json` with the ``Agent`` command fallback, plus one
     reading of its own: a plain enum also takes a member's bare JSON name.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if (
         isinstance(resolved, EnumDecode)
         and is_plain_enum(resolved)
@@ -439,25 +512,51 @@ def host_data_to_json(value: object, schema: DecodeSchema, defs: DefsMap = _EMPT
     (:func:`host_param_text_to_json`). A ``json`` slot keeps its data as is,
     and data matching no slot is returned unchanged for validation to reject.
     """
-    resolved = _resolve(schema, defs)
+    resolved = resolve_decode(schema, defs)
     if isinstance(resolved, ScalarDecode) and resolved.kind is ScalarKind.JSON:
         return value
     if isinstance(value, str):
         return host_param_text_to_json(value, resolved, defs)
     if isinstance(value, list) and isinstance(resolved, ArrayDecode):
         return [host_data_to_json(item, resolved.elem, defs) for item in value]
+    if isinstance(value, list) and isinstance(resolved, DictDecode):
+        return [_host_entry_to_json(item, resolved, defs) for item in value]
     if not isinstance(value, dict):
         return value
-    return _host_entries_to_json(value, resolved, defs)
+    return _host_table_to_json(value, resolved, defs)
 
 
-def _host_entries_to_json(
-    data: Mapping[str, object], schema: DecodeSchema, defs: DefsMap
-) -> Mapping[str, object]:
-    """Read each entry of the table *data* as host data for the slot *schema* gives its key."""
+def _host_entry_to_json(item: object, schema: DictDecode, defs: DefsMap) -> object:
+    """Read a native ``{key, value}`` entry table through *schema*'s key and value slots."""
+    if not isinstance(item, dict) or "key" not in item or "value" not in item:
+        return item
+    entry: Mapping[str, object] = item
+    return {
+        **entry,
+        "key": host_data_to_json(item["key"], schema.key, defs),
+        "value": host_data_to_json(item["value"], schema.value, defs),
+    }
+
+
+def _host_table_to_json(data: Mapping[str, object], schema: DecodeSchema, defs: DefsMap) -> object:
+    """Read each entry of the table *data* as host data for the slot *schema* gives its key.
+
+    A table in a dict slot is laid out in the key's wire form, each table key
+    read as a native string of the key slot is.
+    """
     match schema:
-        case DictDecode(value=item_schema):
-            return {key: host_data_to_json(item, item_schema, defs) for key, item in data.items()}
+        case DictDecode(key_form=key_form, key=key_schema, value=item_schema):
+            return _dict_wire(
+                key_form,
+                (
+                    (
+                        host_data_to_json(key, key_schema, defs),
+                        host_data_to_json(item, item_schema, defs),
+                        None,
+                    )
+                    for key, item in data.items()
+                ),
+            )
         case RecordDecode(fields=record_fields):
             fields = record_fields
         case EnumDecode(variants=variants):

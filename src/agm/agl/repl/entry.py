@@ -13,6 +13,7 @@ from agm.agl.diagnostics import Diagnostic
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.diagnostics import AglError
     from agm.agl.ir.program import ValueDescriptors
     from agm.agl.pipeline import RunError
     from agm.agl.semantics.type_table import TypeTable
@@ -68,6 +69,15 @@ class EntryResult:
     ``error``
         The uncaught AgL exception mapped to a ``RunError`` when the entry raised
         during evaluation; ``None`` otherwise.
+    ``failure``
+        The static (pre-execution) ``AglError`` that produced ``diagnostics``
+        (parse, scope, typecheck, match-compile, lowering), for a
+        programmatic caller that wants the structured error and its span
+        rather than rendered text; ``None`` on success, for a runtime failure
+        (``error``), and for a diagnostic with no single originating
+        ``AglError`` (a lowering ``ResourceError``, a param/environment/
+        extern diagnostic, or a contract materialization error). The REPL
+        renderer keeps using ``diagnostics``.
     ``ok``
         ``True`` iff there are no error diagnostics AND no runtime error.
     ``trace_path``
@@ -98,3 +108,4 @@ class EntryResult:
     type_display: str | None = None
     type_table: "TypeTable | None" = None
     descriptors: "ValueDescriptors | None" = None
+    failure: "AglError | None" = None

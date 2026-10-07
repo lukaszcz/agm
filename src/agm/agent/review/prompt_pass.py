@@ -12,6 +12,7 @@ def prepare_prompt_pass(
     *,
     runner: str,
     primary: PromptSourceOptions,
+    default_prompt_file: Path,
     extra: PromptSourceOptions,
     env: dict[str, str],
     temp_files: list[Path],
@@ -19,11 +20,10 @@ def prepare_prompt_pass(
     cwd: Path,
 ) -> PreparedPromptRun:
     prompt_source = resolve_prompt_source(primary, cwd=cwd)
-    assert prompt_source is not None
     extra_prompt_source = resolve_prompt_source(extra, cwd=cwd)
     return prepare_prompt_run(
         runner=runner,
-        prompt_source=prompt_source,
+        prompt_source=default_prompt_file if prompt_source is None else prompt_source,
         extra_prompt_source=extra_prompt_source,
         env=env,
         temp_files=temp_files,

@@ -8,6 +8,13 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    NoVisibleConstructorError,
+    UnknownMemberError,
+)
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
@@ -33,6 +40,13 @@ def reject(source: str) -> None:
         accept(source)
 
 
+def rejection(source: str) -> AglTypeError | AglScopeError:
+    """Return the error scope or type checking rejects *source* with."""
+    with pytest.raises((AglTypeError, AglScopeError)) as caught:
+        accept(source)
+    return caught.value
+
+
 def accept_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
     graph = make_graph_from_files(tmp_path, modules)
     return check_program(resolve_program(graph), _CAPS)
@@ -43,18 +57,19 @@ def reject_graph(tmp_path: Path, modules: dict[str, str]) -> None:
         accept_graph(tmp_path, modules)
 
 
-@pytest.mark.parametrize(
-    "source",
-    (
+def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments() -> None:
+    reject(
         "enum Tree[T]\n"
         "  | Node(value: T)\n"
         "let tree: Tree[int] = Node(value = 1)\n"
-        "case tree of | Tree[text]::Node(value) => value | _ => 0",
-        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1",
-    ),
-)
-def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments(source: str) -> None:
-    reject(source)
+        "case tree of | Tree[text]::Node(value) => value | _ => 0"
+    )
+
+
+def test_qualified_enum_constructor_pattern_rejects_arguments_on_a_non_generic_owner() -> None:
+    error = rejection("enum E\n  | M\nlet value: E = M\ncase value of | E[int]::M() => 0 | _ => 1")
+
+    assert isinstance(error, AglScopeError)
 
 
 def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None:
@@ -70,18 +85,21 @@ def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None
     )
 
 
-def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() -> None:
-    accept(
+def test_applied_enum_owner_does_not_select_a_referenced_member() -> None:
+    source = (
         "record R[T]\n"
         "  value: T\n"
         "enum E[T] = ::R[T]\n"
         "let value: E[int] = R(value = 1)\n"
-        "case value of | E[int]::R(value) => value"
+        "case value of | {pattern}(value) => value"
     )
+    accept(source.format(pattern="R"))
+    reject(source.format(pattern="E[int]::R"))
 
 
 def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
-    reject(
+    """An enum alias constructs nothing, so it is no visible constructor to match."""
+    error = rejection(
         "record R\n"
         "  value: int\n"
         "enum E = ::R\n"
@@ -89,6 +107,18 @@ def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
         "let value: E = R(value = 1)\n"
         "case value of | Alias(value) => value"
     )
+
+    assert type(error) is NoVisibleConstructorError
+
+
+@pytest.mark.parametrize("pattern", ("U", "U()", "Unit0", "Unit0()"))
+def test_fieldless_record_alias_pattern_matches_bare_and_applied(pattern: str) -> None:
+    accept(f"record Unit0\ntype U = Unit0\nlet x = Unit0\ncase x of | {pattern} => 1")
+
+
+@pytest.mark.parametrize("pattern", ("V", "V()"))
+def test_record_alias_pattern_of_another_record_is_rejected_bare_and_applied(pattern: str) -> None:
+    reject(f"record Unit0\nrecord Other\ntype V = Other\nlet x = Unit0\ncase x of | {pattern} => 1")
 
 
 def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:
@@ -150,10 +180,10 @@ def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
     )
 
 
-def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
+def test_module_qualified_record_pattern_rejects_a_referencing_enum_owner(
     tmp_path: Path,
 ) -> None:
-    accept_graph(
+    reject_graph(
         tmp_path,
         {
             "lib": "record Shared\n  value: int\nenum First = ::Shared\nenum Second = ::Shared\n",
@@ -169,23 +199,27 @@ def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
 def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
     tmp_path: Path,
 ) -> None:
-    reject_graph(
-        tmp_path,
-        {
-            "lib": (
-                "record Shared\n"
-                "  value: int\n"
-                "enum First = ::Shared\n"
-                "enum Second = ::Shared\n"
-                "enum Unrelated | Other\n"
-            ),
-            "entry": (
-                "import lib\n"
-                "let shared: lib::Shared = lib::Shared(value = 1)\n"
-                "case shared of | lib::Unrelated::Shared(value) => value\n"
-            ),
-        },
-    )
+    """``Unrelated`` declares no ``Shared`` member at all, so this is the plain
+    unknown-member verdict scope reports for every position, not a
+    subject/pattern type mismatch typecheck would report."""
+    with pytest.raises(AglScopeError):
+        accept_graph(
+            tmp_path,
+            {
+                "lib": (
+                    "record Shared\n"
+                    "  value: int\n"
+                    "enum First = ::Shared\n"
+                    "enum Second = ::Shared\n"
+                    "enum Unrelated | Other\n"
+                ),
+                "entry": (
+                    "import lib\n"
+                    "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                    "case shared of | lib::Unrelated::Shared(value) => value\n"
+                ),
+            },
+        )
 
 
 def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() -> None:
@@ -203,7 +237,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     assert isinstance(pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
     assert selected is not None
     assert selected.owner_name == "Token"
 
@@ -260,7 +294,7 @@ def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> N
     assert isinstance(case, Case)
     case_pattern = case.branches[0].pattern
     assert isinstance(case_pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(case_pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(case_pattern.node_id)
     assert selected is not None
     assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
 
@@ -280,15 +314,10 @@ def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
     )
 
 
-def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> None:
-    """A same-named scoped variant shadows a root nominal for a bare pattern.
-
-    Nearest-layer precedence is deliberate and deterministic: inside
-    ``scope A``, a bare ``Point`` pattern selects ``A``'s own ``E::Point``
-    variant candidate, never falling outward to the root ``Point`` record,
-    so matching it against a root-typed scrutinee is a genuine mismatch.
-    """
-    reject(
+def test_bare_pattern_in_a_region_reaches_a_root_record_beside_its_scoped_variant() -> None:
+    """A bare pattern's candidates are every step's: the root-typed scrutinee selects the root
+    ``Point`` record over ``A``'s own ``E::Point`` variant."""
+    checked = accept(
         "record Point\n"
         "  x: int\n"
         "\n"
@@ -302,6 +331,77 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
         "\n"
         "A::from-root(Point(x = 1))\n"
     )
+    region = checked.resolved.program.body.items[1]
+    from_root = next(item for item in region.items if isinstance(item, FuncDef))
+    case = from_root.body.items[0]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
+    assert selected is not None
+    assert (selected.owner_path, selected.owner_name) == ((), "Point")
+
+
+def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:
+    """``lib::helper(x)`` reaches a function, not a constructor, so it cannot match."""
+    with pytest.raises(AglScopeError):
+        accept_graph(
+            tmp_path,
+            {
+                "lib": "def helper(x: int) -> int = x\nrecord R\n  x: int\n",
+                "entry": (
+                    "import lib\nlet r = lib::R(x = 1)\ncase r of | lib::helper(x) => 0 | _ => 1\n"
+                ),
+            },
+        )
+
+
+def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
+    """``A::helper(x)`` reaches a scope member that owns no constructor."""
+    error = rejection(
+        "scope A\n"
+        "  def helper(x: int) -> int = x\n"
+        "  record Point\n"
+        "    x: int\n"
+        "end A\n"
+        "\n"
+        "let p: A::Point = A::Point(x = 1)\n"
+        "case p of | A::helper(x) => x | _ => 0\n"
+    )
+    assert type(error) is UnknownMemberError
+
+
+@pytest.mark.parametrize(
+    ("other", "error_class"),
+    [
+        ("enum Signal\n  | Red\n  | Green\n", AmbiguousConstructorError),
+        ("def Red() -> int = 1\n", AmbiguousQualificationError),
+    ],
+    ids=["two-constructors", "a-constructor-and-a-function"],
+)
+def test_a_pattern_name_referenced_where_its_outside_reading_is_ambiguous_is_rejected(
+    tmp_path: Path, other: str, error_class: type[AmbiguousQualificationError]
+) -> None:
+    """The reference, not the field pattern, reports what the name selects outside it."""
+    entry = (
+        "import colors::*\nimport other::*\n"
+        "def f(w: Wrap) -> Color =\n  case w of\n  | Wrap(Red) => Red()\n  | _ => w.shade\n"
+    )
+    with pytest.raises(AglScopeError) as raised:
+        accept_graph(
+            tmp_path,
+            {
+                "colors": "enum Color\n  | Red\n  | Blue\n\nrecord Wrap\n  shade: Color\n",
+                "other": other,
+                "entry": entry,
+            },
+        )
+    error = raised.value
+    assert type(error) is error_class
+    assert error.span is not None
+    assert error.span.start_offset == entry.index("Red()")
+    assert entry[error.span.start_offset : error.span.end_offset] == "Red"
+    assert len(error.origins) == 2
 
 
 def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
@@ -315,33 +415,6 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     assert isinstance(pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
     assert selected is not None
     assert selected.owner_name == "AgentCommand"
-
-
-def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:
-    """``lib::helper(x)`` reaches a function, not a constructor, so it cannot match."""
-    reject_graph(
-        tmp_path,
-        {
-            "lib": "def helper(x: int) -> int = x\nrecord R\n  x: int\n",
-            "entry": (
-                "import lib\nlet r = lib::R(x = 1)\ncase r of | lib::helper(x) => 0 | _ => 1\n"
-            ),
-        },
-    )
-
-
-def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
-    """``A::helper(x)`` reaches a scope member that owns no constructor."""
-    reject(
-        "scope A\n"
-        "  def helper(x: int) -> int = x\n"
-        "  record Point\n"
-        "    x: int\n"
-        "end A\n"
-        "\n"
-        "let p: A::Point = A::Point(x = 1)\n"
-        "case p of | A::helper(x) => x | _ => 0\n"
-    )

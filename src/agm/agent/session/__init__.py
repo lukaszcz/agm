@@ -6,10 +6,10 @@ from agm.agent.session.protocol import (
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
-    SessionCapabilities,
     SessionHostError,
     SessionOpenRequest,
     SessionOperation,
+    SessionOperations,
     SessionStats,
 )
 from agm.agent.session.rpc import PiRpcSessionBackend
@@ -28,10 +28,10 @@ __all__ = [
     "SessionAskResponse",
     "SessionBackend",
     "SessionBackendFactory",
-    "SessionCapabilities",
     "SessionHostError",
     "SessionOpenRequest",
     "SessionOperation",
+    "SessionOperations",
     "PiRpcSessionBackend",
     "SessionService",
     "create_agl_session_host",

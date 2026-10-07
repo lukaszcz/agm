@@ -1,0 +1,55 @@
+# A constructor spelled through an alias is a function value that builds the
+# declaration the alias denotes, whether the value is typed at that record,
+# at an enum it belongs to, or passed on to a higher-order function.
+
+enum Plain
+  | Ready
+  | Wait(n: int)
+
+type W = Plain::Wait
+
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type FM = Slot[int]::Filled
+
+type Count = Slot[int]
+
+record R
+  r: int
+
+enum WithR
+  | ::R
+  | Other
+
+type RA = R
+
+scope s
+  enum Src[T]
+    | Mem(w: T)
+    | Nil
+  type C = Src[int]
+end s
+
+def waits(plain: Plain) -> int =
+  case plain of
+    | W(n) => n
+    | Plain::Ready => 0
+
+def filled(slot: Slot[int]) -> int =
+  case slot of
+    | FM(value) => value
+    | Slot::Empty => -1
+
+def twice(make: (int) -> Plain, n: int) -> int = waits(make(n)) + waits(make(n + 1))
+
+program def main(n: int) -> unit =
+  let wait: (int) -> Plain = W
+  let fill: (int) -> Slot[int] = FM
+  let count: (int) -> Count = Count::Filled
+  let with-r: (int) -> WithR = RA
+  let mem: (int) -> s::Src[int] = s::C::Mem
+  print("%{waits(wait(n))} %{filled(fill(n + 1))} %{filled(count(n + 2))}")
+  print("%{with-r(n) is RA} %{mem(n) is s::C::Mem} %{wait(n) is Plain::Ready}")
+  print("%{twice(W, n)} %{twice(wait, n + 1)}")

@@ -921,20 +921,20 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "Point::Color::red\nPoint::Color::red\n"
 
-    def test_scope_use_of_a_bare_imported_scope_contributed_twice_is_rejected(
-        self, tmp_path: Path
+    def test_scope_use_of_a_bare_imported_scope_contributed_twice_combines(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Two import tails contributing the same scope make ``use A::*`` ambiguous."""
+        """Two import tails contributing scope ``A`` combine under ``use A::*``."""
         (tmp_path / "lib1.agl").write_text("scope A\n  def one() -> int = 1\nend A\n")
         (tmp_path / "lib2.agl").write_text("scope A\n  def two() -> int = 2\nend A\n")
 
         result = _run_program(
-            "import lib1::*\nimport lib2::*\nuse A::*\nprint one()\n",
+            "import lib1::*\nimport lib2::*\nuse A::*\nprint(one() + two())\n",
             roots_dirs=[tmp_path],
         )
 
-        assert result.ok is False
-        assert result.diagnostics
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n"
 
     def test_scoped_generic_accepts_explicit_type_arguments_across_modules(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1021,40 +1021,25 @@ class TestCrossModuleScopedPaths:
         )
         assert repaired.ok is True
 
-    def test_scope_and_module_route_clash_are_repaired_by_anchors(
+    def test_own_scope_beats_module_route_and_anchors_select_either(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
 
-        ambiguous = _run_program(
+        result = _run_program(
             "import Point\n"
             "\n"
             "scope Point\n"
             "  def distance() -> int = 7\n"
             "end Point\n"
             "\n"
-            "Point::distance()\n",
-            roots_dirs=[tmp_path],
-        )
-        assert ambiguous.ok is False
-        assert any(
-            "Point" in diagnostic.message and "module route" in diagnostic.message.lower()
-            for diagnostic in ambiguous.diagnostics
-        )
-
-        repaired = _run_program(
-            "import Point\n"
-            "\n"
-            "scope Point\n"
-            "  def distance() -> int = 7\n"
-            "end Point\n"
-            "\n"
+            "print Point::distance()\n"
             "print /Point::distance()\n"
             "print ::Point::distance()\n",
             roots_dirs=[tmp_path],
         )
-        assert repaired.ok is True
-        assert capsys.readouterr().out == "9\n7\n"
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n9\n7\n"
 
     def test_import_tail_exposes_scoped_paths_without_a_module_route(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1206,19 +1191,21 @@ class TestScopeUses:
         assert result.ok is True
         assert capsys.readouterr().out == "B::Flag::Ready\nA::Flag::Ready\n"
 
-    def test_ambiguous_imported_scope_route_is_rejected(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(("use", "ok"), (("()", True), ("distance()", False)))
+    def test_a_scope_two_same_named_routes_reach_combines_and_clashes_where_used(
+        self, tmp_path: Path, use: str, ok: bool
+    ) -> None:
         for directory in ("one", "two"):
             module_dir = tmp_path / directory
             module_dir.mkdir()
             (module_dir / "geo.agl").write_text("def Point::distance() -> int = 1\n")
 
         result = _run_program(
-            "import one/geo\nimport two/geo\nuse geo::Point::*\n()\n", roots_dirs=[tmp_path]
+            f"import one/geo\nimport two/geo\nuse geo::Point::*\n{use}\n", roots_dirs=[tmp_path]
         )
 
-        assert result.ok is False
-        assert "ambiguous" in result.diagnostics[0].message
-        assert "geo" in result.diagnostics[0].message
+        assert result.ok is ok
+        assert len(result.diagnostics) == (0 if ok else 1)
 
     def test_used_variant_merges_with_the_same_selected_import(self, tmp_path: Path) -> None:
         (tmp_path / "geo.agl").write_text("enum Flag | Ready\n")

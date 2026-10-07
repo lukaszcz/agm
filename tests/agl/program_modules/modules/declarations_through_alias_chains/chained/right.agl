@@ -1,0 +1,20 @@
+# Library module completing the cycle with `left`. Its aliases chain too, the
+# last reaching `left`'s own record.
+import left::*
+
+record Other
+  y: int
+
+type Rt0 = Other
+
+type Rt1 = Rt0
+
+type Rt2 = Base
+
+def Other::rt1(self) -> int = self.y + L5::o5(self)
+
+def Base::rt3(self) -> int = self.l3() + 100
+
+def Base::Deep::upper() -> int = 5
+
+def Other::Deep::second() -> int = Base::Deep::lower() + 1

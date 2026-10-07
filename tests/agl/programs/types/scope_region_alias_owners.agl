@@ -1,0 +1,39 @@
+# An alias declared in a scope region denotes the target its own region
+# selects, so qualifying a constructor through it reaches the region's
+# declaration even where the module root declares the same name.
+
+record Point
+  x: int
+
+enum Src[T]
+  | Mem(v: T)
+  | Nil
+
+scope s
+  record Point
+    y: int
+  type Q = Point
+  type P = Point
+  enum Src[T]
+    | Mem(w: T)
+    | Nil
+  type C = Src[int]
+end s
+
+def total(point: s::Point) -> int =
+  case point of
+    | s::Q::Q(y) => y
+
+def member(slot: s::Src[int]) -> int =
+  case slot of
+    | s::C::Mem(w) => w
+    | s::C::Nil => 0
+
+program def main(start: int) -> unit =
+  let points = [s::Q::Q(y = start), s::Q::Point(y = start + 1), s::P::Point(y = start + 2)]
+  let make = s::P::P
+  let slot: s::Src[int] = s::C::Mem(w = start + 3)
+  let empty: s::Src[int] = s::C::Nil
+  print(points.map(total))
+  print("%{total(make(start + 4))} %{member(slot)} %{member(empty)} %{slot is s::C::Mem}")
+  print("%{Point(x = start).x} %{Src::Mem(v = start).v}")

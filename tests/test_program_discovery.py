@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from agm.agl.runtime.types import ProgramDeclInfo
-from tests._package_helpers import write_installed_package
 
 # ---------------------------------------------------------------------------
 # Program declaration discovery
@@ -16,7 +15,7 @@ from tests._package_helpers import write_installed_package
 
 class TestProgramDeclarationDiscovery:
     def test_discovers_program_value_parameters(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         programs = discover_program_declarations_from_source(
             "program def main(name: text) -> unit = print name"
@@ -26,7 +25,7 @@ class TestProgramDeclarationDiscovery:
         assert [param.name for param in programs[0].parameters] == ["name"]
 
     def test_marks_parameters_annotated_as_paths(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         (program,) = discover_program_declarations_from_source(
             "import std/path\n"
@@ -68,7 +67,7 @@ class TestProgramDeclarationDiscovery:
         }
 
     def test_an_own_text_alias_named_path_is_not_a_path(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         (program,) = discover_program_declarations_from_source(
             "type path = text\nprogram def main(target: path) -> unit = ()\n"
@@ -77,7 +76,7 @@ class TestProgramDeclarationDiscovery:
         assert [param.is_path for param in program.parameters] == [False]
 
     def test_marks_the_reserved_path_without_the_standard_library(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         (program,) = discover_program_declarations_from_source(
             "program def main(target: path, name: text) -> unit = ()\n", default_stdlib=False
@@ -86,8 +85,7 @@ class TestProgramDeclarationDiscovery:
         assert [param.is_path for param in program.parameters] == [True, False]
 
     def test_follows_a_path_alias_imported_from_another_module(self, tmp_path: Path) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
-        from tests._agl_helpers import agl_roots
+        from tests._agl_helpers import agl_roots, discover_program_declarations_from_source
 
         (tmp_path / "shared.agl").write_text(
             "scope files\n  type location = path\nend files\n", encoding="utf-8"
@@ -108,7 +106,7 @@ class TestProgramDeclarationDiscovery:
 
     def test_discovers_the_option_presentation_and_documentation(self) -> None:
         from agm.agl.attributes import ProgramOptionSpec
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         programs = discover_program_declarations_from_source(
             '@doc("Greets someone.")\n'
@@ -126,7 +124,7 @@ class TestProgramDeclarationDiscovery:
         ]
 
     def test_inline_source_wraps_before_discovering_programs(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         programs = discover_program_declarations_from_source(
             'let value = "inline"\nprint value', inline_source=True
@@ -135,79 +133,16 @@ class TestProgramDeclarationDiscovery:
         assert [program.name for program in programs] == ["main"]
 
     def test_invalid_inline_source_degrades_to_no_programs(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         assert (
             discover_program_declarations_from_source("let count: int =", inline_source=True) == ()
         )
 
     def test_invalid_file_source_degrades_to_no_programs(self) -> None:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         assert discover_program_declarations_from_source("let count: int =") == ()
-
-    def test_a_file_sources_unexpected_pipeline_exception_degrades_to_no_programs(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``prepare_program`` is documented non-raising, but the file-source
-
-        branch's ``except`` is still a real safety net, not dead code: force
-        it to raise and confirm discovery degrades instead of propagating.
-        """
-        from agm.agl import PipelineDriver
-
-        monkeypatch.setattr(
-            PipelineDriver,
-            "prepare_program",
-            staticmethod(lambda source: (_ for _ in ()).throw(RuntimeError("boom"))),
-        )
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
-
-        assert discover_program_declarations_from_source("program def main() -> unit = ()") == ()
-
-    def test_unreadable_installed_entry_degrades_to_no_programs(self, tmp_path: Path) -> None:
-        from agm.cli_support.exec_target import (
-            PackageProgramReference,
-            resolve_installed_reference,
-        )
-        from agm.cli_support.program_discovery import (
-            discover_program_declarations_from_installed_reference,
-        )
-
-        module = write_installed_package(tmp_path, "tools")
-        target = resolve_installed_reference(
-            "tools/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
-        )
-        assert isinstance(target, PackageProgramReference)
-        module.unlink()
-
-        assert (
-            discover_program_declarations_from_installed_reference(
-                target, home=tmp_path, proj_dir=None, cwd=tmp_path
-            )
-            == ()
-        )
-
-    def test_discovers_programs_for_an_installed_reference(self, tmp_path: Path) -> None:
-        from agm.cli_support.exec_target import (
-            PackageProgramReference,
-            resolve_installed_reference,
-        )
-        from agm.cli_support.program_discovery import (
-            discover_program_declarations_from_installed_reference,
-        )
-
-        write_installed_package(tmp_path, "tools")
-        target = resolve_installed_reference(
-            "tools/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
-        )
-        assert isinstance(target, PackageProgramReference)
-
-        programs = discover_program_declarations_from_installed_reference(
-            target, home=tmp_path, proj_dir=None, cwd=tmp_path
-        )
-
-        assert [program.name for program in programs] == ["main"]
 
 
 # ---------------------------------------------------------------------------

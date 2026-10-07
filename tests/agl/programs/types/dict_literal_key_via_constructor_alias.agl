@@ -1,0 +1,16 @@
+# A call through a `let`-bound alias of a constructor (`make-point`) is
+# itself provably a constructor call for static duplicate detection, but
+# one entry's argument here is a program parameter, not a constant, so
+# this particular pair of entries is still only ever checked at run time.
+record Point
+  x: int
+  y: int
+
+let make-point = Point
+
+program def main(y: int) -> unit =
+  try
+    let points: dict[Point, int] = {make-point(1, 2): 10, make-point(1, y): 20}
+    print points
+  catch DuplicateKeyError as e =>
+    print "dup: %{e.key}"

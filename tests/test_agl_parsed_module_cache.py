@@ -15,7 +15,6 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule
 from agm.agl.modules.parsed_module_cache import (
     RESERVED_NODE_ID_BASE,
-    ModuleDerivationCache,
     ParsedModuleCache,
     clear_parsed_module_cache,
 )
@@ -344,27 +343,6 @@ def test_reopened_libraries_keep_distinct_declarations(tmp_path: Path) -> None:
     assert all_node_ids(reopened.modules[ModuleId.from_path("lib/b")].program) == second
 
 
-def test_derivation_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:
-    """A bounded derivation store drops its coldest entry rather than growing."""
-    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
-    module = _load(_stdlib_roots(tmp_path))
-    cache: ModuleDerivationCache[str, int] = ModuleDerivationCache(capacity=1)
-    builds: list[str] = []
-
-    def build(key: str) -> Callable[[], int]:
-        def run() -> int:
-            builds.append(key)
-            return len(builds)
-
-        return run
-
-    cache.get_or_build(module, key="first", build=build("first"))
-    cache.get_or_build(module, key="second", build=build("second"))
-    cache.get_or_build(module, key="first", build=build("first"))
-
-    assert builds == ["first", "second", "first"]
-
-
 def test_parsed_cache_preserves_recent_modules_across_eviction(tmp_path: Path) -> None:
     for name in ("a", "b", "c"):
         _write_module(tmp_path, f"lib/{name}", _LIB_SOURCE)
@@ -397,14 +375,13 @@ def test_parsed_cache_preserves_recent_modules_across_eviction(tmp_path: Path) -
     assert reopened.program == second.program
 
 
-def test_infix_chain_module_keeps_one_resolved_program_across_compilations(
+def test_operator_module_keeps_one_program_across_compilations(
     tmp_path: Path, library_parses: list[str]
 ) -> None:
-    """A library module whose bodies hold infix chains is resolved once.
+    """A library module whose bodies apply operators keeps one program object.
 
-    Infix-chain resolution rewrites a module's program, so a library module
-    re-resolved per compilation would hand every later pass a fresh object and
-    silently defeat the identity-keyed scope and type-check reuse guards.
+    A fresh program per compilation would silently defeat the identity-keyed
+    scope and type-check reuse guards.
     """
     path = _write_module(tmp_path, "lib/a", "def f(x: int) -> int = x + 1 + 2\n")
     roots = _stdlib_roots(tmp_path)

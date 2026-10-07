@@ -3980,6 +3980,31 @@ class TestSandbox:
         )
         assert _srt_command(result) == "npm test --coverage"
 
+    @pytest.mark.parametrize("use_alias", [False, True])
+    def test_sandboxed_codex_does_not_use_the_host_daemon(
+        self, tmp_path: Path, env: dict[str, str], use_alias: bool
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+        home_config = Path(env["HOME"]) / ".agm"
+        home_config.mkdir(parents=True)
+        command = str(tmp_path / "bin" / "codex")
+        if use_alias:
+            (home_config / "config.toml").write_text('[run.coding]\nalias = "codex --yolo"\n')
+            command = "coding"
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(
+            ["run", "--no-pty", "-f", str(settings), command, "resume", "session-id"],
+            env=env,
+            cwd=tmp_path,
+        )
+
+        forwarded = shlex.split(_srt_command(result))
+        assert forwarded[1] == "--no-daemon"
+        assert forwarded[-2:] == ["resume", "session-id"]
+        assert ("--yolo" in forwarded) is use_alias
+
     def test_run_preserves_srt_command_arguments(self, tmp_path: Path, env: dict[str, str]) -> None:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -9949,8 +9974,7 @@ class TestExecCommand:
         # Codex is the only built-in spec that delivers its prompt on stdin
         # rather than a prompt file (``PromptDelivery.STDIN``): nothing else
         # composes that delivery mode with a sandbox-wrapped command. The
-        # fake ``codex`` binary below is ``cat`` with no ``"$@"``, so it
-        # ignores argv entirely and can only reproduce the prompt by reading
+        # fake ``codex`` requires daemon isolation and can only reproduce the prompt by reading
         # it off stdin -- proof stdin reaches it intact through the full
         # ``systemd-run ... -- bash -c <bootstrap> -- srt --settings ... --
         # codex ... -`` wrapper chain.
@@ -9970,7 +9994,7 @@ class TestExecCommand:
 
         fake_codex = tmp_path / "bin" / "codex"
         fake_codex.parent.mkdir(parents=True)
-        fake_codex.write_text("#!/bin/bash\ncat\n")
+        fake_codex.write_text('#!/bin/bash\n[[ "$1" == "--no-daemon" ]] || exit 1\ncat\n')
         fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{fake_codex.parent}:{env['PATH']}"
 

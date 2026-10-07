@@ -1,0 +1,109 @@
+# Dicts with any hashable key cross the Python boundary as live views: at
+# concrete positions and at opaque generic ones, as arguments and as results.
+# Key identity is AgL equality, so `true` and `1` are distinct `json` keys.
+
+record Point
+  x: int
+  y: int
+
+enum Color
+  | Red
+  | Blue
+
+exception Problem extends Exception
+  code: int
+
+extern def probe[T](x: T) -> text
+extern def ident[T](x: T) -> T
+extern def mutate_generic[T](x: T) -> unit
+extern def mutate_ints(d: dict[int, text]) -> unit
+extern def mutate_points(d: dict[Point, int]) -> unit
+extern def mutate_colors(d: dict[Color, int]) -> unit
+extern def probe_json(d: dict[json, int]) -> text
+extern def mutate_problems(d: dict[Problem, int]) -> unit
+extern def fill_json(d: dict[json, int]) -> unit
+extern def make_ints() -> dict[int, text]
+extern def make_points() -> dict[Point, int]
+extern def make_json() -> dict[json, int]
+extern def make_problems() -> dict[Problem, int]
+extern def make_decimals() -> dict[decimal, text]
+
+program def main(mode: text) -> unit =
+  if mode == "generic_probe_int" =>
+    print probe({1: "a", 2: "b"})
+
+  if mode == "generic_probe_record" =>
+    print probe({Point(x = 1, y = 2): "p"})
+
+  if mode == "generic_probe_json" =>
+    let d: dict[json, int] = {"a" as json: 1}
+    print probe(d)
+
+  if mode == "generic_identity" =>
+    let d = ident({Point(x = 1, y = 2): 7})
+    print d[Point(x = 1, y = 2)]
+
+  if mode == "generic_mutation_int" =>
+    var d = {1: "a", 2: "b"}
+    let _: unit = mutate_generic(d)
+    print d
+
+  if mode == "generic_mutation_record" =>
+    var d = {Point(x = 1, y = 2): 1}
+    let _: unit = mutate_generic(d)
+    print d
+
+  if mode == "typed_int_mutation" =>
+    var d: dict[int, text] = {1: "a", 2: "b"}
+    let _: unit = mutate_ints(d)
+    print d
+
+  if mode == "typed_record_mutation" =>
+    var d: dict[Point, int] = {Point(x = 1, y = 2): 1, Point(x = 3, y = 4): 2}
+    let _: unit = mutate_points(d)
+    print d
+
+  if mode == "typed_enum_mutation" =>
+    var d: dict[Color, int] = {Red: 1}
+    let _: unit = mutate_colors(d)
+    print d
+
+  if mode == "json_keys_stay_distinct" =>
+    let d: dict[json, int] = {true as json: 1, 1 as json: 2, "a" as json: 3}
+    print probe_json(d)
+
+  if mode == "json_write_into_empty" =>
+    let d: dict[json, int] = {}
+    let _: unit = fill_json(d)
+    print d["a" as json]
+
+  if mode == "generic_probe_exception" =>
+    print probe({Problem(message = "m", code = 1): 5})
+
+  if mode == "typed_exception_mutation" =>
+    var d: dict[Problem, int] = {Problem(message = "m", code = 1): 1}
+    let _: unit = mutate_problems(d)
+    print d[Problem(message = "m", code = 2)]
+    print d[Problem(message = "m", code = 1)]
+
+  if mode == "returned_exception_keys" =>
+    let d = make_problems()
+    print d[Problem(message = "m", code = 7)]
+
+  if mode == "returned_int_keys" =>
+    let d = make_ints()
+    print d
+    print d[2]
+
+  if mode == "returned_record_keys" =>
+    let d = make_points()
+    print d[Point(x = 1, y = 2)]
+
+  if mode == "returned_json_keys" =>
+    let d = make_json()
+    print d["k" as json]
+    print d[[1, 2] as json]
+
+  if mode == "returned_decimal_keys" =>
+    let d = make_decimals()
+    print d[1.5]

@@ -5,21 +5,19 @@ from __future__ import annotations
 import decimal
 import weakref
 from dataclasses import replace
-from typing import Never, NoReturn, assert_never
+from typing import assert_never, cast
 
-from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
     BottomType,
+    CheckedType,
     DecimalType,
     DictType,
     EnumType,
     ExceptionType,
     FunctionType,
-    InferenceVarType,
     IntType,
     JsonType,
     RecordType,
@@ -43,6 +41,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck.env import CheckedModule
+from agm.util.decimal import exact_decimal
 
 from .model import (
     BinderProvenance,
@@ -77,71 +76,12 @@ class MatchCompileInvariantError(RuntimeError):
     """A checked-program invariant required by match compilation was violated."""
 
 
-def _unsupported(description: str, node: Never) -> NoReturn:
-    """Reject a value outside the closed union this dispatch is total over.
-
-    ``assert_never`` keeps the dispatch statically exhaustive; the raise turns a
-    checked-output value that escaped the union into a compiler invariant error
-    rather than a bare ``AssertionError``.
-    """
-    try:
-        assert_never(node)
-    except AssertionError as exc:
-        raise MatchCompileInvariantError(
-            f"unsupported {description} {type(node).__name__}"
-        ) from exc
-
-
-def resolve_bare_enum_constructors(
-    checked: CheckedPatternOwner,
-) -> frozenset[tuple[ModuleId, str, str]]:
-    """Collect enum constructors whose unqualified call forms are visible.
-
-    The witness renderer may use an explicit call form for field-bearing
-    variants, so its visibility set is broader than the nullary-only bare-name
-    pattern rule. Ordinary value bindings do not hide these pattern forms.
-
-    A candidate only qualifies when its owner path is a registered enum's own
-    declaration path, so the key's middle component really is an enum name. A
-    record declared in a named scope never qualifies: its owner path is its
-    declaration's enclosing scope, even when that scope shares a name with an
-    unrelated enum.
-    """
-    enum_paths = {
-        (typedef.module_id, (*typedef.scope_path, typedef.name))
-        for typedef in checked.type_env.type_table.entries()
-        if typedef.kind == "enum"
-    }
-    return frozenset(
-        (candidate.owner_module_id, candidate.owner_path[-1], candidate.owner_name)
-        for candidates in checked.resolved.constructor_candidates.values()
-        for candidate in candidates
-        if (candidate.owner_module_id, candidate.owner_path) in enum_paths
-    )
-
-
 def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> NominalConstructor:
-    try:
-        variants = table.enum_member_names(enum_type)
-    except (KeyError, AssertionError) as exc:
-        raise MatchCompileInvariantError(
-            f"cannot resolve enum signature for checked type {enum_type!r}"
-        ) from exc
-    member = variants.get(variant)
-    if member is None:
-        raise MatchCompileInvariantError(
-            f"checked enum pattern names unknown variant {enum_type!r}::{variant}"
-        )
-    return record_constructor(member, table)
+    return record_constructor(table.enum_member_names(enum_type)[variant], table)
 
 
 def record_constructor(record_type: RecordType, table: TypeTable) -> NominalConstructor:
-    try:
-        fields = table.record_fields(record_type)
-    except (KeyError, AssertionError) as exc:
-        raise MatchCompileInvariantError(
-            f"cannot resolve record signature for checked type {record_type!r}"
-        ) from exc
+    fields = table.record_fields(record_type)
     return NominalConstructor(
         record_type=record_type,
         fields=tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
@@ -153,27 +93,16 @@ def constructor_inhabits_type(
 ) -> bool:
     """Return whether a constructor denotes any runtime value of ``subject_type``.
 
-    This dispatch is deliberately total over both current closed unions.  In
+    This dispatch is deliberately total over the checked type union.  In
     particular, runtime numeric equality permits an integral decimal pattern
     to match an integer, but no integer value can equal a fractional or
     non-finite decimal.  AgL decimal values are finite exact decimals.
     """
-    match constructor:
-        case BoolConstructor() | NominalConstructor() | LiteralConstructor():
-            pass
-        case _ as unsupported_constructor:
-            _unsupported("constructor", unsupported_constructor)
-
-    match subject_type:
+    match cast(CheckedType, subject_type):
         case BoolType():
             return isinstance(constructor, BoolConstructor)
         case EnumType() as enum_type:
-            try:
-                members = table.enum_members(enum_type)
-            except (KeyError, AssertionError) as exc:
-                raise MatchCompileInvariantError(
-                    f"cannot resolve enum signature for checked type {enum_type!r}"
-                ) from exc
+            members = table.enum_members(enum_type)
             return (
                 isinstance(constructor, NominalConstructor) and constructor.record_type in members
             )
@@ -205,8 +134,6 @@ def constructor_inhabits_type(
             return (
                 isinstance(constructor, LiteralConstructor) and constructor.kind is LiteralKind.NULL
             )
-        case InferenceVarType():
-            raise MatchCompileInvariantError("flexible inference type escaped checked output")
         case (
             TypeVarType()
             | ArrayType()
@@ -217,8 +144,8 @@ def constructor_inhabits_type(
             | BottomType()
         ):
             return False
-        case _ as unsupported_type:
-            _unsupported("semantic type", unsupported_type)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type, table: TypeTable) -> bool:
@@ -243,12 +170,7 @@ _NOMINAL_SIGNATURES: weakref.WeakKeyDictionary[
 
 
 def _build_enum_signature(enum_type: EnumType, table: TypeTable) -> ClosedSignature:
-    try:
-        variant_names = tuple(table.enum_member_names(enum_type))
-    except (KeyError, AssertionError) as exc:
-        raise MatchCompileInvariantError(
-            f"cannot resolve enum signature for checked type {enum_type!r}"
-        ) from exc
+    variant_names = tuple(table.enum_member_names(enum_type))
     return ClosedSignature(
         tuple(enum_constructor(enum_type, name, table) for name in variant_names)
     )
@@ -265,8 +187,8 @@ def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) ->
     ``TypeDef`` it NAMES — looked up by the handle's own declaration identity,
     never by its bare name — is what makes a redeclaration of exactly that
     declaration invalidate the entry, without an unrelated declaration
-    sharing the name affecting it either way. A handle naming no registered
-    declaration has nothing to key an entry on, so it is built uncached.
+    sharing the name affecting it either way. A checked program's nominal
+    types always name a registered declaration.
     """
 
     def build() -> ClosedSignature:
@@ -274,9 +196,7 @@ def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) ->
             return _build_enum_signature(nominal_type, table)
         return _build_record_signature(nominal_type, table)
 
-    typedef = table.get_by_id(nominal_type.decl_id)
-    if typedef is None:
-        return build()
+    typedef = table.typedef_of(nominal_type.decl_id)
     cache = _NOMINAL_SIGNATURES.get(table)
     if cache is None:
         cache = {}
@@ -296,13 +216,11 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
     without classifying its matching domain is a compiler error, not an implicit
     fallback to an open domain.
     """
-    match subject_type:
+    match cast(CheckedType, subject_type):
         case BoolType():
             return ClosedSignature((BoolConstructor(False), BoolConstructor(True)))
         case EnumType() | RecordType() as nominal_type:
             return _nominal_signature(nominal_type, table)
-        case InferenceVarType():
-            raise MatchCompileInvariantError("flexible inference type escaped checked output")
         case BottomType():
             return ClosedSignature(())
         case (
@@ -318,26 +236,26 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             | FunctionType()
         ):
             return OpenSignature()
-        case _ as unreachable:
-            _unsupported("semantic type", unreachable)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
-def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Constructor:
+def _canonical_literal(pattern: LiteralPattern) -> Constructor:
+    """Return the constructor of a literal pattern, which checking matched to its occurrence."""
     literal = pattern.literal
-    if isinstance(subject_type, BoolType) and isinstance(literal, BoolLit):
-        return BoolConstructor(literal.value)
-    if isinstance(subject_type, (IntType, DecimalType)) and isinstance(
-        literal, (IntLit, DecimalLit)
-    ):
-        return LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal(literal.value))
-    if isinstance(subject_type, TextType) and isinstance(literal, StringLit):
-        return LiteralConstructor(LiteralKind.TEXT, literal.value)
-    if isinstance(subject_type, JsonType) and isinstance(literal, NullLit):
-        return LiteralConstructor(LiteralKind.NULL, None)
-    raise MatchCompileInvariantError(
-        "checked literal pattern is incompatible with its occurrence type: "
-        f"{type(literal).__name__} against {subject_type!r}"
-    )
+    match literal:
+        case BoolLit():
+            return BoolConstructor(literal.value)
+        case IntLit():
+            return LiteralConstructor(LiteralKind.NUMERIC, exact_decimal(literal.value))
+        case DecimalLit():
+            return LiteralConstructor(LiteralKind.NUMERIC, literal.value)
+        case StringLit():
+            return LiteralConstructor(LiteralKind.TEXT, literal.value)
+        case NullLit():
+            return LiteralConstructor(LiteralKind.NULL, None)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def _add_as_binder(cell: PatternCell, binder: BinderProvenance) -> PatternCell:
@@ -345,36 +263,15 @@ def _add_as_binder(cell: PatternCell, binder: BinderProvenance) -> PatternCell:
     return replace(cell, binders=(*cell.binders, binder))
 
 
-def _canonical_enum_pattern_variant(
-    source_name: str,
-    node_id: int,
-    constructor_ref: ConstructorRef,
-    selected_owner: int | None,
-    subject_type: EnumType,
-    checked: CheckedPatternOwner,
-) -> str:
-    """Return the member-record name behind a canonical or aliased pattern spelling."""
-    try:
-        members = checked.type_env.type_table.enum_member_names(subject_type)
-    except (KeyError, AssertionError) as exc:
-        raise MatchCompileInvariantError("cannot resolve enum signature") from exc
-    recorded_spelling = checked.resolved.pattern_constructor_spellings.get(node_id)
-    if recorded_spelling is not None and recorded_spelling != source_name:
-        raise MatchCompileInvariantError("invalid final constructor classification")
-    candidates = checked.resolved.pattern_constructor_candidates.get(node_id, ())
-    candidate_matches_owner = any(
-        candidate.owner_decl_node_id == selected_owner for candidate in candidates
-    )
-    if selected_owner is None or (
-        candidates
-        and (constructor_ref.owner_decl_node_id != selected_owner or candidate_matches_owner)
-        and constructor_ref not in candidates
-    ):
-        raise MatchCompileInvariantError("invalid final constructor classification")
-    member = next((member for member in members.values() if member.decl_id == selected_owner), None)
-    if member is None:
-        raise MatchCompileInvariantError("invalid final constructor classification")
-    return member.name
+def _nominal_constructor(
+    subject_type: EnumType | RecordType, owner: int, table: TypeTable
+) -> NominalConstructor:
+    """Return the constructor of the record declared as *owner* within *subject_type*."""
+    if isinstance(subject_type, EnumType):
+        return record_constructor(
+            cast(RecordType, table.enum_member_by_decl(subject_type, owner)), table
+        )
+    return record_constructor(subject_type, table)
 
 
 def normalize_pattern(
@@ -393,139 +290,50 @@ def normalize_pattern(
                 BinderProvenance(node_id=node_id, name=name, span=pattern.span),
             )
         case VarPattern(node_id=node_id, name=name):
-            classifications = checked.pattern_classifications
-            if node_id in classifications and classifications[node_id] is None:
+            if checked.pattern_classifications[node_id] is None:
                 return WildcardCell(
                     provenance=provenance,
                     binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
-            constructor_ref = classifications.get(node_id)
-            if constructor_ref is None:
-                raise MatchCompileInvariantError(
-                    "missing final constructor classification for bare pattern"
-                )
-            if isinstance(subject_type, EnumType):
-                canonical_variant = _canonical_enum_pattern_variant(
-                    name,
-                    node_id,
-                    constructor_ref,
-                    constructor_ref.owner_decl_node_id,
-                    subject_type,
-                    checked,
-                )
-                constructor = enum_constructor(
-                    subject_type,
-                    canonical_variant,
-                    checked.type_env.type_table,
-                )
-                members = checked.type_env.type_table.enum_members(subject_type)
-                assert constructor.record_type in members
-                assert constructor.record_type.decl_id == constructor_ref.owner_decl_node_id
-                assert constructor.arity == 0
-                return ConstructorCell(constructor, (), provenance)
-            if not isinstance(subject_type, RecordType):
-                raise MatchCompileInvariantError(
-                    "final bare constructor has a non-enum or record checked type"
-                )
-            assert constructor_ref.owner_decl_node_id == subject_type.decl_id
-            constructor = record_constructor(subject_type, checked.type_env.type_table)
-            assert constructor.arity == 0
+            # The checker-published owner: an alias's constructor names the
+            # alias, while its pattern matches the member the alias names.
+            constructor = _nominal_constructor(
+                cast("EnumType | RecordType", subject_type),
+                checked.pattern_constructor_owners[node_id].value,
+                checked.type_env.type_table,
+            )
             return ConstructorCell(constructor, (), provenance)
         case LiteralPattern():
             return ConstructorCell(
-                constructor=_canonical_literal(pattern, subject_type),
+                constructor=_canonical_literal(pattern),
                 arguments=(),
                 provenance=provenance,
             )
         case ConstructorPattern():
-            constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
-            if constructor_ref is None:
-                raise MatchCompileInvariantError(
-                    "missing final constructor classification for applied pattern"
-                )
-            if not isinstance(subject_type, (EnumType, RecordType)):
-                raise MatchCompileInvariantError(
-                    "checked constructor pattern has a non-enum or non-record occurrence type"
-                )
-            # Compare checker-published nominal identity; normalization does not
+            # Checker-published nominal identity; normalization does not
             # re-select the constructor from scope candidates.
-            selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
-            applied_variant = (
-                _canonical_enum_pattern_variant(
-                    pattern.name,
-                    pattern.node_id,
-                    constructor_ref,
-                    None if selected_owner is None else selected_owner.value,
-                    subject_type,
-                    checked,
-                )
-                if isinstance(subject_type, EnumType)
-                else None
+            nominal_constructor = _nominal_constructor(
+                cast("EnumType | RecordType", subject_type),
+                checked.pattern_constructor_owners[pattern.node_id].value,
+                checked.type_env.type_table,
             )
-            if isinstance(subject_type, EnumType):
-                assert applied_variant is not None
-                expected_owner = checked.type_env.type_table.enum_member_names(subject_type)[
-                    applied_variant
-                ].decl_id
-            else:
-                expected_owner = subject_type.decl_id
-            if selected_owner is None or selected_owner.value != expected_owner:
-                raise MatchCompileInvariantError(
-                    "invalid final constructor classification: published nominal owner disagrees "
-                    "with the checked occurrence type"
+            supplied = dict(checked.argument_bindings.constructor_patterns[pattern.node_id])
+            arguments = tuple(
+                normalize_pattern(supplied[field.name], field.type, checked)
+                if field.name in supplied
+                else WildcardCell(
+                    provenance=OmittedFieldProvenance(field_name=field.name, span=pattern.span)
                 )
-            if isinstance(subject_type, EnumType):
-                assert applied_variant is not None
-                nominal_constructor = enum_constructor(
-                    subject_type, applied_variant, checked.type_env.type_table
-                )
-            else:
-                nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
-            supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)
-            if supplied_pairs is None:
-                raise MatchCompileInvariantError(
-                    f"missing checked argument bindings for pattern node {pattern.node_id}"
-                )
-            supplied = dict(supplied_pairs)
-            if len(supplied) != len(supplied_pairs):
-                raise MatchCompileInvariantError(
-                    f"duplicate checked field binding for pattern node {pattern.node_id}"
-                )
-            declared_names = {field.name for field in nominal_constructor.fields}
-            unknown = supplied.keys() - declared_names
-            if unknown:
-                raise MatchCompileInvariantError(
-                    f"checked pattern node {pattern.node_id} binds unknown fields "
-                    f"{sorted(unknown)!r}"
-                )
-            arguments: list[PatternCell] = []
-            for field in nominal_constructor.fields:
-                child = supplied.get(field.name)
-                if child is None:
-                    arguments.append(
-                        WildcardCell(
-                            provenance=OmittedFieldProvenance(
-                                field_name=field.name,
-                                span=pattern.span,
-                            ),
-                        )
-                    )
-                else:
-                    arguments.append(normalize_pattern(child, field.type, checked))
-            return ConstructorCell(nominal_constructor, tuple(arguments), provenance)
-        case _ as unreachable:
-            _unsupported("source pattern", unreachable)
+                for field in nominal_constructor.fields
+            )
+            return ConstructorCell(nominal_constructor, arguments, provenance)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def match_case_context(checked: CheckedPatternOwner) -> MatchCaseContext:
-    """Resolve the checked qualification metadata shared by one owner's match sites."""
-    return MatchCaseContext(
-        module_id=checked.module_id,
-        enum_owner_forms=checked.type_env.enum_owner_forms(),
-        blocked_enum_variants=checked.type_env.blocked_enum_variants(),
-        bare_enum_constructors=resolve_bare_enum_constructors(checked),
-        owner_program=checked.resolved.program,
-    )
+    """Resolve the context shared by one owner's match sites."""
+    return MatchCaseContext(module_id=checked.module_id, owner_program=checked.resolved.program)
 
 
 def normalize_case(
@@ -540,12 +348,7 @@ def normalize_case(
     one resolution of the checked qualification metadata; direct callers let it
     default to resolving from *checked*.
     """
-    try:
-        subject_type = checked.node_types[case.subject.node_id]
-    except KeyError as exc:
-        raise MatchCompileInvariantError(
-            f"missing checked subject type for case node {case.node_id}"
-        ) from exc
+    subject_type = checked.node_types[case.subject.node_id]
     root = Occurrence(
         id=OccurrenceId(0),
         creation_order=0,
@@ -571,7 +374,6 @@ def normalize_case(
         SourceAction(
             action_id=branch.node_id,
             source_index=index,
-            body_node_id=branch.body.node_id,
             pattern_span=branch.pattern.span,
         )
         for index, branch in enumerate(case.branches)
@@ -598,6 +400,5 @@ __all__ = [
     "normalize_pattern",
     "pattern_cell_inhabits_type",
     "record_constructor",
-    "resolve_bare_enum_constructors",
     "signature_for_type",
 ]

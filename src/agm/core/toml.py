@@ -2,19 +2,22 @@
 
 :func:`parse_toml_doc` is the one place a TOML document from outside is read,
 so config, manifests and dependency files all get the same lone-surrogate
-rejection.
+rejection; :func:`toml_data` is the one place its values become plain data,
+with exact numbers.
 """
 
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import tomlkit
-from tomlkit.exceptions import InvalidUnicodeValueError
-from tomlkit.items import Item, Table
+from tomlkit.exceptions import InvalidUnicodeValueError, TOMLKitError
+from tomlkit.items import Float, Item, Table
 from tomlkit.toml_document import TOMLDocument
 
+from agm.util.decimal import parse_json_decimal
 from agm.util.unicode import holds_surrogate
 
 TomlDict = dict[str, object]
@@ -46,6 +49,49 @@ def parse_toml_doc(text: str) -> TOMLDocument:
     return doc
 
 
+class TomlNumberError(ValueError, TOMLKitError):
+    """A TOML float no decimal can hold, reported like a TOML parse error."""
+
+
+#: TOML's non-finite float spellings, which stay ``float`` (exact already).
+_NON_FINITE_FLOATS = frozenset({"inf", "+inf", "-inf", "nan", "+nan", "-nan"})
+
+
+def _exact_float(item: Float) -> float | Decimal:
+    """*item*'s exact value: a ``Decimal`` from its source text, or a non-finite ``float``.
+
+    Mirrors ``json.loads(parse_float=...)``, which leaves ``NaN``/``Infinity``
+    to its constant hook. Raises :exc:`TomlNumberError` for an exponent no
+    decimal can hold.
+    """
+    text = item.as_string()
+    if text in _NON_FINITE_FLOATS:
+        return float(item)
+    try:
+        return parse_json_decimal(text)
+    except ValueError as exc:
+        raise TomlNumberError(f"unrepresentable number {text!r}") from exc
+
+
+def toml_data(value: object) -> object:
+    """Unwrap a parsed TOML *value* into plain data, reading every float exactly.
+
+    ``unwrap()`` would read a float through the binary ``float`` type, losing
+    digits (``1.00000000000000000001``) and range (``1e400``).
+    """
+    if isinstance(value, Float):
+        return _exact_float(value)
+    if isinstance(value, dict):
+        entries: dict[object, object] = value
+        return {str(key): toml_data(item) for key, item in entries.items()}
+    if isinstance(value, list):
+        elements: list[object] = value
+        return [toml_data(item) for item in elements]
+    if isinstance(value, Item):
+        return value.unwrap()
+    return value
+
+
 def toml_dict(value: object) -> TomlDict:
     """Coerce *value* to a ``TomlDict``, returning an empty dict for non-dicts."""
 
@@ -59,7 +105,7 @@ def load_toml_file(path: Path) -> TomlDict:
 
     with path.open("r", encoding="utf-8") as handle:
         doc = parse_toml_doc(handle.read())
-    return toml_dict(doc.unwrap())
+    return toml_dict(toml_data(doc))
 
 
 def load_toml_doc(path: Path) -> TOMLDocument:

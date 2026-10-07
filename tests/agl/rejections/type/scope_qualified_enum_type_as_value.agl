@@ -1,0 +1,10 @@
+scope Paint
+
+  scope Inner
+    enum Dir
+      | Up
+  end Inner
+end Paint
+
+program def main() -> unit =
+  print(Paint::Inner::Dir)

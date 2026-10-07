@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
 from agm.agl.pipeline import PreparedProgram
-from agm.agl.semantics.types import ArrayType, DictType, IntType, TypeVarType
+from agm.agl.semantics.types import ArrayType, DictType, IntType, TextType, TypeVarType
 from agm.agl.syntax import FuncDef
 from agm.agl.typecheck.env import FunctionSignature
 from agm.agl.typecheck.program import CheckedProgram
@@ -47,9 +47,10 @@ def test_invalid_builtin_method_receivers_are_rejected(source: str) -> None:
     assert discovery.diagnostics
 
 
-def test_bare_array_scope_is_not_a_builtin_receiver_head() -> None:
+@pytest.mark.parametrize("receiver", ("array", "dict"))
+def test_bare_generic_scope_is_not_a_builtin_receiver_head(receiver: str) -> None:
     prepared = PipelineDriver.prepare_program(
-        "def array::copy(self) -> int = 0\nprogram def main() -> unit = ()\n",
+        f"def {receiver}::copy(self) -> int = 0\nprogram def main() -> unit = ()\n",
         default_stdlib=False,
     )
 
@@ -181,22 +182,27 @@ def test_builtin_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_path:
     assert signature.params[0].type == ArrayType(TypeVarType(type_parameter))
 
 
-def test_unknown_applied_receiver_uses_its_head_name_as_its_scope(tmp_path: Path) -> None:
+def test_unknown_applied_receiver_uses_its_head_name_as_its_scope() -> None:
+    (declaration,) = parse_program("def bytes[E]::copy(self) -> unit = ()\n").body.items
+    assert isinstance(declaration, FuncDef)
+
+    assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
+
+
+def test_unknown_applied_receiver_is_rejected_at_its_head(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,
         "std/array",
         "def bytes[E]::copy(self) -> unit = ()\n",
     )
 
-    assert prepared.resolved is not None, prepared.diagnostics
-    resolved_module = prepared.resolved.modules[ModuleId.from_path("std/array")]
-    (declaration,) = resolved_module.resolved.program.body.items
-    assert isinstance(declaration, FuncDef)
-
-    assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
+    assert prepared.resolved is None
+    (diagnostic,) = prepared.diagnostics
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 5, 13)
 
 
-def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
+def test_a_method_beneath_an_own_alias_named_as_a_builtin_type_is_rejected() -> None:
+    """The module declares ``array`` as an alias: nothing is declared beneath that name."""
     prepared = PipelineDriver.prepare_program(
         "type array[T] = int\n\ndef array[E]::constant(self) -> int = 1\n",
         default_stdlib=False,
@@ -206,7 +212,8 @@ def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
         prepared
     )
 
-    assert discovery.checked is not None, discovery.diagnostics
+    assert discovery.checked is None
+    assert [(d.line, d.column, d.end_column) for d in discovery.diagnostics] == [(3, 5, 13)]
 
 
 def test_generic_builtin_receiver_binds_its_receiver_slot(tmp_path: Path) -> None:
@@ -241,7 +248,7 @@ def test_builtin_dict_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_
     signature = _signature_for(discovery.checked, "std/dict")
     (type_parameter,) = signature.type_params
     assert type_parameter.startswith("__method_type_slot_")
-    assert signature.params[0].type == DictType(TypeVarType(type_parameter))
+    assert signature.params[0].type == DictType(TextType(), TypeVarType(type_parameter))
 
 
 def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
@@ -257,7 +264,7 @@ def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/dict")
-    assert signature.params[0].type == DictType(TypeVarType("V"))
+    assert signature.params[0].type == DictType(TextType(), TypeVarType("V"))
 
 
 def test_scalar_builtin_receiver_may_be_declared_in_a_named_region() -> None:

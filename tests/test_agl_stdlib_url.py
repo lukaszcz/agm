@@ -59,6 +59,7 @@ def _url_companion() -> tuple[_UrlCompanion, ExternRegistry]:
                 declared_name="Url",
                 kind=NominalKind.RECORD,
                 fields=("scheme", "host", "port", "path", "query", "fragment"),
+                field_json_names=("scheme", "host", "port", "path", "query", "fragment"),
             ),
             _URL_PARSE_ERROR: NominalDescriptor(
                 nominal=_URL_PARSE_ERROR,
@@ -67,6 +68,7 @@ def _url_companion() -> tuple[_UrlCompanion, ExternRegistry]:
                 declared_name="UrlParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
             _PAIR: NominalDescriptor(
@@ -76,6 +78,7 @@ def _url_companion() -> tuple[_UrlCompanion, ExternRegistry]:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("first", "second"),
+                field_json_names=("first", "second"),
             ),
         },
     )

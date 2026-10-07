@@ -1,0 +1,8 @@
+record Saved
+  id: int
+
+enum Stored[T] = ::Saved | Fresh(value: T)
+
+program def main() -> unit =
+  let stored: Stored[int] = Saved(id = 1)
+  print(stored is Stored[int]::Saved)

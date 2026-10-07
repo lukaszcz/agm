@@ -53,10 +53,10 @@
       }
     },
     {
-      "name": "parse_and_render_decimal_special_values",
+      "name": "parse_and_render_decimal_spellings",
       "params": {"mode": 9},
       "expect": {
-        "stdout": "zero = 0.0\nnegative_zero = -0.0\nexponent = 1E+2\nnegative_nan = -nan\nnegative_infinity = -inf\n",
+        "stdout": "zero = 0.0\nnegative_zero = -0.0\nexponent = 1E+2\n",
         "calls": {}
       }
     },

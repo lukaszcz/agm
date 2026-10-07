@@ -17,34 +17,36 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import json_repair
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    ContractRequest,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
+    JsonContractRequest,
     RecordDecode,
-    RefDecode,
+    TextContractRequest,
     is_plain_enum,
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
     DefaultResolver,
+    StrictJsonParseError,
     _clean_validation_message,
     agl_validator_class,
     decode_value,
+    parse_json_strict,
+    resolve_decode,
 )
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_format_instructions, derive_schema_and_decode
-from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
     from jsonschema import ValidationError as JsonschemaValidationError
@@ -127,8 +129,7 @@ class OutputCodec(Protocol):
     - ``make_contract(type_ref, type_table)`` — build an ``OutputContract``.
       Runs at check time (or REPL contract-preview time), when a real checker
       ``Type`` is in hand.  ``type_table`` resolves record/enum field/variant
-      shapes for *type_ref* (or one nested inside it); ``None`` is only valid
-      when *type_ref* carries no nominal type.
+      shapes for *type_ref* (or one nested inside it).
     - ``parse(raw, *, strict_json, schema, decode, defs)`` — parse a raw string.
       Runs at execution time against the typeless contract data the lowerer
       already compiled (``schema`` is the JSON Schema dict, ``decode`` the
@@ -143,9 +144,7 @@ class OutputCodec(Protocol):
     @property
     def supported_kinds(self) -> frozenset[str]: ...
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract": ...
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract": ...
 
     def parse(
         self,
@@ -192,9 +191,7 @@ class TextCodec:
         """
         return frozenset({"text"})
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract":
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         For ``text`` targets ``format_instructions`` is left empty (absent):
@@ -237,18 +234,25 @@ class TextCodec:
 _FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
 
 
+#: Syntax-only JSON decoder: every number token and constant stays its own
+#: text, so a syntactically valid document is recognized as such -- and kept
+#: off the repair path, which would rewrite an unrepresentable number --
+#: before :func:`~agm.agl.runtime.convert.parse_json_strict` judges its numbers.
+_SYNTAX_DECODER = json.JSONDecoder(parse_int=str, parse_float=str, parse_constant=str)
+
+
 def _try_direct_parse(text: str) -> tuple[bool, str]:
-    """Attempt a direct stdlib json.loads on *text* (stripped).
+    """Check whether *text* is syntactically one JSON value.
 
     Returns ``(success, text)`` where:
-    - ``success=True`` and ``text`` is the stripped input if it is valid JSON.
+    - ``success=True`` and ``text`` is the input if it is valid JSON syntax.
     - ``success=False`` and ``text`` is empty if parsing fails.
 
-    The returned text is the original *text* (not re-serialised), so
-    ``json.loads(text, parse_float=Decimal)`` will preserve decimal precision.
+    The returned text is the original *text* (not re-serialised), so its
+    numbers are later parsed exactly.
     """
     try:
-        json.loads(text, parse_float=Decimal)
+        _SYNTAX_DECODER.decode(text)
         return True, text
     except json.JSONDecodeError:
         return False, ""
@@ -273,7 +277,6 @@ def _count_top_level_values(candidate: str) -> int:
     (e.g. trailing prose ``json-repair`` already cleaned up), the count
     reflects only the leading values it could decode.
     """
-    decoder = json.JSONDecoder()
     index = 0
     length = len(candidate)
     count = 0
@@ -283,7 +286,7 @@ def _count_top_level_values(candidate: str) -> int:
         while index < length and candidate[index].isspace():
             index += 1
         try:
-            decoded: tuple[object, int] = decoder.raw_decode(candidate, index)
+            decoded: tuple[object, int] = _SYNTAX_DECODER.raw_decode(candidate, index)
         except json.JSONDecodeError:
             break
         end: int = decoded[1]
@@ -297,6 +300,70 @@ def _count_top_level_values(candidate: str) -> int:
 def _candidate_is_ambiguous_multi_value(candidate: str) -> bool:
     """Return True if *candidate* contains 2+ complete top-level JSON values."""
     return _count_top_level_values(candidate.strip()) >= 2
+
+
+# One JSON-like token as json-repair reads it: a double- or single-quoted
+# string, a structural character, or a bare word (an unquoted key or scalar).
+_REPAIR_TOKEN_RE = re.compile(
+    r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[{}\[\]:,]|[^\s{}\[\]:,\"']+"
+)
+_CONTAINER_OPEN_RE = re.compile(r"[{\[]")
+
+
+def _member_name(token: str) -> str:
+    """Return the member name a key *token* spells (quotes and escapes removed)."""
+    if token[0] == '"':
+        try:
+            return cast(str, _SYNTAX_DECODER.decode(token))
+        except json.JSONDecodeError:
+            return token[1:-1]
+    if token[0] == "'":
+        repaired = json_repair.repair_json(f"{{{token}: null}}", return_objects=True)
+        return next(iter(cast(dict[str, object], repaired)))
+    return token
+
+
+def _has_duplicate_member(candidate: str) -> bool:
+    """Return True if any JSON-like object in *candidate* repeats a member name.
+
+    Lenient recovery repairs format damage but never resolves ambiguous
+    content, and ``json-repair`` silently keeps the last duplicate. This scans
+    the text handed to it: a quoted or bare token followed by ``:`` inside the
+    innermost ``{`` is a key, tracked per open object. Text outside every
+    container is prose and is ignored.
+    """
+    # One entry per open container: its key set for ``{``, ``None`` for ``[``.
+    stack: list[set[str] | None] = []
+    last: str | None = None
+    position = 0
+    while True:
+        if not stack:
+            opener = _CONTAINER_OPEN_RE.search(candidate, position)
+            if opener is None:
+                return False
+            position = opener.start()
+        match = _REPAIR_TOKEN_RE.search(candidate, position)
+        if match is None:
+            return False
+        token = match.group()
+        position = match.end()
+        keys = stack[-1] if stack else None
+        if token == ":" and keys is not None and last is not None:
+            member_name = _member_name(last)
+            if member_name in keys:
+                return True
+            keys.add(member_name)
+            last = None
+        elif token in "{[":
+            stack.append(set() if token == "{" else None)
+            last = None
+        elif token in "}]":
+            stack.pop()
+            last = None
+        elif token in ":,":
+            last = None
+        else:
+            last = token
 
 
 # JSON scalar keywords recoverable from prose (bool / null).
@@ -339,10 +406,11 @@ def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
     Strategy (lenient mode):
-    0. Try direct stdlib ``json.loads`` on the stripped input — if it succeeds
-       (bare valid JSON, possibly with surrounding whitespace), return the
-       stripped text verbatim.  This preserves full decimal precision since
-       we never route through ``json-repair`` for already-valid JSON.
+    0. Check the stripped input's JSON syntax alone (:func:`_try_direct_parse`)
+       — if it is one valid JSON value, return the stripped text verbatim.
+       Its numbers are judged only by the later strict parse, so an
+       unrepresentable number fails there instead of being rewritten by
+       ``json-repair``, and full decimal precision is preserved.
     1. Check for a Markdown code fence (```json ... ``` or ``` ... ```).
        If found, try direct parse on the fenced content; if that fails,
        try ``repair_json`` on the fenced content.
@@ -353,11 +421,15 @@ def _extract_json_text(raw: str) -> str | None | object:
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
        top-level values into an array.
 
+    A candidate that needs ``json-repair`` and repeats a member name within
+    one object is unrecoverable (``None``): repair never picks a duplicate's
+    winner.
+
     When ``json-repair`` is needed, it returns the repaired JSON *text*
-    (without ``return_objects=True``), which is then re-parsed with
-    ``json.loads(parse_float=Decimal)``.  Note that ``json-repair`` may
-    lose decimal precision for very high-precision numbers; the direct-parse
-    path (step 0 / step 1 inner) avoids this.
+    (without ``return_objects=True``), which is then re-parsed strictly.
+    Note that ``json-repair`` may lose decimal precision for very
+    high-precision numbers; the direct-parse path (step 0 / step 1 inner)
+    avoids this.
     """
     stripped = raw.strip()
 
@@ -377,7 +449,9 @@ def _extract_json_text(raw: str) -> str | None | object:
         ok2, direct2 = _try_direct_parse(candidate)
         if ok2:
             return direct2
-        # Fall back to repair within the fence.
+        # Fall back to repair within the fence, unless it would pick a winner.
+        if _has_duplicate_member(candidate):
+            return None
         repaired = json_repair.repair_json(candidate)
         if isinstance(repaired, str) and repaired and repaired not in ('""', "null"):
             return repaired
@@ -387,6 +461,8 @@ def _extract_json_text(raw: str) -> str | None | object:
     # (e.g. ``{"a":1} {"b":2}`` or ``{"a":[1]} {"b":2}``).
     if _candidate_is_ambiguous_multi_value(stripped):
         return _AMBIGUOUS_MULTI_VALUE
+    if _has_duplicate_member(stripped):
+        return None
     repaired_full = json_repair.repair_json(stripped)
     if isinstance(repaired_full, str) and repaired_full and repaired_full not in ('""', "null"):
         return repaired_full
@@ -418,46 +494,6 @@ def _path_sort_key(error: JsonschemaValidationError) -> str:
     return "/".join(str(p) for p in error.path)
 
 
-def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
-    """Resolve a ``RefDecode`` node through *defs*; return *decode* unchanged otherwise.
-
-    Shared by the classification walkers below, which navigate a finite JSON
-    error PATH (not the value graph) — resolving a ref as encountered always
-    terminates, so no visited-set is needed here (contrast
-    ``ir/validate.py::_check_decode_nominals``, which walks the whole decode
-    plan and does track visited ``defs`` keys). An unknown key (should never
-    happen for a well-formed contract) makes the ref opaque to the caller's
-    ``isinstance`` checks, so navigation fails soft into the generic fallback
-    message rather than raising — these walkers only refine an already-failed
-    validation's message, never gate correctness.
-    """
-    while isinstance(decode, RefDecode):
-        resolved = defs.get(decode.key)
-        if resolved is None:
-            return decode
-        decode = resolved
-    return decode
-
-
-def _decode_contains_ref(decode: DecodeSchema) -> bool:
-    """Return whether *decode* contains any ``RefDecode`` node."""
-    if isinstance(decode, RefDecode):
-        return True
-    if isinstance(decode, ArrayDecode):
-        return _decode_contains_ref(decode.elem)
-    if isinstance(decode, DictDecode):
-        return _decode_contains_ref(decode.value)
-    if isinstance(decode, RecordDecode):
-        return any(_decode_contains_ref(rfield.schema) for rfield in decode.fields)
-    if isinstance(decode, EnumDecode):
-        return any(
-            _decode_contains_ref(vfield.schema)
-            for variant in decode.variants
-            for vfield in variant.fields
-        )
-    return False
-
-
 def _coerce_decode_defs(defs: DecodeDefsInput | None) -> Mapping[str, DecodeSchema]:
     """Normalize parse-time decode defs from either contract storage shape."""
     if defs is None:
@@ -471,12 +507,22 @@ def _find_enum_decode_at_path(
     decode: DecodeSchema,
     path_elements: list[object],
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
+    *,
+    at_key: bool = False,
 ) -> EnumDecode | None:
-    """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path."""
-    decode = _resolve_ref(decode, defs)
-    for elem in path_elements:
+    """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path.
+
+    *at_key*: the error is a ``propertyNames`` failure, whose path stops at the
+    stringified-key object itself; the enum sought is that dict's key type.
+    """
+    decode = resolve_decode(decode, defs)
+    elements = iter(path_elements)
+    for elem in elements:
         if isinstance(decode, ArrayDecode):
             decode = decode.elem
+        elif isinstance(decode, DictDecode) and decode.key_form is DictKeyForm.ENTRIES:
+            # An entries array: an index, then ``key`` or ``value`` of that entry.
+            decode = decode.key if next(elements, None) == "key" else decode.value
         elif isinstance(decode, DictDecode):
             decode = decode.value
         elif isinstance(decode, RecordDecode):
@@ -492,13 +538,15 @@ def _find_enum_decode_at_path(
             decode = field_decode
         else:
             return None
-        decode = _resolve_ref(decode, defs)
+        decode = resolve_decode(decode, defs)
+    if at_key and isinstance(decode, DictDecode):
+        decode = resolve_decode(decode.key, defs)
     return decode if isinstance(decode, EnumDecode) else None
 
 
 def _plain_enum_tags(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> tuple[str, ...]:
     """Return *decode*'s member tags when it is a plain enum, else none."""
-    resolved = _resolve_ref(decode, defs)
+    resolved = resolve_decode(decode, defs)
     if isinstance(resolved, EnumDecode) and is_plain_enum(resolved):
         return tuple(variant.json_name for variant in resolved.variants)
     return ()
@@ -548,7 +596,12 @@ def _classify_enum_failure(
     Covers a tagged enum's ``oneOf`` and a plain enum's ``oneOf``/``enum``.
     """
     instance = error.instance
-    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
+    enum_decode = _find_enum_decode_at_path(
+        decode_schema,
+        list(error.absolute_path),
+        defs,
+        at_key="propertyNames" in error.relative_schema_path,
+    )
     if enum_decode is not None and is_plain_enum(enum_decode):
         valid = ", ".join(v.json_name for v in enum_decode.variants)
         return ValidationError(
@@ -645,9 +698,9 @@ def _parse_json_core(
     """
     if strict:
         try:
-            parsed_obj: object = loads_json(raw, parse_float=Decimal)
-        except json.JSONDecodeError as exc:
-            return ParseResult.failure(f"Strict JSON parse failed: {exc}")
+            parsed_obj = parse_json_strict(raw)
+        except StrictJsonParseError as exc:
+            return ParseResult.failure(f"Strict JSON parse failed: {exc.message}")
         return _validate_and_decode_core(
             raw.strip(), parsed_obj, schema_dict, decode_schema, defs, default_resolver
         )
@@ -689,9 +742,9 @@ def _parse_recovered_json(
             f"Could not extract a JSON value from the agent response: {raw!r}"
         )
     try:
-        parsed_obj = loads_json(json_text, parse_float=Decimal)
-    except json.JSONDecodeError as exc:
-        return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
+        parsed_obj = parse_json_strict(json_text)
+    except StrictJsonParseError as exc:
+        return ParseResult.failure(f"JSON parse failed after repair attempt: {exc.message}")
     return _validate_and_decode_core(
         json_text, parsed_obj, schema_dict, decode_schema, defs, default_resolver
     )
@@ -726,28 +779,22 @@ def _validate_and_decode_core(
 
 def _parse_contract_output(
     raw: str,
-    contract: ContractRequest,
+    contract: "TextContractRequest | JsonContractRequest",
     *,
     effective_strict: bool,
     default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Parse a raw agent/exec response per a built-in-codec ``ContractRequest``.
 
-    Handles the ``text`` passthrough and the ``json`` parse path, including
-    defensive checks for missing ``json_schema`` and ``decode`` fields.
-    Called by ``IrInterpreter._parse_host_output`` for built-in codecs.
+    Handles the ``text`` passthrough and the ``json`` parse path. Called by
+    ``IrInterpreter._parse_host_output`` for the built-in codecs; a
+    ``JsonContractRequest`` always carries its ``json_schema``/``decode``.
     *default_resolver*, when given, fills an omitted defaulted field.
     """
-    if contract.codec_name == "text":
+    if isinstance(contract, TextContractRequest):
         return ParseResult.success(TextValue(raw))
-    # json codec
-    if contract.json_schema is None:
-        return ParseResult.failure("ContractRequest has no json_schema for json codec")
-    schema_raw: object = json.loads(contract.json_schema)
-    if not isinstance(schema_raw, dict):
-        return ParseResult.failure("ContractRequest json_schema is not a JSON object")
-    if contract.decode is None:
-        return ParseResult.failure("ContractRequest has no decode schema for json codec")
+    # The lowerer only ever writes a serialized JSON Schema object here.
+    schema_raw = cast("dict[str, object]", json.loads(contract.json_schema))
     return _parse_json_core(
         raw,
         schema_raw,
@@ -779,12 +826,15 @@ class JsonCodec:
     Parsing strategy:
     - **Lenient** (default): extract exactly one JSON value from chatty output
       (fences/prose), repair trivially malformed JSON via ``json-repair``
-      (which returns a repaired JSON *string*), then re-parse with
-      ``json.loads(parse_float=Decimal)`` to preserve decimal exactness.
+      (which returns a repaired JSON *string*), then re-parse it strictly
+      (``parse_json_strict``) to preserve decimal exactness.
       Validate against the derived JSON Schema.
     - **Strict** (``strict_json=True``): parse exactly one bare JSON value
-      via stdlib ``json.loads`` (surrounding whitespace permitted; nothing
+      via ``parse_json_strict`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
+
+    Either way a non-finite number, or one no decimal can hold, is a
+    parse failure.
 
     Schema validation is always strict in both modes (rules 3–6 of
     never relaxed).
@@ -811,9 +861,7 @@ class JsonCodec:
         """
         return _JSON_CODEC_KINDS
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract":
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         Derives the JSON Schema, format instructions, and typeless decode
@@ -822,16 +870,11 @@ class JsonCodec:
         it uses the ``json_schema``/``decode`` the lowerer already compiled
         into the IR contract request.
 
-        *type_table* resolves record/enum field/variant shapes.  ``None`` is
-        only valid when *type_ref* carries no nominal type: passing ``None``
-        for a record/enum target is an internal error, surfaced as the
-        ``KeyError`` an empty table's lookup naturally raises rather than a
-        user-facing diagnostic.
+        *type_table* resolves record/enum field/variant shapes.
         """
         from agm.agl.runtime.contract import OutputContract
 
-        table = type_table if type_table is not None else TypeTable()
-        schema, decode_plan = derive_schema_and_decode(type_ref, table)
+        schema, decode_plan = derive_schema_and_decode(type_ref, type_table)
         instructions = build_format_instructions(schema)
         return OutputContract(
             target_type_label=repr(type_ref),
@@ -856,44 +899,36 @@ class JsonCodec:
 
         Lenient mode (``strict_json=False``, the default):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
-          2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
+          2. Re-parse the repaired text strictly.
           3. Validate against *schema*.
           4. Convert to the appropriate typed ``Value`` per *decode*.
 
         Strict mode (``strict_json=True``):
-          1. ``json.loads`` on the stripped raw string — no repair, no fence
+          1. Strict parse of the stripped raw string — no repair, no fence
              stripping.  Fails if there is any surrounding non-whitespace.
           2. Validate and convert as in lenient mode.
 
         *schema* and *decode* are the JSON Schema dict and typeless
-        ``DecodeSchema`` walk for the target type — both required.  *defs* is
-        *decode*'s ``$defs`` table for a recursive target type; absent (or
-        ``None``) for a non-recursive one.  Callers (the IR evaluator, or a
-        test exercising this codec directly) must supply *schema*/*decode*
-        explicitly; this method never derives them from a checker ``Type``,
-        so there is no re-derivation cost per parse attempt.
+        ``DecodeSchema`` walk for the target type; the protocol types them as
+        optional for custom codecs, but a ``json`` contract always carries
+        both.  *defs* is *decode*'s ``$defs`` table for a recursive target
+        type; absent (or ``None``) for a non-recursive one.  This method never
+        derives them from a checker ``Type``.
 
         Decimal exactness: ``json-repair`` always produces a
-        JSON *string* (not Python objects), which is then re-parsed via
-        ``json.loads(parse_float=Decimal)``.  Decimal values are never
+        JSON *string* (not Python objects), which is then re-parsed
+        strictly.  Decimal values are never
         routed through Python ``float``.
-
-        :raises ValueError: if *schema* or *decode* is ``None``.
 
         This method takes no ``default_resolver`` (the ``OutputCodec.parse``
         protocol has none): a defaulted-but-omitted field always reports the
         ordinary missing-field error here, even though the IR evaluator's own
         built-in-codec path fills one (see ``_parse_contract_output``).
         """
-        if schema is None or decode is None:
-            raise ValueError(
-                "JsonCodec.parse requires an explicit schema and decode walk; "
-                "it does not derive them from a checker Type. Pass the "
-                "contract-carried json_schema/decode (see ContractRequest)."
-            )
-        effective_defs = _coerce_decode_defs(defs)
-        if not effective_defs and _decode_contains_ref(decode):
-            raise ValueError(
-                "JsonCodec.parse requires defs when the decode walk contains RefDecode nodes."
-            )
-        return _parse_json_core(raw, schema, decode, effective_defs, strict=strict_json)
+        return _parse_json_core(
+            raw,
+            cast("dict[str, object]", schema),
+            cast(DecodeSchema, decode),
+            _coerce_decode_defs(defs),
+            strict=strict_json,
+        )

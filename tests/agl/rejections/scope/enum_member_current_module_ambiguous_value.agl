@@ -1,0 +1,6 @@
+enum Light = Red | Green
+enum Paint = Red | Blue
+
+program def main() -> unit =
+  let light: Light = ::Red
+  print(light)

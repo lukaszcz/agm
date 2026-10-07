@@ -158,26 +158,37 @@ def test_chat_uses_current_defaults_without_opening_a_persistent_session(
 
 
 @pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize(
+    ("agent", "permission_flag"),
+    [
+        ("Claude", "--dangerously-skip-permissions"),
+        ("Codex", "--dangerously-bypass-approvals-and-sandbox"),
+    ],
+)
 def test_sandboxed_chat_prepares_a_controlling_terminal_and_cleans_up(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failed: bool,
+    agent: str,
+    permission_flag: str,
 ) -> None:
     import agm.core.process as process
 
     home = tmp_path / "home"
-    write_sandbox_home(home, run_toml="[run.claude]\nmemory = '1G'\nswap = '0'\n")
+    command = agent.lower()
+    write_sandbox_home(home, run_toml=f"[run.{command}]\nmemory = '1G'\nswap = '0'\n")
     binary_dir = tmp_path / "bin"
     write_transparent_sandbox_shims(binary_dir, log_dir=tmp_path / "sandbox-log")
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".sandbox").mkdir()
-    (tmp_path / ".sandbox" / "claude.json").write_text("{}")
+    (tmp_path / ".sandbox" / f"{command}.json").write_text("{}")
     settings: list[Path] = []
 
     def foreground(argv: list[str], *, env: dict[str, str] | None = None, **options: object) -> int:
         assert "agm.sandbox.pty" in argv
-        assert "claude" in argv
-        assert "--dangerously-skip-permissions" in argv
+        assert command in argv
+        assert permission_flag in argv
+        assert ("--no-daemon" in argv) is (agent == "Codex")
         assert "MemoryMax=1G" in argv
         assert env is not None and env["MARKER"] == "chosen"
         assert options["cwd"] == tmp_path
@@ -199,7 +210,7 @@ def test_sandboxed_chat_prepares_a_controlling_terminal_and_cleans_up(
         "import std/env::Environ\n"
         "program def main() -> unit =\n"
         f'  let environment = Environ({{"PATH": "{binary_dir}", "MARKER": "chosen"}})\n'
-        '  chat("hello", AgentClaude(), Sandbox, environment)\n',
+        f'  chat("hello", Agent{agent}(), Sandbox, environment)\n',
         roots=agl_roots(),
     )
 

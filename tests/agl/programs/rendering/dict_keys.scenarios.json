@@ -1,0 +1,220 @@
+{
+  "scenarios": [
+    {
+      "name": "text_keys_quoted_and_escaped",
+      "params": {
+        "mode": "text"
+      },
+      "expect": {
+        "stdout": "{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\n  \"a\": 1,\n  \"b c\": 2,\n  \"say \\\"hi\\\"\": 3,\n  \"50\\%\": 4\n}\n"
+      }
+    },
+    {
+      "name": "int_keys_render_as_numbers",
+      "params": {
+        "mode": "int"
+      },
+      "expect": {
+        "stdout": "{1: \"one\", -2: \"minus two\"}\n{1: \"one\", -2: \"minus two\"}\n{1: \"one\", -2: \"minus two\"}\n{\n  1: \"one\",\n  -2: \"minus two\"\n}\n"
+      }
+    },
+    {
+      "name": "decimal_keys_render_normalized",
+      "params": {
+        "mode": "decimal"
+      },
+      "expect": {
+        "stdout": "{1.5: true, 2: false}\n{1.5: true, 2: false}\n{1.5: true, 2: false}\n{\n  1.5: true,\n  2: false\n}\n"
+      }
+    },
+    {
+      "name": "bool_keys_render_bare",
+      "params": {
+        "mode": "bool"
+      },
+      "expect": {
+        "stdout": "{true: 1, false: 0}\n{true: 1, false: 0}\n{true: 1, false: 0}\n{\n  true: 1,\n  false: 0\n}\n"
+      }
+    },
+    {
+      "name": "enum_keys_render_as_qualified_members",
+      "params": {
+        "mode": "enum"
+      },
+      "expect": {
+        "stdout": "{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{\n  Color::Red: \"red\",\n  Color::Tint(level = 2): \"tint\"\n}\n"
+      }
+    },
+    {
+      "name": "record_keys_render_as_constructors",
+      "params": {
+        "mode": "record"
+      },
+      "expect": {
+        "stdout": "{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{\n  Point(x = 1, y = 2): \"a\",\n  Point(x = -1, y = 0): \"b\"\n}\n"
+      }
+    },
+    {
+      "name": "json_keys_render_as_compact_json",
+      "params": {
+        "mode": "json"
+      },
+      "expect": {
+        "stdout": "{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{\n  null: 0,\n  \"s\": 1,\n  {\"k\": [1, 2]}: 2\n}\n"
+      }
+    },
+    {
+      "name": "nested_dict_keys_render_at_every_level",
+      "params": {
+        "mode": "nested"
+      },
+      "expect": {
+        "stdout": "{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\n  \"grid\": {\n    Point(x = 0, y = 0): [\n      Color::Red\n    ]\n  }\n}\n"
+      }
+    },
+    {
+      "name": "rendered_text_keyed_dict_parses_back_equal",
+      "params": {
+        "mode": "round_trip_text"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_int",
+      "params": {
+        "mode": "round_trip_int"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_decimal",
+      "params": {
+        "mode": "round_trip_decimal"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_bool",
+      "params": {
+        "mode": "round_trip_bool"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_enum",
+      "params": {
+        "mode": "round_trip_enum"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_record",
+      "params": {
+        "mode": "round_trip_record"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_json",
+      "params": {
+        "mode": "round_trip_json"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "round_trip_key_error",
+      "params": {
+        "mode": "round_trip_key_error"
+      },
+      "expect": {
+        "stdout": "true\n"
+      }
+    },
+    {
+      "name": "json_text_keys_parse_back_as_value_syntax",
+      "params": {
+        "mode": "round_trip_json_text_keys"
+      },
+      "expect": {
+        "stdout": "{\n  \"s\": 1,\n  \"t\": 2\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "empty_entries_dict_parses_back",
+      "params": {
+        "mode": "round_trip_empty_entries"
+      },
+      "expect": {
+        "stdout": "{}\ntrue\n"
+      }
+    },
+    {
+      "name": "array_of_entries_dicts_parses_back",
+      "params": {
+        "mode": "round_trip_array_of_entries"
+      },
+      "expect": {
+        "stdout": "[\n  {}\n]\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_interpolation_trigger",
+      "params": {
+        "mode": "round_trip_json_key_interpolation_trigger"
+      },
+      "expect": {
+        "stdout": "{\n  \"a\\%{b}\": 1\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "json_field_escapes_interpolation_trigger",
+      "params": {
+        "mode": "round_trip_json_field_interpolation_trigger"
+      },
+      "expect": {
+        "stdout": "Holder(\n  j = \"a\\%{b}\"\n)\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_key_dollar_hole"
+      },
+      "expect": {
+        "stdout": "{\n  \"\\${HOME}\": 1\n}\ntrue\n"
+      }
+    },
+    {
+      "name": "json_field_escapes_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_field_dollar_hole"
+      },
+      "expect": {
+        "stdout": "Holder(\n  j = \"\\${HOME}\"\n)\ntrue\n"
+      }
+    },
+    {
+      "name": "json_key_escapes_percent_before_dollar_hole",
+      "params": {
+        "mode": "round_trip_json_key_percent_dollar_hole"
+      },
+      "expect": {
+        "stdout": "{\n  \"\\%\\${HOME}\": 1\n}\ntrue\n"
+      }
+    }
+  ]
+}

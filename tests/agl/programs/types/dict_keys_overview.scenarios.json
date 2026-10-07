@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "overview_runs",
+      "expect": {
+        "stdout": "Color::Red\nColor::Blue\ntwo\norigin\n1\n{Color::Red: 2, Color::Blue: 1}\ntrue\n"
+      }
+    }
+  ]
+}

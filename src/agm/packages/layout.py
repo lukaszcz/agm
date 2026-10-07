@@ -5,7 +5,7 @@ package domain, so configuration loading can depend on it without creating an
 import cycle back into ``agm.packages``. Every path here is computed from an
 already-resolved AGM home; resolving that home (``AGM_HOME``, an installation
 prefix, or the project-relative default) stays the responsibility of
-``agm.config.general.agm_home_dir``.
+``agm.config.home.agm_home_dir``.
 """
 
 from __future__ import annotations

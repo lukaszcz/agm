@@ -25,20 +25,6 @@ file, a test writing into a temporary tree — reaches exactly that case. The
 parsed module already carries the text it was parsed from, so comparing it
 costs a read and no extra storage, and the read is the one the parse needed
 anyway: the cache hands its text to the builder on a miss.
-
-Artifacts derived from a parsed module are cached beside it, through
-:class:`ModuleDerivationCache`, and served only to the very module they were
-derived from. Infix-chain resolution is one: it rewrites a module's
-program against the operators visible to it, so a module re-resolved
-per compilation would hand every later pass a structurally equal but *fresh*
-program object, defeating the identity-keyed reuse guards in scope resolution
-and type checking. :func:`cached_infix_resolution` therefore memoizes the
-rewrite on the parsed module together with the exact operator tables it was
-resolved against, so a later graph that presents the same module the same
-operators reuses the very program object it produced before, and one that
-presents different operators resolves afresh. Locating the named scope that
-owns each raw chain, which the rewrite needs before it can consult that memo,
-is cached the same way.
 """
 
 from __future__ import annotations
@@ -47,11 +33,11 @@ import hashlib
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agm.agl.modules import disk_cache
+from agm.agl.modules.errors import ModuleReadError
 from agm.core import fs
 from agm.util.text import normalize_newlines
 
@@ -77,26 +63,15 @@ _CacheKey = tuple[str, "ModuleId", bool]
 # parsed module and the first node id it did not use.
 ModuleBuilder = Callable[[int, str], "tuple[LoadedModule, int]"]
 
-# Everything infix-chain resolution reads besides the program itself: the
-# operator tables and conflicting-operator sets the loader derived for one
-# module from the graph around it.
-InfixSignature = tuple[object, ...]
 
-# Rewrites one module's infix chains, returning its resolved form.
-InfixResolver = Callable[[], "LoadedModule"]
-
-
-@dataclass(frozen=True, slots=True)
-class _DerivedEntry[V]:
-    """One artifact derived from a parsed module, and the module it came from.
-
-    *source* pins the exact parsed module the derivation consumed, so an entry
-    is served only to that same object.  A reparse (the file changed, or the
-    cache was cleared) produces a different module and misses.
-    """
-
-    source: LoadedModule
-    value: V
+def _read_module_source(module_id: ModuleId, path: Path) -> str:
+    """Read *path*'s text, reporting an unreadable file as a module-load error."""
+    try:
+        return fs.read_text(path)
+    except UnicodeDecodeError as exc:
+        raise ModuleReadError(module_id, path, "file is not valid UTF-8 text") from exc
+    except OSError as exc:
+        raise ModuleReadError(module_id, path, exc.strerror or str(exc)) from exc
 
 
 def _companion_intact(module: LoadedModule) -> bool:
@@ -158,7 +133,7 @@ class ParsedModuleCache:
         node-id counter is neither read nor advanced.
         """
         key = (str(path), module_id, default_stdlib)
-        source_text = normalize_newlines(fs.read_text(path))
+        source_text = normalize_newlines(_read_module_source(module_id, path))
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None and entry.source_text == source_text and _companion_intact(entry):
@@ -195,82 +170,7 @@ class ParsedModuleCache:
             self._entries.clear()
 
 
-class ModuleDerivationCache[K, V]:
-    """A bounded store of artifacts derived from one parsed library module.
-
-    Keyed by the module's file identity and whatever else the derivation reads
-    besides the module itself, and served only to the very parsed module the
-    derivation consumed, so a reparse or a differing input derives afresh.
-    """
-
-    def __init__(self, *, capacity: int = _DEFAULT_CAPACITY) -> None:
-        self._capacity = capacity
-        self._entries: OrderedDict[tuple[str, ModuleId, K], _DerivedEntry[V]] = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get_or_build(
-        self,
-        module: LoadedModule,
-        *,
-        key: K,
-        build: Callable[[], V],
-    ) -> V:
-        """Return the artifact derived from *module*, calling *build* on a miss."""
-        entry_key = (str(module.path), module.module_id, key)
-        with self._lock:
-            entry = self._entries.get(entry_key)
-            if entry is not None and entry.source is module:
-                self._entries.move_to_end(entry_key)
-                return entry.value
-            value = build()
-            self._entries[entry_key] = _DerivedEntry(module, value)
-            self._entries.move_to_end(entry_key)
-            while len(self._entries) > self._capacity:
-                self._entries.popitem(last=False)
-            return value
-
-    def clear(self) -> None:
-        """Drop every memoized artifact."""
-        with self._lock:
-            self._entries.clear()
-
-
 _PARSED_MODULES = ParsedModuleCache()
-_INFIX_RESOLUTIONS: ModuleDerivationCache[InfixSignature, LoadedModule] = ModuleDerivationCache()
-_CHAIN_SCOPE_PATHS: ModuleDerivationCache[None, "dict[int, tuple[str, ...]]"] = (
-    ModuleDerivationCache()
-)
-
-
-def cached_infix_resolution(
-    module: LoadedModule,
-    *,
-    signature: InfixSignature,
-    resolve: InfixResolver,
-) -> LoadedModule:
-    """Serve one module's infix-resolved form.
-
-    The loader rewrites every module's infix chains against the operators
-    visible to it.  For an unchanged module that rewrite is the same on every
-    compilation that presents the same operators, and repeating it would return
-    a fresh program object each time — equal to the last one, but not the same,
-    which is what the scope and type-check reuse guards key on.
-    """
-    return _INFIX_RESOLUTIONS.get_or_build(module, key=signature, build=resolve)
-
-
-def cached_chain_scope_paths(
-    module: LoadedModule,
-    *,
-    build: Callable[[], "dict[int, tuple[str, ...]]"],
-) -> "dict[int, tuple[str, ...]]":
-    """Serve the named scope owning each raw infix chain of a module.
-
-    Locating them walks the module's whole syntax tree, and the answer depends
-    on nothing but that tree, so it is derived once per parse rather than once
-    per compilation.
-    """
-    return _CHAIN_SCOPE_PATHS.get_or_build(module, key=None, build=build)
 
 
 def cached_parsed_module(
@@ -292,5 +192,3 @@ def clear_parsed_module_cache() -> None:
     simply misses.
     """
     _PARSED_MODULES.clear()
-    _INFIX_RESOLUTIONS.clear()
-    _CHAIN_SCOPE_PATHS.clear()

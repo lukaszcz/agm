@@ -1,0 +1,5 @@
+import library::Status
+
+def Status::Saved::label(self) -> int = self.id
+
+program def main() -> unit = ()

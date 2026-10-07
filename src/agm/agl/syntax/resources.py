@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-from agm.agl.syntax.nodes import Call, StringLit
+from agm.agl.syntax.nodes import Call, CompleteCall, StringLit
 from agm.agl.syntax.spans import SourceSpan
 from agm.core.path import is_portable_relative_path
 from agm.util.unicode import surrogate_index, visible_text
@@ -18,7 +18,7 @@ class ResourceError(ValueError):
         self.span = span
 
 
-def resource_path(call: Call, *, is_directory: bool) -> str | None:
+def resource_path(call: Call | CompleteCall, *, is_directory: bool) -> str | None:
     """Validate *call* syntax and return its relative path, if it has one."""
     if is_directory:
         if call.type_args or call.args or call.named_args:

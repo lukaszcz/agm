@@ -1,0 +1,3 @@
+import a
+
+type C = a::Color

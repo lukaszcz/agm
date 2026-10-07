@@ -1,10 +1,10 @@
 """IR evaluation tests for operator nodes.
 
-Tests all operator node types: IrArith, IrCompare, IrContains, IrAnd, IrOr, IrUnary.
+Tests all operator node types: IrArith, IrCompare, IrContains, IrAnd, IrOr, IrNot, IrNeg.
 
 Also includes:
 - Golden lowering tests (structural IR shape assertions)
-- Coverage tests for defensive branches in arith.py and validate.py
+- Coverage tests for validate.py's static rejection of malformed IR
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     IntValue,
-    TextValue,
 )
 from tests.agl.ir_harness import (
     evaluate_ir,
@@ -113,7 +112,7 @@ def test_div_by_zero_raises() -> None:
     source = "let x: decimal = 1 / 0\n()"
     ir_exc = evaluate_ir_raises(source)
     assert ir_exc.type_name == "ArithmeticError"
-    assert ir_exc.fields["message"] == "Division by zero"
+    assert ir_exc.fields["operation"] == "/"
 
 
 # ---------------------------------------------------------------------------
@@ -378,146 +377,54 @@ def test_unary_neg_decimal() -> None:
     assert ir["x"] == DecimalValue(decimal.Decimal("-3.14"))
 
 
+def test_unary_neg_decimal_is_exact_for_a_31_digit_literal() -> None:
+    """Negation is exact (`copy_negate`), never rounded to 28 significant
+    digits: a 31-digit literal negates without losing precision, and
+    `a == -b` holds when `b` is that negation."""
+    source = "let a: decimal = 123456789012345678901234567890.1\nlet b = -a\nlet same = a == -b\n()"
+    ir = evaluate_ir(source)
+    assert ir["b"] == DecimalValue(decimal.Decimal("-123456789012345678901234567890.1"))
+    assert ir["same"] == BoolValue(True)
+
+
 # ---------------------------------------------------------------------------
 # Defensive coverage: arith.py invalid kind branches
 # ---------------------------------------------------------------------------
 
 
 def test_arith_div_by_zero_raises_sentinel() -> None:
-    """div() raises AglDivisionByZero on zero divisor."""
-    from agm.agl.eval.arith import AglDivisionByZero, div
-    from agm.agl.semantics.values import IntValue
+    """div() raises decimal.DivisionByZero on a zero divisor (caught and
+    classified by the interpreter, not by arith.py itself)."""
+    from agm.agl.eval.arith import div
+    from agm.util.decimal import AGL_DECIMAL_CONTEXT
 
-    with pytest.raises(AglDivisionByZero):
-        div(IntValue(5), IntValue(0))
-
-
-def test_logical_not_requires_bool() -> None:
-    """logical_not raises AssertionError on non-bool."""
-    from agm.agl.eval.arith import logical_not
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError):
-        logical_not(IntValue(1))
+    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+        with pytest.raises(decimal.DivisionByZero):
+            div(DecimalValue(decimal.Decimal(5)), DecimalValue(decimal.Decimal(0)))
 
 
-def test_order_called_with_eq_raises() -> None:
-    """order() with a non-ordering op (EQ) must raise AssertionError."""
-    from agm.agl.eval.arith import order
-    from agm.agl.ir.operations import CmpOp
-    from agm.agl.semantics.values import IntValue
+def test_arith_zero_by_zero_is_a_division_by_zero() -> None:
+    """``0 / 0`` is classified as a division by zero, not an invalid operation."""
+    from agm.agl.eval.arith import div
+    from agm.util.decimal import AGL_DECIMAL_CONTEXT
 
-    with pytest.raises(AssertionError, match="non-ordering op"):
-        order(CmpOp.EQ, IntValue(1), IntValue(2))
-
-
-def test_contains_array_wrong_container() -> None:
-    """contains ARRAY with a non-ArrayValue raises AssertionError."""
-    from agm.agl.eval.arith import contains
-    from agm.agl.ir.operations import ContainsKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="contains ARRAY"):
-        contains(ContainsKind.ARRAY, IntValue(1), TextValue("not-a-list"))
+    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+        with pytest.raises(decimal.DivisionByZero):
+            div(DecimalValue(decimal.Decimal(0)), DecimalValue(decimal.Decimal(0)))
 
 
-def test_contains_dict_wrong_container() -> None:
-    """contains DICT with a non-DictValue raises AssertionError."""
-    from agm.agl.eval.arith import contains
-    from agm.agl.ir.operations import ContainsKind
-
-    with pytest.raises(AssertionError, match="contains DICT"):
-        contains(ContainsKind.DICT, TextValue("a"), TextValue("not-a-dict"))
-
-
-def test_contains_text_wrong_types() -> None:
-    """contains TEXT with non-TextValue types raises AssertionError."""
-    from agm.agl.eval.arith import contains
-    from agm.agl.ir.operations import ContainsKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="contains TEXT"):
-        contains(ContainsKind.TEXT, IntValue(1), TextValue("hello"))
-
-
-def test_add_int_wrong_types() -> None:
-    """add INT with non-IntValues raises AssertionError."""
-    from agm.agl.eval.arith import add
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="add INT"):
-        add(ArithKind.INT, IntValue(1), TextValue("x"))
-
-
-def test_add_decimal_wrong_types() -> None:
-    """add DECIMAL with non-numeric values raises AssertionError."""
-    from agm.agl.eval.arith import add
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="add DECIMAL"):
-        add(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
-
-
-def test_sub_int_wrong_types() -> None:
-    """sub INT with non-IntValues raises AssertionError."""
-    from agm.agl.eval.arith import sub
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="sub INT"):
-        sub(ArithKind.INT, IntValue(1), TextValue("x"))
-
-
-def test_sub_decimal_wrong_types() -> None:
-    """sub DECIMAL with non-numeric values raises AssertionError."""
-    from agm.agl.eval.arith import sub
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="sub DECIMAL"):
-        sub(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
-
-
-def test_mul_int_wrong_types() -> None:
-    """mul INT with non-IntValues raises AssertionError."""
-    from agm.agl.eval.arith import mul
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="mul INT"):
-        mul(ArithKind.INT, IntValue(1), TextValue("x"))
-
-
-def test_mul_decimal_wrong_types() -> None:
-    """mul DECIMAL with non-numeric values raises AssertionError."""
-    from agm.agl.eval.arith import mul
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="mul DECIMAL"):
-        mul(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
-
-
-def test_negate_int_wrong_type() -> None:
-    """negate INT with non-IntValue raises AssertionError."""
-    from agm.agl.eval.arith import negate
-    from agm.agl.ir.operations import NumericKind
-    from agm.agl.semantics.values import DecimalValue
-
-    with pytest.raises(AssertionError, match="negate INT"):
-        negate(NumericKind.INT, DecimalValue(decimal.Decimal("1.5")))
-
-
-def test_negate_decimal_wrong_type() -> None:
-    """negate DECIMAL with non-DecimalValue raises AssertionError."""
-    from agm.agl.eval.arith import negate
-    from agm.agl.ir.operations import NumericKind
-    from agm.agl.semantics.values import IntValue
-
-    with pytest.raises(AssertionError, match="negate DECIMAL"):
-        negate(NumericKind.DECIMAL, IntValue(5))
+def test_mixed_arith_out_of_range_int_operand_labels_the_operator() -> None:
+    """A binary operator's own int operand, when out of range, is widened
+    (and range-checked) by the lowerer's compile-time ``IntToDecimal``
+    coercion and labelled with the operator itself, not "as decimal" (the
+    ``as``/``as?`` cast's own label)."""
+    # 2.pow(3400000) is a valid unbounded `int` but outside the pinned decimal
+    # range -- rejected cheaply by the bit-length check without ever
+    # constructing a `Decimal` from it.
+    source = "let n = 2.pow(3400000)\nlet x = n + 1.0\n()\n"
+    ir_exc = evaluate_ir_raises(source)
+    assert ir_exc.type_name == "ArithmeticError"
+    assert ir_exc.fields["operation"] == "+"
 
 
 # ---------------------------------------------------------------------------
@@ -569,55 +476,6 @@ def test_validate_compare_structural_with_ordering_raises() -> None:
         kind=CompareKind.STRUCTURAL,
         lhs=IrConstInt(location=loc, value=1),
         rhs=IrConstInt(location=loc, value=2),
-    )
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={SourceId(0): SourceFile(display_name="<test>", normalized_text="x")},
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(program, deep=False)
-
-
-def test_validate_unary_neg_none_kind_raises() -> None:
-    """Validate raises InvalidIrError when NEG has kind=None."""
-    from agm.agl.ir.ids import Location, SourceId
-    from agm.agl.ir.nodes import IrConstInt, IrUnary
-    from agm.agl.ir.operations import UnaryOp
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrUnary(location=loc, op=UnaryOp.NEG, kind=None, value=IrConstInt(location=loc, value=5))
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={SourceId(0): SourceFile(display_name="<test>", normalized_text="x")},
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(program, deep=False)
-
-
-def test_validate_unary_not_with_kind_raises() -> None:
-    """Validate raises InvalidIrError when NOT has non-None kind."""
-    from agm.agl.ir.ids import Location, SourceId
-    from agm.agl.ir.nodes import IrConstBool, IrUnary
-    from agm.agl.ir.operations import NumericKind, UnaryOp
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrUnary(
-        location=loc,
-        op=UnaryOp.NOT,
-        kind=NumericKind.INT,
-        value=IrConstBool(location=loc, value=True),
     )
     program = ExecutableProgram(
         entry_module=ENTRY_ID,

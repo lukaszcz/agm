@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import TypeVar
+from dataclasses import dataclass, field
+from typing import ClassVar, Literal, TypeVar
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.zones import ParamZone
@@ -28,13 +28,17 @@ __all__ = [
     "ArrayEncode",
     "ContractPayload",
     "ContractRequest",
+    "CustomContractRequest",
     "ConversionFailureMode",
     "ConversionRecipe",
     "ConversionStrategy",
+    "DecodeConversionKind",
+    "DecodeConversionRecipe",
     "DecodePlan",
     "DecodeSchema",
     "DictDecode",
     "DictEncode",
+    "DictKeyForm",
     "EncodeDefinition",
     "EncodePlan",
     "EncodeSchema",
@@ -44,6 +48,7 @@ __all__ = [
     "EnumDecode",
     "FieldDecode",
     "FieldEncode",
+    "JsonContractRequest",
     "ParamDecoder",
     "RecordDecode",
     "RecordEncode",
@@ -52,6 +57,12 @@ __all__ = [
     "ScalarDecode",
     "ScalarEncode",
     "ScalarKind",
+    "SimpleConversionKind",
+    "SimpleConversionRecipe",
+    "TargetContractRequest",
+    "UnitContractRequest",
+    "TextContractRequest",
+    "ToJsonRecipe",
     "TypeNode",
     "TypeNodeField",
     "TypeNodeKind",
@@ -61,6 +72,7 @@ __all__ = [
     "TypeTreeEntry",
     "VariantDecode",
     "VariantEncode",
+    "dict_key_form",
     "forwarded_encode_key",
     "is_plain_enum",
     "resolve_schema_ref",
@@ -100,8 +112,15 @@ class ArrayDecode:
 
 @dataclass(frozen=True, slots=True)
 class DictDecode:
-    """Decode a JSON object as a homogeneous dict, recursing on each value."""
+    """Decode a JSON object or entries array as a dict, recursing on each key and value.
 
+    ``key_form`` (see :func:`dict_key_form`) selects the wire shape: a text-keyed
+    object, an object whose key texts stringify ``key``'s scalar or plain-enum
+    tag, or an array of ``{"key", "value"}`` entries.
+    """
+
+    key_form: "DictKeyForm"
+    key: "DecodeSchema"
     value: "DecodeSchema"
 
 
@@ -237,6 +256,8 @@ class DecodePlan:
 class ScalarEncode:
     """Encode a scalar or opaque ``json`` value."""
 
+    kind: ScalarKind
+
 
 @dataclass(frozen=True, slots=True)
 class ArrayEncode:
@@ -245,10 +266,28 @@ class ArrayEncode:
     elem: "EncodeSchema"
 
 
+class DictKeyForm(enum.Enum):
+    """Wire shape for a dict's key, decided by :func:`dict_key_form` off its own encode schema.
+
+    ``OBJECT_TEXT``: ``text`` (and text aliases) key directly as a JSON object key.
+    ``OBJECT_STRINGIFIED``: int/decimal/bool/all-nullary-enum keys stringified as a JSON
+    object key. ``ENTRIES``: every other hashable key, as a ``{"key":..., "value":...}``
+    array.
+    """
+
+    OBJECT_TEXT = "object_text"
+    OBJECT_STRINGIFIED = "object_stringified"
+    ENTRIES = "entries"
+
+
 @dataclass(frozen=True, slots=True)
 class DictEncode:
-    """Encode a dict by recursively encoding each value."""
+    """Encode a dict by recursively encoding each key and value.
 
+    The wire shape is :func:`dict_key_form` of the key schema resolved at encode time.
+    """
+
+    key: "EncodeSchema"
     value: "EncodeSchema"
 
 
@@ -271,10 +310,16 @@ class RecordEncode:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionEncode:
-    """Encode an exception as its statically ordered field object."""
+    """Encode an exception-typed slot by its value's own runtime nominal.
+
+    A leaf: a slot's runtime value may be a more-derived subtype than its
+    static type and encodes with all of its own fields, so the field plans
+    are selected at encode time from the program's ``exception_field_encodes``
+    table by the value's ``nominal`` (see ``runtime.serialize.encode_value``).
+    ``nominal`` is the slot's static exception type.
+    """
 
     nominal: NominalId
-    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +400,31 @@ class EncodePlan:
 
     root: EncodeSchema
     definitions: "tuple[EncodeDefinition, ...]" = ()
+    definitions_by_key: "dict[str, EncodeDefinition]" = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        self.definitions_by_key.update((d.key, d) for d in self.definitions)
+
+
+def dict_key_form(schema: EncodeSchema) -> DictKeyForm:
+    """Classify a dict key's wire shape from its own, already-RESOLVED encode schema.
+
+    *schema* must already be resolved past any ``TypeParameterEncode``/
+    ``RefEncode`` indirection. The ONE classifier, consulted by schema
+    derivation and decode-plan emission (``type_schema``) and by the runtime
+    encoder; see ``DictKeyForm``.
+    """
+    if isinstance(schema, ScalarEncode):
+        if schema.kind is ScalarKind.TEXT:
+            return DictKeyForm.OBJECT_TEXT
+        if schema.kind is ScalarKind.JSON:
+            return DictKeyForm.ENTRIES
+        return DictKeyForm.OBJECT_STRINGIFIED
+    if isinstance(schema, EnumEncode) and is_plain_enum(schema):
+        return DictKeyForm.OBJECT_STRINGIFIED
+    return DictKeyForm.ENTRIES
 
 
 def is_plain_enum(schema: "EnumDecode | EnumEncode") -> bool:
@@ -419,7 +489,6 @@ class ConversionStrategy(enum.Enum):
     NOOP = "noop"  # identity / already-assignable (return value unchanged)
     WIDEN_INT_TO_DECIMAL = "widen_int_to_decimal"
     RENDER_TO_TEXT = "render_to_text"  # total
-    TO_JSON = "to_json"  # total, encode plan
     NARROW_DECIMAL_TO_INT = "narrow_decimal_to_int"  # fallible
     PARSE_TEXT_THEN_DECODE = "parse_text_then_decode"  # fallible
     DECODE_JSON = "decode_json"  # fallible
@@ -433,32 +502,72 @@ class ConversionFailureMode(enum.Enum):
     RETURN_OPTION = "return_option"  # `as?`
 
 
+#: Strategies that need no conversion payload beyond the source/target labels.
+type SimpleConversionKind = Literal[
+    ConversionStrategy.NOOP,
+    ConversionStrategy.WIDEN_INT_TO_DECIMAL,
+    ConversionStrategy.RENDER_TO_TEXT,
+]
+
+#: Fallible strategies that validate a JSON document against ``json_schema``
+#: then walk ``decode`` to build the target value.
+type DecodeConversionKind = Literal[
+    ConversionStrategy.NARROW_DECIMAL_TO_INT,
+    ConversionStrategy.PARSE_TEXT_THEN_DECODE,
+    ConversionStrategy.DECODE_JSON,
+]
+
+
 @dataclass(frozen=True, slots=True)
-class ConversionRecipe:
-    """Closed tagged-data describing one cast conversion.
+class SimpleConversionRecipe:
+    """A cast conversion with no payload beyond its strategy and labels.
 
     ``source_label`` / ``target_label`` are the user-facing type names used in
-    ``CastError`` (the legacy ``repr(Type)``).  For the decode strategies
-    (``NARROW_DECIMAL_TO_INT`` / ``PARSE_TEXT_THEN_DECODE`` / ``DECODE_JSON``)
+    ``CastError`` (the legacy ``repr(Type)``).
+    """
+
+    strategy: SimpleConversionKind
+    source_label: str
+    target_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToJsonRecipe:
+    """An ``as json`` cast conversion: an encode plan for the source type.
+
+    ``encode_definitions`` carries the plan's ``$defs``, whose parameters a
+    source with growing polymorphic recursion binds at each reference.
+    """
+
+    source_label: str
+    target_label: str
+    encode: EncodeSchema
+    encode_definitions: "tuple[EncodeDefinition, ...]" = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DecodeConversionRecipe:
+    """A fallible cast conversion: JSON-Schema validate, then decode.
+
     ``json_schema`` carries the JSON Schema derived from the target type —
     serialized as a canonical JSON **string** so the recipe stays frozen and
     hashable (a bare ``dict`` would break ``__hash__``, the invariant every IR
     node maintains) — and ``decode`` carries the typeless decode walk; ``defs``
     carries the ``$defs`` table for a recursive target type (empty for a
-    non-recursive one, see ``DecodePlan``). ``TO_JSON`` instead carries the
-    encode walk and its ``encode_definitions``, whose parameters a source with
-    growing polymorphic recursion binds at each reference. All unrelated
-    fields are ``None``/empty for each strategy.
+    non-recursive one, see ``DecodePlan``).
     """
 
-    strategy: ConversionStrategy
+    strategy: DecodeConversionKind
     source_label: str
     target_label: str
-    json_schema: str | None = None
-    decode: DecodeSchema | None = None
+    json_schema: str
+    decode: DecodeSchema
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
-    encode: EncodeSchema | None = None
-    encode_definitions: "tuple[EncodeDefinition, ...]" = ()
+
+
+#: Closed tagged-data describing one cast conversion, one variant per strategy
+#: family. All unrelated payload is structurally absent for each variant.
+type ConversionRecipe = SimpleConversionRecipe | ToJsonRecipe | DecodeConversionRecipe
 
 
 # ---------------------------------------------------------------------------
@@ -504,12 +613,12 @@ class TypeNode:
 
     ``label`` is the type's schema-canonical spelling (shared by every
     occurrence of a hoisted definition); the root's own label is
-    ``ContractRequest.target_type_label``. ``schema`` is the node's JSON Schema
+    ``TargetContractRequest.target_type_label``. ``schema`` is the node's JSON Schema
     fragment as a JSON string, whose ``$ref``s resolve against the tree's ``defs``.
     ``doc`` is the declaration's ``@doc``. ``nominal`` identifies a record,
     enum, or member declaration. ``fields`` (records, members) and
     ``members`` (enums, as ``(json_tag, member)``) keep declaration order;
-    ``items``/``values`` are an array's elements and a dict's values.
+    ``items`` is an array's elements, ``keys``/``values`` are a dict's keys and values.
     """
 
     kind: TypeNodeKind
@@ -520,6 +629,7 @@ class TypeNode:
     fields: tuple[TypeNodeField, ...] = ()
     members: "tuple[tuple[str, TypeNode], ...]" = ()
     items: "TypeTreeEntry | None" = None
+    keys: "TypeTreeEntry | None" = None
     values: "TypeTreeEntry | None" = None
 
 
@@ -555,40 +665,80 @@ class ContractPayload:
 
 
 @dataclass(frozen=True, slots=True)
-class ContractRequest:
-    """Typeless contract descriptor for an ask or exec call site.
+class UnitContractRequest:
+    """A ``unit`` target: the evaluator discards the output without parsing it.
+
+    Its common fields are constants. See ``JsonContractRequest`` for the
+    common-field documentation shared by every ``ContractRequest`` variant.
+    """
+
+    codec_name: ClassVar[Literal["none"]] = "none"
+    strict_json: ClassVar[None] = None
+    target_type_label: ClassVar[str] = "unit"
+    structured_exec: ClassVar[bool] = False
+    format_instructions: ClassVar[str] = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TextContractRequest:
+    """No-schema contract descriptor for the built-in ``text`` codec.
+
+    See ``JsonContractRequest`` for the common-field documentation shared by
+    every ``ContractRequest`` variant.
+    """
+
+    strict_json: bool | None
+    target_type_label: str
+    structured_exec: bool
+    format_instructions: str
+    codec_name: Literal["text"] = "text"
+
+
+@dataclass(frozen=True, slots=True)
+class JsonContractRequest:
+    """Contract descriptor for the built-in ``json`` codec: ``json_schema``
+    and ``decode`` are always derived and present. ``codec_name`` is always
+    ``"json"``.
 
     Built at lowering while checker types are available; evaluated WITHOUT any
     checker ``Type``.  The evaluator parses agent output using only this descriptor.
 
-    ``codec_name``          — ``"text"`` or ``"json"`` (from ``OutputContractSpec``).
     ``strict_json``         — per-call strict_json override; ``None`` → use the
                               evaluator-level default.
     ``json_schema``         — canonical JSON string of the derived schema
-                              (``json.dumps(..., sort_keys=True)``); ``None`` for
-                              the text codec.
-    ``decode``              — typeless ``DecodeSchema`` walk for the target type;
-                              ``None`` for the text codec.
+                              (``json.dumps(..., sort_keys=True)``).
+    ``decode``              — typeless ``DecodeSchema`` walk for the target type.
     ``target_type_label``   — ``repr(target_type)`` stored for ``AgentParseError``
                               field text and failure-message formatting.
-    ``target_type_kind``    — semantic kind string (``int``, ``record``, …) kept
-                              as typeless compatibility metadata for legacy
-                              custom-codec parse hooks.
-    ``target_type``         — opaque checker type retained only for legacy custom
-                              codecs whose ``parse`` hook still accepts a
-                              positional target type. Runtime-neutral code must
-                              not inspect it.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
-    ``format_instructions`` — pre-computed format instructions string (empty for
-                              text codec and unit-typed asks).
-    ``is_unit``             — ``True`` when the target type is ``unit`` (unit
-                              target); the evaluator dispatches the call but skips
-                              output parsing and returns ``UnitValue`` immediately.
+    ``format_instructions`` — pre-computed format instructions string.
     ``defs``                — ``$defs`` table for a recursive target type (empty
-                              for a non-recursive one, see ``DecodePlan``); ``()``
-                              for the text codec.
-    ``type_tree``           — the target's ``TypeTree`` for a type-directed
-                              extern's contract; ``None`` for ask and exec.
+                              for a non-recursive one, see ``DecodePlan``).
+    """
+
+    strict_json: bool | None
+    json_schema: str
+    decode: "DecodeSchema"
+    target_type_label: str
+    structured_exec: bool
+    format_instructions: str
+    codec_name: Literal["json"] = "json"
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CustomContractRequest:
+    """Contract descriptor for a host-registered custom codec.
+
+    ``json_schema``/``decode`` mirror whatever the codec's own
+    ``make_contract`` hook produced while checker types were still available
+    (see ``ContractPayload``): a custom codec may or may not derive a schema,
+    so unlike ``JsonContractRequest`` these stay optional. The evaluator never
+    parses output through this descriptor directly -- it dispatches to the
+    codec's own ``parse`` hook (see ``eval.ir_interpreter._call_custom_codec_parse``).
+    ``target_type`` is the opaque checker type, retained only for legacy
+    custom codecs whose ``parse`` hook accepts a positional target type;
+    runtime-neutral code must not inspect it.
     """
 
     codec_name: str
@@ -598,16 +748,30 @@ class ContractRequest:
     target_type_label: str
     structured_exec: bool
     format_instructions: str
-    is_unit: bool = False
-    target_type_kind: str = ""
-    target_type: object | None = None
+    target_type: object
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
-    type_tree: TypeTree | None = None
 
-    @property
-    def can_fail_parsing(self) -> bool:
-        """Whether agent output can fail to parse, so a parse-error retry can ever happen."""
-        return not self.is_unit and self.codec_name != "text"
+
+#: Closed tagged-data describing one ask/exec output contract, one variant per
+#: codec shape. ``codec_name`` alone never determines which fields are present;
+#: match on the variant instead.
+type ContractRequest = (
+    UnitContractRequest | TextContractRequest | JsonContractRequest | CustomContractRequest
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TargetContractRequest:
+    """A type-directed extern's target contract, passed to its companion.
+
+    ``json_schema`` is the target's canonical JSON Schema string and
+    ``type_tree`` its ``TypeTree``; ``target_type_label`` is the target's
+    display label.
+    """
+
+    target_type_label: str
+    json_schema: str
+    type_tree: TypeTree
 
 
 _SchemaT = TypeVar("_SchemaT")
@@ -617,8 +781,6 @@ def resolve_schema_ref(
     key: str,
     defs: Mapping[str, _SchemaT],
     forwarded_key: Callable[[_SchemaT], str | None],
-    *,
-    subject: str,
 ) -> _SchemaT:
     """Follow ``$defs`` references to the first non-reference body.
 
@@ -626,15 +788,9 @@ def resolve_schema_ref(
     once the walk reaches a body. Encode and decode plans share the same
     ``$defs`` keying, so they share this walk.
     """
-    seen: set[str] = set()
     current = key
     while True:
-        if current in seen:
-            raise AssertionError(f"{subject}: $defs reference cycle at key {current!r}")
-        seen.add(current)
-        resolved = defs.get(current)
-        if resolved is None:
-            raise AssertionError(f"{subject}: unknown $defs key {current!r}")
+        resolved = defs[current]
         onward = forwarded_key(resolved)
         if onward is None:
             return resolved

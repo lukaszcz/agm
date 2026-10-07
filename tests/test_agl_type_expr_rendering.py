@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
 from agm.agl.parser import parse_type_expr
-from agm.agl.syntax.types import TypeExpr, render_type_expr
+from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import DictT, IntT, TextT, render_type_expr
 
 
 @pytest.mark.parametrize(
@@ -47,6 +46,16 @@ def test_render_type_expr_uses_a_canonical_source_spelling(source: str, expected
     assert render_type_expr(parse_type_expr(source)) == expected
 
 
-def test_render_type_expr_rejects_unknown_ast_nodes() -> None:
-    with pytest.raises(AssertionError, match="unexpected type expression"):
-        render_type_expr(cast(TypeExpr, object()))
+def _span() -> SourceSpan:
+    return SourceSpan(
+        start_line=1, start_col=1, end_line=1, end_col=1, start_offset=0, end_offset=0
+    )
+
+
+def test_render_type_expr_renders_a_non_text_dict_key() -> None:
+    # The parser only ever builds a text key, so a non-text key is
+    # constructed directly rather than parsed from source.
+    key = IntT(span=_span(), node_id=1)
+    value = TextT(span=_span(), node_id=2)
+    dict_t = DictT(key=key, value=value, span=_span(), node_id=3)
+    assert render_type_expr(dict_t) == "dict[int, text]"

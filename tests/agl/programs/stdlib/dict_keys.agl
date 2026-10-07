@@ -1,0 +1,210 @@
+# std/dict over int, enum, record, json and non-hashable key types.
+import std/dict
+import std/json
+
+enum Color
+  | Red
+  | Tint(level: int)
+
+record Point
+  x: int
+  y: int
+
+def probe[K, V](
+  d: dict[K, V],
+  f: (V) -> V,
+  p: (K, V) -> bool,
+  show: (K, V) -> unit
+) -> unit =
+  print(d.size())
+  print(d.is-empty())
+  print(d.keys().size())
+  print(d.values().size())
+  print(d.entries().size())
+  print(d.map-values(f).size())
+  print(d.select(p).size())
+  d.each(show)
+  d.select!(p)
+  print(d.size())
+  d.clear()
+  print(d.is-empty())
+
+program def main(mode: text) -> unit =
+  case mode of
+    | "int" =>
+        var d: dict[int, text] = {1: "one", 2: "two"}
+        print(d.get(1))
+        print(d.get?(3))
+        print(d.contains(2))
+        d.set(3, "three")
+        print(d.remove(1))
+        print(d.remove?(9))
+        print(d.keys())
+        print(d.values())
+        print(d.entries())
+        print(d.map-values(fn(v: text) => v ++ "!"))
+        print(d.select(fn(k: int, v: text) => k > 2))
+        d.select!(fn(k: int, v: text) => k < 3)
+        d.each(fn(k: int, v: text) => print(v))
+        d.merge!({2: "deux", 5: "five"})
+        print(d.merge({7: "seven"}))
+        print(d.size())
+        d.clear()
+        print(d.is-empty())
+    | "enum" =>
+        var d: dict[Color, int] = {Red: 1, Tint(level = 2): 2}
+        print(d.get(Tint(level = 2)))
+        print(d.get?(Tint(level = 3)))
+        print(d.contains(Red))
+        d.set(Tint(level = 3), 3)
+        print(d.remove(Red))
+        print(d.remove?(Red))
+        print(d.keys())
+        print(d.values())
+        print(d.select(fn(k: Color, v: int) => v > 2))
+        d.merge!({Red: 9})
+        print(d.entries())
+    | "record" =>
+        var d: dict[Point, text] = {Point(x = 0, y = 0): "origin"}
+        d.set(Point(x = 1, y = 2), "p")
+        print(d.get(Point(x = 1, y = 2)))
+        print(d.contains(Point(x = 2, y = 1)))
+        print(d.remove?(Point(x = 0, y = 0)))
+        print(d.keys())
+        print(d.merge({Point(x = 1, y = 2): "q"}))
+        print(dict::from-entries(d.entries()))
+    | "enum_rest" =>
+        var d: dict[Color, int] = {Red: 1, Tint(level = 2): 2, Tint(level = 3): 3}
+        print(d.size())
+        print(d.is-empty())
+        print(d.map-values(fn(v: int) => v * 10))
+        d.each(fn(k: Color, v: int) => print(v))
+        print(d.merge({Tint(level = 2): 20, Tint(level = 4): 4}))
+        d.select!(fn(k: Color, v: int) => v != 2)
+        print(d)
+        d.clear()
+        print(d.is-empty())
+    | "record_rest" =>
+        var d: dict[Point, text] = {Point(x = 0, y = 0): "origin", Point(x = 1, y = 2): "p"}
+        print(d.size())
+        print(d.is-empty())
+        print(d.get?(Point(x = 1, y = 2)))
+        print(d.get?(Point(x = 5, y = 5)))
+        print(d.values())
+        print(d.map-values(fn(v: text) => v ++ "!"))
+        print(d.select(fn(k: Point, v: text) => k.x > 0))
+        d.each(fn(k: Point, v: text) => print(v))
+        d.merge!({Point(x = 1, y = 2): "q", Point(x = 3, y = 3): "r"})
+        print(d)
+        print(d.remove(Point(x = 0, y = 0)))
+        d.select!(fn(k: Point, v: text) => v != "q")
+        print(d)
+        d.clear()
+        print(d.is-empty())
+    | "type_variable" =>
+        probe(
+          {1: "one", 2: "two", 3: "three"},
+          fn(v: text) => v ++ "!",
+          fn(k: int, v: text) => k > 1,
+          fn(k: int, v: text) => print(v)
+        )
+    | "decimal" =>
+        let merged = {1.50: "a"}.merge({1.5: "b"})
+        print(merged)
+        print(merged.keys()[0] as json)
+        var d: dict[decimal, text] = {1.50: "a"}
+        d.merge!({1.5: "b"})
+        print(d)
+        print(d.keys()[0] as json)
+        let first = dict::from-entries(
+          [Pair(first = 1.50, second = "a"), Pair(first = 1.5, second = "b")],
+          dict::DuplicateKeys::KeepFirst
+        )
+        print(first)
+        print(first.keys()[0] as json)
+        let last = dict::from-entries(
+          [Pair(first = 1.50, second = "a"), Pair(first = 1.5, second = "b")],
+          dict::DuplicateKeys::KeepLast
+        )
+        print(last)
+        print(last.keys()[0] as json)
+    | "bool" =>
+        var d: dict[bool, int] = {true: 1}
+        d.set(false, 0)
+        print(d.get(false))
+        print(d.contains(true))
+        print(d.merge({true: 10}))
+        print(d.keys())
+        print(d.remove(true))
+        print(d)
+    | "record_missing" =>
+        let d: dict[Point, text] = {}
+        try
+          let _ = d.get(Point(x = 1, y = 2))
+        catch KeyError as e =>
+          print(e.key)
+    | "unbounded" =>
+        var d: dict[array[int], int] = {}
+        print(d.size())
+        print(d.is-empty())
+        print(d.keys())
+        print(d.values())
+        print(d.entries())
+        print(d.map-values(fn(v: int) => v + 1))
+        print(d.select(fn(k: array[int], v: int) => true))
+        d.select!(fn(k: array[int], v: int) => true)
+        d.each(fn(k: array[int], v: int) => print(v))
+        d.clear()
+    | "merge_empty" =>
+        var a: dict[int, int] = {}
+        a.merge!({1: 10})
+        print(a)
+        let b: dict[int, int] = {}
+        print(b.merge({2: 20}))
+        print({3: 30}.merge(b))
+        var e: dict[Color, int] = {}
+        print(e.merge({Red: 1}))
+        print({}.merge({4: 40}))
+        print(b.merge({}))
+    | "json" =>
+        var d: dict[json, text] = {}
+        d.set(json::parse("true"), "bool")
+        d.set(json::parse("1"), "int")
+        print(d.size())
+        d.set(json::parse("1.5"), "a")
+        d.set(json::parse("1.50"), "b")
+        print(d.size())
+        print(d.keys())
+        let m = {json::parse("2.0"): "x"}.merge({json::parse("2"): "y"})
+        print(m)
+    | "dup_raise" =>
+        try
+          let red: Color = Red
+          let tint: Color = Tint(level = 1)
+          let entries = [
+            Pair(first = red, second = 1),
+            Pair(first = tint, second = 2),
+            Pair(first = red, second = 3),
+          ]
+          let _ = dict::from-entries(entries)
+        catch DuplicateKeyError as e =>
+          print(e.key)
+    | "dup_raise_text" =>
+        try
+          let _ = dict::from-entries([Pair(first = "k", second = 1), Pair(first = "k", second = 2)])
+        catch DuplicateKeyError as e =>
+          print(e.key)
+    | "dup_keep_first" =>
+        print(dict::from-entries([
+          Pair(first = 1, second = "a"),
+          Pair(first = 2, second = "b"),
+          Pair(first = 1, second = "c"),
+        ], dict::DuplicateKeys::KeepFirst))
+    | "dup_keep_last" =>
+        print(dict::from-entries([
+          Pair(first = 1, second = "a"),
+          Pair(first = 2, second = "b"),
+          Pair(first = 1, second = "c"),
+        ], dict::DuplicateKeys::KeepLast))
+    | _ =>
+        print "unknown mode"

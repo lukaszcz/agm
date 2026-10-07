@@ -1,0 +1,63 @@
+"""The structural type-constraint kinds (`Eq`, `Hashable`), shared vocabulary leaf.
+
+A constraint block (`{Hashable K}`, `{Eq T}`) names one of these kinds on a
+type parameter. Like ``zones``/``keywords``, this is a dependency-free leaf so
+both ``syntax`` (parsing the block) and ``semantics`` (interpreting it, see
+``semantics.type_table.satisfies``) can import it
+without importing each other.
+"""
+
+from __future__ import annotations
+
+import enum
+from collections.abc import Mapping
+from types import MappingProxyType
+
+__all__ = [
+    "CONSTRAINT_SPELLINGS",
+    "ConstraintBounds",
+    "ConstraintKind",
+    "close_constraints",
+    "strongest_constraint",
+]
+
+
+class ConstraintKind(enum.Enum):
+    """A language-level structural constraint, spelled contextually like a type name."""
+
+    EQ = "Eq"
+    HASHABLE = "Hashable"
+
+
+#: Spelling -> kind, the closed set of contextual names a constraint block recognizes.
+CONSTRAINT_SPELLINGS: Mapping[str, ConstraintKind] = MappingProxyType(
+    {kind.value: kind for kind in ConstraintKind}
+)
+
+#: In-scope type variables' constraints, by name — what a bare type variable
+#: needs to satisfy ``semantics.type_table.satisfies``.
+#: An absent name has no bound and satisfies neither; ``None`` in place of this
+#: mapping instead means open-world mode, where a type variable anywhere
+#: (along with the bottom and inference-variable types) counts as satisfied.
+ConstraintBounds = Mapping[str, frozenset[ConstraintKind]]
+
+
+def close_constraints(kinds: frozenset[ConstraintKind]) -> frozenset[ConstraintKind]:
+    """Return *kinds* closed under implication: ``Hashable`` implies ``Eq``."""
+    if ConstraintKind.HASHABLE in kinds:
+        return kinds | {ConstraintKind.EQ}
+    return kinds
+
+
+#: Every kind, strongest first: each kind implies all that follow it (see
+#: :func:`close_constraints`).
+_STRENGTH_ORDER = (ConstraintKind.HASHABLE, ConstraintKind.EQ)
+
+
+def strongest_constraint(kinds: frozenset[ConstraintKind]) -> ConstraintKind:
+    """Return the strongest kind in the non-empty *kinds*.
+
+    It implies every other kind of an implication-closed set, so checking it
+    alone decides the set and a diagnostic names the real obstacle.
+    """
+    return next(kind for kind in _STRENGTH_ORDER if kind in kinds)

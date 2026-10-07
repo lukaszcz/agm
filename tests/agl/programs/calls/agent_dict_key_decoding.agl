@@ -1,0 +1,22 @@
+# Agent output decodes a dict from the wire form its key type picks: an
+# object with stringified int keys, or an entries array for record keys. Two
+# wire keys that decode to equal AgL keys are a decode failure like any other
+# malformed output: the agent is retried, then `AgentParseError` is raised.
+record Point
+  x: int
+  y: int
+
+program def main(mode: int) -> unit =
+  let builder: Agent = AgentCommand("builder")
+  try
+    case mode of
+      | 1 =>
+          let d: dict[int, text] = builder.ask("Counts.", parse-error-retries = 1)
+          print(d as json)
+      | 2 =>
+          let d: dict[Point, text] = builder.ask("Points.", parse-error-retries = 1)
+          print(d as json)
+      | _ =>
+          print(()) # unreachable in scenarios
+  catch AgentParseError =>
+    print("parse-failed")

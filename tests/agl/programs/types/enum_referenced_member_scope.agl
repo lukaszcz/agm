@@ -1,0 +1,59 @@
+# An enum's scope holds only its inline members; referenced members keep their own paths.
+# `::` alone selects an inline member of a root enum by its bare name.
+record Saved
+  id: int
+
+scope shapes
+  record Circle
+    radius: int
+
+  enum Shape = ::shapes::Circle | Square(side: int)
+end shapes
+
+enum Status = ::Saved | Fresh(n: int)
+type Current = Status
+
+def describe(status: Status) -> text =
+  case status of
+    | Saved(id) => "saved %{id}"
+    | Status::Fresh(n) => "fresh %{n}"
+
+def describe-anchored(status: Status) -> text =
+  case status of
+    | ::Saved(id) => "anchored saved %{id}"
+    | ::Status::Fresh(n) => "anchored fresh %{n}"
+
+def describe-alias(status: Current) -> text =
+  case status of
+    | Saved(id) => "alias saved %{id}"
+    | Current::Fresh(n) => "alias fresh %{n}"
+
+def area(shape: shapes::Shape) -> int =
+  case shape of
+    | shapes::Circle(radius) => radius * radius * 3
+    | shapes::Shape::Square(side) => side * side
+
+def fresh-count(fresh: Status::Fresh) -> int = fresh.n
+
+program def main(pick: int) -> unit =
+  let fresh: int -> Status = ::Fresh
+  let status: Status =
+    if pick > 0 => ::Fresh(n = pick)
+    else => Saved(id = 0 - pick)
+  let aliased: Current =
+    if pick > 0 => Current::Fresh(n = pick)
+    else => ::Saved(id = 7)
+  let shape: shapes::Shape =
+    if pick > 0 => shapes::Shape::Square(side = pick)
+    else => shapes::Circle(radius = 2)
+  print(describe(status))
+  print(describe-anchored(status))
+  print(describe-alias(aliased))
+  print(area(shape))
+  print(status is Saved)
+  print(status is Status::Fresh)
+  print(status is ::Fresh)
+  print(shape is shapes::Circle)
+  print(shape is shapes::Shape::Square)
+  print(fresh-count(Status::Fresh(n = 4)))
+  print(describe(fresh(8)))

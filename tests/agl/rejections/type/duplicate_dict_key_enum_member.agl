@@ -1,0 +1,9 @@
+# Two nullary-constructor keys referring to the same enum member are the
+# same constant key, regardless of position.
+enum Color
+  | Red
+  | Blue
+
+program def main() -> unit =
+  let m: dict[Color, int] = {Red: 1, Blue: 2, Red: 3}
+  print m

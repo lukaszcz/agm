@@ -74,7 +74,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
 @pytest.mark.parametrize(
     ("package", "allowed"),
     [
-        ("ir", ("agm.agl.ir", "agm.agl.modules.ids", "agm.agl.zones")),
+        ("ir", ("agm.agl.constraints", "agm.agl.ir", "agm.agl.modules.ids", "agm.agl.zones")),
         (
             "lower",
             (
@@ -110,8 +110,10 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             "scope",
             (
                 "agm.agl.attributes",
+                "agm.agl.constraints",
                 "agm.agl.diagnostics",
                 "agm.agl.artifact_cache",
+                "agm.agl.infix",
                 "agm.agl.modules",
                 "agm.agl.scope",
                 "agm.agl.semantics",
@@ -122,7 +124,9 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "typecheck",
             (
+                "agm.agl.attributes",
                 "agm.agl.capabilities",
+                "agm.agl.constraints",
                 "agm.agl.diagnostics",
                 "agm.agl.ir.ids",
                 "agm.agl.ir.reserved_nominals",
@@ -139,6 +143,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "semantics",
             (
+                "agm.agl.constraints",
                 "agm.agl.ir",
                 "agm.agl.modules.ids",
                 "agm.agl.self_validation",
@@ -149,6 +154,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "syntax",
             (
+                "agm.agl.constraints",
                 "agm.agl.modules.ids",
                 "agm.agl.syntax",
                 "agm.agl.value_syntax",
@@ -220,6 +226,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
         ("attributes.py", ("agm.agl.keywords", "agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
         ("keywords.py", ("agm.util.ident",)),
+        ("constraints.py", ()),
     ],
 )
 def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
@@ -246,6 +253,7 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
 def test_ir_all_agm_dependencies_are_explicit() -> None:
     """Keep the IR on its own data plus the canonical config-key data leaf."""
     allowed = (
+        "agm.agl.constraints",
         "agm.agl.ir",
         "agm.agl.modules.ids",
         "agm.agl.zones",

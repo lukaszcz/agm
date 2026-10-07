@@ -1,0 +1,9 @@
+# A positional and a named spelling of the same constructor arguments are
+# the same constant key.
+record Point
+  x: int
+  y: int
+
+program def main() -> unit =
+  let m = {Point(1, 2): "a", Point(x = 1, y = 2): "b"}
+  print m

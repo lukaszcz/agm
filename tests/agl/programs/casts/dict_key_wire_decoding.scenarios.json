@@ -1,0 +1,566 @@
+{
+  "scenarios": [
+    {
+      "name": "int_keys_decode_from_object",
+      "params": {
+        "mode": 1,
+        "raw": "{\"1\": \"a\", \"-2\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\", \"-2\": \"b\"}\n"
+      }
+    },
+    {
+      "name": "int_key_accepts_integral_decimal_text",
+      "params": {
+        "mode": 1,
+        "raw": "{\"2.0\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "{\"2\": \"a\"}\n"
+      }
+    },
+    {
+      "name": "int_key_rejects_fractional_text",
+      "params": {
+        "mode": 1,
+        "raw": "{\"2.5\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "int_key_rejects_non_number_text",
+      "params": {
+        "mode": 1,
+        "raw": "{\"abc\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "int_key_rejects_padded_number_text",
+      "params": {
+        "mode": 1,
+        "raw": "{\" 1\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "int_keys_equal_after_decoding_fail",
+      "params": {
+        "mode": 1,
+        "raw": "{\"1\": \"a\", \"1.0\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "decimal_keys_decode_exactly",
+      "params": {
+        "mode": 2,
+        "raw": "{\"1.50\": \"a\", \"-2\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "{\"1.50\": \"a\", \"-2\": \"b\"}\n"
+      }
+    },
+    {
+      "name": "decimal_keys_equal_after_decoding_fail",
+      "params": {
+        "mode": 2,
+        "raw": "{\"1.0\": \"a\", \"1.00\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "bool_keys_decode_true_false_only",
+      "params": {
+        "mode": 3,
+        "raw": "{\"true\": \"a\", \"false\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "{\"true\": \"a\", \"false\": \"b\"}\n"
+      }
+    },
+    {
+      "name": "bool_key_rejects_other_text",
+      "params": {
+        "mode": 3,
+        "raw": "{\"True\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "bool_key_rejects_number_text",
+      "params": {
+        "mode": 3,
+        "raw": "{\"1\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "enum_keys_decode_by_effective_tag",
+      "params": {
+        "mode": 4,
+        "raw": "{\"Red\": 1, \"bleu\": 2}"
+      },
+      "expect": {
+        "stdout": "{\"Red\": 1, \"bleu\": 2}\n"
+      }
+    },
+    {
+      "name": "enum_key_rejects_declared_name_behind_json_name",
+      "params": {
+        "mode": 4,
+        "raw": "{\"Blue\": 1}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "record_keys_decode_from_entries",
+      "params": {
+        "mode": 5,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n"
+      }
+    },
+    {
+      "name": "entries_repeated_key_fails",
+      "params": {
+        "mode": 5,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"y\": 2, \"x\": 1}, \"value\": \"q\"}]"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "entries_reject_object_form",
+      "params": {
+        "mode": 5,
+        "raw": "{\"x\": \"p\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "entries_reject_entry_missing_value",
+      "params": {
+        "mode": 5,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}}]"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "entries_reject_bad_key",
+      "params": {
+        "mode": 5,
+        "raw": "[{\"key\": {\"x\": \"no\", \"y\": 2}, \"value\": \"p\"}]"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "mixed_enum_keys_decode_from_entries",
+      "params": {
+        "mode": 6,
+        "raw": "[{\"key\": {\"$case\": \"Square\"}, \"value\": \"s\"}, {\"key\": {\"$case\": \"Circle\", \"radius\": 1}, \"value\": \"c\"}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"$case\": \"Square\"}, \"value\": \"s\"}, {\"key\": {\"$case\": \"Circle\", \"radius\": 1}, \"value\": \"c\"}]\n"
+      }
+    },
+    {
+      "name": "json_keys_decode_from_entries",
+      "params": {
+        "mode": 7,
+        "raw": "[{\"key\": 5, \"value\": \"j\"}, {\"key\": [1], \"value\": \"k\"}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": 5, \"value\": \"j\"}, {\"key\": [1], \"value\": \"k\"}]\n"
+      }
+    },
+    {
+      "name": "json_keys_equal_fail",
+      "params": {
+        "mode": 7,
+        "raw": "[{\"key\": 5, \"value\": \"j\"}, {\"key\": 5.0, \"value\": \"k\"}]"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "option_keys_decode_from_entries",
+      "params": {
+        "mode": 8,
+        "raw": "[{\"key\": {\"$case\": \"Some\", \"value\": 1}, \"value\": \"s\"}, {\"key\": {\"$case\": \"None\"}, \"value\": \"n\"}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"$case\": \"Some\", \"value\": 1}, \"value\": \"s\"}, {\"key\": {\"$case\": \"None\"}, \"value\": \"n\"}]\n"
+      }
+    },
+    {
+      "name": "empty_entries_decode_to_empty_dict",
+      "params": {
+        "mode": 5,
+        "raw": "[]"
+      },
+      "expect": {
+        "stdout": "[]\n"
+      }
+    },
+    {
+      "name": "empty_object_decodes_to_empty_int_keyed_dict",
+      "params": {
+        "mode": 1,
+        "raw": "{}"
+      },
+      "expect": {
+        "stdout": "{}\n"
+      }
+    },
+    {
+      "name": "as_optional_succeeds_for_int_keys",
+      "params": {
+        "mode": 9,
+        "raw": "{\"1\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\"}\n"
+      }
+    },
+    {
+      "name": "as_optional_none_on_equal_int_keys",
+      "params": {
+        "mode": 9,
+        "raw": "{\"1\": \"a\", \"1.0\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "none\n"
+      }
+    },
+    {
+      "name": "as_optional_none_on_bad_int_key",
+      "params": {
+        "mode": 9,
+        "raw": "{\"x\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "none\n"
+      }
+    },
+    {
+      "name": "as_optional_none_on_repeated_entry_key",
+      "params": {
+        "mode": 10,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]"
+      },
+      "expect": {
+        "stdout": "none\n"
+      }
+    },
+    {
+      "name": "parse_decodes_int_keys",
+      "params": {
+        "mode": 11,
+        "raw": "{\"7\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "{\"7\": \"a\"}\n"
+      }
+    },
+    {
+      "name": "parse_raises_value_parse_error_on_equal_keys",
+      "params": {
+        "mode": 11,
+        "raw": "{\"1\": \"a\", \"1.0\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "parse_decodes_entries",
+      "params": {
+        "mode": 12,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n"
+      }
+    },
+    {
+      "name": "parse_raises_value_parse_error_on_repeated_entry_key",
+      "params": {
+        "mode": 12,
+        "raw": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "decoded_int_keyed_dict_is_usable",
+      "params": {
+        "mode": 13,
+        "raw": "{\"1\": \"one\", \"2.0\": \"two\"}"
+      },
+      "expect": {
+        "stdout": "one\n"
+      }
+    },
+    {
+      "name": "int_key_rejects_unrepresentable_number_text",
+      "params": {
+        "mode": 1,
+        "raw": "{\"1e99999999999999999999\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "as_optional_none_on_unrepresentable_number_key",
+      "params": {
+        "mode": 9,
+        "raw": "{\"1e99999999999999999999\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "none\n"
+      }
+    },
+    {
+      "name": "exec_output_decodes_int_keyed_object",
+      "params": {
+        "mode": 14,
+        "raw": ""
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\", \"2\": \"b\"}\n"
+      },
+      "shell": [
+        {
+          "command": "echo objects",
+          "stdout": "{\"1\": \"a\", \"2.0\": \"b\"}\n"
+        }
+      ]
+    },
+    {
+      "name": "exec_output_decodes_record_keyed_entries",
+      "params": {
+        "mode": 15,
+        "raw": ""
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n"
+      },
+      "shell": [
+        {
+          "command": "echo entries",
+          "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n"
+        }
+      ]
+    },
+    {
+      "name": "try_parse_succeeds_for_int_keys",
+      "params": {
+        "mode": 16,
+        "raw": "{\"7\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "{\"7\": \"a\"}\n"
+      }
+    },
+    {
+      "name": "try_parse_errs_on_malformed_key",
+      "params": {
+        "mode": 16,
+        "raw": "{\"x\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
+    },
+    {
+      "name": "try_parse_errs_on_equal_keys",
+      "params": {
+        "mode": 16,
+        "raw": "{\"1\": \"a\", \"1.0\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
+    },
+    {
+      "name": "as_optional_from_json_source_decodes_int_keys",
+      "params": {
+        "mode": 17,
+        "raw": "{\"1\": \"a\"}"
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\"}\n"
+      }
+    },
+    {
+      "name": "as_optional_from_json_source_none_on_equal_keys",
+      "params": {
+        "mode": 17,
+        "raw": "{\"1\": \"a\", \"1.0\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "none\n"
+      }
+    },
+    {
+      "name": "hoisted_plain_enum_key_decodes",
+      "params": {
+        "mode": 18,
+        "raw": "{\"by-color\": {\"Red\": 1, \"bleu\": 2}, \"favorite\": \"bleu\"}"
+      },
+      "expect": {
+        "stdout": "{\"by-color\": {\"Red\": 1, \"bleu\": 2}, \"favorite\": \"bleu\"}\n"
+      }
+    },
+    {
+      "name": "hoisted_plain_enum_key_rejects_unknown_tag",
+      "params": {
+        "mode": 18,
+        "raw": "{\"by-color\": {\"Green\": 1}, \"favorite\": \"Red\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "recursive_enum_keys_decode_from_entries",
+      "params": {
+        "mode": 19,
+        "raw": "[{\"key\": {\"$case\": \"Node\", \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}, \"value\": 1}, {\"key\": {\"$case\": \"Leaf\"}, \"value\": 2}]"
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"$case\": \"Node\", \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}, \"value\": 1}, {\"key\": {\"$case\": \"Leaf\"}, \"value\": 2}]\n"
+      }
+    },
+    {
+      "name": "recursive_enum_repeated_key_fails",
+      "params": {
+        "mode": 19,
+        "raw": "[{\"key\": {\"$case\": \"Leaf\"}, \"value\": 1}, {\"key\": {\"$case\": \"Leaf\"}, \"value\": 2}]"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_int_keyed_cast",
+      "params": {
+        "mode": 1,
+        "raw": "{\"1\": \"a\", \"1\": \"b\"}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_text_keyed_cast",
+      "params": {
+        "mode": 20,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "cast-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_json_parse",
+      "params": {
+        "mode": 21,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "json_repeated_member_name_fails_std_json_parse",
+      "params": {
+        "mode": 22,
+        "raw": "{\"a\": 1, \"a\": 2}"
+      },
+      "expect": {
+        "stdout": "json-parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_repeated_int_key_fails_parse",
+      "params": {
+        "mode": 11,
+        "raw": "{1: \"a\", 1: \"b\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_int_keys_fail_parse",
+      "params": {
+        "mode": 11,
+        "raw": "{1: \"a\", 1.0: \"b\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_record_keys_fail_parse",
+      "params": {
+        "mode": 12,
+        "raw": "{Point(x = 1, y = 2): \"p\", Point(1, 2): \"q\"}"
+      },
+      "expect": {
+        "stdout": "parse-error\n"
+      }
+    },
+    {
+      "name": "value_syntax_repeated_int_key_errs_try_parse",
+      "params": {
+        "mode": 16,
+        "raw": "{1: \"a\", 1: \"b\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
+    },
+    {
+      "name": "value_syntax_equal_int_keys_err_try_parse",
+      "params": {
+        "mode": 16,
+        "raw": "{1: \"a\", 1.0: \"b\"}"
+      },
+      "expect": {
+        "stdout": "err\n"
+      }
+    }
+  ]
+}

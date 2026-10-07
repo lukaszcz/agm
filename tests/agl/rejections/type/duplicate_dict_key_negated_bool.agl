@@ -1,0 +1,5 @@
+# `not true` folds to a bool constant like any other scalar, so it is
+# caught as a duplicate against a matching literal `false` key.
+program def main() -> unit =
+  let m = {not true: 1, false: 2}
+  print m

@@ -48,9 +48,9 @@ import pytest
 
 from agm.agent.session import (
     SessionAgentError,
-    SessionCapabilities,
     SessionHostError,
     SessionOperation,
+    SessionOperations,
     SessionService,
 )
 from agm.agent.spec import PermissionMode
@@ -209,10 +209,10 @@ class ScriptedAgent:
         """Create an observable wrapper around the production session service."""
         return _ScriptedSessionService(self)
 
-    def _new_session_backend(self, agent: object, transport: str) -> Any:
-        """Build the same transport-specific backend production would select.
+    def _new_session_backend(self, request: Any) -> Any:
+        """Open the same transport-specific backend production would select.
 
-        *agent* is already the resolved host specification: the evaluator is
+        The request's agent is already the resolved host specification: the evaluator is
         the sole seam that decodes an AgL ``Agent`` value, so no session-host
         layer below it ever sees the value or has to decode it.
         """
@@ -220,27 +220,21 @@ class ScriptedAgent:
         from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
         from agm.util.interp import InterpolationError
 
-        if transport == "scripted":
-            session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
-            self.sessions.append(session)
-            return _ScriptedSessionBackend(
-                self,
-                session,
-                frozenset(SessionOperation),
-                supports_name=True,
-                continues_conversation=True,
-            )
-        spec = agent
+        spec = request.agent
+        transport = request.transport
+        backend_type: type[_ScriptedSessionBackend] = _ScriptedSessionBackend
         continues_conversation = True
         command_without_session_id = False
-        if transport == "rpc":
+        if transport == "scripted":
+            capabilities = frozenset(SessionOperation)
+            supports_name = True
+        elif transport == "rpc":
             if not isinstance(spec, AgentPi):
                 raise SessionHostError("RPC transport is only supported by AgentPi", "open")
             capabilities = frozenset(SessionOperation)
-            backend_type: type[_ScriptedSessionBackend] = _ScriptedPiRpcSessionBackend
+            backend_type = _ScriptedPiRpcSessionBackend
             supports_name = True
         elif transport == "cli":
-            backend_type = _ScriptedSessionBackend
             if isinstance(spec, AgentCommand):
                 try:
                     continues_conversation = command_targets_session_id(spec.argv())
@@ -264,7 +258,19 @@ class ScriptedAgent:
                 raise SessionHostError("unsupported session agent", "open")
         else:
             raise SessionHostError(f"unsupported session transport {transport!r}", "open")
-        session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
+        if command_without_session_id and not (request.single_prompt or request.ephemeral):
+            raise SessionHostError("command session requires a session placeholder", "open")
+        if request.name and not supports_name:
+            raise SessionHostError("scripted session does not support names", "set-name")
+        session = _ScriptedSession(
+            tag=f"session-{len(self.sessions) + 1}",
+            parent=None,
+            transport=transport,
+            single_prompt=request.single_prompt,
+            permission_mode=request.permission_mode.value,
+            sandbox=request.sandbox,
+            opened=True,
+        )
         self.sessions.append(session)
         return backend_type(
             self,
@@ -348,8 +354,8 @@ class _ScriptedSessionService:
         self._backends: dict[str, _ScriptedSessionBackend] = {}
         self._ephemeral_handles: set[str] = set()
 
-    def _backend_factory(self, agent: object, transport: str) -> Any:
-        return self._agent._new_session_backend(agent, transport)
+    def _backend_factory(self, request: Any) -> Any:
+        return self._agent._new_session_backend(request)
 
     def open(
         self,
@@ -843,30 +849,21 @@ class _ScriptedSessionBackend:
         session.backend = self
 
     @property
-    def capabilities(self) -> SessionCapabilities:
-        return SessionCapabilities(
-            frozenset(
-                operation
-                for operation in self._native_capabilities
-                if self._agent._supports_operation(operation.value)
-            )
+    def operations(self) -> SessionOperations:
+        def native(operation: SessionOperation, method: Any) -> Any:
+            return method if self.supports(operation.value) else None
+
+        return SessionOperations(
+            compact=native(SessionOperation.COMPACT, self.compact),
+            fork=native(SessionOperation.FORK, self.fork),
+            set_name=native(SessionOperation.SET_NAME, self.set_name),
+            stats=native(SessionOperation.STATS, self.stats),
         )
 
     def supports(self, operation: str) -> bool:
-        return self.capabilities.supports(SessionOperation(operation))
-
-    def open(self, request: Any) -> None:
-        if self._command_without_session_id and not (request.single_prompt or request.ephemeral):
-            self._agent.sessions.remove(self._session)
-            raise SessionHostError("command session requires a session placeholder", "open")
-        if request.name and not self._supports_name:
-            self._agent.sessions.remove(self._session)
-            raise SessionHostError("scripted session does not support names", "set-name")
-        self._session.transport = request.transport
-        self._session.single_prompt = request.single_prompt
-        self._session.opened = True
-        self._session.permission_mode = request.permission_mode.value
-        self._session.sandbox = request.sandbox
+        return SessionOperation(
+            operation
+        ) in self._native_capabilities and self._agent._supports_operation(operation)
 
     def ask(self, request: Any) -> Any:
         from agm.agent.session import SessionAskError, SessionAskResponse
@@ -1209,7 +1206,11 @@ def _run_program(
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime_options["get_sandbox_context"] = get_sandbox_context
     registry = ExternRegistry()
-    runtime = PipelineDriver(extern_registry=registry, resolve_agent_spec=None, **runtime_options)
+    runtime = PipelineDriver(
+        extern_registry=registry,
+        resolve_agent_spec=None,
+        **runtime_options,
+    )
     scripts: list[_Script] = [shell, http_adapter]
     default_stdlib = not scenario.get("no_stdlib", False)
     entry_path: Path | None = None
@@ -1290,6 +1291,11 @@ def _assert_outcome(result: Any, expect: dict[str, Any]) -> None:
         spec = expect["raises"]
         assert result.error is not None, f"expected uncaught {spec['type']}, got none"
         assert result.error.type_name == spec["type"]
+        if "line" in spec:
+            assert result.error.line == spec["line"]
+        if "source_contains" in spec:
+            assert result.error.source is not None
+            assert spec["source_contains"] in result.error.source
         for key, value in spec.get("fields", {}).items():
             actual = result.error.fields[key]
             assert _fields_match(actual, value), (

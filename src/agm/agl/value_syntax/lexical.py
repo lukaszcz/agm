@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from agm.agl.value_syntax.errors import ValueSyntaxError
+from agm.util.decimal import strip_trailing_zeros
 from agm.util.ident import IDENT_STOP, is_identifier_start
 from agm.util.interp import INTERP_TRIGGER
 
@@ -42,34 +43,42 @@ ESCAPE_ENCODE: Final[Mapping[str, str]] = {
 _HEX_DIGITS: Final[str] = "0123456789abcdefABCDEF"
 
 
+def escape_interpolation_triggers(quoted: str) -> str:
+    """Escape ``%`` and ``${`` in already-quoted string text for value syntax.
+
+    A double-quoted JSON string and an AgL text literal share every other
+    escape, so this is the only step turning one into the other.
+    """
+    return quoted.replace(INTERP_TRIGGER, ESCAPE_ENCODE[INTERP_TRIGGER]).replace("${", "\\${")
+
+
 def quote_text(value: str) -> str:
     """Return *value* as a double-quoted AgL text-literal surface form."""
-    out: list[str] = ['"']
-    for index, character in enumerate(value):
-        if character == "$" and value.startswith("${", index):
-            out.append("\\$")
-            continue
+    out: list[str] = []
+    for character in value:
         escaped = ESCAPE_ENCODE.get(character)
-        if escaped is not None:
+        if escaped is not None and character != INTERP_TRIGGER:
             out.append(escaped)
         elif character < " ":
             out.append(f"\\u{ord(character):04x}")
         else:
             out.append(character)
-    out.append('"')
-    return "".join(out)
+    return f'"{escape_interpolation_triggers("".join(out))}"'
 
 
 def scalar_text(value: int | decimal.Decimal | bool) -> str:
     """Return an int, decimal, or bool as its plain (unquoted) AgL spelling.
 
     A decimal drops trailing zeros without falling back to scientific
-    notation, which AgL surface syntax does not spell.
+    notation, which AgL surface syntax does not spell. Rendering is
+    context-free (:func:`~agm.util.decimal.strip_trailing_zeros`), so it
+    never rounds and never raises, however many significant digits *value*
+    carries.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, decimal.Decimal):
-        return format(value.normalize(), "f")
+        return format(strip_trailing_zeros(value), "f")
     return str(value)
 
 
@@ -184,6 +193,11 @@ def scan_name(source: str, offset: int) -> int | None:
     """
     if offset >= len(source) or not is_identifier_start(source[offset]):
         return None
+    return identifier_end(source, offset)
+
+
+def identifier_end(source: str, offset: int) -> int:
+    """Return the end offset of the identifier known to start at *offset*."""
     end = offset + 1
     while end < len(source) and source[end] not in IDENT_STOP:
         end += 1
@@ -206,6 +220,7 @@ __all__ = [
     "ESCAPE_ENCODE",
     "decode_escape",
     "environment_hole_name",
+    "identifier_end",
     "is_ascii_digit",
     "quote_text",
     "scalar_text",

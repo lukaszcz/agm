@@ -1,0 +1,9 @@
+# A record with an array field is never Hashable, so it can never be a
+# dict-literal key, even where the same key repeats and would otherwise be
+# a duplicate.
+record Bag
+  items: array[int]
+
+program def main() -> unit =
+  let d = {Bag(items = [1, 2]): 1, Bag(items = [1, 2]): 2}
+  print d

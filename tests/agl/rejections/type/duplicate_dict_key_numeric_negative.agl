@@ -1,0 +1,5 @@
+# -1 and -1.0 are the same constant key under numeric equality, regardless
+# of which literal form wrote the negated magnitude.
+program def main() -> unit =
+  let m = {-1: "a", -1.0: "b"}
+  print m

@@ -22,7 +22,12 @@ from dataclasses import dataclass, field
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.builtin_vars import BuiltinVarKey
-from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    ExceptionFieldEncode,
+    ParamDecoder,
+    TargetContractRequest,
+)
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -90,15 +95,25 @@ class SymbolDescriptor:
 class VariantDescriptor:
     """Descriptor for one enum variant.
 
-    ``name``   — the variant name.
-    ``fields`` — declared field names in declaration order (names only; no
-                 checker ``Type`` objects — the IR is typeless).
-    ``member`` — nominal identity of the member record declaration.
+    ``name``      — the variant name.
+    ``fields``    — declared field names in declaration order (names only; no
+                    checker ``Type`` objects — the IR is typeless).
+    ``field_json_names`` — each field's effective JSON name (``@json-name`` ??
+                    ``@name`` ?? declared), parallel to ``fields`` — the SAME
+                    tag :class:`FieldEncode`/:class:`FieldDecode` carry for
+                    it; ``len`` matches ``fields``. Also carried by the
+                    member's own ``NominalDescriptor`` in ``program.nominals``.
+    ``member``    — nominal identity of the member record declaration.
+    ``json_name`` — the member's effective JSON ``$case`` tag (``@json-name``
+                    ?? ``@name`` ?? ``name``), the SAME tag a typed
+                    ``EnumEncode``/``EnumDecode`` selects for it.
     """
 
     name: str
     fields: tuple[str, ...]
     member: NominalId
+    json_name: str
+    field_json_names: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +135,11 @@ class NominalDescriptor:
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
                        stores fields per-variant in ``variants``).
+    ``field_json_names`` — each field's effective JSON name (``@json-name``
+                       ?? ``@name`` ?? declared), parallel to ``fields`` —
+                       the SAME tag :class:`FieldEncode`/:class:`FieldDecode`
+                       carry for it. Used for RECORD and EXCEPTION; ``()``
+                       for ENUM.
     ``mutable_fields`` — names of the ``var`` fields a RECORD declares (a
                        subset of ``fields``); always empty for ENUM and
                        EXCEPTION, neither of which admits a mutable field.
@@ -171,6 +191,7 @@ class NominalDescriptor:
     declared_name: str
     kind: NominalKind
     fields: tuple[str, ...] = ()
+    field_json_names: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
     positional_fields: tuple[str, ...] = ()
@@ -304,14 +325,23 @@ class ValueDescriptors:
     ``functions[closure.function_id].param_labels``/``.result_label`` for a
     closure. Built directly from ``ExecutableProgram.nominals``/``.functions``
     (see ``ValueDescriptors.from_program``).
+
+    ``exception_field_encodes`` mirrors ``ExecutableProgram.exception_field_encodes``:
+    ``as json`` selects an exception value's own field-encode plans from it
+    by the value's runtime nominal (``runtime.serialize.encode_value``).
     """
 
     nominals: Mapping[NominalId, NominalDescriptor]
     functions: Mapping[FunctionId, FunctionDescriptor]
+    exception_field_encodes: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]
 
     @classmethod
     def from_program(cls, program: "ExecutableProgram") -> "ValueDescriptors":
-        return cls(nominals=program.nominals, functions=program.functions)
+        return cls(
+            nominals=program.nominals,
+            functions=program.functions,
+            exception_field_encodes=program.exception_field_encodes,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +434,9 @@ class ExecutableProgram:
         decoders, compiled alongside program parameter signatures.
       ``param_spans`` — static ``@param`` identities -> declaration spans,
         retained to anchor host-value decode diagnostics in their source file.
+      ``contracts`` — ask/exec output contracts, keyed by ``ContractId``.
+      ``target_contracts`` — type-directed extern target contracts, which
+        ``IrContract`` operands name; they share the ``ContractId`` space.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -446,6 +479,7 @@ class ExecutableProgram:
     param_decoders: dict[StaticBindingKey, ParamDecoder] = field(default_factory=dict)
     param_spans: Mapping[StaticBindingKey, object] = field(default_factory=dict)
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
+    target_contracts: dict["ContractId", TargetContractRequest] = field(default_factory=dict)
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     builtin_var_declarations: frozenset[BuiltinVarKey] = frozenset()
     exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = field(

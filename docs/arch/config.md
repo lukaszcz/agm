@@ -44,6 +44,7 @@ Sandbox settings follow their own discovery and merge chain across the same scop
 ## Code Entry Points
 
 - `src/agm/config/context.py` — config context and project-directory discovery.
+- `src/agm/config/home.py` — AGM home directory resolution (`AGM_HOME`, installation prefix, project-relative default) and AGM-home path candidates; a leaf module so `agm.project.layout` can depend on it.
 - `src/agm/config/general.py` — layer loading, merging, precedence retention, and per-feature readers.
 - `src/agm/config/command_config.py` — per-command override sections.
 - `src/agm/config/engine_keys.py` — the engine-key catalog; `src/agm/config/qualified_keys.py` — qualified AgL config-key routing; `src/agm/cli_support/param_config.py` — module-parameter and selected-program-route resolution.

@@ -1045,9 +1045,11 @@ class TestExecDynamicHelp:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("program def main(msg: text) -> unit = print msg\n")
+        from agm.packages.stdlib import StdlibResolutionError
+
         monkeypatch.setattr(
             "agm.cli_support.exec_roots.effective_exec_roots",
-            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
+            lambda **_kwargs: (_ for _ in ()).throw(StdlibResolutionError("unavailable roots")),
         )
 
         assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
@@ -3620,6 +3622,63 @@ class TestProgramValueArguments:
         assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == '"hello"\n'
 
+    @pytest.mark.parametrize(
+        ("setting", "parameter", "expected"),
+        [
+            ("n = 1.00000000000000000001", "n: decimal", "1.00000000000000000001\n"),
+            (
+                "n = [1.00000000000000000001, 1e400, 1_000.5]",
+                "n: json",
+                f"[1.00000000000000000001, 1{'0' * 400}, 1000.5]\n",
+            ),
+            (f"n = {'7' * 5000}", "n: int", "7" * 5000 + "\n"),
+        ],
+    )
+    def test_config_table_numbers_are_exact(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        setting: str,
+        parameter: str,
+        expected: str,
+    ) -> None:
+        """Config floats are read exactly, and integers keep every digit."""
+        _config_home(tmp_path, monkeypatch, f"[prog.main]\n{setting}\n")
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, f"program def main({parameter}) -> unit = print n\n")
+
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
+        assert capsys.readouterr().out == expected
+
+    @pytest.mark.parametrize(
+        ("setting", "parameter"),
+        [
+            ("n = inf", "n: json"),
+            ("n = -nan", "n: decimal"),
+            ("n = 1e99999999999999999999", "n: json"),
+        ],
+    )
+    def test_config_table_rejects_a_number_no_value_can_hold(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        setting: str,
+        parameter: str,
+    ) -> None:
+        """A non-finite config float, or one no decimal can hold, is a clean error."""
+        _config_home(tmp_path, monkeypatch, f"[prog.main]\n{setting}\n")
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, f"program def main({parameter}) -> unit = print n\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Traceback" not in captured.err
+
     def test_cli_overrides_configured_argument(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -5130,7 +5189,7 @@ class TestExecProgramSelection:
             exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 2
-        assert "at line 1" in capsys.readouterr().err
+        assert f"{agl_file.name}:1:" in capsys.readouterr().err
 
 
 class TestProgramLogFilePathResolution:

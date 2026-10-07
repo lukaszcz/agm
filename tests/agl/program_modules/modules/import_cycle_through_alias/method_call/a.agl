@@ -1,0 +1,10 @@
+# Library module forming a cyclic import with `b`, re-exporting `b`'s alias
+# `G` of this module's own `Base`. Its own function calls the method `b`
+# declares at `Base`'s path on a value of `Base`.
+import b::*
+export b::{G}
+
+record Base
+  x: int
+
+def af() -> int = Base(x = 2).h()

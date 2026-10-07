@@ -16,9 +16,10 @@ for backward compatibility (the lexer and other callers use
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, NamedTuple, Sequence
 
 # Re-export the canonical definition so existing callers keep working.
 from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
@@ -243,3 +244,113 @@ class AglError(Exception):
             return Diagnostic(message=str(self), line=1, related=related)
         primary = diagnostic_from_span(str(self), self.span)
         return replace(primary, related=related)
+
+
+class AglSyntaxError(AglError):
+    """A syntax error: raised by the parser, and by operator grouping and fixity.
+
+    Carries a :class:`~agm.agl.syntax.spans.SourceSpan` pinpointing the
+    offending location in the source (never ``None``, unlike the base
+    ``AglError``).
+    """
+
+    span: SourceSpan
+
+    def __init__(self, message: str, *, span: SourceSpan) -> None:
+        super().__init__(message, span=span)
+
+
+class AglTypeError(AglError):
+    """A fatal static type error.
+
+    Raised by the type checker on the first type violation.  Carries an
+    optional ``SourceSpan`` for source location.
+    """
+
+
+def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for a type name that denotes no constructor value.
+
+    Raised wherever a type name is found in a value position -- by scope when
+    no value of that name is visible, by typecheck when a constructor
+    position names a type without one -- so the reader is told the same
+    thing wherever the name was written and whatever declared it.
+    """
+    return AglTypeError(
+        f"'{name}' is a type name, not a value; "
+        "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+        span=span,
+    )
+
+
+class CycleAlias(NamedTuple):
+    """One alias of a cycle: its declaration order, declared path and declaration span."""
+
+    order: tuple[int, ...]
+    spelling: str
+    span: SourceSpan
+
+
+def _declaration_order(alias: CycleAlias) -> tuple[int, ...]:
+    return alias.order
+
+
+def alias_cycle_error[E: AglError](error: type[E], cycle: Iterable[CycleAlias]) -> E:
+    """Return the *error* for an alias cycle, reported at its alias declared first.
+
+    Each alias of a cycle denotes no type: scope decides a cycle of nominal
+    targets, typecheck one through a structural target.
+    """
+    _order, spelling, span = min(cycle, key=_declaration_order)
+    return error(f"Type alias '{spelling}' is part of a cycle.", span=span)
+
+
+def unknown_type(name: str, span: SourceSpan | None) -> AglTypeError:
+    """Return the diagnostic for a bare type name selecting nothing and naming no built-in type.
+
+    Raised by scope, where the name is written.
+    """
+    return AglTypeError(f"Unknown type '{name}'.", span=span)
+
+
+def not_a_type(spelling: str, span: SourceSpan | None) -> AglTypeError:
+    """Return the diagnostic for a qualified type spelling selecting only a value."""
+    return AglTypeError(f"'{spelling}' does not name a type.", span=span)
+
+
+class HiddenMemberError(AglTypeError):
+    """An owner spelling that names a member no route at its site currently reaches.
+
+    An import or a ``use`` hides it -- directly, or through an alias whose
+    target it hides. Scope raises it wherever owner selection fails: values,
+    patterns, ``is`` tests, method receivers, and type annotations alike.
+    ``owner`` is the owner as spelled, empty for a name at the root, and
+    ``member`` the hidden member's name.
+    """
+
+    def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:
+        spelled = f"{owner}::{member}" if owner else member
+        super().__init__(f"'{spelled}' is hidden by its import or 'use'.", span=span)
+        self.owner = owner
+        self.member = member
+
+
+class ReferencedMemberError(AglTypeError):
+    """An enum owner spelling that selects a member the enum only references.
+
+    Only an enum's inline members are in its scope; a referenced member keeps
+    its own declaration path, so ``Owner::member`` or a module qualifier
+    (``mylib::member``) names nothing. Scope is the one place that decides
+    this, identically wherever an owner is spelled: values, patterns, ``is``
+    tests, method receivers, and type annotations alike. ``owner`` is the
+    owner as spelled and ``member`` the referenced member's name.
+    """
+
+    def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:
+        super().__init__(
+            f"'{member}' is a referenced member of enum '{owner}', not one of its inline "
+            f"members; spell it at its own declaration path or by its bare name.",
+            span=span,
+        )
+        self.owner = owner
+        self.member = member

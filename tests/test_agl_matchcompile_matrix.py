@@ -14,8 +14,8 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile.compiler import compile_match_site
 from agm.agl.matchcompile.diagnostics import (
+    ConstructorWitness,
     NonExhaustiveIssue,
-    RecordWitness,
     render_witness,
 )
 from agm.agl.matchcompile.matrix import (
@@ -50,7 +50,6 @@ from agm.agl.matchcompile.normalize import (
 )
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope.program import resolve_program
-from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import BoolType, EnumType, IntType, RecordType, TextType
 from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.agl.syntax.nodes import Case
@@ -204,14 +203,6 @@ def test_record_specialization_and_validation_use_field_bearing_nominal_machiner
     malformed = replace(head, fields=tuple(reversed(head.fields)))
     with pytest.raises(MatchCompileInvariantError, match="checked signature"):
         specialize(matrix, 0, malformed, allocator)
-    missing_table = TypeTable()
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
-        specialize(
-            replace(matrix, type_table=missing_table),
-            0,
-            head,
-            replace(allocator, type_table=missing_table),
-        )
 
 
 def test_record_compilation_validates_field_occurrences_and_reconstructs_witnesses() -> None:
@@ -228,10 +219,13 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     assert len(compiled.occurrences) == 2
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
-    assert isinstance(issue.witness, RecordWitness)
-    assert strip_decl_ids(issue.witness.record_type) == RecordType("Box")
+    assert isinstance(issue.witness, ConstructorWitness)
+    assert issue.witness.constructor[2] == "Box"
     assert [field.name for field in issue.witness.fields] == ["value"]
-    assert render_witness(issue.witness) == "Box(value = a int value other than 1)"
+    assert (
+        render_witness(issue.witness, lambda decl, _node: decl[2])
+        == "Box(value = a int value other than 1)"
+    )
 
 
 def test_path_decompositions_are_recorded_only_when_the_self_checks_run(
@@ -579,27 +573,10 @@ def test_matrix_operations_reject_malformed_boundaries_loudly() -> None:
             matrix.available_occurrences,
             matrix.type_table,
         )
-    with pytest.raises(MatchCompileInvariantError, match="binder assignment"):
-        binder = cast(WildcardCell, matrix.rows[2].cells[0]).binders[0]
-        bad_row = replace(
-            row,
-            binder_assignments=(BinderAssignment(OccurrenceId(99), binder),),
-        )
-        PatternMatrix(
-            matrix.occurrences,
-            (bad_row,),
-            matrix.available_occurrences,
-            matrix.type_table,
-        )
     with pytest.raises(MatchCompileInvariantError, match="column"):
         specialize(matrix, 2, pair, allocator)
-    with pytest.raises(MatchCompileInvariantError, match="not observed"):
-        specialize(matrix, 0, BoolConstructor(False), allocator)
     with pytest.raises(MatchCompileInvariantError, match="column"):
         default_matrix(matrix, -1)
-    wildcard_only = default_matrix(matrix, 0)
-    with pytest.raises(MatchCompileInvariantError, match="refutable"):
-        select_qba_column(wildcard_only)
 
 
 @pytest.mark.parametrize(
@@ -1009,9 +986,6 @@ def test_matrix_context_is_identity_only_and_mixed_allocators_are_rejected() -> 
 
     with pytest.raises(MatchCompileInvariantError, match="case compilation"):
         specialize(matrix, 0, pair, other_allocator)
-
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        replace(matrix, type_table=TypeTable())
 
 
 def test_path_decomposition_constructor_must_match_checked_signature() -> None:

@@ -30,8 +30,6 @@ from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
-from lark.exceptions import UnexpectedToken
-from lark.lexer import Token
 
 import agm.agl.syntax as syntax
 from agm.agl.parser import (
@@ -40,11 +38,10 @@ from agm.agl.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
-    parse_program_unresolved,
     parse_type_expr,
-    resolve_infix_chains,
 )
-from agm.agl.parser.errors import syntax_error_from_lark
+from agm.agl.parser.transform import AstBuilder
+from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.syntax import (
     ArrayLit,
     AsPattern,
@@ -155,14 +152,6 @@ def items(prog: Program) -> tuple[object, ...]:
 def first(prog: Program) -> object:
     """Return the first top-level item."""
     return prog.body.items[0]
-
-
-def raw_infix_program(*operator_names: str) -> Program:
-    """Parse one raw infix chain for parser-layer resolution tests."""
-    source_parts = ["0"]
-    for index, name in enumerate(operator_names, start=1):
-        source_parts.extend((name, str(index)))
-    return parse_program_unresolved(" ".join(source_parts))
 
 
 def _collect_node_ids(obj: object, result: list[int]) -> None:
@@ -281,6 +270,36 @@ class TestProgramRoot:
         assert len(id_list) == len(set(id_list)), "duplicate node_ids detected in parsed tree"
 
 
+class TestBuilderFailures:
+    """A non-syntax exception raised while building the AST surfaces as itself."""
+
+    @pytest.fixture
+    def failing_builder(self, monkeypatch: pytest.MonkeyPatch) -> Callable[[BaseException], None]:
+        def install(error: BaseException) -> None:
+            def fail(*_args: object) -> object:
+                raise error
+
+            monkeypatch.setattr(AstBuilder, "start", fail)
+
+        return install
+
+    def test_stack_exhaustion_reaches_the_frontend_recursion_boundary(
+        self, failing_builder: Callable[[BaseException], None]
+    ) -> None:
+        failing_builder(RecursionError())
+        with pytest.raises(NestingTooDeepError):
+            with frontend_recursion_boundary():
+                parse("1")
+
+    def test_other_exception_is_reraised_unwrapped(
+        self, failing_builder: Callable[[BaseException], None]
+    ) -> None:
+        failing_builder(ValueError())
+        with pytest.raises(ValueError) as excinfo:
+            parse("1")
+        assert type(excinfo.value) is ValueError
+
+
 # ---------------------------------------------------------------------------
 # Literals
 # ---------------------------------------------------------------------------
@@ -294,6 +313,10 @@ class TestLiterals:
     def test_decimal(self) -> None:
         d = first(parse("3.14"))
         assert isinstance(d, DecimalLit) and d.value == decimal.Decimal("3.14")
+
+    def test_decimal_out_of_range_is_a_compile_time_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("1" + "0" * 1_000_000 + ".0")
 
     def test_bool_true(self) -> None:
         b = first(parse("true"))
@@ -338,10 +361,16 @@ class TestLiterals:
         assert isinstance(d, DictLit) and len(d.entries) == 2
         assert all(isinstance(e, DictEntry) for e in d.entries)
 
-    def test_dict_shorthand_key(self) -> None:
+    def test_dict_bare_name_key_is_a_reference(self) -> None:
+        """A bare name key names a variable/constructor -- it is not a string shorthand."""
         d = first(parse("{name: 1}"))
         assert isinstance(d, DictLit)
-        assert d.entries[0].key.value == "name"
+        assert isinstance(d.entries[0].key, VarRef) and d.entries[0].key.name == "name"
+
+    def test_dict_expression_key(self) -> None:
+        d = first(parse("{1 + 1: 2}"))
+        assert isinstance(d, DictLit)
+        assert isinstance(d.entries[0].key, BinaryOp)
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +506,7 @@ class TestBinders:
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
-        assert assignment.target.qualifier.route_segments == ("std", "config")
+        assert [s.name for s in assignment.target.qualifier.segments] == ["std/config"]
 
     def test_multi_segment_qualified_assignment_target_preserved(self) -> None:
         """A multi-segment qualifier -- a local scope path such as
@@ -486,7 +515,7 @@ class TestBinders:
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
-        assert assignment.target.qualifier.route_segments == ("A", "B")
+        assert [s.name for s in assignment.target.qualifier.segments] == ["A", "B"]
 
     @pytest.mark.parametrize(
         "source",
@@ -610,6 +639,7 @@ class TestTypeExpressions:
         let = first(parse("let d: dict[text, int] = {}"))
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, TextT)
         assert isinstance(let.type_ann.value, IntT)
 
     def test_array_wrong_arg_count_raises(self) -> None:
@@ -624,21 +654,20 @@ class TestTypeExpressions:
         with pytest.raises(AglSyntaxError, match="exactly two"):
             parse("let d: dict[int] = {}")
 
-    def test_dict_non_text_key_complex_type_raises(self) -> None:
-        # dict key type must be text; a complex key is rendered with its type
-        # arguments (array[int]).
-        from agm.agl.parser.errors import AglSyntaxError
+    def test_dict_complex_key_type_parses(self) -> None:
+        # dict[K, V] admits any key type expression at parse time; Hashable K
+        # is checked later, at a hashing operation site.
+        let = first(parse("let d: dict[array[int], int] = {}"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, ArrayT)
 
-        with pytest.raises(AglSyntaxError, match="text"):
-            parse("let d: dict[array[int], int] = {}")
-
-    def test_dict_named_type_key_raises(self) -> None:
-        # dict key type must be text; a named type key is rendered by its name
-        # in the error message.
-        from agm.agl.parser.errors import AglSyntaxError
-
-        with pytest.raises(AglSyntaxError, match="Review"):
-            parse("let d: dict[Review, int] = {}")
+    def test_dict_named_type_key_parses(self) -> None:
+        let = first(parse("let d: dict[Review, int] = {}"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, NameT)
+        assert let.type_ann.key.name == "Review"
 
     def test_named_type(self) -> None:
         let = first(parse("let r: Review = x"))
@@ -713,13 +742,12 @@ class TestTypeExpressions:
         assert isinstance(let.type_ann, NameT)
         assert let.type_ann.name == "mytype"
 
-    def test_dict_key_must_be_text(self) -> None:
-        """dict keys must be text; the rejection names the type as it was written."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let x: dict[int, text] = 1")
-        msg = str(exc_info.value)
-        assert "'int'" in msg
-        assert "IntT" not in msg
+    def test_dict_non_text_key_type_parses(self) -> None:
+        """dict[K, V] admits a non-text key type; Hashable K is a typecheck concern."""
+        let = first(parse("let x: dict[int, text] = 1"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, IntT)
 
 
 # ---------------------------------------------------------------------------
@@ -1433,7 +1461,7 @@ class TestParseTypeExpr:
         assert isinstance(result, AppliedT)
         assert result.name == "Box"
         assert result.qualifier is not None
-        assert result.qualifier.route_segments == ("mymod",)
+        assert [s.name for s in result.qualifier.segments] == ["mymod"]
 
     def test_invalid_raises_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -1680,6 +1708,48 @@ class TestAttributes:
         assert attribute_names(en) == ["doc"]
         assert [attribute_names(member) for member in en.members] == [["doc"], []]
 
+    @pytest.mark.parametrize(
+        "prefix",
+        (
+            '  | @doc("m")\n    ',
+            '  | @doc("""\n      m\n    """)\n    ',
+            '  | @doc("m")\n    @json-name("named")\n    ',
+            '  | @doc("m") @arg-named\n    ',
+        ),
+    )
+    @pytest.mark.parametrize("payload", ("", "(value: int)", "\n      value: int"))
+    def test_enum_member_attributes_can_precede_the_constructor_line(
+        self, prefix: str, payload: str
+    ) -> None:
+        en = first(parse(f"enum E\n{prefix}Member{payload}\n  | Other\n"))
+        assert isinstance(en, EnumDef)
+        member, other = en.members
+        assert member.name == "Member"
+        assert other.name == "Other"
+        expected = ["doc"]
+        if "@json-name" in prefix:
+            expected.append("json-name")
+        if "@arg-named" in prefix:
+            expected.append("arg-named")
+        assert attribute_names(member) == expected
+        assert [field.name for field in member.fields] == (["value"] if payload else [])
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'enum E | @doc("m")\n  Member\n| Other',
+            'enum E =\n  @doc("m")\n    Member\n  | Other',
+            'scope S\n  enum E\n    | @doc("m")\n      Member\n    | Other\nend S',
+        ),
+    )
+    def test_enum_member_doc_lines_in_other_layouts(self, source: str) -> None:
+        en = first(parse(source))
+        if isinstance(en, ScopeRegion):
+            en = en.items[0]
+        assert isinstance(en, EnumDef)
+        assert [member.name for member in en.members] == ["Member", "Other"]
+        assert [attribute_names(member) for member in en.members] == [["doc"], []]
+
     def test_exception_declaration_and_field_attributes(self) -> None:
         exc = first(parse('@doc("x")\nexception E(@doc("c") code: int)'))
         assert isinstance(exc, ExceptionDef)
@@ -1793,40 +1863,31 @@ class TestAttributes:
         ),
         ids=("def", "record", "enum", "exception", "type-alias", "let", "var"),
     )
-    def test_declared_operator_inside_an_attribute_argument_is_resolved(self, target: str) -> None:
-        """An attribute argument is an ordinary expression, so a user infix
-        operator written there is grouped like any other chain."""
-        program = parse(
-            f"infixl <+> at 6\ndef <+>(a: int, b: int) -> int = a + b\n@doc(1 <+> 2)\n{target}"
-        )
+    def test_user_operator_inside_an_attribute_argument_stays_a_raw_chain(
+        self, target: str
+    ) -> None:
+        """An attribute argument is an ordinary expression: a chain applying a
+        user operator there is grouped by scope, like any other."""
+        program = parse(f"@doc(1 <+> 2)\n{target}")
 
         chains: list[object] = []
         walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
+        assert len(chains) == 1
 
-    def test_declared_operator_inside_a_parameter_attribute_argument_is_resolved(self) -> None:
-        program = parse(
-            "infixl <+> at 6\n"
-            "def <+>(a: int, b: int) -> int = a + b\n"
-            "def f(@doc(1 <+> 2) x: int) -> int = x"
-        )
-
+    @pytest.mark.parametrize(
+        "source",
+        ("def f(@doc(1 <+> 2) x: int) -> int = x", "@doc(k = 1 <+> 2)\ndef f(x: int) -> int = x"),
+        ids=("parameter", "keyed"),
+    )
+    def test_user_operator_inside_other_attribute_arguments_stays_a_raw_chain(
+        self, source: str
+    ) -> None:
         chains: list[object] = []
-        walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
-
-    def test_declared_operator_inside_a_keyed_attribute_argument_is_resolved(self) -> None:
-        """A keyed attribute argument's value is grouped the same as a positional one."""
-        program = parse(
-            "infixl <+> at 6\n"
-            "def <+>(a: int, b: int) -> int = a + b\n"
-            "@doc(k = 1 <+> 2)\n"
-            "def f(x: int) -> int = x"
+        walk(
+            parse(source),
+            lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None,
         )
-
-        chains: list[object] = []
-        walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
-        assert chains == []
+        assert len(chains) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2593,99 +2654,39 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError, match="must start with 'at'"):
             parse("infixl |> near 12")
 
-    def test_infix_decl_cannot_redeclare_builtin_operator(self) -> None:
-        with pytest.raises(AglSyntaxError, match="Cannot redeclare"):
-            parse("infixl + at 12")
+    def test_user_operator_chain_stays_raw(self) -> None:
+        expression = first(parse("1 |> 2 |> 3"))
 
-    def test_infix_decl_cannot_be_duplicated(self) -> None:
-        with pytest.raises(AglSyntaxError, match="already declared"):
-            parse("infixl |>\ninfixr |> at 45")
-
-    def test_infix_decl_priority_reference_must_be_known(self) -> None:
-        with pytest.raises(AglSyntaxError, match="Unknown operator"):
-            parse("infixl |> at prio << + 1")
-
-    def test_user_infix_operator_must_be_declared_before_use(self) -> None:
-        with pytest.raises(AglSyntaxError, match="must be declared"):
-            parse("1 |> 2")
-
-    def test_ast_builder_retains_user_infix_chain_before_resolution(self) -> None:
-        program = parse_program_unresolved("infixl |>\n1 |> 2 |> 3")
-
-        expression = program.body.items[1]
         assert isinstance(expression, RawInfixChain)
         assert tuple(operator.name for operator in expression.operators) == ("|>", "|>")
         assert len(expression.operands) == 3
         assert all(isinstance(operand.expr, IntLit) for operand in expression.operands)
 
-    def test_resolution_pass_rewrites_raw_chain(self) -> None:
-        resolved = resolve_infix_chains(
-            raw_infix_program("|>", "|>"),
-            {"|>": (5, InfixAssoc.LEFT, None)},
-        )
+    def test_builtin_chain_over_a_raw_operand_stays_raw(self) -> None:
+        expression = first(parse("(1 |> 2) + 3 * 4"))
 
-        expression = resolved.body.items[0]
-        assert isinstance(expression, Call)
-        assert isinstance(expression.args[0], Call)
-        assert isinstance(expression.callee, VarRef)
-        assert expression.callee.name == "|>"
+        assert isinstance(expression, RawInfixChain)
+        assert tuple(operator.name for operator in expression.operators) == ("+", "*")
+        assert isinstance(expression.operands[0].expr, RawInfixChain)
 
-    def test_resolution_pass_honors_precedence_and_associativity(self) -> None:
-        resolved = resolve_infix_chains(
-            raw_infix_program("|>", "<|", "<|"),
-            {
-                "|>": (5, InfixAssoc.LEFT, None),
-                "<|": (6, InfixAssoc.RIGHT, None),
-            },
-        )
+    def test_builtin_chain_inside_a_raw_operand_is_grouped(self) -> None:
+        expression = first(parse("(1 + 2 * 3) |> 4"))
 
-        expression = resolved.body.items[0]
-        assert isinstance(expression, Call)
-        assert isinstance(expression.callee, VarRef)
-        assert expression.callee.name == "|>"
-        right = expression.args[1]
-        assert isinstance(right, Call)
-        assert isinstance(right.callee, VarRef)
-        assert right.callee.name == "<|"
-        assert isinstance(right.args[1], Call)
+        assert isinstance(expression, RawInfixChain)
+        grouped = expression.operands[0].expr
+        assert isinstance(grouped, BinaryOp)
+        assert grouped.op is BinOp.ADD
 
-    def test_resolution_pass_rejects_undeclared_operator(self) -> None:
+    def test_chained_comparison_is_rejected(self) -> None:
         with pytest.raises(AglSyntaxError):
-            resolve_infix_chains(raw_infix_program("|>"), {})
+            parse("1 == 1 == true")
 
-    def test_resolution_pass_rejects_mixed_associativity_at_one_priority(self) -> None:
-        with pytest.raises(AglSyntaxError):
-            resolve_infix_chains(
-                raw_infix_program("|>", "<|"),
-                {
-                    "|>": (5, InfixAssoc.LEFT, None),
-                    "<|": (5, InfixAssoc.RIGHT, None),
-                },
-            )
+    @pytest.mark.parametrize("source", ("(1 == 1) == true", "true == (1 == 1)"))
+    def test_parenthesized_comparison_is_an_operand(self, source: str) -> None:
+        expression = first(parse(source))
 
-    def test_user_infix_left_associative(self) -> None:
-        e = items(parse("infixl |>\n1 |> 2 |> 3"))[1]
-        assert isinstance(e, Call)
-        left_arg = e.args[0]
-        assert isinstance(left_arg, Call)
-        assert isinstance(left_arg.callee, VarRef)
-        assert left_arg.callee.name == "|>"
-
-    def test_user_infix_right_associative(self) -> None:
-        e = items(parse("infixr <<\n1 << 2 << 3"))[1]
-        assert isinstance(e, Call)
-        right_arg = e.args[1]
-        assert isinstance(right_arg, Call)
-        assert isinstance(right_arg.callee, VarRef)
-        assert right_arg.callee.name == "<<"
-
-    def test_user_infix_relative_priority_groups_with_builtins(self) -> None:
-        e = items(parse("infixl |> at prio > + 1\n1 + 2 |> 3 > 4"))[1]
-        assert isinstance(e, BinaryOp)
-        assert e.op is BinOp.GT
-        assert isinstance(e.left, Call)
-        assert isinstance(e.left.args[0], BinaryOp)
-        assert e.left.args[0].op is BinOp.ADD
+        assert isinstance(expression, BinaryOp)
+        assert expression.op is BinOp.EQ
 
     def test_arithmetic(self) -> None:
         e = first(parse("1 + 2 * 3"))
@@ -2739,7 +2740,7 @@ class TestBinaryOperators:
         e = first(parse("x is Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.qualifier is not None
-        assert e.qualifier.route_segments == ("Review",)
+        assert [s.name for s in e.qualifier.segments] == ["Review"]
         assert e.variant == "Pass"
         assert not e.negated
 
@@ -2747,7 +2748,7 @@ class TestBinaryOperators:
         e = first(parse("x is not Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.qualifier is not None
-        assert e.qualifier.route_segments == ("Review",)
+        assert [s.name for s in e.qualifier.segments] == ["Review"]
         assert e.variant == "Pass"
         assert e.negated
 
@@ -3198,6 +3199,10 @@ class TestPatterns:
         if not isinstance(pat.literal, NullLit):
             assert pat.literal.value == value
 
+    def test_decimal_pattern_literal_out_of_range_is_a_compile_time_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(f"case x of | {'1' + '0' * 1_000_000}.0 => a")
+
     def test_as_patterns_wrap_complete_patterns_and_chain(self) -> None:
         expr = first(parse("case r of | Rect(w, h) as rect as shape => shape"))
         assert isinstance(expr, Case)
@@ -3251,7 +3256,7 @@ class TestPatterns:
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
 
     # -----------------------------------------------------------------
     # Qualified pattern parsing: constructor-match shape in `case`, and its
@@ -3274,7 +3279,7 @@ class TestPatterns:
         pat = self._first_case_pattern("case r of | Review::Pass => ok")
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
         assert pat.positional == ()
         assert pat.named == ()
 
@@ -3282,7 +3287,7 @@ class TestPatterns:
         pat = self._first_case_pattern("case r of | Review::Pass() => ok")
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Review",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Review",)
         assert pat.positional == ()
         assert pat.named == ()
 
@@ -3354,7 +3359,9 @@ class TestTemplates:
         assert isinstance(interpolation.expr.callee, VarRef)
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
-        assert interpolation.expr.callee.qualifier.route_segments == ("std", "prelude")
+        assert tuple(s.name for s in interpolation.expr.callee.qualifier.segments) == (
+            "std/prelude",
+        )
         argument = interpolation.expr.args[0]
         assert isinstance(argument, StringLit)
         assert argument.value == "HOME"
@@ -3552,21 +3559,6 @@ class TestReplSeam:
         """Input the lexer rejects is a real error, not a continuation prompt."""
         assert not is_incomplete_source("~~~")
 
-    def test_is_incomplete_source_unexpected_parser_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Unexpected residual Lark errors are complete so the REPL shows them."""
-        from lark.exceptions import LarkError
-
-        import agm.agl.parser.parser as parser_mod
-
-        def fail_parse(_text: str) -> object:
-            raise LarkError("synthetic parser failure")
-
-        monkeypatch.setattr(parser_mod, "_incomplete_cache", None)
-        monkeypatch.setattr(parser_mod._PARSER, "parse", fail_parse)
-        assert not is_incomplete_source("synthetic lark fallback")
-
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_is_incomplete_source_unterminated_triple_quote(self, quote: str) -> None:
         """Triple-quoted string EOF is incomplete for REPL continuation."""
@@ -3658,7 +3650,7 @@ class TestDollarSpacingHint:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("ask$ let x = 1")
         assert "ask $" in str(exc_info.value)
-        assert exc_info.value.source_span.start_offset == 5
+        assert exc_info.value.span.start_offset == 5
 
     def test_offending_token_later_on_the_dollar_suffixed_names_own_line_gets_a_hint(
         self,
@@ -3718,33 +3710,6 @@ class TestDollarSpacingHint:
             parse_program("1 2 3")
         assert "$ …" not in str(exc_info.value)
 
-    def test_layout_token_with_no_preceding_real_token_gets_no_hint(self) -> None:
-        """A layout token's anchor search finds nothing before it: no crash, no hint.
-
-        Not reachable through ``parse_program`` (a stray indent always has
-        something real before it); call the mapping helper directly with a
-        materialized token list that starts after the offending position.
-        """
-        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
-        far_name = Token("NAME", "ask$", start_pos=10, line=2, column=6)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[far_name]
-        )
-        assert "$ …" not in str(err)
-
-    def test_layout_anchor_search_skips_a_materialized_token_with_no_line(self) -> None:
-        """A token missing its own line cannot anchor the layout-token hint search.
-
-        Not reachable through ``parse_program`` (the lexer always sets a real
-        token's line); call the mapping helper directly.
-        """
-        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
-        lineless = Token("NAME", "ask$", start_pos=0, line=None, column=None)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[lineless]
-        )
-        assert "$ …" not in str(err)
-
 
 class TestPipingHint:
     """Juxtaposition takes one argument; a further `$` literal gets a piping hint."""
@@ -3781,21 +3746,11 @@ class TestPipingHint:
             parse_program("f x y")
         assert "pipe" not in str(exc_info.value)
 
-    def test_missing_tokens_gets_no_piping_hint(self) -> None:
-        """No materialized token pass: nothing to inspect, no hint, no crash."""
-        offending = Token("VERBATIM_START", "$", start_pos=5, line=1, column=6)
-        err = syntax_error_from_lark(UnexpectedToken(offending, expected={"NAME"}))
-        assert "pipe" not in str(err)
-
     def test_dollar_literal_opener_preceded_by_a_non_operand_token_gets_no_hint(self) -> None:
-        """Two tokens precede the `$` opener, but the nearer one is not operand-ending."""
-        name = Token("NAME", "x", start_pos=1, line=1, column=2)
-        op = Token("EQ", "=", start_pos=5, line=1, column=6)
-        offending = Token("VERBATIM_START", "$", start_pos=10, line=1, column=11)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[name, op, offending]
-        )
-        assert "pipe" not in str(err)
+        """`x. $ y`: two tokens precede the `$` opener, but `.` is not operand-ending."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("x. $ y")
+        assert "pipe" not in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -3860,17 +3815,10 @@ class TestFullPrograms:
 class TestSyntaxErrorSpans:
     """A syntax error locates itself with a 1-based span."""
 
-    def test_source_span_is_the_error_span(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x = y")
-        err = exc_info.value
-        assert err.span is not None
-        assert err.source_span is err.span
-
-    def test_source_span_points_at_the_offending_source(self) -> None:
+    def test_span_points_at_the_offending_source(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let a = 1\nx = y")
-        span = exc_info.value.source_span
+        span = exc_info.value.span
         assert span.start_line == 2
         assert span.start_col >= 1
 
@@ -3892,55 +3840,7 @@ class TestInlineCompoundInExpressionPosition:
 
 
 class TestLarkErrorMapping:
-    """Lark exceptions map to AgL syntax errors with usable spans.
-
-    The custom AglLexer pre-empts Lark's character-level lexer, so
-    UnexpectedCharacters, UnexpectedEOF, and generic LarkError are never
-    raised through the normal parse path.  We call the pure mapping helper
-    directly with minimally-constructed Lark exception instances.
-    """
-
-    def test_unexpected_characters_message(self) -> None:
-        """UnexpectedCharacters maps to 'Unexpected character.' with a 1-based span."""
-        from lark.exceptions import UnexpectedCharacters
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        # seq='hello', lex_pos=2, line=3, column=5
-        exc = UnexpectedCharacters("hello", 2, 3, 5)
-        err = syntax_error_from_lark(exc)
-        assert str(err) == "Unexpected character."
-        assert err.span is not None
-        assert err.span.start_line == 3
-        assert err.span.start_col == 5
-
-    def test_unexpected_characters_span_width_one(self) -> None:
-        """The span produced for UnexpectedCharacters is exactly one character wide."""
-        from lark.exceptions import UnexpectedCharacters
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        exc = UnexpectedCharacters("abc", 1, 1, 2)
-        err = syntax_error_from_lark(exc)
-        span = err.span
-        assert span is not None
-        assert span.end_col == span.start_col + 1
-        assert span.end_offset == span.start_offset + 1
-
-    def test_unexpected_eof_message(self) -> None:
-        """UnexpectedEOF maps to 'Unexpected end of input.' with (1,1) fallback span."""
-        from lark.exceptions import UnexpectedEOF
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        exc = UnexpectedEOF([])
-        err = syntax_error_from_lark(exc)
-        assert str(err) == "Unexpected end of input."
-        span = err.span
-        assert span is not None
-        assert span.start_line == 1
-        assert span.start_col == 1
-        assert span.start_offset == 0
+    """Lark parse failures map to AgL syntax errors with usable spans."""
 
     @pytest.mark.parametrize(
         "source",
@@ -3997,7 +3897,7 @@ class TestLarkErrorMapping:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
 
-        span = exc_info.value.source_span
+        span = exc_info.value.span
         assert span.start_line == expected_line
         assert span.start_offset != 0
         assert span.start_offset == len(source)
@@ -4027,21 +3927,6 @@ class TestLarkErrorMapping:
             parse_program("let x = raise\n\n  1\n")
 
         assert str(exc_info.value) == "Unexpected indentation."
-
-    def test_generic_lark_error_fallback(self) -> None:
-        """A plain LarkError falls back to str(exc) as the message with (1,1) span."""
-        from lark.exceptions import LarkError
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        message = "some unexpected grammar state"
-        exc = LarkError(message)
-        err = syntax_error_from_lark(exc)
-        assert str(err) == message
-        span = err.span
-        assert span is not None
-        assert span.start_line == 1
-        assert span.start_col == 1
 
 
 # ---------------------------------------------------------------------------
@@ -4316,7 +4201,7 @@ class TestCaseNeutralPatterns:
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("Option",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("Option",)
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
@@ -4820,7 +4705,7 @@ class TestQualifiedRefs:
         (argument,) = expr.right.args
         assert isinstance(argument, VarRef)
         assert argument.qualifier is not None
-        assert argument.qualifier.route_segments == ()
+        assert argument.qualifier.segments == ()
 
     def test_anchored_qual_var_ref(self) -> None:
         (expr,) = items(parse("/foo/bar::baz"))
@@ -4851,7 +4736,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "myvar"
         assert expr.qualifier is not None
-        assert expr.qualifier.route_segments == ()
+        assert expr.qualifier.segments == ()
 
     def test_self_ref_constructor(self) -> None:
         # ::MyType has a current-module anchor and no qualifier segments.
@@ -4860,7 +4745,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "MyType"
         assert expr.qualifier is not None
-        assert expr.qualifier.route_segments == ()
+        assert expr.qualifier.segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
         # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
@@ -4940,7 +4825,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.name == "MyType"
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in decl.type_ann.qualifier.segments) == ("m",)
 
     def test_qual_applied_type_in_annotation(self) -> None:
         prog = parse("let x: m::Box[int] = null")
@@ -4949,7 +4834,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl.type_ann, syntax.AppliedT)
         assert decl.type_ann.name == "Box"
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in decl.type_ann.qualifier.segments) == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
         prog = parse("Option[int]::some(value = 1)")
@@ -4974,7 +4859,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.qualifier is not None
-        assert decl.type_ann.qualifier.route_segments == ()
+        assert decl.type_ann.qualifier.segments == ()
 
     def test_qual_named_type_in_func_return(self) -> None:
         prog = parse("def f() -> m::Result = null")
@@ -4991,7 +4876,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("m",)
+        assert tuple(s.name for s in pat.qualifier.segments) == ("m",)
 
     def test_self_ref_pattern_constructor(self) -> None:
         prog = parse("case x of | ::Bar => 2")
@@ -5000,7 +4885,7 @@ class TestQualifiedTypeRefs:
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ()
+        assert pat.qualifier.segments == ()
 
     def test_qual_pattern_enum_variant(self) -> None:
         # Qualified enum variant: m::Color::Red (type qualifier after qual_prefix)
@@ -5102,17 +4987,6 @@ class TestFieldAssignmentSyntax:
         with pytest.raises(AglSyntaxError):
             parse("let same = (x = 3)")
 
-    def test_lark_chained_comparison_error_adapter(self) -> None:
-        tok = Token("LT", "<")
-        tok.line = 1
-        tok.column = 7
-        tok.start_pos = 6
-        tok.end_line = 1
-        tok.end_column = 8
-        tok.end_pos = 7
-        err = syntax_error_from_lark(UnexpectedToken(tok, expected={"PLUS"}))
-        assert "Comparisons are non-associative" in str(err)
-
 
 class TestModifierDecoratorNewline:
     """`builtin` acts as a decorator: a newline may follow it.
@@ -5182,7 +5056,7 @@ class TestVerbatimTextLiteral:
             pytest.param("r.ask $ hello", 'r.ask "hello"', id="juxt_dotted_ask"),
             pytest.param("ask::[Review] $ hello", 'ask::[Review] "hello"', id="juxt_typed_ask"),
             pytest.param("session.ask $ hello", 'session.ask "hello"', id="juxt_session_ask"),
-            pytest.param("infixl ++\na ++ $ b", 'infixl ++\na ++ "b"', id="infix_right_operand"),
+            pytest.param("a ++ $ b", 'a ++ "b"', id="infix_right_operand"),
             pytest.param(
                 "if true =>\n  $ a\n| else =>\n  $ b",
                 'if true =>\n  "a"\n| else =>\n  "b"',
@@ -5231,15 +5105,15 @@ class TestVerbatimTextLiteral:
     def test_juxtaposition_does_not_chain(self, source: str) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
-        assert exc_info.value.source_span.start_offset == 10
+        assert exc_info.value.span.start_offset == 10
 
     @pytest.mark.parametrize(
         ("verbatim_source", "quoted_source"),
         (
-            pytest.param("infixr <|\nprint <| ask $ x", 'infixr <|\nprint <| ask "x"', id="plain"),
+            pytest.param("print <| ask $ x", 'print <| ask "x"', id="plain"),
             pytest.param(
-                "infixr <|\nprint <| ag.ask $ Summarize %{subject}",
-                'infixr <|\nprint <| ag.ask("Summarize %{subject}")',
+                "print <| ag.ask $ Summarize %{subject}",
+                'print <| ag.ask("Summarize %{subject}")',
                 id="dotted_member",
             ),
         ),
@@ -5250,9 +5124,9 @@ class TestVerbatimTextLiteral:
         verbatim_call = items(parse_program(verbatim_source))[-1]
         quoted_call = items(parse_program(quoted_source))[-1]
         assert verbatim_call == quoted_call
-        assert isinstance(verbatim_call, Call)
-        assert isinstance(verbatim_call.callee, VarRef)
-        assert verbatim_call.callee.name == "<|"
+        assert isinstance(verbatim_call, RawInfixChain)
+        assert tuple(operator.name for operator in verbatim_call.operators) == ("<|",)
+        assert isinstance(verbatim_call.operands[1].expr, Call)
 
     def test_same_line_swallowing_yields_a_single_branch(self) -> None:
         expr = first(parse("if c => $ a | else => $ b"))

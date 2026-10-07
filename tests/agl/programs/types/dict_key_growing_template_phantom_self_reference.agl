@@ -1,0 +1,27 @@
+# A growing polymorphic-recursive type's own declaration template is
+# compiled while still in progress; a sibling field's PHANTOM type argument
+# (unused in the argument's own body) can reach the very declaration being
+# compiled as a dict key -- here `K`'s own field nests it, unused, inside
+# `Phantom[T]`. Relevance filtering drops that phantom argument before
+# `emit` ever visits it, so `dict[K, int]` is never reached as a key to
+# classify at all -- it needs no completed body from K's own, still
+# mid-construction, definition.
+
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+
+record Phantom[T]
+  y: int
+
+record K
+  p: Phantom[dict[K, int]]
+
+program def main() -> unit =
+  let k: K = K(p = Phantom(y = 1))
+  let v: Perfect[K] = Single(value = k)
+  print(v as json)

@@ -20,7 +20,7 @@
       "expect": {
         "stdout_contains": [
           "\"quoted\"",
-          "\"shorthand\"",
+          "\"plain\"",
           "\"nested\"",
           "\"inner\"",
           "5\n",

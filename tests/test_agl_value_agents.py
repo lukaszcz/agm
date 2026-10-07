@@ -68,17 +68,6 @@ def test_decode_accepts_every_declared_agent_variant() -> None:
         assert isinstance(decode_agent_value(value, NO_BUILTIN_DECLARATIONS), AGENT_SPECS[variant])
 
 
-def test_decode_rejects_declared_variant_without_a_host_spec(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    catalog = dict(AGENT_SPECS)
-    del catalog["AgentCommand"]
-    monkeypatch.setattr("agm.agent.spec.AGENT_SPECS", catalog)
-
-    with pytest.raises(ValueError):
-        decode_agent_value(agent_value("AgentCommand", command="runner"), NO_BUILTIN_DECLARATIONS)
-
-
 def test_agent_value_encodes_the_inverse_of_decode_agent_value() -> None:
     """``agent_value`` round-trips every declared ``Agent`` variant's host spec."""
     for variant, payload in _agent_member_fields().items():
@@ -500,16 +489,17 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
 def test_composed_prompt_appends_format_instructions_after_the_prompt(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import JsonCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(
         idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
     )
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=True,
         format_instructions="Return only valid JSON matching the schema.",
         json_schema=None,
@@ -529,16 +519,17 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """An empty ``format_instructions`` (e.g. the text codec) adds nothing."""
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import TextCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest
 
     dispatch = value_driven_agent_factory(
         idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
     )
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="text",
-        codec_name="text",
+    contract = OutputContract(
+        target_type_label="text",
+        codec=TextCodec(),
         strict_json=None,
         format_instructions="",
         json_schema=None,
@@ -602,16 +593,17 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """Ordering: prompt, then format_instructions, then the retry-feedback block."""
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import JsonCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(
         idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
     )
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=True,
         format_instructions="Return JSON.",
         json_schema=None,
@@ -938,7 +930,7 @@ def _capturing_run_capture_result(
     ("source", "profile", "argv_prefix"),
     [
         ('AgentClaude("sonnet", "medium")', "claude", ["claude", "-p"]),
-        ('AgentCodex("o3", "high")', "codex", ["codex", "exec"]),
+        ('AgentCodex("o3", "high")', "codex", ["codex", "--no-daemon", "exec"]),
         ('AgentPi("openai", "gpt", "low")', "pi", ["pi", "-p"]),
         ('AgentCommand("/some/path/my-agent")', "my-agent", ["/some/path/my-agent"]),
     ],

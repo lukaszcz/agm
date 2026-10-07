@@ -1,0 +1,313 @@
+{
+  "scenarios": [
+    {
+      "name": "params_value_syntax",
+      "params": {
+        "mode": "params",
+        "stock": "{North: 2, Zone::South: 5}",
+        "sizes": "{1: \"s\", 2: \"m\"}",
+        "spots": "{Cell(x = 1, y = 2): \"a\", Cell(x = 0, y = 0): \"o\"}"
+      },
+      "expect": {
+        "stdout": "{Zone::North: 2, Zone::South: 5}\n{1: \"s\", 2: \"m\"}\n{Cell(x = 1, y = 2): \"a\", Cell(x = 0, y = 0): \"o\"}\n7\n1,2 -> a\n0,0 -> o\n"
+      }
+    },
+    {
+      "name": "params_json_forms",
+      "params": {
+        "mode": "params",
+        "stock": "{\"South\": 5}",
+        "sizes": "{\"7\": \"x\"}",
+        "spots": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"a\"}]"
+      },
+      "expect": {
+        "stdout": "{Zone::South: 5}\n{7: \"x\"}\n{Cell(x = 1, y = 2): \"a\"}\n5\n1,2 -> a\n"
+      }
+    },
+    {
+      "name": "params_defaults_are_empty",
+      "params": {
+        "mode": "params"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n0\n"
+      }
+    },
+    {
+      "name": "literals_computed_keys",
+      "params": {
+        "mode": "literals",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "{\"k-a\": 1, \"k-b\": 2}\n{3: \"updated\", 4: \"next\", 8: \"far\"}\n{Zone::North: 2, Zone::South: 11}\n{Cell(x = 3, y = 0): \"moved\", Cell(x = 3, y = 1): \"up\"}\ntrue\ntrue\nfalse\n{Zone::North: 2, Zone::South: 1}\n{3: 2, 4: 1}\n{\"a\": 2, \"b\": 1}\n"
+      }
+    },
+    {
+      "name": "literals_other_base",
+      "params": {
+        "mode": "literals",
+        "n": -1
+      },
+      "expect": {
+        "stdout": "{\"k-a\": 1, \"k-b\": 2}\n{-1: \"updated\", 0: \"next\", 4: \"far\"}\n{Zone::North: 2, Zone::South: 11}\n{Cell(x = -1, y = 0): \"moved\", Cell(x = -1, y = 1): \"up\"}\ntrue\ntrue\nfalse\n{Zone::North: 2, Zone::South: 1}\n{-1: 2, 0: 1}\n{\"a\": 2, \"b\": 1}\n"
+      }
+    },
+    {
+      "name": "missing_keys_render_in_value_syntax",
+      "params": {
+        "mode": "missing",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "3\nZone::South\nCell(x = 3, y = 3)\n\"b\"\n"
+      }
+    },
+    {
+      "name": "present_int_key_is_not_missing",
+      "params": {
+        "mode": "missing",
+        "n": 1
+      },
+      "expect": {
+        "stdout": "Zone::South\nCell(x = 1, y = 1)\n\"b\"\n"
+      }
+    },
+    {
+      "name": "computed_duplicate_literal_key_raises",
+      "params": {
+        "mode": "computed-duplicate",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "duplicate 3\n"
+      }
+    },
+    {
+      "name": "computed_distinct_literal_keys",
+      "params": {
+        "mode": "computed-duplicate",
+        "n": 4
+      },
+      "expect": {
+        "stdout": "{4: \"a\", 3: \"b\"}\n"
+      }
+    },
+    {
+      "name": "from_entries_policies",
+      "params": {
+        "mode": "from-entries",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "{Cell(x = 3, y = 0): \"a\", Cell(x = 2, y = 0): \"b\"}\n{Cell(x = 3, y = 0): \"c\", Cell(x = 2, y = 0): \"b\"}\nduplicate Cell(x = 3, y = 0)\n[Zone::North, Zone::South]\n{Zone::North: 5, Zone::South: 2}\n"
+      }
+    },
+    {
+      "name": "from_entries_distinct_keys_need_no_policy",
+      "params": {
+        "mode": "from-entries",
+        "n": 4
+      },
+      "expect": {
+        "stdout": "{Cell(x = 4, y = 0): \"a\", Cell(x = 2, y = 0): \"b\", Cell(x = 3, y = 0): \"c\"}\n{Cell(x = 4, y = 0): \"a\", Cell(x = 2, y = 0): \"b\", Cell(x = 3, y = 0): \"c\"}\n{Cell(x = 4, y = 0): \"a\", Cell(x = 2, y = 0): \"b\", Cell(x = 3, y = 0): \"c\"}\n[Zone::North, Zone::South]\n{Zone::North: 5, Zone::South: 2}\n"
+      }
+    },
+    {
+      "name": "agent_int_object_form",
+      "params": {
+        "mode": "agent-int"
+      },
+      "agents": {
+        "planner": [
+          "{\"1\": \"a\", \"2.0\": \"b\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{1: \"a\", 2: \"b\"}\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "agent_int_entries_form_is_retried",
+      "params": {
+        "mode": "agent-int"
+      },
+      "agents": {
+        "planner": [
+          "[{\"key\": 3, \"value\": \"c\"}]",
+          "{\"3\": \"c\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{3: \"c\"}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_text_object_form",
+      "params": {
+        "mode": "agent-text"
+      },
+      "agents": {
+        "planner": [
+          "{\"a\": 1, \"b\": 2}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"a\": 1, \"b\": 2}\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "agent_text_entries_form_is_retried",
+      "params": {
+        "mode": "agent-text"
+      },
+      "agents": {
+        "planner": [
+          "[{\"key\": \"a\", \"value\": 1}]",
+          "{\"a\": 1}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"a\": 1}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_zone_object_form",
+      "params": {
+        "mode": "agent-zone"
+      },
+      "agents": {
+        "planner": [
+          "{\"North\": 1, \"South\": 2}"
+        ]
+      },
+      "expect": {
+        "stdout": "{Zone::North: 1, Zone::South: 2}\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "agent_zone_entries_form_is_retried",
+      "params": {
+        "mode": "agent-zone"
+      },
+      "agents": {
+        "planner": [
+          "[{\"key\": {\"$case\": \"South\"}, \"value\": 2}]",
+          "{\"South\": 2}"
+        ]
+      },
+      "expect": {
+        "stdout": "{Zone::South: 2}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_zone_unknown_tag_retries",
+      "params": {
+        "mode": "agent-zone"
+      },
+      "agents": {
+        "planner": [
+          "{\"East\": 1}",
+          "{\"North\": 1}"
+        ]
+      },
+      "expect": {
+        "stdout": "{Zone::North: 1}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_cell_entries_form",
+      "params": {
+        "mode": "agent-cell"
+      },
+      "agents": {
+        "planner": [
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 0, \"y\": 0}, \"value\": \"o\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "{Cell(x = 1, y = 2): \"p\", Cell(x = 0, y = 0): \"o\"}\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "agent_cell_duplicate_entry_retries",
+      "params": {
+        "mode": "agent-cell"
+      },
+      "agents": {
+        "planner": [
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]",
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "{Cell(x = 1, y = 2): \"p\"}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_cell_object_form_retries",
+      "params": {
+        "mode": "agent-cell"
+      },
+      "agents": {
+        "planner": [
+          "{\"p\": \"x\"}",
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "{Cell(x = 1, y = 2): \"p\"}\n",
+        "calls": {
+          "planner": 2
+        }
+      }
+    },
+    {
+      "name": "agent_int_equal_keys_exhaust_retries",
+      "params": {
+        "mode": "agent-int"
+      },
+      "agents": {
+        "planner": [
+          "{\"1\": \"a\", \"1.0\": \"b\"}",
+          "{\"1\": \"a\", \"1.00\": \"b\"}"
+        ]
+      },
+      "expect": {
+        "raises": {
+          "type": "AgentParseError"
+        },
+        "calls": {
+          "planner": 2
+        }
+      }
+    }
+  ]
+}

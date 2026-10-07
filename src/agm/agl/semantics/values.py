@@ -22,18 +22,19 @@ Design constraints
 from __future__ import annotations
 
 import decimal
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SymbolId
+from agm.util.decimal import compare_numbers
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
 # ---------------------------------------------------------------------------
 
 
-def _json_eq(left: object, right: object) -> bool:
+def json_eq(left: object, right: object) -> bool:
     """Compare two JSON-shaped trees with bool-guarded numeric equivalence.
 
     Mirrors the semantics in the interpreter: JSON numbers compare numerically
@@ -46,36 +47,34 @@ def _json_eq(left: object, right: object) -> bool:
     if isinstance(left, bool) or isinstance(right, bool):
         return isinstance(left, bool) and isinstance(right, bool) and left == right
     if isinstance(left, (int, decimal.Decimal)) and isinstance(right, (int, decimal.Decimal)):
-        return decimal.Decimal(left) == decimal.Decimal(right)
+        return compare_numbers(left, right) == 0
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
             return False
-        return all(_json_eq(left[i], right[i]) for i in range(len(left)))
+        return all(json_eq(left[i], right[i]) for i in range(len(left)))
     if isinstance(left, dict) and isinstance(right, dict):
         if left.keys() != right.keys():
             return False
-        return all(_json_eq(left[k], right[k]) for k in left)
+        return all(json_eq(left[k], right[k]) for k in left)
     return left == right
 
 
-def _json_hash(obj: object) -> int:
+def json_hash(obj: object) -> int:
     """Stable hash for a JSON-shaped tree.
 
-    Must be consistent with ``_json_eq``: objects that compare equal must hash
-    equal.  Because ``_json_eq`` treats numeric int/Decimal equivalently, we
-    normalise numbers to ``Decimal`` before hashing.  Lists and dicts recurse;
-    bools are guarded so ``True`` never hashes the same as ``1``.
+    Must be consistent with ``json_eq``: objects that compare equal must hash
+    equal.  ``json_eq`` compares an int and a Decimal numerically, and Python
+    already hashes numerically equal ints and Decimals alike (``hash(1) ==
+    hash(Decimal("1.0"))``), so numbers hash as themselves.  Lists and dicts
+    recurse; bools are guarded so ``True`` never hashes the same as ``1``.
     """
     if isinstance(obj, bool):
         # Hash True/False distinctly from integers.
         return hash(("__bool__", obj))
-    if isinstance(obj, (int, decimal.Decimal)):
-        # Normalise to Decimal so 1 and Decimal("1") hash the same.
-        return hash(decimal.Decimal(obj))
     if isinstance(obj, list):
-        return hash(tuple(_json_hash(e) for e in obj))
+        return hash(tuple(json_hash(e) for e in obj))
     if isinstance(obj, dict):
-        return hash(frozenset((_json_hash(k), _json_hash(v)) for k, v in obj.items()))
+        return hash(frozenset((json_hash(k), json_hash(v)) for k, v in obj.items()))
     return hash(obj)
 
 
@@ -121,21 +120,21 @@ class JsonValue:
     operations on the payload use ``isinstance`` guards, never bare ``Any``
     access.
 
-    ``__eq__`` delegates to ``_json_eq`` so that JSON bool/number conflation is
+    ``__eq__`` delegates to ``json_eq`` so that JSON bool/number conflation is
     prevented inside containers (e.g. ``JsonValue([True]) != JsonValue([1])``),
     consistent with the top-level ``json = json`` comparison semantics.
-    ``__hash__`` is consistent with ``__eq__`` via ``_json_hash``.
+    ``__hash__`` is consistent with ``__eq__`` via ``json_hash``.
     """
 
     raw: object
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, JsonValue):
-            return _json_eq(self.raw, other.raw)
+            return json_eq(self.raw, other.raw)
         return NotImplemented
 
     def __hash__(self) -> int:
-        return _json_hash(self.raw)
+        return json_hash(self.raw)
 
 
 # ---------------------------------------------------------------------------
@@ -200,25 +199,234 @@ class ArrayValue:
         return NotImplemented
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True, eq=False, init=False)
 class DictValue:
-    """A ``dict[text, V]`` value: a mutable reference to a mapping of str → Value.
+    """A ``dict[K, V]`` value: a mutable reference to entries, storage hidden behind an API.
 
-    Stored as a plain ``dict`` and mutated in place by indexed assignment;
-    that mutation is observed by every binding, field, capture, or iterator
-    that holds a reference to this ``DictValue``. Unhashable: the payload is
-    mutable, so a stable hash is impossible.
+    Two representations: a ``text``-keyed dict stores ``dict[str, Value]``
+    directly, with no per-key wrapper or token — the hot path, and the
+    default an empty dict starts in. The first non-``text`` key inserted
+    switches the dict (migrating any ``text`` entries, order kept) to
+    token-keyed storage: ``dict[Hashable, tuple[Value, Value]]`` keyed by
+    :func:`key_token`, holding ``(original key, value)``. So an empty dict is
+    undetermined (``text``-keyed until proven otherwise) and stays token-keyed
+    once switched, even if every entry is later removed. Updating a key equal
+    to one already stored (e.g. ``1.5`` over stored ``1.50``) replaces only
+    the value — the originally inserted key is kept, so iteration is stable.
 
-    Equality delegates to :func:`values_equal` (cycle-safe, co-inductive) —
-    see :class:`ArrayValue`.
+    No code outside this class touches ``_text``/``_tokens``; every bulk
+    operation (equality, copying, text-keyed iteration) is a method here so
+    callers never need representation-specific storage access.
+
+    Mutation is observed by every binding, field, capture, or iterator that
+    holds a reference to this ``DictValue``, as for :class:`ArrayValue`.
+    Unhashable: the payload is mutable, so a stable hash is impossible.
+    Equality delegates to :func:`values_equal` (cycle-safe, co-inductive).
     """
 
-    entries: dict[str, Value] = field(default_factory=dict)
+    _text: dict[str, Value]
+    _tokens: dict[Hashable, tuple[Value, Value]] | None
+
+    def __init__(self, entries: dict[str, Value] | None = None) -> None:
+        """Construct a dict value, taking ownership of *entries* (no copy).
+
+        *entries* seeds a ``text``-keyed dict directly, for the common case
+        of a literal or decoded ``text``-keyed dict; the caller must not
+        keep mutating it afterwards, since this ``DictValue`` now owns it in
+        place. Omitted or empty, the dict is undetermined — exactly the same
+        state either way, since there is no key yet to fix a representation
+        from.
+        """
+        text: dict[str, Value] = {} if entries is None else entries
+        object.__setattr__(self, "_text", text)
+        object.__setattr__(self, "_tokens", None)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, DictValue):
             return values_equal(self, other)
         return NotImplemented
+
+    def __repr__(self) -> str:
+        body = ", ".join(f"{key!r}: {value!r}" for key, value in self.items())
+        return f"DictValue({{{body}}})"
+
+    def __len__(self) -> int:
+        return len(self._text) if self._tokens is None else len(self._tokens)
+
+    def is_text_keyed(self) -> bool:
+        """Whether this dict is (still) ``text``-keyed storage.
+
+        True for an undetermined empty dict, which defaults to ``text``-keyed.
+        """
+        return self._tokens is None
+
+    def lookup(self, key: Value) -> Value | None:
+        """Return the value stored under *key*, or ``None`` if absent."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue):
+                return None
+            return self._text.get(key.value)
+        pair = self._tokens.get(key_token(key))
+        return None if pair is None else pair[1]
+
+    def insert(self, key: Value, value: Value) -> bool:
+        """Store *value* under *key*; a first non-``text`` key migrates entries to token storage.
+
+        Returns whether *key* was new (``False`` if it already existed — the
+        stored key value is then left unchanged, only its value replaced).
+        """
+        if self._tokens is None and isinstance(key, TextValue):
+            is_new = key.value not in self._text
+            self._text[key.value] = value
+            return is_new
+        tokens = self._tokens
+        if tokens is None:
+            tokens = {}
+            for text_key, text_value in self._text.items():
+                wrapped = TextValue(text_key)
+                tokens[key_token(wrapped)] = (wrapped, text_value)
+            self._text.clear()
+            object.__setattr__(self, "_tokens", tokens)
+        token = key_token(key)
+        existing = tokens.get(token)
+        if existing is None:
+            tokens[token] = (key, value)
+            return True
+        tokens[token] = (existing[0], value)
+        return False
+
+    def update_existing(self, key: Value, value: Value) -> bool:
+        """Replace the value stored under *key* only if it already exists; report whether it did."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue) or key.value not in self._text:
+                return False
+            self._text[key.value] = value
+            return True
+        token = key_token(key)
+        existing = self._tokens.get(token)
+        if existing is None:
+            return False
+        self._tokens[token] = (existing[0], value)
+        return True
+
+    def remove(self, key: Value) -> Value | None:
+        """Remove *key* and return its value, or ``None`` if absent."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue):
+                return None
+            return self._text.pop(key.value, None)
+        pair = self._tokens.pop(key_token(key), None)
+        return None if pair is None else pair[1]
+
+    def pop_last(self) -> tuple[Value, Value] | None:
+        """Remove and return the most-recently-inserted ``(key, value)`` pair, or ``None`` if empty.
+
+        O(1): pops directly from the storage dict's own insertion order.
+        """
+        if self._tokens is None:
+            if not self._text:
+                return None
+            key_str, value = self._text.popitem()
+            return TextValue(key_str), value
+        if not self._tokens:
+            return None
+        _token, pair = self._tokens.popitem()
+        return pair
+
+    def clear(self) -> None:
+        """Remove every entry, keeping the fixed representation (if any)."""
+        if self._tokens is None:
+            self._text.clear()
+        else:
+            self._tokens.clear()
+
+    def items(self) -> Iterator[tuple[Value, Value]]:
+        """Iterate ``(key, value)`` pairs in insertion order, with original key values."""
+        if self._tokens is None:
+            for key_str, value in self._text.items():
+                yield TextValue(key_str), value
+        else:
+            yield from self._tokens.values()
+
+    def keys(self) -> Iterator[Value]:
+        """Iterate original key values in insertion order."""
+        if self._tokens is None:
+            return (TextValue(key_str) for key_str in self._text)
+        return (key for key, _value in self._tokens.values())
+
+    def values(self) -> Iterator[Value]:
+        """Iterate values in insertion order."""
+        if self._tokens is None:
+            return iter(self._text.values())
+        return (value for _key, value in self._tokens.values())
+
+    def text_items(self) -> Iterator[tuple[str, Value]]:
+        """Iterate ``(str, Value)`` pairs straight from ``text`` storage, unwrapped.
+
+        For callers statically restricted to ``text``-keyed dicts (JSON and
+        display encoders, the environment table): they never see a
+        token-keyed dict, so this skips the
+        per-key ``TextValue`` wrap/unwrap :meth:`items` pays.
+        """
+        return iter(self._text.items())
+
+    def fill_from(
+        self, source: "DictValue", transform: Callable[[Value], Value] | None = None
+    ) -> None:
+        """Fill this (empty) dict from *source*, adopting its representation.
+
+        Copies storage directly — a bulk ``dict.update`` when *transform* is
+        ``None``, a bulk comprehension applying *transform* to each value
+        otherwise — so this pays no per-key ``insert``/``key_token`` call.
+        Keys are immutable and shared either way; only values are
+        transformed. *source*'s representation (including an
+        emptied-but-token-determined dict) is preserved.
+        """
+        if source._tokens is None:
+            if transform is None:
+                self._text.update(source._text)
+            else:
+                for key_str, value in source._text.items():
+                    self._text[key_str] = transform(value)
+            return
+        tokens: dict[Hashable, tuple[Value, Value]]
+        if transform is None:
+            tokens = dict(source._tokens)
+        else:
+            tokens = {
+                token: (key, transform(value)) for token, (key, value) in source._tokens.items()
+            }
+        object.__setattr__(self, "_tokens", tokens)
+
+    def aligned_values(self, other: "DictValue") -> Iterable[tuple[Value, Value]] | None:
+        """Pair this dict's values with *other*'s by key, or ``None`` if their key sets differ.
+
+        When both dicts share a representation, compares key sets directly
+        against storage (``_text.keys()``/``_tokens.keys()``) at C speed —
+        the common case. A representation mismatch (one ``text``-keyed, the
+        other token-keyed — e.g. one is undetermined-empty while the other
+        holds a ``text`` key under a token fixed by an earlier, since-removed
+        non-``text`` key) falls back to a per-key ``lookup`` on *other*.
+        """
+        if len(self) != len(other):
+            return None
+        if self._tokens is None and other._tokens is None:
+            if self._text.keys() != other._text.keys():
+                return None
+            return ((value, other._text[key_str]) for key_str, value in self._text.items())
+        if self._tokens is not None and other._tokens is not None:
+            if self._tokens.keys() != other._tokens.keys():
+                return None
+            return (
+                (value, other._tokens[token][1]) for token, (_key, value) in self._tokens.items()
+            )
+        pairs: list[tuple[Value, Value]] = []
+        for key, value in self.items():
+            matched = other.lookup(key)
+            if matched is None:
+                return None
+            pairs.append((value, matched))
+        return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +441,9 @@ class RecordValue:
     ``nominal`` is the opaque ``NominalId`` — the identity key; its display
     spelling for rendering and diagnostics is looked up from the program's
     descriptor table, never stored on the value.  ``fields`` holds the
-    record's field values.
+    record's field values, in declaration order (every construction path —
+    constructor call, ``with`` update — fills it in that order; :func:`key_token`
+    relies on this to token identically regardless of construction path).
 
     Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
@@ -260,8 +470,10 @@ class ExceptionValue:
     uses that declaration's identity instead. Its display spelling (e.g.
     ``"AgentParseError"``) is looked up from the program's descriptor table,
     never stored on the value.
-    ``fields`` maps the exception's declared field names to their values.
-    The ``"message"`` field is always present (base ``Exception`` contract).
+    ``fields`` maps the exception's declared field names to their values, in
+    declaration order (see :class:`RecordValue`; the same ordering
+    guarantee holds here). The ``"message"`` field is always present (base
+    ``Exception`` contract).
 
     Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
@@ -289,17 +501,42 @@ class ExceptionValue:
 _STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, ExceptionValue)
 
 
+def key_token(value: Value) -> Hashable:
+    """Canonical hashable token for *value*, used as a :class:`DictValue` non-``text`` key.
+
+    Values equal under AgL equality share a token, distinct values don't:
+    every scalar/``json`` ``Value`` is its own token, since their frozen
+    dataclass (or, for ``json``, ``json_eq``/``json_hash``-backed) equality
+    and hashing already follow AgL equality — distinct classes never compare
+    equal (``bool`` != ``int``), ``decimal`` widens (``1.5`` == ``1.50``, same
+    hash), and ``json`` bools tag apart from numbers. A record, enum member,
+    or exception tokens as its nominal identity paired with its fields'
+    tokens, in declaration order (see :class:`RecordValue`).
+    """
+    if isinstance(value, (RecordValue, ExceptionValue)):
+        return (
+            value.nominal,
+            tuple(key_token(field_value) for field_value in value.fields.values()),
+        )
+    return value
+
+
 def value_equal(left: Value, right: Value) -> bool:
     """Return AgL equality for one value position.
 
-    ``int`` and ``decimal`` widen when compared directly. Structural equality
-    remains responsible for recursive positions, where values retain their
-    exact element types and therefore do not widen.
+    An ``int`` and a ``decimal`` compared directly -- by ``==``, array
+    membership, or an FFI live view's ``index`` -- compare exactly, whatever
+    the int's magnitude (:func:`~agm.util.decimal.compare_numbers`).
+    Structural equality remains responsible for recursive positions, where
+    values retain their exact element types.
     """
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        return decimal.Decimal(left.value) == right.value
-    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        return left.value == decimal.Decimal(right.value)
+    if (
+        isinstance(left, IntValue)
+        and isinstance(right, DecimalValue)
+        or isinstance(left, DecimalValue)
+        and isinstance(right, IntValue)
+    ):
+        return compare_numbers(left.value, right.value) == 0
     return values_equal(left, right)
 
 
@@ -341,9 +578,12 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
             return False
         return _children_equal(a, b, _seen, zip(a.elements, b.elements))
     if isinstance(a, DictValue):
-        if not isinstance(b, DictValue) or a.entries.keys() != b.entries.keys():
+        if not isinstance(b, DictValue):
             return False
-        return _children_equal(a, b, _seen, ((v, b.entries[k]) for k, v in a.entries.items()))
+        pairs = a.aligned_values(b)
+        if pairs is None:
+            return False
+        return _children_equal(a, b, _seen, pairs)
     if isinstance(a, RecordValue):
         if not isinstance(b, RecordValue) or a.nominal != b.nominal:
             return False
@@ -417,6 +657,10 @@ class IrClosureValue:
         return id(self)
 
 
+# A first-class function value: a closure or a constructor.
+FunctionValue: TypeAlias = IrClosureValue | ConstructorValue
+
+
 @dataclass(slots=True, eq=False)
 class IteratorValue:
     """Internal loop iterator cursor.
@@ -456,7 +700,8 @@ class ContractValue:
 # Broad runtime value union
 # ---------------------------------------------------------------------------
 
-Value: TypeAlias = (
+# Every value a program can observe: an iterator is internal to loop lowering.
+ObservableValue: TypeAlias = (
     TextValue
     | IntValue
     | DecimalValue
@@ -469,9 +714,10 @@ Value: TypeAlias = (
     | UnitValue
     | ConstructorValue
     | IrClosureValue
-    | IteratorValue
     | ContractValue
 )
+
+Value: TypeAlias = ObservableValue | IteratorValue
 
 # ---------------------------------------------------------------------------
 # Frame and cell model
@@ -511,6 +757,7 @@ __all__ = [
     "DictValue",
     "ExceptionValue",
     "Frame",
+    "FunctionValue",
     "IntValue",
     "IrClosureValue",
     "IteratorValue",
@@ -521,8 +768,9 @@ __all__ = [
     "TextValue",
     "UnitValue",
     "Value",
-    "_json_eq",
-    "_json_hash",
+    "json_eq",
+    "json_hash",
+    "key_token",
     "value_equal",
     "values_equal",
 ]

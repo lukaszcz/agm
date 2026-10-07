@@ -1,0 +1,22 @@
+# An uncaught exception whose `inners: dict[Inner, Option[() -> int]]` field
+# has no JSON form (its value type holds a function), so it reports through
+# the untyped value-directed walk rather than a compiled plan. That walk must
+# still key each nested record's fields by their EFFECTIVE JSON name
+# (`@json-name` ?? `@name` ?? declared name) -- the same names the typed
+# `c: Inner` field (which does have a plan) selects for the same record.
+
+record Inner
+  @json-name("xx") x: int
+  @name("yy") y: int
+  z: int
+
+exception Boom extends Exception
+  inners: dict[Inner, Option[() -> int]]
+  c: Inner
+
+program def main() -> unit =
+  raise Boom(
+    message = "boom",
+    inners = {Inner(x = 1, y = 2, z = 3): None},
+    c = Inner(x = 1, y = 2, z = 3),
+  )

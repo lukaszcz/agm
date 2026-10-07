@@ -1,0 +1,12 @@
+import library
+
+scope reports
+  use library::{Status}
+
+  def describe(status: Status) -> int =
+    case status of
+      | Status::Saved(id) => id
+      | Status::Fresh(n) => n
+end reports
+
+program def main() -> unit = print(reports::describe(library::Saved(id = 1)))

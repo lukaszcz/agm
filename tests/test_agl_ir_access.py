@@ -50,15 +50,9 @@ def test_index_get_text_uses_unicode_code_points() -> None:
     assert index_get(IndexKind.TEXT, value, IntValue(-1)) == TextValue("😀")
 
 
-def test_index_get_text_rejects_bad_indices_and_containers() -> None:
+def test_index_get_text_rejects_a_bad_index() -> None:
     with pytest.raises(AglIndexOutOfRange):
         index_get(IndexKind.TEXT, TextValue("x"), IntValue(1))
-    with pytest.raises(AssertionError, match="index_get TEXT: expected TextValue"):
-        index_get(IndexKind.TEXT, ArrayValue([]), IntValue(0))
-    with pytest.raises(AssertionError, match="index_get TEXT: expected IntValue"):
-        index_get(IndexKind.TEXT, TextValue("x"), TextValue("x"))
-    with pytest.raises(AssertionError, match="index_set TEXT: text is immutable"):
-        index_set(IndexKind.TEXT, TextValue("x"), IntValue(0), TextValue("y"))
 
 
 def test_index_get_dict_basic() -> None:
@@ -70,7 +64,7 @@ def test_index_get_dict_missing_key() -> None:
     d = DictValue({"a": IntValue(1)})
     with pytest.raises(AglMissingKey) as exc_info:
         index_get(IndexKind.DICT, d, TextValue("z"))
-    assert exc_info.value.key == "z"
+    assert exc_info.value.key == TextValue("z")
 
 
 def test_index_set_array_basic() -> None:
@@ -106,51 +100,17 @@ def test_index_set_dict_missing_key_raises() -> None:
         index_set(IndexKind.DICT, d, TextValue("z"), IntValue(99))
 
 
-def test_index_get_array_wrong_container() -> None:
+def test_index_get_dict_non_text_index_is_a_missing_key() -> None:
+    """A non-``text`` dict index is a ``Hashable``-bound violation the checker rules
+    out statically; at runtime it behaves like an ordinary missing key."""
     d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_get ARRAY: expected ArrayValue"):
-        index_get(IndexKind.ARRAY, d, IntValue(0))
-
-
-def test_index_get_array_wrong_index() -> None:
-    lst = ArrayValue([IntValue(1)])
-    with pytest.raises(AssertionError, match="index_get ARRAY: expected IntValue"):
-        index_get(IndexKind.ARRAY, lst, TextValue("x"))
-
-
-def test_index_get_dict_wrong_container() -> None:
-    lst = ArrayValue([IntValue(1)])
-    with pytest.raises(AssertionError, match="index_get DICT: expected DictValue"):
-        index_get(IndexKind.DICT, lst, TextValue("x"))
-
-
-def test_index_get_dict_wrong_index() -> None:
-    d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_get DICT: expected TextValue"):
+    with pytest.raises(AglMissingKey):
         index_get(IndexKind.DICT, d, IntValue(0))
 
 
-def test_index_set_array_wrong_container() -> None:
+def test_index_set_dict_non_text_index_is_a_missing_key() -> None:
     d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_set ARRAY: expected ArrayValue"):
-        index_set(IndexKind.ARRAY, d, IntValue(0), IntValue(99))
-
-
-def test_index_set_dict_wrong_container() -> None:
-    lst = ArrayValue([IntValue(1)])
-    with pytest.raises(AssertionError, match="index_set DICT: expected DictValue"):
-        index_set(IndexKind.DICT, lst, TextValue("x"), IntValue(99))
-
-
-def test_index_set_array_wrong_index() -> None:
-    lst = ArrayValue([IntValue(1)])
-    with pytest.raises(AssertionError, match="index_set ARRAY: expected IntValue"):
-        index_set(IndexKind.ARRAY, lst, TextValue("x"), IntValue(99))
-
-
-def test_index_set_dict_wrong_index() -> None:
-    d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_set DICT: expected TextValue"):
+    with pytest.raises(AglMissingKey):
         index_set(IndexKind.DICT, d, IntValue(0), IntValue(99))
 
 
@@ -420,7 +380,7 @@ m["a"] := 7
     ir = evaluate_ir(source)
     result = ir["m"]
     assert isinstance(result, DictValue)
-    assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
+    assert result.lookup(TextValue("a")) == DecimalValue(decimal.Decimal(7))
 
 
 def test_empty_array_literal_evaluates_to_empty_array() -> None:

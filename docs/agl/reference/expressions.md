@@ -91,11 +91,33 @@ let metadata: dict[text, json] = {
 }
 ```
 
-Keys are literal strings; an unquoted identifier key is shorthand for the same
-string. Interpolated keys are rejected. Duplicate keys are a static error. An
-empty dictionary may obtain its value type from an expected dictionary type or
-another constraint in the same enclosing expression; otherwise it needs an
-annotation:
+A key is an ordinary expression of the dictionary's key type — a literal,
+interpolated text, a constructor application, an arithmetic expression, or a
+variable; a bare name is a reference, not a shorthand key. Under an expected
+type of `json`, keys are always `text`. A non-empty literal's key type must
+satisfy `Hashable`.
+
+Two entries are a static error when both keys are [constant
+expressions](bindings-and-scope.md#constant-expressions) with a comparable
+constant value: `null`, `bool`, int and decimal literals compare
+numerically (`1` and `1.0` collide), text compares after folding templates
+and constant references to the text each renders (`"%{prefix}-a"` collides
+with the text it folds to), and a constructor application — direct or
+reached through a constant alias — compares by constructor identity with
+its arguments normalized to field names, positional and named alike
+(`Point(1, 2)` collides with `Point(x = 1, y = 2)`). Folding a reference
+never crosses a `var`, whose value can still change, or a module parameter,
+whose value the host settles at run time, nor an annotation other than the
+referenced constant's own scalar type (`text`, `int`, `decimal`, `bool`) —
+a `json`-typed constant renders through `json`'s own rules, not scalar
+text, so a hole reading one is never comparable this way either. A constant
+key with no comparable value under these rules is left to run time, like
+any pair of genuinely computed keys: two entries whose keys compute an
+equal value at run time raise catchable `DuplicateKeyError` instead.
+
+An empty dictionary may obtain its key and value types from an expected
+dictionary type or another constraint in the same enclosing expression;
+otherwise it needs an annotation:
 
 ```agl
 let metadata: dict[text, json] = {}
@@ -170,6 +192,10 @@ Review::Fail(issues = ["missing tests"])
 let review: Review = Pass           # checked in an enum-typed slot
 ```
 
+A module qualifier also reaches an inline member of one of the module's root
+enums by its terminal name (`mylib::Pass`, `::Pass`); see
+[Module-qualified enum members](modules.md#module-qualified-enum-members).
+
 A member constructor produces its own record type. Assign it to an enum slot
 to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
 binding above has type `Review`. This is a directed check, not common-type
@@ -197,8 +223,10 @@ let named-err = Outcome::Err(reason = "bad", fatal = false)
 
 ### Unqualified member ambiguity
 
-If two or more visible constructor candidates have the same unqualified name,
-a bare reference in ordinary value position is a **static scope ambiguity
+If two or more distinct constructor candidates have the same unqualified name
+at the [lookup step](scopes.md#names-and-visibility) that decides it — two of
+the module's own, or two contributed ones when the module declares none — a
+bare reference in ordinary value position is a **static scope ambiguity
 error**, even in a context with an expected enum type. Scope reports the
 ambiguity before type checking can use that type. Disambiguate by qualifying
 with the member's declaring record or, for an inline member, its owning enum:
@@ -416,7 +444,7 @@ so aliases of `receiver` observe the new value. A `let` receiver is valid: it
 prevents rebinding the name, not updating a `var` field. An enum-typed receiver
 has no fields; narrow it with a `case` pattern or cast it to a member record
 before assignment. Exceptions and fields without `var` cannot be assigned.
-See [Bindings and scope](bindings-and-scope.md#--destructive-assignment) for
+See [Bindings and scope](bindings-and-scope.md#destructive-assignment) for
 assignment targets, evaluation order, and cycle behavior.
 
 ## Record update
@@ -504,8 +532,9 @@ code point. An out-of-range array or text index raises catchable `IndexError`
 with `index`, `length`, and `message` fields. Text is immutable, so it cannot
 be an indexed-assignment target.
 
-Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
-with `key` and `message` fields.
+A dictionary index must have (or directedly coerce to, e.g. `int` into a
+`decimal` key) the dictionary's key type, which must satisfy `Hashable`.
+Missing keys raise catchable `KeyError` with `key` and `message` fields.
 
 ## Calls
 
@@ -595,8 +624,11 @@ render(value: T, pretty: bool = true, quote-strings: bool = true) -> text
 ```
 
 `pretty` selects single-line versus multi-line indented rendering for
-structured values and JSON. `quote-strings` controls only a top-level `text`
-argument; when it is `false`, rendering text is identity.
+structured values and JSON; a dict key always renders on one line.
+`quote-strings` controls only a top-level `text` or `json` argument. When it
+is `false`, rendering text is identity and a top-level `json` renders as pure
+JSON; when it is `true`, a `json` string escapes `%` and `${` as a text literal
+does, so the output is value syntax.
 
 ```agl
 program def main() -> unit =
@@ -612,8 +644,9 @@ type argument fixes its input, for example `let f: json -> text = render`. An
 explicit type argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote-strings = false)` renders the quoted json form
-`"hi"`: `quote-strings` controls only a top-level `text` argument, and the
-coerced argument has type `json`.
+`"hi"`: the coerced argument has type `json`, so it is not rendered as text.
+`render::[json]("50%")` renders `"50\%"`, and with `quote-strings = false`
+`"50%"`.
 
 ## JSON parsing
 
@@ -660,39 +693,54 @@ see [Parsing values](types.md#parsing-values).
 ### Equality: `==` and `!=`
 
 `==` is **equality** (a single `=` is never a comparison — it is a
-binder/named-argument separator). Both operands must have the same type after
-`int → decimal` widening, or one operand's type must widen nominally to the
+binder/named-argument separator). Both operands must have the same type, or
+one `int` and the other `decimal`, or one operand's type must widen nominally to the
 other's (an enum member or narrower enum against an enum, a derived exception
 against an ancestor), so `opt == None` checks. Equality is full value equality
-([Types](types.md#assignability-and-coercion)).
+([Types](types.md#assignability-and-coercion)); an `int` and a `decimal` compare exactly, without
+widening, so the comparison never raises
+([Numbers](types.md#numbers-int-and-decimal)).
 
 Operands whose type is, or transitively contains, a function or `unit` value
 are a static error — this applies to bare values as well as to
 containers (`array`, `dict`), records, enums, or exceptions that hold such
-a type at any depth.
+a type at any depth. A generic type parameter — bare, or nested inside such
+a type — is comparable only where its declaration bounds it `Eq` or
+`Hashable`; see [Constraint blocks](generics.md#constraint-blocks).
 
 `==` is non-associative; `x == y == z` is a parse error.
 
 ### Ordering: `<` `<=` `>` `>=`
 
-Both operands must be numeric or both `text`. Text ordering is lexicographic
-by code point.
+Both operands must be numeric or both `text`. Numbers order exactly, an `int`
+against a `decimal` included, without widening. Text ordering is
+lexicographic by code point.
 
 ### Membership: `in`
 
 <!-- agl-check: fragment -->
 ```agl
 issue in issues          # element membership:  issues: array[T]
-"source" in metadata     # key membership:      metadata: dict[text, V]
+key in counts             # key membership:      counts: dict[K, V]
 "missing" in body        # substring:           both text
 ```
+
+Element membership requires the array's element type to satisfy `Eq`; a bare
+generic element type needs an `Eq`/`Hashable` bound, as for `==`
+(see [Constraint blocks](generics.md#constraint-blocks)). Key membership
+requires the dict's key type to satisfy `Hashable`; the tested value must
+have (or directedly coerce to) that key type. An `int` tested against
+`decimal` elements or keys compares exactly and never raises; see
+[Numbers](types.md#numbers-int-and-decimal).
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 
 1. Both operands must be numeric. `+ - *` on two `int` values yield `int`; if
    either is `decimal`, the result is `decimal`.
 2. `/` **always yields `decimal`**, even for two `int` operands.
-3. Division by zero raises `ArithmeticError` at runtime.
+3. Division by zero raises `ArithmeticError` at runtime, as does a `decimal`
+   result outside the fixed decimal context's range
+   ([Numbers: int and decimal](types.md#numbers-int-and-decimal)).
 4. Unary `-` negates an `int` or `decimal`.
 
 Text is concatenated with the prelude operator `++`, not `+`; see
@@ -714,8 +762,11 @@ EXPR as? T    # optional cast: Option[T], never raises
 without raising, yielding `Some(value)` carrying the converted value on
 success and `None` on failure — so a successful test also supplies the value.
 `as text` and `as json` raise `CyclicValueError` when conversion walks a
-reference cycle; their `as?` forms yield `None` instead. Casting from an enum
-to one of its member records is an identity downcast;
+reference cycle; their `as?` forms yield `None` instead. `as decimal` on an
+`int` outside the fixed decimal context's range
+([Numbers: int and decimal](types.md#numbers-int-and-decimal)) raises
+`ArithmeticError` the same way, and `as? decimal` yields `None` instead.
+Casting from an enum to one of its member records is an identity downcast;
 casting a member record to a containing enum is an identity upcast. Enums can
 be cast when they share constructors; the runtime constructor must belong to
 the target enum. An exception value follows the same identity-cast shape over
@@ -794,7 +845,8 @@ The left operand must have enum or exception type.
 For an **enum** left operand, the right-hand name must be one of that enum's
 members. A member may be written by its bare injected name, its record
 declaration name, or a qualified enum-member spelling. The test compares
-nominal member identity. When one bare spelling exposes members from several
+nominal member identity. A bare name selects among the constructors visible
+where the test is written: when one bare spelling exposes members from several
 enums, the left operand's enum type selects the member; several distinct
 matching members remain ambiguous.
 
@@ -1011,7 +1063,7 @@ An expected type propagates top-down where it helps:
 | `let x: T = e` / `var x: T = e` | `T` into `e` |
 | `x := e` | declared type of `x` into `e` |
 | Constructor argument | declared field type |
-| `array[T]` / `dict[text, V]` expectation | element/value type into each element |
+| `array[T]` / `dict[K, V]` expectation | element type into each element; key/value type into each key/value |
 | `case` / `if` expression with outer expectation | into every branch |
 | `ask` / typed `exec` | becomes the call's target type |
 | Function call | each parameter type into the corresponding argument |

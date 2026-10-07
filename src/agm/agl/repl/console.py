@@ -45,6 +45,7 @@ from prompt_toolkit.output import Output
 from agm.agl.keywords import KEYWORDS, SOFT_KEYWORDS
 from agm.agl.lexer import (
     IncompleteInputError,
+    LexError,
     UnterminatedTripleQuotedStringError,
     lex_comment_spans,
     tokenize,
@@ -232,11 +233,9 @@ class AglPromptLexer(Lexer):
         styled = self._styled_lines(document.text, type_names, constructor_names)
 
         def get_line(lineno: int) -> StyleAndTextTuples:
-            # prompt_toolkit only asks for in-range lines; guard defensively so a
-            # stray request can never raise out of the highlighter.
-            if 0 <= lineno < len(styled):
-                return styled[lineno]
-            return []
+            # prompt_toolkit requests only lines below ``document.line_count``,
+            # and ``styled`` holds exactly one entry per line.
+            return styled[lineno]
 
         return get_line
 
@@ -332,7 +331,7 @@ def _styled_spans(
     """
     try:
         tokens = list(tokenize(text))
-    except Exception as exc:
+    except LexError as exc:
         open_start = _open_verbatim_literal_start(exc)
         if open_start is None:
             open_start = _open_string_start(text)
@@ -382,7 +381,7 @@ def _styled_open_tail(
     return prefix_spans + [(open_start, len(text), "class:agl.string")]
 
 
-def _open_verbatim_literal_start(exc: Exception) -> int | None:
+def _open_verbatim_literal_start(exc: LexError) -> int | None:
     """Return the `$` offset of a half-typed verbatim literal header, if *exc* is one.
 
     An ``IncompleteInputError`` other than an unterminated triple-quoted string

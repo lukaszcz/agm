@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Literal
 
 __all__ = [
+    "AS_DECIMAL_OPERATION",
     "ArithKind",
     "ArithOp",
     "CmpOp",
@@ -30,9 +32,9 @@ __all__ = [
     "IndexKind",
     "IntToDecimal",
     "IterKind",
+    "MutableIndexKind",
     "NumericKind",
     "ToJson",
-    "UnaryOp",
 ]
 
 
@@ -86,7 +88,11 @@ class NumericKind(enum.Enum):
 
 
 class CompareKind(enum.Enum):
-    """Kind tag for comparison operations: integer, decimal, text, or structural."""
+    """Kind tag for comparison operations: integer, decimal, text, or structural.
+
+    A ``DECIMAL`` ordering may pair an int with a decimal operand: mixed
+    numbers compare exactly, without widening the int.
+    """
 
     INT = "int"
     DECIMAL = "decimal"
@@ -95,10 +101,16 @@ class CompareKind(enum.Enum):
 
 
 class ContainsKind(enum.Enum):
-    """Kind tag for the ``in`` containment operator: array, dict, or text."""
+    """Kind tag for the ``in`` containment operator: array, dict, or text.
+
+    ``DICT_INT_NEEDLE`` tests an unwidened int needle against ``decimal``
+    keys: it widens only when within the decimal range, and is otherwise
+    absent, so membership never raises.
+    """
 
     ARRAY = "array"
     DICT = "dict"
+    DICT_INT_NEEDLE = "dict-int-needle"
     TEXT = "text"
 
 
@@ -110,18 +122,17 @@ class IndexKind(enum.Enum):
     TEXT = "text"
 
 
+#: Kind tag for an indexed assignment target: text is immutable and never
+#: reaches one, so ``IrIndexSet.kind`` is narrowed to this subset of
+#: ``IndexKind``.
+MutableIndexKind = Literal[IndexKind.ARRAY, IndexKind.DICT]
+
+
 class CopyKind(enum.Enum):
     """Kind tag for value copying: deep or shallow."""
 
     DEEP = "deep"
     SHALLOW = "shallow"
-
-
-class UnaryOp(enum.Enum):
-    """Kind tag for unary operations: NOT (logical negation) or NEG (numeric negation)."""
-
-    NOT = "not"
-    NEG = "neg"
 
 
 class IterKind(enum.Enum):
@@ -136,10 +147,22 @@ class IterKind(enum.Enum):
 # Coercion closed union
 # ---------------------------------------------------------------------------
 
+#: ``ArithmeticError`` operation label of an int-to-decimal widening outside
+#: any operator: a cast or an implicit coercion.
+AS_DECIMAL_OPERATION = "as decimal"
+
 
 @dataclass(frozen=True, slots=True)
 class IntToDecimal:
-    """Coercion: widen an ``int`` value to ``decimal``."""
+    """Coercion: widen an ``int`` value to ``decimal``.
+
+    *operation* labels the ``ArithmeticError`` raised when the int falls
+    outside the decimal range: the operator for a mixed binary-operator
+    operand (e.g. ``"+"``, ``"in"``), or :data:`AS_DECIMAL_OPERATION` for a
+    cast or an implicit non-operator context.
+    """
+
+    operation: str = AS_DECIMAL_OPERATION
 
 
 @dataclass(frozen=True, slots=True)

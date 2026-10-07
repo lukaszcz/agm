@@ -307,7 +307,7 @@ class TestRejectedConfigTargets:
             )
 
     def test_a_type_name_is_not_a_legal_key(self) -> None:
-        with pytest.raises(AglScopeError):
+        with pytest.raises(AglTypeError):
             _check(
                 "enum Color =\n"
                 "  | Red\n"

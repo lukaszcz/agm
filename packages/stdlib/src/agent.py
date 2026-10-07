@@ -31,7 +31,7 @@ def chat(prompt: str, agent: object, sandbox: object, env: object) -> None:
     request = AgentRequest(
         agent=spec,
         prompt=prompt,
-        env={name: cast(TextValue, value).value for name, value in variables.entries.items()},
+        env={name: cast(TextValue, value).value for name, value in variables.text_items()},
         permission_mode=mode,
         sandbox=limits,
     )

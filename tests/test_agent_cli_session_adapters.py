@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,13 +19,13 @@ from agm.agent.session import (
     SessionService,
 )
 from agm.agent.session.cli_adapters import (
-    CLI_SESSION_BACKENDS,
     AgentCommandSessionBackend,
     ClaudeCliSessionBackend,
     CodexCliSessionBackend,
     PiCliSessionBackend,
-    SessionBackendConstructor,
+    open_cli_session,
 )
+from agm.agent.session.protocol import BackendSettings
 from agm.agent.spec import (
     AGENT_SPECS,
     AgentClaude,
@@ -33,6 +34,7 @@ from agm.agent.spec import (
     AgentPi,
     AgentSpec,
     PermissionMode,
+    SessionTransport,
     payload_fields,
 )
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
@@ -90,35 +92,27 @@ class CaptureTransport:
 
 
 def _open(
-    backend: object,
-    agent: object,
+    agent: AgentSpec,
     *,
     name: str = "",
     single_prompt: bool = False,
     permission_mode: PermissionMode = PermissionMode.NONE,
     sandbox: SandboxLimits | None = None,
     env: dict[str, str] | None = None,
-) -> None:
-    if not isinstance(
-        backend,
-        (
-            AgentCommandSessionBackend,
-            ClaudeCliSessionBackend,
-            CodexCliSessionBackend,
-            PiCliSessionBackend,
-        ),
-    ):
-        raise AssertionError("unexpected backend")
-    backend.open(
+    get_sandbox_context=unavailable_sandbox_context,
+) -> Any:
+    return open_cli_session(
         SessionOpenRequest(
             agent=agent,
-            transport="cli",
+            transport=SessionTransport.CLI,
             name=name,
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
             env=env or {},
-        )
+        ),
+        idle_timeout=None,
+        get_sandbox_context=get_sandbox_context,
     )
 
 
@@ -147,8 +141,13 @@ def test_codex_captures_large_events_from_nonblocking_stdout(
         encoding="utf-8",
     )
     executable.chmod(0o755)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""), single_prompt=single_prompt, env={"PATH": str(tmp_path)})
+    backend = _open(
+        AgentCodex("", ""),
+        get_sandbox_context=unavailable_sandbox_context,
+        single_prompt=single_prompt,
+        env={"PATH": str(tmp_path)},
+    )
+
     events: list[tuple[str, str]] = []
     request = SessionAskRequest(
         "question",
@@ -183,12 +182,12 @@ def test_agent_variant_spec_backend_catalogs_are_in_lockstep() -> None:
         for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members
     }
 
-    assert set(declared) == set(expected) == set(AGENT_SPECS) == set(CLI_SESSION_BACKENDS)
+    assert set(declared) == set(expected) == set(AGENT_SPECS)
     for variant, (fields, spec, backend, transport) in expected.items():
         assert tuple(name for name, _ in declared[variant]) == fields
         assert payload_fields(spec) == fields
         assert AGENT_SPECS[variant] is spec
-        assert CLI_SESSION_BACKENDS[variant] is backend
+        assert type(_open(spec(*("x",) * len(fields)), single_prompt=True)) is backend
         assert spec.DEFAULT_SESSION_TRANSPORT == transport
 
 
@@ -205,8 +204,7 @@ def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
     )
     transport.install(monkeypatch)
     agent = AgentClaude("m", "t")
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, agent, name="named")
+    backend = _open(agent, name="named")
 
     backend.ask(SessionAskRequest("first"))
     backend.compact("instructions")
@@ -295,8 +293,7 @@ def test_claude_fork_session_id_combines_a_surrogate_escape_pair(
         ]
     )
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("m", "t"))
+    backend = _open(AgentClaude("m", "t"))
     backend.ask(SessionAskRequest("first"))
 
     child = backend.fork()
@@ -311,8 +308,7 @@ def test_claude_forks_immediately_after_open_with_independent_child_continuation
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("child answer"), CaptureOutcome("parent answer")])
     transport.install(monkeypatch)
-    parent = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(parent, AgentClaude("m", "t"), name="named")
+    parent = _open(AgentClaude("m", "t"), name="named")
 
     child = parent.fork()
     assert child.ask(SessionAskRequest("child follow-up")).content == "child answer"
@@ -354,8 +350,7 @@ def test_claude_forks_immediately_after_open_with_independent_child_continuation
 def test_claude_compact_before_first_ask_is_deferred(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("m", "t"), name="named")
+    backend = _open(AgentClaude("m", "t"), name="named")
 
     backend.compact("instructions")
     backend.ask(SessionAskRequest("question"))
@@ -384,8 +379,8 @@ def test_claude_echo_stream_decodes_final_response_and_reports_progress(
     )
     transport = CaptureTransport([CaptureOutcome(output, stderr="diagnostic\n")])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("m", "t"))
+    backend = _open(AgentClaude("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
     output_chunks: list[tuple[str, str]] = []
 
     response = backend.ask(
@@ -413,8 +408,7 @@ def test_claude_echo_stream_rejects_an_undecodable_final_response(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("not json")])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("m", "t"))
+    backend = _open(AgentClaude("m", "t"), get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(
@@ -450,8 +444,8 @@ def test_codex_echo_stream_decodes_response_and_echoes_command_progress(
         [CaptureOutcome(output, stderr="codex log\n"), CaptureOutcome(resumed_output)]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context)
+
     output_chunks: list[tuple[str, str]] = []
 
     response = backend.ask(
@@ -488,8 +482,10 @@ def test_codex_single_prompt_echo_decodes_jsonl_final_response(
     )
     transport = CaptureTransport([CaptureOutcome(output)])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
+
     output_chunks: list[tuple[str, str]] = []
 
     response = backend.ask(
@@ -509,8 +505,9 @@ def test_codex_single_prompt_echo_rejects_malformed_jsonl(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("not json")])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(
@@ -531,8 +528,9 @@ def test_codex_single_prompt_echo_reports_turn_failure_as_agent_failure(
     )
     transport = CaptureTransport([CaptureOutcome(output)])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+    backend = _open(
+        AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context, single_prompt=True
+    )
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(
@@ -548,8 +546,7 @@ def test_pi_forks_immediately_after_open_then_child_starts_independently(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("child"), CaptureOutcome("parent")])
     transport.install(monkeypatch)
-    parent = PiCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(parent, AgentPi("p", "m", "t"), name="named")
+    parent = _open(AgentPi("p", "m", "t"), name="named")
 
     child = parent.fork()
     child.ask(SessionAskRequest("child"))
@@ -597,8 +594,7 @@ def test_pi_forks_started_transcript_natively(monkeypatch: pytest.MonkeyPatch) -
         [CaptureOutcome("parent"), CaptureOutcome("forked"), CaptureOutcome("child")]
     )
     transport.install(monkeypatch)
-    parent = PiCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(parent, AgentPi("p", "m", "t"))
+    parent = _open(AgentPi("p", "m", "t"))
 
     parent.ask(SessionAskRequest("start"))
     child = parent.fork()
@@ -613,15 +609,14 @@ def test_pi_forks_started_transcript_natively(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize(
-    ("backend", "agent", "name_flag"),
+    ("agent", "name_flag"),
     [
-        (ClaudeCliSessionBackend, AgentClaude("m", "t"), "-n"),
-        (PiCliSessionBackend, AgentPi("p", "m", "t"), "--name"),
+        (AgentClaude("m", "t"), "-n"),
+        (AgentPi("p", "m", "t"), "--name"),
     ],
 )
 def test_session_id_cli_backends_reuse_ids_and_names_after_reset(
     monkeypatch: pytest.MonkeyPatch,
-    backend: SessionBackendConstructor,
     agent: AgentClaude | AgentPi,
     name_flag: str,
 ) -> None:
@@ -629,8 +624,7 @@ def test_session_id_cli_backends_reuse_ids_and_names_after_reset(
         [CaptureOutcome("first"), CaptureOutcome("second"), CaptureOutcome("reset")]
     )
     transport.install(monkeypatch)
-    session = backend(get_sandbox_context=unavailable_sandbox_context)
-    _open(session, agent, name="named")
+    session = _open(agent, name="named")
 
     session.ask(SessionAskRequest("first"))
     session.ask(SessionAskRequest("second"))
@@ -652,8 +646,7 @@ def test_codex_single_prompt_session_uses_the_standard_command(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"), single_prompt=True)
+    backend = _open(AgentCodex("m", "t"), single_prompt=True)
 
     assert backend.ask(SessionAskRequest("prompt")).content == "answer"
     assert transport.calls == [
@@ -682,8 +675,7 @@ def test_codex_reset_after_successful_creation_starts_a_new_jsonl_thread(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"))
 
     assert backend.ask(SessionAskRequest("first prompt")).content == "first answer"
     backend.reset()
@@ -741,8 +733,7 @@ def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
     )
     transport.install(monkeypatch)
     agent = AgentCodex("m", "t")
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, agent)
+    backend = _open(agent)
 
     first = backend.ask(SessionAskRequest("first"))
     assert first.content == "first answer"
@@ -801,8 +792,7 @@ def test_codex_reply_combines_a_surrogate_escape_pair(monkeypatch: pytest.Monkey
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"))
 
     assert backend.ask(SessionAskRequest("hello")).content == "\U0001f600"
 
@@ -820,8 +810,7 @@ def test_codex_reply_preserves_unicode_jsonl_separators(
     )
     transport = CaptureTransport([CaptureOutcome(output)])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"), get_sandbox_context=unavailable_sandbox_context)
 
     assert backend.ask(SessionAskRequest("hello")).content == expected
 
@@ -848,8 +837,7 @@ def test_codex_rejects_malformed_or_incomplete_jsonl(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome(output)])
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -874,8 +862,7 @@ def test_codex_ignores_completed_non_assistant_items(monkeypatch: pytest.MonkeyP
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     assert backend.ask(SessionAskRequest("first")).content == "answer"
 
@@ -896,25 +883,13 @@ def test_codex_defers_thread_creation_until_the_first_ask(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("model", "high"))
+    backend = _open(AgentCodex("model", "high"))
 
-    for operation in (lambda: backend.compact(""), backend.fork, backend.stats):
-        with pytest.raises(SessionHostError):
-            operation()
-    with pytest.raises(SessionHostError):
-        backend.set_name("unsupported")
     backend.reset()
     assert transport.calls == []
 
     assert backend.ask(SessionAskRequest("create")).content == "answer"
     assert len(transport.calls) == 1
-    for operation in (lambda: backend.compact(""), backend.fork, backend.stats):
-        with pytest.raises(SessionHostError):
-            operation()
-    with pytest.raises(SessionHostError):
-        backend.set_name("unsupported")
-    backend.close()
 
 
 def test_first_invocation_transport_failure_consumes_creation_state_until_reset(
@@ -929,8 +904,7 @@ def test_first_invocation_transport_failure_consumes_creation_state_until_reset(
     )
     transport.install(monkeypatch)
     agent = AgentClaude("m", "t")
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, agent, name="named")
+    backend = _open(agent, name="named")
 
     with pytest.raises(SessionAskError):
         backend.ask(SessionAskRequest("first"))
@@ -994,9 +968,12 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
         [CaptureOutcome("started"), CaptureOutcome(returncode=1, stderr="failed")]
     )
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    service = SessionService(lambda _agent, _transport: backend)
-    handle = service.open(AgentClaude("", ""), "cli", env={})
+    service = SessionService(
+        lambda request: open_cli_session(
+            request, idle_timeout=None, get_sandbox_context=unavailable_sandbox_context
+        )
+    )
+    handle = service.open(AgentClaude("", ""), SessionTransport.CLI, env={})
     service.ask(handle, SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
@@ -1026,8 +1003,7 @@ def test_claude_lifecycle_protocol_errors_are_host_errors(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("started"), CaptureOutcome(output)])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("", ""))
+    backend = _open(AgentClaude("", ""))
     backend.ask(SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
@@ -1042,8 +1018,7 @@ def test_claude_lifecycle_protocol_errors_are_host_errors(
 def test_claude_rejects_an_unsuccessful_compaction(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CaptureTransport([CaptureOutcome("started"), CaptureOutcome('{"is_error": true}')])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("", ""))
+    backend = _open(AgentClaude("", ""))
     backend.ask(SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
@@ -1053,22 +1028,20 @@ def test_claude_rejects_an_unsuccessful_compaction(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize(
-    ("backend", "agent", "name_flag"),
+    ("agent", "name_flag"),
     [
-        (ClaudeCliSessionBackend, AgentClaude("m", "t"), "-n"),
-        (PiCliSessionBackend, AgentPi("p", "m", "t"), "--name"),
+        (AgentClaude("m", "t"), "-n"),
+        (AgentPi("p", "m", "t"), "--name"),
     ],
 )
 def test_spawn_failure_retries_cli_session_creation(
     monkeypatch: pytest.MonkeyPatch,
-    backend: SessionBackendConstructor,
     agent: AgentClaude | AgentPi,
     name_flag: str,
 ) -> None:
     transport = CaptureTransport([CaptureOutcome(spawn_error="missing"), CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    session = backend(get_sandbox_context=unavailable_sandbox_context)
-    _open(session, agent, name="named")
+    session = _open(agent, name="named")
 
     with pytest.raises(SessionAskError):
         session.ask(SessionAskRequest("first"))
@@ -1090,8 +1063,7 @@ def test_pi_first_invocation_failure_does_not_repeat_creation_flags_until_reset(
     )
     transport.install(monkeypatch)
     agent = AgentPi("p", "m", "t")
-    backend = PiCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, agent, name="named")
+    backend = _open(agent, name="named")
 
     with pytest.raises(SessionAskError):
         backend.ask(SessionAskRequest("first"))
@@ -1154,17 +1126,12 @@ def test_pi_first_invocation_failure_does_not_repeat_creation_flags_until_reset(
 
 
 @pytest.mark.parametrize(
-    ("backend", "agent"),
-    [
-        (AgentCommandSessionBackend, AgentCommand("runner --session %{SESSION_ID}")),
-        (CodexCliSessionBackend, AgentCodex("", "")),
-    ],
+    "agent",
+    [AgentCommand("runner --session %{SESSION_ID}"), AgentCodex("", "")],
 )
-def test_backends_rejecting_a_name_report_the_open_operation(
-    backend: SessionBackendConstructor, agent: object
-) -> None:
+def test_backends_rejecting_a_name_report_the_open_operation(agent: AgentSpec) -> None:
     with pytest.raises(SessionHostError) as raised:
-        _open(backend(get_sandbox_context=unavailable_sandbox_context), agent, name="named")
+        _open(agent, name="named")
 
     assert raised.value.operation == "open"
 
@@ -1182,8 +1149,7 @@ def test_codex_retries_thread_creation_after_spawn_failure(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError):
         backend.ask(SessionAskRequest("first"))
@@ -1208,8 +1174,7 @@ def test_codex_does_not_retry_a_failed_first_invocation_as_a_new_thread(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError):
         backend.ask(SessionAskRequest("first"))
@@ -1226,64 +1191,24 @@ def test_codex_does_not_retry_a_failed_first_invocation_as_a_new_thread(
 
 
 @pytest.mark.parametrize(
-    ("backend", "agent", "operation", "args"),
+    ("agent", "supported"),
     [
-        (ClaudeCliSessionBackend, AgentClaude("", ""), "set_name", ("name",)),
-        (ClaudeCliSessionBackend, AgentClaude("", ""), "stats", ()),
-        (CodexCliSessionBackend, AgentCodex("", ""), "compact", ("",)),
-        (CodexCliSessionBackend, AgentCodex("", ""), "fork", ()),
-        (CodexCliSessionBackend, AgentCodex("", ""), "set_name", ("name",)),
-        (CodexCliSessionBackend, AgentCodex("", ""), "stats", ()),
-        (PiCliSessionBackend, AgentPi("", "", ""), "compact", ("",)),
-        (PiCliSessionBackend, AgentPi("", "", ""), "set_name", ("name",)),
-        (PiCliSessionBackend, AgentPi("", "", ""), "stats", ()),
+        (AgentCommand("runner --session %{SESSION_ID}"), set()),
+        (AgentClaude("", ""), {"compact", "fork"}),
+        (AgentCodex("", ""), set()),
+        (AgentPi("", "", ""), {"fork"}),
     ],
 )
-def test_native_cli_sessions_reject_unsupported_operations(
-    backend: SessionBackendConstructor, agent: object, operation: str, args: tuple[str, ...]
+def test_native_cli_sessions_expose_only_their_native_operations(
+    agent: AgentSpec, supported: set[str]
 ) -> None:
-    instance = backend(get_sandbox_context=unavailable_sandbox_context)
-    _open(instance, agent)
+    operations = _open(agent).operations
 
-    with pytest.raises(SessionHostError) as raised:
-        getattr(instance, operation)(*args)
-
-    assert raised.value.operation == operation.replace("_", "-")
-
-
-@pytest.mark.parametrize(
-    ("backend", "agent"),
-    [
-        (ClaudeCliSessionBackend, AgentClaude("", "")),
-        (CodexCliSessionBackend, AgentCodex("", "")),
-        (PiCliSessionBackend, AgentPi("", "", "")),
-    ],
-)
-def test_native_cli_sessions_close_and_reject_future_asks(
-    backend: SessionBackendConstructor, agent: object
-) -> None:
-    instance = backend(get_sandbox_context=unavailable_sandbox_context)
-    _open(instance, agent)
-    instance.close()
-
-    with pytest.raises(SessionHostError):
-        instance.ask(SessionAskRequest("again"))
-
-
-@pytest.mark.parametrize(
-    ("backend", "agent"),
-    [
-        (ClaudeCliSessionBackend, AgentCodex("", "")),
-        (CodexCliSessionBackend, AgentPi("", "", "")),
-        (PiCliSessionBackend, AgentClaude("", "")),
-    ],
-)
-def test_native_cli_sessions_reject_an_agent_for_another_backend(
-    backend: SessionBackendConstructor, agent: object
-) -> None:
-    with pytest.raises(SessionHostError) as raised:
-        _open(backend(get_sandbox_context=unavailable_sandbox_context), agent)
-    assert raised.value.operation == "open"
+    assert {
+        name
+        for name in ("compact", "fork", "set_name", "stats")
+        if getattr(operations, name) is not None
+    } == supported
 
 
 def test_claude_single_prompt_session_uses_the_standard_command(
@@ -1291,8 +1216,7 @@ def test_claude_single_prompt_session_uses_the_standard_command(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentClaude("m", "t"), single_prompt=True)
+    backend = _open(AgentClaude("m", "t"), single_prompt=True)
 
     assert backend.ask(SessionAskRequest("prompt")).content == "answer"
     (argv, _stdin) = transport.calls[0]
@@ -1305,8 +1229,7 @@ def test_pi_single_prompt_session_uses_the_standard_command(
 ) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    backend = PiCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentPi("p", "m", "t"), single_prompt=True)
+    backend = _open(AgentPi("p", "m", "t"), single_prompt=True)
 
     assert backend.ask(SessionAskRequest("prompt")).content == "answer"
     (argv, _stdin) = transport.calls[0]
@@ -1331,8 +1254,7 @@ def test_codex_turn_failure_reports_the_agent_error_not_a_protocol_failure(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -1364,8 +1286,7 @@ def test_codex_turn_failure_without_a_usable_message_still_fails_the_ask(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -1391,8 +1312,7 @@ def test_codex_ignores_unrecognized_protocol_events(monkeypatch: pytest.MonkeyPa
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     assert backend.ask(SessionAskRequest("first")).content == "answer"
 
@@ -1417,8 +1337,7 @@ def test_codex_tolerates_blank_lines_in_the_jsonl_stream(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     assert backend.ask(SessionAskRequest("first")).content == "answer"
 
@@ -1441,8 +1360,7 @@ def test_codex_resumes_the_started_thread_after_a_failed_turn(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("m", "t"))
+    backend = _open(AgentCodex("m", "t"))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -1468,8 +1386,7 @@ def test_codex_starts_a_fresh_thread_after_a_turn_failure_without_a_thread_id(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -1495,8 +1412,7 @@ def test_codex_keeps_a_malformed_stream_thread_unresumable(
         ]
     )
     transport.install(monkeypatch)
-    backend = CodexCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCodex("", ""))
+    backend = _open(AgentCodex("", ""))
 
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
@@ -1544,10 +1460,9 @@ def test_agent_command_session_wraps_each_prompt_under_sandbox_mode_and_cleans_u
     monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
 
     limits = SandboxLimits()
-    backend = AgentCommandSessionBackend(get_sandbox_context=session_sandbox_context(home))
-    _open(
-        backend,
+    backend = _open(
         AgentCommand("cat %{SESSION_ID}"),
+        get_sandbox_context=session_sandbox_context(home),
         permission_mode=PermissionMode.UNRESTRICTED,
         sandbox=limits,
     )
@@ -1572,8 +1487,9 @@ def test_agent_command_session_ask_under_disabled_reproduces_the_unwrapped_argv(
     plain, unwrapped argv a command session always sent before sandboxing existed."""
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
-    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
-    _open(backend, AgentCommand("cat %{SESSION_ID}"))
+    backend = _open(
+        AgentCommand("cat %{SESSION_ID}"), get_sandbox_context=unavailable_sandbox_context
+    )
 
     response = backend.ask(SessionAskRequest("hello"))
 
@@ -1601,15 +1517,14 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
     )
     transport.install(monkeypatch)
 
-    backend = ClaudeCliSessionBackend(get_sandbox_context=session_sandbox_context(home))
-    backend.open(
-        SessionOpenRequest(
-            agent=AgentClaude("m", "t"),
-            transport="cli",
+    backend = ClaudeCliSessionBackend.open(
+        AgentClaude("m", "t"),
+        BackendSettings(
+            get_sandbox_context=session_sandbox_context(home),
             permission_mode=PermissionMode.UNRESTRICTED,
             sandbox=SandboxLimits(),
             env={"FIXED": "at-open"},
-        )
+        ),
     )
 
     backend.ask(SessionAskRequest("first"))
@@ -1626,6 +1541,34 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
     assert transport.envs[0] == transport.envs[1] == transport.envs[2]
     assert transport.envs[0] is not None and transport.envs[0]["FIXED"] == "at-open"
     assert isinstance(child, ClaudeCliSessionBackend)
-    assert child._permission_mode == PermissionMode.UNRESTRICTED
-    assert child._sandbox == SandboxLimits()
-    assert child._env == {"FIXED": "at-open"}
+    assert child._settings == backend._settings
+
+
+def test_sandboxed_codex_disables_the_daemon_on_creation_resume_and_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    created = CaptureOutcome(
+        '{"type":"thread.started","thread_id":"first"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}'
+    )
+    transport = CaptureTransport([created, CaptureOutcome("resumed"), created])
+    transport.install(monkeypatch)
+    backend = _open(
+        AgentCodex("m", "t"),
+        get_sandbox_context=session_sandbox_context(home),
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+    )
+
+    assert backend.ask(SessionAskRequest("first")).content == "answer"
+    assert backend.ask(SessionAskRequest("second")).content == "resumed"
+    backend.reset()
+    assert backend.ask(SessionAskRequest("after reset")).content == "answer"
+
+    for argv, _stdin in transport.calls:
+        _sandbox_wrapped_argv_prefix(argv, home)
+        assert argv[argv.index("codex") + 1] == "--no-daemon"
+        assert argv.count("--no-daemon") == 1

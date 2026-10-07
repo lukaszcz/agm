@@ -1,0 +1,17 @@
+# Modules × aliases × scopes × methods: two library modules importing each
+# other declare methods at their records' own paths, and functions and nested
+# types beneath each other's alias names, where they stand at the path
+# written. Reading through an alias, along a chain of them too, reaches what
+# its target's path declares, the alias's own module included, beside those.
+import left::*
+import right::*
+
+type Mine = L3
+
+def Rt1::Deep::sum(p: Rt1::Deep::Pair) -> int = p.a + p.b + Other::Deep::second()
+
+program def main(x: int, y: int) -> unit =
+  print(Base(x = x).rt3())
+  print(Rt1::rt1(Other(y = y)))
+  print(Rt1::Deep::sum(Rt1::Deep::Pair(a = x, b = y)))
+  print(Mine::Deep::lower() + Rt0::Deep::first() + Mine::l3(Mine(x = x)))

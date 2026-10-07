@@ -52,8 +52,6 @@ timestamp = 1979-05-27T07:32:00Z
 zero = 0.0
 negative_zero = -0.0
 exponent = 1E+2
-negative_nan = -nan
-negative_infinity = -inf
 ''')
         print(toml::render(document))
     | 10 =>

@@ -27,3 +27,6 @@ program def main(bad-input: text) -> unit =
   catch ArithmeticError as e =>
     print e
     print "operation: %{e.operation}"
+    # as json: structural check that the message and operation fields are
+    # both present, without pinning the message's exact wording.
+    print(e as json)

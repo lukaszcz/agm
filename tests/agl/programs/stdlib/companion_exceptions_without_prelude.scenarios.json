@@ -16,7 +16,7 @@
       "name": "dict_get_missing_key_raises_key_error",
       "no_stdlib": true,
       "params": {"surface": "dict", "guarded": false},
-      "expect": {"raises": {"type": "KeyError", "fields": {"key": "missing"}}}
+      "expect": {"raises": {"type": "KeyError", "fields": {"key": "\"missing\""}}}
     },
     {
       "name": "dict_get_missing_key_is_catchable",

@@ -177,6 +177,12 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
+**`Eq` and `Hashable`** are likewise not reserved; they are recognized
+contextually as the constraint names inside a constraint block (`{Eq T}`,
+`{Hashable K}`), and remain ordinary identifiers everywhere else, including
+as a field, parameter, or function name; see
+[Constraint blocks](generics.md#constraint-blocks).
+
 Soft keywords are **not reserved**: each is promoted to its own token only
 inside a promotion window, and remains a valid identifier everywhere else.
 
@@ -242,10 +248,27 @@ foo/bar::Geometry::Point    # module route, then scope members
 
 A slash-separated path before the first `::` is a module route. A leading `/`
 anchors that route to the complete module path; otherwise it may be a suffix
-route or an alias. Subsequent `::` segments name scopes or types. A single
-leading segment can be either a local scope/type or a module route; use `/` for
-the module reading or `::` for the current-module reading when both would
-resolve. Scope segments never suffix-match.
+route or an alias. Subsequent `::` segments name scopes or types.
+
+A chain is looked up as its **whole path**: a scope path is part of a
+declaration's name, so `Geometry::Point` names the declaration whose full path
+is `Geometry::Point`, wherever it comes from. Every source is read at once —
+the module's own declarations, its imports, and its `use` declarations — and
+the module's own declaration at that path wins; otherwise the one declaration
+the imports and uses provide there is selected, and two distinct ones are
+ambiguous. A leading segment naming both an own scope or type and a module
+route therefore needs no repair when the module declares the path: an own
+`scope mylib` declaring `x` makes `mylib::x` the own member, while
+`/mylib::x` reaches the module. `/route::x` and a multi-segment route read only
+that module, and `::x` reads only the current module's own declarations. Inside
+a scope region, an unanchored chain is tried at each enclosing scope path in
+turn ([Names and visibility](scopes.md#names-and-visibility)).
+
+Only a scope path, a type, a type alias, or a module route qualifies. A chain
+whose prefix names a function, a binding, or an injected enum member reports
+an unknown qualifier. A path beneath a type alias reads as the same path
+beneath the alias's target, written and read where the alias is declared
+([Type aliases](types.md#type-aliases)). Scope segments never suffix-match.
 
 Every route and chain segment is byte-adjacent through `::`: `foo/bar::thing`
 is a qualifier, while `foo / bar::thing` is division followed by a separate
@@ -263,9 +286,12 @@ let s = a/ b         # error: reads as a path, but the segments are split
 let t = a /b         # error: same
 ```
 
-A type-owning chain segment may carry type arguments, as in
-`Option[int]::Some`; type arguments on a plain scope segment are a static
-error. The type-argument form `callee::[T]` and typed-call form
+A chain segment may carry type arguments, as in `Option[int]::Some`, only when
+its full path selects a generic type of matching arity and the next segment
+selects one of that type's inline members (a record's own name counts:
+`Box[int]::Box`). Type arguments on any other segment — a plain scope, a
+non-generic type, or a type followed by another declaration beneath it — are a
+static error. The type-argument form `callee::[T]` and typed-call form
 `callee::[T](args)` (e.g. `ask::[Review](…)`) instead apply to the
 complete callee and are not qualifier segments.
 ## Identifiers
@@ -523,7 +549,9 @@ same spelling is an ordinary identifier everywhere else.
 An attribute prefixes what it belongs to, and several attributes may be written
 in a row. A declaration, a field, and a parameter each take their attributes on
 the line above or in front of them on the same line. An enum member takes its
-attributes after the member's `|`, on the member's own line.
+attributes after the member's `|`; the constructor and further attributes may
+continue on indented lines below the prefix, with fields indented further below
+the constructor.
 
 ```agl
 @arg-pos
@@ -582,23 +610,40 @@ right-associative at the `+`/`-` priority, so it binds tighter than comparisons
 and `|>`: `"a" ++ b == c` is `("a" ++ b) == c`. A chain cannot mix `++` with
 `+` or `-` without parentheses.
 
-User-defined symbolic infix operators are declared with `infixl` or `infixr`:
+User-defined symbolic infix operators are declared with `infixl` or `infixr`
+beside the function that implements them:
 
 ```agl
-infixl |> at 45
-infixr << at prio > + 1
+infixl <+> at 45
+infixr <<< at prio > + 1
+
+def <+>(a: int, b: int) -> int = a * 10 + b
+
+def <<<(a: int, b: int) -> int = a - b
 ```
 
 Priorities are integers where lower numbers bind looser and higher numbers bind
-tighter. A priority can be a literal integer or relative to an existing builtin,
-local operator, operator made bare-visible by an import wildcard or tail, or an
-operator member made bare by `use` (with the `std/prelude` prelude included);
-omitted priority uses the `+`/`-` level. A plain qualified import does not make
-an operator's fixity available. User infix
-use lowers to a normal two-argument function call, so the operator must also be
-declared as a function with the same name. Two visible declarations for one
-operator must agree on fixity, and operators at one priority cannot mix left and
-right associativity in a chain.
+tighter. A priority can be a literal integer or relative to another operator
+(`prio Y + n`); omitted priority uses the `+`/`-` level. `Y` is looked up at
+the module root like any operator name, the module's own infix declarations
+first, in any order; it may be a builtin operator. Relative priorities may not
+form a cycle.
+
+An operator in a chain is a name: it is looked up at its site exactly like a
+function of that name — lexical bindings first, then the scope steps, own
+declarations before imports, two distinct imported declarations ambiguous —
+and reached through the same imports, `use` declarations, re-exports, renames,
+and aliases. User infix use lowers to a two-argument call of the selected
+declaration. Its fixity is the one the selected declaration's module declares
+for that name: an `infixl`/`infixr` declaration applies to the module's own
+declarations of the name, at any scope path, and to its `let`/`var` binders of
+the name; it is never exported on its own. A fixity declaration for a name the
+module does not declare is an error, as is an operator use that selects a
+declaration whose module declares no fixity for it. In the REPL the session is
+one module: an operator's definition comes in the same entry as its fixity
+declaration or an earlier one. Operators at one priority cannot mix left and
+right associativity in a chain, and comparisons do not chain; a parenthesized
+comparison is an ordinary operand (`(a == b) == c`).
 
 **Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
 `* /`. They are left-associative: `x as json as text` = `(x as json) as text`.

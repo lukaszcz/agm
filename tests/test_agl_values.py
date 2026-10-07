@@ -120,6 +120,29 @@ def test_json_value_hash_consistent_with_eq() -> None:
     # (No hash collision requirement here — just that equal things hash equal.)
 
 
+@pytest.mark.parametrize(
+    ("whole", "same"),
+    [
+        (2, decimal.Decimal("2.0")),
+        (-(10**30), decimal.Decimal("-1e30")),
+        (10**5000, decimal.Decimal("1e5000")),
+        (-(10**5000), decimal.Decimal("-1.000e5000")),
+        ([{"n": 10**5000}], [{"n": decimal.Decimal("10e4999")}]),
+    ],
+)
+def test_equal_int_and_decimal_json_keys_are_one_dict_key(whole: object, same: object) -> None:
+    """Equal int and decimal ``json`` numbers, of any size, hash equal and share a dict key."""
+    from agm.agl.semantics.values import DictValue, JsonValue, TextValue
+
+    assert JsonValue(whole) == JsonValue(same)
+    assert hash(JsonValue(whole)) == hash(JsonValue(same))
+    entries = DictValue()
+    entries.insert(JsonValue(whole), TextValue("whole"))
+    assert entries.lookup(JsonValue(same)) == TextValue("whole")
+    assert not entries.insert(JsonValue(same), TextValue("same"))
+    assert len(entries) == 1
+
+
 def test_json_value_nested_list_eq() -> None:
     """Nested JsonValue list equality follows the same bool/int rules."""
     from agm.agl.semantics.values import JsonValue
@@ -135,6 +158,24 @@ def test_json_value_dict_eq() -> None:
     assert JsonValue({"a": 1}) == JsonValue({"a": 1})
     assert JsonValue({"a": 1}) != JsonValue({"a": 2})
     assert JsonValue({"a": 1}) != JsonValue({"b": 1})
+
+
+def test_dict_value_first_non_text_key_migrates_existing_text_entries() -> None:
+    """Inserting a non-text key into text storage keeps every entry, in order."""
+    from agm.agl.semantics.values import DictValue, IntValue, TextValue
+
+    d = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
+    assert d.insert(IntValue(3), IntValue(3)) is True
+
+    assert [(k, v) for k, v in d.items()] == [
+        (TextValue("a"), IntValue(1)),
+        (TextValue("b"), IntValue(2)),
+        (IntValue(3), IntValue(3)),
+    ]
+    assert d.lookup(TextValue("b")) == IntValue(2)
+    assert d.insert(TextValue("a"), IntValue(9)) is False
+    assert d.lookup(TextValue("a")) == IntValue(9)
+    assert len(d) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -239,17 +280,17 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
 
 def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
     """`==` on two separately-built cyclic dicts is co-inductive and terminates."""
-    from agm.agl.semantics.values import DictValue, IntValue
+    from agm.agl.semantics.values import DictValue, IntValue, TextValue
 
     d1 = DictValue(entries={"tag": IntValue(1)})
-    d1.entries["self"] = d1
+    d1.insert(TextValue("self"), d1)
     d2 = DictValue(entries={"tag": IntValue(1)})
-    d2.entries["self"] = d2
+    d2.insert(TextValue("self"), d2)
 
     assert d1 == d2
 
     d3 = DictValue(entries={"tag": IntValue(2)})
-    d3.entries["self"] = d3
+    d3.insert(TextValue("self"), d3)
     assert d1 != d3
 
 
@@ -498,12 +539,12 @@ def test_broad_value_includes_ir_callable_forms() -> None:
 
 
 def test_helpers_accessible_from_semantics_values() -> None:
-    """_json_eq and _json_hash are accessible from agm.agl.semantics.values."""
-    from agm.agl.semantics.values import _json_eq, _json_hash
+    """json_eq and json_hash are accessible from agm.agl.semantics.values."""
+    from agm.agl.semantics.values import json_eq, json_hash
 
-    assert _json_eq(1, decimal.Decimal("1")) is True
-    assert _json_eq(True, 1) is False
-    assert isinstance(_json_hash(1), int)
+    assert json_eq(1, decimal.Decimal("1")) is True
+    assert json_eq(True, 1) is False
+    assert isinstance(json_hash(1), int)
 
 
 def test_ir_closure_value_identity_equality() -> None:

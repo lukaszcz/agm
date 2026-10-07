@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TypeAlias
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Case, Program
@@ -16,13 +16,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
 
 from .compiler import CompiledMatchSite, compile_match_site, validate_compiled_case
-from .diagnostics import (
-    MatchIssue,
-    NonExhaustiveIssue,
-    RedundantArmIssue,
-    issue_sort_key,
-    render_witness,
-)
+from .diagnostics import ConstructorSpellers, MatchIssue, issue_sort_key, match_issue_error
 from .model import CaseSite, MatchCaseContext, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
@@ -43,19 +37,6 @@ def _immutable_module_sites(
     return MappingProxyType(
         {module_id: _immutable_sites(sites) for module_id, sites in sites_by_module.items()}
     )
-
-
-@dataclass(frozen=True, slots=True)
-class MatchCompiledModule:
-    """A checked module plus one compiled decision DAG per source match site."""
-
-    checked: CheckedModule
-    sites: Mapping[int, CompiledMatchSite]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "sites", _immutable_sites(self.sites))
-        if self_validation_enabled():
-            validate_match_compiled_module(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,14 +76,11 @@ class CachedModuleSites:
     sites: Mapping[int, CompiledMatchSite]
 
 
-MatchCompiledArtifact: TypeAlias = MatchCompiledModule | MatchCompiledProgram
-
-
 @dataclass(frozen=True, slots=True)
 class MatchCompilationResult:
     """Non-raising stage result with exactly one artifact or source issue tuple."""
 
-    compiled: MatchCompiledArtifact | None
+    compiled: MatchCompiledProgram | None
     issues: tuple[MatchIssue, ...]
 
 
@@ -111,13 +89,8 @@ def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
     sites: dict[int, SourceMatchSite] = {}
 
     def collect(node: object) -> None:
-        if not isinstance(node, Case):
-            return
-        if node.node_id in sites:
-            raise MatchCompileInvariantError(
-                f"duplicate source match-site node id {node.node_id} in one program"
-            )
-        sites[node.node_id] = node
+        if isinstance(node, Case):
+            sites[node.node_id] = node
 
     walk(program, collect)
     return sites
@@ -165,7 +138,6 @@ def cached_module_sites(
     return {
         module_id: CachedModuleSites(previous.checked.modules[module_id], sites)
         for module_id, sites in previous.sites_by_module.items()
-        if module_id in previous.checked.modules
     }
 
 
@@ -207,20 +179,18 @@ def compile_program_matches(
     )
 
 
-def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
+def diagnostic_from_match_issue(issue: MatchIssue, spellers: ConstructorSpellers) -> Diagnostic:
     """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
-    if isinstance(issue, NonExhaustiveIssue):
-        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
-    elif isinstance(issue, RedundantArmIssue):
-        message = "Redundant case arm; this pattern can never be selected."
-    else:
-        raise AssertionError(f"unsupported match issue: {type(issue).__name__}")
-    return diagnostic_from_span(message, issue.span)
+    return match_issue_error(issue, spellers).to_diagnostic()
 
 
-def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagnostic, ...]:
+def diagnostics_from_match_issues(
+    issues: tuple[MatchIssue, ...], spellers: ConstructorSpellers
+) -> tuple[Diagnostic, ...]:
     """Adapt and deterministically order match issues for pipeline consumers."""
-    return tuple(diagnostic_from_match_issue(issue) for issue in sorted(issues, key=issue_sort_key))
+    return tuple(
+        diagnostic_from_match_issue(issue, spellers) for issue in sorted(issues, key=issue_sort_key)
+    )
 
 
 def _validate_sites(
@@ -276,13 +246,6 @@ def _validate_sites(
         )
 
 
-def validate_match_compiled_module(compiled: MatchCompiledModule) -> None:
-    """Validate totality, ownership, provenance, and replay for a module artifact."""
-    _validate_sites(
-        owner=compiled.checked, module_id=compiled.checked.module_id, sites=compiled.sites
-    )
-
-
 def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
     """Validate totality, ownership, provenance, and replay for a program artifact."""
     expected_modules = set(compiled.checked.modules)
@@ -305,14 +268,11 @@ def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
 
 __all__ = [
     "MatchCompilationResult",
-    "MatchCompiledArtifact",
     "MatchCompiledProgram",
-    "MatchCompiledModule",
     "CachedModuleSites",
     "cached_module_sites",
     "compile_program_matches",
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",
     "validate_match_compiled_program",
-    "validate_match_compiled_module",
 ]

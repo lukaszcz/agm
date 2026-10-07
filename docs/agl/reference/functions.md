@@ -11,19 +11,24 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
-builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" (name | "text") "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
+constraint_block ::= "{" constraint ("," constraint)* ","? "}"
+constraint       ::= ("Eq" | "Hashable") name
 param_list    ::= param ("," param)* ","?
 param         ::= attributes? field_name ":" type_expr ("=" or_expr)?
                 | "self" [":" type_expr]       (* first parameter of a method *)
 ```
+
+`constraint_block` bounds one or more of `type_params` `Eq` or `Hashable`; see
+[Constraint blocks](generics.md#constraint-blocks).
 
 A `def` is a static declaration at the module root or in a
 [named scope](scopes.md). A declaration head may include its scope path, as in
@@ -253,14 +258,19 @@ a receiver type — a record, enum, enum member, exception, or builtin receiver
 dynamically dispatched.
 
 The receiver part of `def Type::f(self)` (or `scope Type` containing that
-`def`) resolves as a type name in the module containing the declaration. A
-locally declared record, enum, enum member, or exception wins. Otherwise, exactly one
-type made bare-visible in that region by an import tail or `use` must provide
-the name. Renamed contributions may provide that spelling. A qualified import
-alone provides no bare receiver name, and a type alias cannot name a method
-receiver. The declaration extends the resolved type's plain scope in the
-module that contains the `def`; it does not add a declaration to the type's
-home module.
+`def`) is the type declared at that scope path — the method's whole path
+without its own name — read at the path's parent step in the module
+containing the declaration ([Names and
+visibility](scopes.md#names-and-visibility)). A record, enum, enum member, or
+exception the module declares there wins. Otherwise, exactly one type an
+import tail or `use` written in that scope or an enclosing one provides there
+must supply it; renamed contributions may provide that spelling, and two
+distinct provided types are ambiguous. There is no outward fallback, and a
+qualified import alone provides no bare receiver name. A receiver names its
+type directly: a receiver path that selects a type through a type alias, the
+module's own or an imported one, is an error. The declaration extends the
+resolved type's plain scope in the module that contains the `def`; it does
+not add a declaration to the type's home module.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -358,12 +368,19 @@ an annotation or `as` that narrows or widens the receiver's static type.
 
 A builtin receiver may be named in a method declaration in any module. This
 syntax is available to ordinary, `builtin`, and `extern` definitions:
-`array[E]::name` and `dict[text, V]::name` bind their receiver element or value
-parameter; `text`, `json`, `int`, `decimal`, and `bool` are bare receivers. A
-builtin receiver must use its bare generic form, so `array[int]::name` and
-`dict[text, array[int]]::name` are invalid. As with a nominal generic receiver,
-`_` may occupy an unused receiver slot; it binds a private rigid parameter and
-cannot be named by the method body.
+`array[E]::name` binds its receiver element parameter and `dict[K, V]::name`
+binds its receiver key and value parameters; `dict[text, V]::name` binds only
+the value parameter and applies only to `text`-keyed dicts; `text`, `json`,
+`int`, `decimal`, and `bool` are bare receivers. Otherwise a builtin receiver
+must use its bare generic form, so `array[int]::name`, `dict[int, V]::name`,
+and `dict[text, array[int]]::name` are invalid, and so is a receiver spelled
+through an alias of a builtin type. These builtin heads are the only
+declaration-path segments that take type arguments, and only for a method:
+`def array[E]::f()` and `def Box[int]::f()` are invalid. As with a nominal generic
+receiver, `_` may occupy an unused receiver slot; it binds a private rigid
+parameter and cannot be named by the method body. A `{…}` constraint block may
+bound the receiver's key, element, or value parameter the same way it bounds a
+nominal receiver's; see [Generic methods](generics.md#generic-methods).
 
 The prelude re-exports builtin receiver scopes, making standard-library methods
 reachable wherever the prelude is enabled. With `--no-stdlib`, import a route
@@ -714,26 +731,11 @@ where the arguments drive inference, needs no annotation.)
 ### Strict parametricity
 
 Inside a generic `def`, a value whose static type is a bare type variable
-`T` is **opaque**. The body knows nothing about `T` beyond the fact that
-values of it exist, so such a value can only be passed to other functions,
-returned, or stored. It may **not** be:
-
-- compared with `=`, `!=`, or the ordering operators,
-- used in arithmetic,
-- printed or interpolated in a template,
-- field- or index-accessed,
-- tested with `is` / `is not`.
-
-<!-- agl-check: error -->
-```agl
-def bad[T](x: T, y: T) -> bool = x == y   # static error: '==' on type variable T
-```
-
-Each of these is a static error. This *parametricity* guarantee means a
-generic function treats its type-variable values uniformly regardless of the
-concrete type they are instantiated at. (The restriction applies only to the
-bare type variable itself — a value of a concrete or composite type such as
-`array[T]` supports every operation that type normally allows.)
+`T` is **opaque**: it can be passed, returned, and stored, but not compared,
+used in arithmetic, field- or index-accessed, or tested with `is`/`is not`.
+See [Strict parametricity](generics.md#strict-parametricity) for the full
+rule and what a `{…}` [constraint block](generics.md#constraint-blocks)
+relaxes.
 
 ## Calling functions
 

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintKind
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
     RESERVED_NOMINAL_NAMES,
@@ -23,6 +24,7 @@ from agm.agl.ir.reserved_nominals import (
 from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import UnknownQualifierError
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
     compute_uninhabited,
@@ -30,7 +32,13 @@ from agm.agl.semantics.analyses import (
 )
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    BadDictKey,
+    BadDictKeyField,
+    BadKeyArgument,
+    FreeTypeVar,
     MethodDef,
+    NonDataField,
+    NonDataLeaf,
     TypeDef,
     TypeTable,
     cast_classification,
@@ -39,6 +47,7 @@ from agm.agl.semantics.type_table import (
     is_json_convertible,
     json_cast_hint,
     parse_classification,
+    satisfies,
     source_enum_member_decl_id,
 )
 from agm.agl.semantics.types import (
@@ -78,6 +87,7 @@ from agm.agl.zones import ParamZone
 from tests._agl_helpers import enum_typedef, register_typedef, strip_decl_ids
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_inline_entry
+from tests.agl.qualifier_support import span_text
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -124,27 +134,8 @@ def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None
     )
 
 
-def test_enum_owners_for_member_recovers_only_captured_type_arguments() -> None:
-    table = TypeTable()
-    outcome = TypeDef(
-        kind="enum",
-        name="Outcome",
-        module_id=ENTRY_ID,
-        type_params=("T", "E"),
-        members=(
-            RecordType("ok", (TypeVarType("T"),), scope_path=("Outcome",), decl_id=1),
-            RecordType("fixed", (IntType(),), scope_path=("Outcome",), decl_id=2),
-        ),
-        decl_node_id=2,
-    )
-    table.register(outcome)
-    members = table.enum_members(outcome.handle((IntType(), TextType())))
-
-    assert table.enum_owners_for_member(members[0]) == ()
-    assert table.enum_owners_for_member(members[1]) == ()
-
-
-def test_enum_owners_for_referenced_member_require_its_full_type_template() -> None:
+def test_record_matches_enum_member_rejects_a_different_named_member() -> None:
+    """A member-name mismatch short-circuits ``record_matches_enum_member`` to False directly."""
     table = TypeTable()
     box = TypeDef(
         kind="record",
@@ -164,12 +155,8 @@ def test_enum_owners_for_referenced_member_require_its_full_type_template() -> N
     table.register(box)
     table.register(enum)
 
-    assert table.enum_owners_for_member(RecordType("Box", (IntType(),), decl_id=10)) == (
-        enum.handle(),
-    )
-    assert table.enum_owners_for_member(RecordType("Box", (TextType(),), decl_id=10)) == ()
     assert not table.record_matches_enum_member(
-        enum.handle(), "Missing", RecordType("Box", (IntType(),), decl_id=10)
+        enum.handle(), (), "Missing", RecordType("Box", (IntType(),), decl_id=10)
     )
 
 
@@ -445,8 +432,10 @@ def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
 
 
 def test_current_module_generic_type_anchor_rejects_unknown_root_type() -> None:
-    with pytest.raises(AglTypeError, match="Unknown scoped type"):
-        _check("def f(value: ::A::Missing[int]) -> int = 0\nf(1)")
+    source = "def f(value: ::A::Missing[int]) -> int = 0\nf(1)"
+    with pytest.raises(UnknownQualifierError) as exc_info:
+        _check(source)
+    assert span_text(source, exc_info.value.span) == "::A::Missing"
 
 
 def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path: Path) -> None:
@@ -605,11 +594,6 @@ class TestTypeDefHandle:
         typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
         assert typedef.handle() == ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
 
-    def test_exception_handle_rejects_type_args(self) -> None:
-        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
-        with pytest.raises(ValueError, match="does not accept type_args"):
-            typedef.handle(type_args=(IntType(),))
-
     def test_record_handle_stamps_decl_id_from_decl_node_id(self) -> None:
         typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=42)
         assert typedef.handle().decl_id == 42
@@ -703,40 +687,6 @@ class TestNonGenericAccessors:
             "Red": {},
             "Custom": {"hex": TextType()},
         }
-
-    def test_record_fields_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.record_fields(handle)
-
-    def test_enum_members_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = EnumType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            _enum_fields(table, handle)
-
-    def test_record_fields_raises_when_key_registered_as_enum(self) -> None:
-        table = TypeTable()
-        register_typedef(table, enum_typedef("Color", {"Red": {}}, decl_id=700001))
-        handle = RecordType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        with pytest.raises(AssertionError):
-            table.record_fields(handle)
-
-    def test_enum_members_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = EnumType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            _enum_fields(table, handle)
 
 
 # ---------------------------------------------------------------------------
@@ -941,54 +891,6 @@ class TestExceptionAccessors:
             ("own", ParamZone.NAMED_ONLY),
         )
 
-    def test_exception_fields_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.exception_fields(handle)
-
-    def test_exception_fields_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            table.exception_fields(handle)
-
-    def test_exception_fields_raises_on_cyclic_base_chain(self) -> None:
-        """Internal robustness guard: a cyclic ``base`` chain cannot occur via the
-        builder (the temporary recursion ban rejects it first), but the table
-        itself still guards against infinite recursion."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.exception_fields(handle)
-
     def test_exception_def_returns_abstract_and_base(self) -> None:
         table = TypeTable()
         table.register(
@@ -1021,19 +923,6 @@ class TestExceptionAccessors:
         )
         assert child_def.abstract is False
         assert child_def.base == 700008
-
-    def test_exception_def_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.exception_def(handle)
-
-    def test_exception_def_raises_when_key_registered_as_enum(self) -> None:
-        table = TypeTable()
-        register_typedef(table, enum_typedef("Color", {"Red": {}}, decl_id=700001))
-        handle = ExceptionType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        with pytest.raises(AssertionError):
-            table.exception_def(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -1167,32 +1056,6 @@ class TestMethodIndex:
         table.register_method(base, status)
 
         assert _selected_method(table, child, "status") == status
-
-    def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.method_candidates(
-                ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014), "missing"
-            )
 
     def test_lookup_miss_returns_none_for_owner_with_no_methods(self) -> None:
         table = TypeTable()
@@ -1786,51 +1649,6 @@ class TestExceptionFieldKinds:
         second = table.field_kinds(handle)
         assert first is second
 
-    def test_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.field_kinds(handle)
-
-    def test_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            table.field_kinds(handle)
-
-    def test_raises_on_cyclic_base_chain(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.field_kinds(handle)
-
 
 # ---------------------------------------------------------------------------
 # TypeTable.field_kinds (record branch) — a record/enum-member's own zones,
@@ -1894,21 +1712,6 @@ class TestRecordFieldKinds:
             ("h", ParamZone.POSITIONAL_ONLY),
         )
 
-    def test_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.field_kinds(handle)
-
-    def test_raises_when_key_registered_as_exception(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700034)
-        )
-        handle = RecordType(name="Boom", module_id=ENTRY_ID, decl_id=700034)
-        with pytest.raises(AssertionError):
-            table.field_kinds(handle)
-
 
 # ---------------------------------------------------------------------------
 # TypeTable.field_has_default — each field's declared default *presence*,
@@ -1955,15 +1758,6 @@ class TestRecordFieldHasDefault:
         table = TypeTable()
         handle = RecordType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
-            table.field_has_default(handle)
-
-    def test_raises_when_key_registered_as_exception(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700042)
-        )
-        handle = RecordType(name="Boom", module_id=ENTRY_ID, decl_id=700042)
-        with pytest.raises(AssertionError):
             table.field_has_default(handle)
 
 
@@ -2041,45 +1835,6 @@ class TestExceptionFieldHasDefault:
         with pytest.raises(KeyError):
             table.field_has_default(handle)
 
-    def test_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700047,
-            )
-        )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700047)
-        with pytest.raises(AssertionError):
-            table.field_has_default(handle)
-
-    def test_raises_on_cyclic_base_chain(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700049,
-                decl_node_id=700048,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700048,
-                decl_node_id=700049,
-            )
-        )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700048)
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.field_has_default(handle)
-
     def test_field_has_default_cache_updates_when_a_base_def_is_overwritten(self) -> None:
         """Overwriting a base's TypeDef via merge_from must invalidate a leaf's cached flattening.
 
@@ -2149,7 +1904,7 @@ class TestGenericSubstitution:
                     ("first", TypeVarType("T")),
                     ("second", TypeVarType("U")),
                     ("firsts", ArrayType(TypeVarType("T"))),
-                    ("seconds", DictType(TypeVarType("U"))),
+                    ("seconds", DictType(TextType(), TypeVarType("U"))),
                 ),
                 decl_node_id=700018,
             )
@@ -2162,7 +1917,7 @@ class TestGenericSubstitution:
             "first": IntType(),
             "second": TextType(),
             "firsts": ArrayType(IntType()),
-            "seconds": DictType(TextType()),
+            "seconds": DictType(TextType(), TextType()),
         }
 
     def test_enum_members_substitute_type_args(self) -> None:
@@ -2212,15 +1967,6 @@ class TestRecordMutableFields:
             RecordType(name="Pair", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700020)
         ) == frozenset({"mutable"})
         assert dict(table.record_fields(handle)) == {"mutable": TextType(), "fixed": IntType()}
-
-    def test_accessor_rejects_missing_and_non_record_definitions(self) -> None:
-        table = TypeTable()
-        with pytest.raises(KeyError):
-            table.record_mutable_fields(RecordType(name="Missing", module_id=ENTRY_ID))
-
-        table.register(TypeDef(kind="enum", name="Kind", module_id=ENTRY_ID, decl_node_id=700023))
-        with pytest.raises(AssertionError):
-            table.record_mutable_fields(RecordType(name="Kind", module_id=ENTRY_ID, decl_id=700023))
 
     def test_builder_registers_standalone_and_enum_member_mutability(self) -> None:
         checked = _check(
@@ -3049,7 +2795,7 @@ class TestEnvTypeHasMatchingTableDefGraphMode:
         }
         cg = _check_program(tmp_path, modules)
         mylib_id = ModuleId.from_path("mylib")
-        point = cg.program_type_table[(mylib_id, "Point")]
+        point = cg.program_type_table[(mylib_id, (), "Point")]
         assert isinstance(point, RecordType)
 
         mylib_table = cg.modules[mylib_id].type_env.type_table
@@ -3097,7 +2843,7 @@ class TestReplSeeding:
 
 
 # ---------------------------------------------------------------------------
-# comparable_types / _reaches_non_data: table-aware record/enum walk
+# comparable_types / satisfies: table-aware record/enum walk
 # ---------------------------------------------------------------------------
 
 
@@ -3114,7 +2860,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
         table = TypeTable()
@@ -3131,12 +2877,12 @@ class TestComparableTypesTableAware:
         fn_handle = EnumType(
             name="Holder", type_args=(fn_type,), module_id=ENTRY_ID, decl_id=700023
         )
-        assert comparable_types(fn_handle, fn_handle, table) is False
+        assert comparable_types(fn_handle, fn_handle, table, bounds={}) is False
 
         text_handle = EnumType(
             name="Holder", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700023
         )
-        assert comparable_types(text_handle, text_handle, table) is True
+        assert comparable_types(text_handle, text_handle, table, bounds={}) is True
 
     def test_record_with_unit_nested_in_array_field_not_comparable(self) -> None:
         # Nested depth: the record field itself is an array, whose element type
@@ -3156,7 +2902,7 @@ class TestComparableTypesTableAware:
         handle = RecordType(
             name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID, decl_id=700024
         )
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         table = TypeTable()
@@ -3171,7 +2917,7 @@ class TestComparableTypesTableAware:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
-        assert comparable_types(exc, exc, table) is False
+        assert comparable_types(exc, exc, table, bounds={}) is False
 
     def test_exception_with_only_scalar_fields_comparable(self) -> None:
         table = TypeTable()
@@ -3185,7 +2931,7 @@ class TestComparableTypesTableAware:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
-        assert comparable_types(exc, exc, table) is True
+        assert comparable_types(exc, exc, table, bounds={}) is True
 
     def test_record_containing_exception_with_function_field_not_comparable(self) -> None:
         # A record field of exception type walks that exception's flattened
@@ -3212,7 +2958,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700026)
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_record_referencing_already_flagged_record_not_comparable(self) -> None:
         # X is unconditionally non-comparable (a function field); Y's only
@@ -3240,33 +2986,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
-        assert comparable_types(handle, handle, table) is False
-
-    def test_dangling_field_reference_defaults_to_comparable(self) -> None:
-        # Y's field references a declaration that was never registered (an
-        # internal-invariant violation that should not happen for a
-        # well-formed table); the fixpoint treats an unresolvable reference
-        # as comparable rather than raising, defensively.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Y",
-                module_id=ENTRY_ID,
-                fields=(("ghost", RecordType(name="Ghost", module_id=ENTRY_ID)),),
-                decl_node_id=700027,
-            )
-        )
-        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
-        assert comparable_types(handle, handle, table) is True
-
-    def test_unregistered_handle_defaults_to_comparable(self) -> None:
-        # Querying comparability of a handle whose own declaration was never
-        # registered at all (as opposed to one merely referenced by a field)
-        # is likewise defensive rather than a crash.
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_recursive_tree_is_comparable(self) -> None:
         # A self-referential enum (array/dict guard not even needed for
@@ -3290,7 +3010,7 @@ class TestComparableTypesTableAware:
             ),
         )
         handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_recursive_type_with_function_field_at_depth_not_comparable(self) -> None:
         # Same recursive shape as above, but one variant carries a function
@@ -3314,7 +3034,7 @@ class TestComparableTypesTableAware:
             ),
         )
         handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_mutually_recursive_records_are_comparable(self) -> None:
         # A/B are mutually recursive through an array guard (inhabited) and
@@ -3344,8 +3064,804 @@ class TestComparableTypesTableAware:
         )
         a_handle = RecordType(name="A", module_id=ENTRY_ID, decl_id=700014)
         b_handle = RecordType(name="B", module_id=ENTRY_ID, decl_id=700015)
-        assert comparable_types(a_handle, a_handle, table) is True
-        assert comparable_types(b_handle, b_handle, table) is True
+        assert comparable_types(a_handle, a_handle, table, bounds={}) is True
+        assert comparable_types(b_handle, b_handle, table, bounds={}) is True
+
+
+# ---------------------------------------------------------------------------
+# satisfies: the structural predicate every constraint check (and
+# comparable_types, by delegation) is built on.
+# ---------------------------------------------------------------------------
+
+
+def _register_box(table: TypeTable, decl_id: int) -> None:
+    """Register the generic record ``Box[T] { value: T }`` under *decl_id*."""
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+            decl_node_id=decl_id,
+        )
+    )
+
+
+class TestSatisfiesEq:
+    @pytest.mark.parametrize("typ", [TextType(), JsonType(), BoolType(), IntType(), DecimalType()])
+    def test_scalars_satisfy_eq(self, typ: Type) -> None:
+        table = TypeTable()
+        assert satisfies(typ, ConstraintKind.EQ, table, {}) is True
+
+    def test_array_of_scalars_satisfies_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(ArrayType(IntType()), ConstraintKind.EQ, table, {}) is True
+
+    def test_array_of_functions_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        assert satisfies(ArrayType(fn_type), ConstraintKind.EQ, table, {}) is False
+
+    def test_dict_of_functions_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        assert satisfies(DictType(TextType(), fn_type), ConstraintKind.EQ, table, {}) is False
+
+    def test_function_type_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        typ = FunctionType(params=(), result=IntType())
+        assert satisfies(typ, ConstraintKind.EQ, table, {}) is False
+
+    def test_unit_type_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(UnitType(), ConstraintKind.EQ, table, {}) is False
+
+    def test_bottom_type_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(BottomType(), ConstraintKind.EQ, table, {}) is False
+
+    def test_bottom_type_satisfies_eq_in_open_world_mode(self) -> None:
+        table = TypeTable()
+        assert satisfies(BottomType(), ConstraintKind.EQ, table, None) is True
+
+    def test_inference_var_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(InferenceVarType(), ConstraintKind.EQ, table, {}) is False
+
+    def test_inference_var_satisfies_eq_in_open_world_mode(self) -> None:
+        table = TypeTable()
+        assert satisfies(InferenceVarType(), ConstraintKind.EQ, table, None) is True
+
+    def test_var_record_satisfies_eq(self) -> None:
+        # Eq (unlike Hashable) does not exclude mutable fields.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Counter",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                mutable_fields=frozenset({"value"}),
+                decl_node_id=700100,
+            )
+        )
+        handle = RecordType(name="Counter", module_id=ENTRY_ID, decl_id=700100)
+        assert satisfies(handle, ConstraintKind.EQ, table, {}) is True
+
+    def test_generic_nominal_satisfies_eq_only_for_eq_instantiation(self) -> None:
+        table = TypeTable()
+        _register_box(table, 700101)
+        int_box = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700101)
+        fn_box = RecordType(
+            name="Box",
+            type_args=(FunctionType(params=(), result=IntType()),),
+            module_id=ENTRY_ID,
+            decl_id=700101,
+        )
+        assert satisfies(int_box, ConstraintKind.EQ, table, {}) is True
+        assert satisfies(fn_box, ConstraintKind.EQ, table, {}) is False
+
+    def test_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, {}) is False
+
+    def test_type_variable_bounded_eq_satisfies_eq(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.EQ})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
+
+    def test_type_variable_with_closed_hashable_bound_satisfies_eq(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
+
+    def test_type_variable_bound_only_applies_to_its_own_name(self) -> None:
+        table = TypeTable()
+        bounds = {"U": frozenset({ConstraintKind.EQ})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is False
+
+    def test_array_of_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
+
+    def test_array_of_bounded_type_variable_satisfies_eq(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.EQ})}
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, bounds) is True
+
+    def test_array_of_unbounded_type_variable_satisfies_eq_in_open_world_mode(self) -> None:
+        table = TypeTable()
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, None) is True
+
+    def test_dict_of_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        assert (
+            satisfies(DictType(TextType(), TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
+        )
+
+    def test_dict_of_bounded_type_variable_satisfies_eq(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.EQ})}
+        assert (
+            satisfies(DictType(TextType(), TypeVarType("T")), ConstraintKind.EQ, table, bounds)
+            is True
+        )
+
+    def test_dict_satisfies_eq_only_when_both_key_and_value_do(self) -> None:
+        # Eq is required of both children independently: a bad key disqualifies
+        # the dict even when the value is fine, and vice versa.
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        assert satisfies(DictType(fn_type, IntType()), ConstraintKind.EQ, table, {}) is False
+        assert satisfies(DictType(IntType(), fn_type), ConstraintKind.EQ, table, {}) is False
+        assert satisfies(DictType(IntType(), IntType()), ConstraintKind.EQ, table, {}) is True
+
+    def test_record_with_bad_dict_key_is_flagged_for_eq_and_json(self) -> None:
+        # The KEY position of a field's dict type is scanned by the
+        # declaration-flagging fixpoint too: a function hiding there
+        # disqualifies the record from Eq (and, by the same fixpoint, from
+        # JSON convertibility) even though the value type is fine.
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Mapping",
+                module_id=ENTRY_ID,
+                fields=(("entries", DictType(fn_type, IntType())),),
+                decl_node_id=701025,
+            )
+        )
+        handle = RecordType(name="Mapping", module_id=ENTRY_ID, decl_id=701025)
+        assert satisfies(handle, ConstraintKind.EQ, table, {}) is False
+        assert is_json_convertible(handle, table) is False
+
+    def test_generic_record_dict_key_position_is_relevant_for_eq(self) -> None:
+        # T appears only in the dict's KEY position; relevant_params must
+        # still mark it relevant, or a bad instantiation for T slips through
+        # unchecked (nominal_satisfies only recurses into relevant params).
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="KeyBox",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("entries", DictType(TypeVarType("T"), IntType())),),
+                decl_node_id=701026,
+            )
+        )
+        fn_type = FunctionType(params=(), result=IntType())
+        int_box = RecordType(
+            name="KeyBox", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=701026
+        )
+        fn_box = RecordType(name="KeyBox", type_args=(fn_type,), module_id=ENTRY_ID, decl_id=701026)
+        assert satisfies(int_box, ConstraintKind.EQ, table, {}) is True
+        assert satisfies(fn_box, ConstraintKind.EQ, table, {}) is False
+
+    def test_generic_nominal_with_unbounded_type_variable_argument_does_not_satisfy_eq(
+        self,
+    ) -> None:
+        # Box[K] where K is the caller's own unbounded type variable: the
+        # bound must thread through the recursive instantiation check.
+        table = TypeTable()
+        _register_box(table, 701000)
+        k_box = RecordType(
+            name="Box", type_args=(TypeVarType("K"),), module_id=ENTRY_ID, decl_id=701000
+        )
+        assert satisfies(k_box, ConstraintKind.EQ, table, {}) is False
+        bounds = {"K": frozenset({ConstraintKind.EQ})}
+        assert satisfies(k_box, ConstraintKind.EQ, table, bounds) is True
+
+    def test_exception_extends_inherited_function_field_does_not_satisfy_eq(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("handler", fn_type),),
+                decl_node_id=701001,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception", name="Child", module_id=ENTRY_ID, base=701001, decl_node_id=701002
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=701002)
+        assert satisfies(child, ConstraintKind.EQ, table, {}) is False
+
+    def test_exception_extends_non_eq_descendant_flags_ancestor(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                abstract=True,
+                decl_node_id=701003,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                base=701003,
+                fields=(("handler", fn_type),),
+                decl_node_id=701004,
+            )
+        )
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=701003)
+        assert satisfies(root, ConstraintKind.EQ, table, {}) is False
+
+    def test_host_minted_declaration_does_not_satisfy_eq(self) -> None:
+        table = create_seeded_type_table()
+        session = BUILTIN_PRELUDE_TYPES["Session"]
+        assert satisfies(session, ConstraintKind.EQ, table, {}) is False
+
+    def test_host_minted_declaration_does_not_satisfy_eq_on_unseeded_table(self) -> None:
+        # A host-minted handle is flagged by declaration identity alone
+        # (TypeTable.host_minted_declaration_ids), independent of whether its
+        # TypeDef is registered in this particular table.
+        table = TypeTable()
+        session = BUILTIN_PRELUDE_TYPES["Session"]
+        assert satisfies(session, ConstraintKind.EQ, table, {}) is False
+
+
+class TestSatisfiesHashable:
+    @pytest.mark.parametrize("typ", [TextType(), JsonType(), BoolType(), IntType(), DecimalType()])
+    def test_scalars_satisfy_hashable(self, typ: Type) -> None:
+        table = TypeTable()
+        assert satisfies(typ, ConstraintKind.HASHABLE, table, {}) is True
+
+    def test_array_never_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        assert satisfies(ArrayType(IntType()), ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_array_of_unbounded_type_variable_does_not_satisfy_hashable_in_open_world_mode(
+        self,
+    ) -> None:
+        # array is never hashable regardless of content, open-world mode included.
+        table = TypeTable()
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.HASHABLE, table, None) is False
+
+    def test_dict_never_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        assert (
+            satisfies(DictType(TextType(), IntType()), ConstraintKind.HASHABLE, table, {}) is False
+        )
+
+    def test_dict_never_satisfies_hashable_regardless_of_key_type(self) -> None:
+        # dict is disqualified outright, before even looking at its key type.
+        table = TypeTable()
+        assert (
+            satisfies(DictType(IntType(), IntType()), ConstraintKind.HASHABLE, table, {}) is False
+        )
+
+    def test_function_type_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        typ = FunctionType(params=(), result=IntType())
+        assert satisfies(typ, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_unit_type_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        assert satisfies(UnitType(), ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_bottom_type_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        assert satisfies(BottomType(), ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_bottom_type_satisfies_hashable_in_open_world_mode(self) -> None:
+        table = TypeTable()
+        assert satisfies(BottomType(), ConstraintKind.HASHABLE, table, None) is True
+
+    def test_inference_var_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        assert satisfies(InferenceVarType(), ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_inference_var_satisfies_hashable_in_open_world_mode(self) -> None:
+        table = TypeTable()
+        assert satisfies(InferenceVarType(), ConstraintKind.HASHABLE, table, None) is True
+
+    def test_record_of_scalars_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=700102,
+            )
+        )
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700102)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
+
+    def test_var_record_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Counter",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                mutable_fields=frozenset({"value"}),
+                decl_node_id=700103,
+            )
+        )
+        handle = RecordType(name="Counter", module_id=ENTRY_ID, decl_id=700103)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_array_field_record_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Items",
+                module_id=ENTRY_ID,
+                fields=(("xs", ArrayType(IntType())),),
+                decl_node_id=701022,
+            )
+        )
+        handle = RecordType(name="Items", module_id=ENTRY_ID, decl_id=701022)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_dict_field_record_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Mapping",
+                module_id=ENTRY_ID,
+                fields=(("entries", DictType(TextType(), IntType())),),
+                decl_node_id=701023,
+            )
+        )
+        handle = RecordType(name="Mapping", module_id=ENTRY_ID, decl_id=701023)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_exception_of_scalars_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700104,
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700104)
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is True
+
+    def test_unregistered_exception_hashability_is_not_retained_as_a_proof(self) -> None:
+        table = TypeTable()
+        exc = ExceptionType(name="Unregistered", module_id=ENTRY_ID, decl_id=700104)
+
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is True
+        assert not table.hashable_proofs
+
+    def test_exception_with_function_field_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("handler", handler_type),),
+                decl_node_id=700105,
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700105)
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_recursive_enum_of_scalars_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        register_typedef(
+            table,
+            enum_typedef(
+                "Tree",
+                {
+                    "Leaf": {},
+                    "Node": {
+                        "value": IntType(),
+                        "left": EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700106),
+                        "right": EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700106),
+                    },
+                },
+                decl_id=700106,
+            ),
+        )
+        handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700106)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
+
+    def test_enum_member_with_var_field_does_not_satisfy_hashable(self) -> None:
+        # A member's own `var` field disqualifies the enum, even though an
+        # enum's own `mutable_fields` is always empty.
+        table = TypeTable()
+        some_member = RecordType(name="Some", module_id=ENTRY_ID, decl_id=700111)
+        none_member = RecordType(name="None", module_id=ENTRY_ID, decl_id=700112)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Some",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                mutable_fields=frozenset({"value"}),
+                decl_node_id=700111,
+            )
+        )
+        table.register(TypeDef(kind="record", name="None", module_id=ENTRY_ID, decl_node_id=700112))
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Holder",
+                module_id=ENTRY_ID,
+                members=(some_member, none_member),
+                decl_node_id=700107,
+            )
+        )
+        handle = EnumType(name="Holder", module_id=ENTRY_ID, decl_id=700107)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_function_containing_record_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Callback",
+                module_id=ENTRY_ID,
+                fields=(("fn", handler_type),),
+                decl_node_id=700108,
+            )
+        )
+        handle = RecordType(name="Callback", module_id=ENTRY_ID, decl_id=700108)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_generic_nominal_hashable_depends_on_instantiation(self) -> None:
+        table = TypeTable()
+        _register_box(table, 700109)
+        int_box = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700109)
+        array_box = RecordType(
+            name="Box",
+            type_args=(ArrayType(IntType()),),
+            module_id=ENTRY_ID,
+            decl_id=700109,
+        )
+        assert satisfies(int_box, ConstraintKind.HASHABLE, table, {}) is True
+        assert satisfies(array_box, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_generic_nominal_satisfies_hashable_in_open_world_mode(self) -> None:
+        # Box[T] itself, T free: no bound is in scope, so the field's own
+        # type variable is assumed hashable wherever it is instantiated.
+        table = TypeTable()
+        _register_box(table, 700111)
+        t_box = RecordType(
+            name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700111
+        )
+        assert satisfies(t_box, ConstraintKind.HASHABLE, table, None) is True
+
+    def test_unbounded_type_variable_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_type_variable_bounded_hashable_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.HASHABLE})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, bounds) is True
+
+    def test_type_variable_bounded_eq_only_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        bounds = {"T": frozenset({ConstraintKind.EQ})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, bounds) is False
+
+    def test_generic_nominal_hashable_with_bounded_type_variable_argument(self) -> None:
+        # Box[K] where K is the caller's own bounded type variable: the
+        # bound must thread through the recursive instantiation check.
+        table = TypeTable()
+        _register_box(table, 700110)
+        k_box = RecordType(
+            name="Box", type_args=(TypeVarType("K"),), module_id=ENTRY_ID, decl_id=700110
+        )
+        assert satisfies(k_box, ConstraintKind.HASHABLE, table, {}) is False
+        bounds = {"K": frozenset({ConstraintKind.HASHABLE})}
+        assert satisfies(k_box, ConstraintKind.HASHABLE, table, bounds) is True
+
+    def test_record_containing_hashable_exception_field_satisfies_hashable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700112,
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700112)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Report",
+                module_id=ENTRY_ID,
+                fields=(("cause", exc),),
+                decl_node_id=700113,
+            )
+        )
+        handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700113)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
+
+    def test_record_containing_non_hashable_exception_field_does_not_satisfy_hashable(
+        self,
+    ) -> None:
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("handler", handler_type),),
+                decl_node_id=700114,
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700114)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Report",
+                module_id=ENTRY_ID,
+                fields=(("cause", exc),),
+                decl_node_id=700115,
+            )
+        )
+        handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700115)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_record_referencing_already_flagged_record_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="X",
+                module_id=ENTRY_ID,
+                fields=(("fn", fn_type),),
+                decl_node_id=700116,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Y",
+                module_id=ENTRY_ID,
+                fields=(("x", RecordType(name="X", module_id=ENTRY_ID, decl_id=700116)),),
+                decl_node_id=700117,
+            )
+        )
+        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700117)
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_exception_extends_inherited_function_field_does_not_satisfy_hashable(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("handler", fn_type),),
+                decl_node_id=701005,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception", name="Child", module_id=ENTRY_ID, base=701005, decl_node_id=701006
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=701006)
+        assert satisfies(child, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_exception_extends_non_hashable_descendant_flags_ancestor(self) -> None:
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                abstract=True,
+                decl_node_id=701007,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                base=701007,
+                fields=(("handler", fn_type),),
+                decl_node_id=701008,
+            )
+        )
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=701007)
+        assert satisfies(root, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_host_minted_declaration_does_not_satisfy_hashable(self) -> None:
+        table = create_seeded_type_table()
+        session = BUILTIN_PRELUDE_TYPES["Session"]
+        assert satisfies(session, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_generic_recursive_enum_hashable_depends_on_instantiation(self) -> None:
+        table = TypeTable()
+        register_typedef(
+            table,
+            enum_typedef(
+                "List",
+                {
+                    "Nil": {},
+                    "Cons": {
+                        "head": TypeVarType("T"),
+                        "tail": EnumType(
+                            name="List",
+                            type_args=(TypeVarType("T"),),
+                            module_id=ENTRY_ID,
+                            decl_id=701009,
+                        ),
+                    },
+                },
+                type_params=("T",),
+                decl_id=701009,
+            ),
+        )
+        int_list = EnumType(name="List", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=701009)
+        array_list = EnumType(
+            name="List", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID, decl_id=701009
+        )
+        assert satisfies(int_list, ConstraintKind.HASHABLE, table, {}) is True
+        assert satisfies(array_list, ConstraintKind.HASHABLE, table, {}) is False
+
+    def test_phantom_type_parameter_does_not_affect_hashable(self) -> None:
+        # T never appears in Phantom's own fields, so instantiating it with a
+        # non-hashable argument cannot poison the declaration.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("x", IntType()),),
+                decl_node_id=701010,
+            )
+        )
+        handle = RecordType(
+            name="Phantom",
+            type_args=(FunctionType(params=(), result=IntType()),),
+            module_id=ENTRY_ID,
+            decl_id=701010,
+        )
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
+
+
+class TestHashableImpliesEq:
+    """`Hashable` implies `Eq` for every kind of type this module builds."""
+
+    @staticmethod
+    def _table() -> TypeTable:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=701011,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Counter",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                mutable_fields=frozenset({"value"}),
+                decl_node_id=701012,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=701013,
+            )
+        )
+        _register_box(table, 701014)
+        return table
+
+    @pytest.mark.parametrize(
+        "typ, bounds",
+        [
+            (TextType(), {}),
+            (JsonType(), {}),
+            (BoolType(), {}),
+            (IntType(), {}),
+            (DecimalType(), {}),
+            (ArrayType(IntType()), {}),
+            (DictType(TextType(), IntType()), {}),
+            (UnitType(), {}),
+            (FunctionType(params=(), result=IntType()), {}),
+            (BottomType(), {}),
+            (InferenceVarType(), {}),
+            (TypeVarType("T"), {}),
+            (TypeVarType("T"), {"T": frozenset({ConstraintKind.EQ})}),
+            (TypeVarType("T"), {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}),
+            (RecordType(name="Point", module_id=ENTRY_ID, decl_id=701011), {}),
+            (RecordType(name="Counter", module_id=ENTRY_ID, decl_id=701012), {}),
+            (ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=701013), {}),
+            (
+                RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=701014),
+                {},
+            ),
+            (
+                RecordType(
+                    name="Box",
+                    type_args=(ArrayType(IntType()),),
+                    module_id=ENTRY_ID,
+                    decl_id=701014,
+                ),
+                {},
+            ),
+            (
+                RecordType(
+                    name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=701014
+                ),
+                {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})},
+            ),
+            (
+                RecordType(
+                    name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=701014
+                ),
+                {"T": frozenset({ConstraintKind.EQ})},
+            ),
+        ],
+    )
+    def test_hashable_implies_eq(
+        self, typ: Type, bounds: dict[str, frozenset[ConstraintKind]]
+    ) -> None:
+        table = self._table()
+        assert not satisfies(typ, ConstraintKind.HASHABLE, table, bounds) or satisfies(
+            typ, ConstraintKind.EQ, table, bounds
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3467,7 +3983,7 @@ class TestCastClassification:
 
     def test_dict_of_scalars_to_json_total(self) -> None:
         assert (
-            cast_classification(DictType(value=IntType()), JsonType(), TypeTable())
+            cast_classification(DictType(key=TextType(), value=IntType()), JsonType(), TypeTable())
             == CastKind.TOTAL_JSON
         )
 
@@ -3530,6 +4046,16 @@ class TestCastClassification:
         table = _bad_record_table()
         bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029))
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+    def test_unresolved_type_var_target_static_error(self) -> None:
+        """Casting to a generic function's own bare type parameter is a static error.
+
+        ``x as T`` inside ``def f[T](x: json) -> T`` resolves the target to
+        ``TypeVarType("T")`` -- a real program shape, not an internal artifact.
+        """
+        assert (
+            cast_classification(JsonType(), TypeVarType("T"), TypeTable()) == CastKind.STATIC_ERROR
+        )
 
 
 def _exception_hierarchy_table() -> TypeTable:
@@ -3708,9 +4234,26 @@ class TestIsJsonConvertible:
         good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
         bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=good)), table) is True
-        assert is_json_convertible(DictType(value=ArrayType(elem=good)), table) is True
+        assert (
+            is_json_convertible(DictType(key=TextType(), value=ArrayType(elem=good)), table) is True
+        )
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=bad)), table) is False
-        assert is_json_convertible(DictType(value=ArrayType(elem=bad)), table) is False
+        assert (
+            is_json_convertible(DictType(key=TextType(), value=ArrayType(elem=bad)), table) is False
+        )
+
+    def test_dict_follows_its_key_type_too(self) -> None:
+        # A non-Hashable key disqualifies the dict even with a good value; any
+        # Hashable key (not just text) converts, each with its own wire form.
+        table = TypeTable()
+        assert is_json_convertible(DictType(key=UnitType(), value=IntType()), table) is False
+        assert is_json_convertible(DictType(key=TextType(), value=IntType()), table) is True
+        assert is_json_convertible(DictType(key=IntType(), value=IntType()), table) is True
+        # array is itself JSON-convertible as a value, but never Hashable as a key.
+        assert (
+            is_json_convertible(DictType(key=ArrayType(elem=IntType()), value=IntType()), table)
+            is False
+        )
 
     def test_recursive_declaration_converts(self) -> None:
         table = TypeTable()
@@ -3762,7 +4305,11 @@ class TestJsonCastHint:
     def test_container_and_nominal_into_json_are_hinted(self) -> None:
         table = _bad_record_table()
         good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
-        for value_type in (ArrayType(elem=IntType()), DictType(value=IntType()), good):
+        for value_type in (
+            ArrayType(elem=IntType()),
+            DictType(key=TextType(), value=IntType()),
+            good,
+        ):
             assert "as json" in json_cast_hint(value_type, JsonType(), table)
 
     def test_nonconvertible_container_into_json_is_not_hinted(self) -> None:
@@ -3782,7 +4329,11 @@ class TestJsonCastHint:
         # The reverse direction: the fix is a cast to the target type, never
         # `as json`.
         table = TypeTable()
-        for target in (TextType(), ArrayType(elem=IntType()), DictType(value=IntType())):
+        for target in (
+            TextType(),
+            ArrayType(elem=IntType()),
+            DictType(key=TextType(), value=IntType()),
+        ):
             assert json_cast_hint(JsonType(), target, table) == ""
 
 
@@ -3790,13 +4341,14 @@ class TestJsonRepresentationObstacle:
     def test_convertible_type_has_no_obstacle(self) -> None:
         table = _bad_record_table()
         good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030))
-        assert table.json_representation_obstacle(good) is None
+        assert table.json_representation_culprit(good) is None
 
     def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
         table = TypeTable()
-        message = table.json_representation_obstacle(DictType(value=ArrayType(elem=UnitType())))
-        assert message is not None
-        assert "unit" in message
+        culprit = table.json_representation_culprit(
+            DictType(key=TextType(), value=ArrayType(elem=UnitType()))
+        )
+        assert culprit == NonDataLeaf(UnitType())
 
     def test_culprit_is_reported_through_a_nested_declaration(self) -> None:
         table = _bad_record_table()
@@ -3816,10 +4368,10 @@ class TestJsonRepresentationObstacle:
             )
         )
         outer = RecordType(name="Outer", module_id=ENTRY_ID, decl_id=700033)
-        message = table.json_representation_obstacle(outer)
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
+        culprit = table.json_representation_culprit(outer)
+        assert culprit == NonDataField(
+            table.typedef_of(700029), "a", FunctionType(params=(), result=UnitType())
+        )
 
     def test_culprit_search_visits_a_shared_declaration_once(self) -> None:
         # Two independent paths reach Mid, whose own fields are all clean
@@ -3861,12 +4413,12 @@ class TestJsonRepresentationObstacle:
                 decl_node_id=700034,
             )
         )
-        message = table.json_representation_obstacle(
+        culprit = table.json_representation_culprit(
             RecordType(name="Top", module_id=ENTRY_ID, decl_id=700034)
         )
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
+        assert culprit == NonDataField(
+            table.typedef_of(700029), "a", FunctionType(params=(), result=UnitType())
+        )
 
     def test_enum_variant_field_is_named(self) -> None:
         table = TypeTable()
@@ -3879,10 +4431,12 @@ class TestJsonRepresentationObstacle:
             ),
         )
         holder = EnumType(name="Holder", module_id=ENTRY_ID, decl_id=700023)
-        message = table.json_representation_obstacle(holder)
-        assert message is not None
-        assert "'run'" in message
-        assert "Holder" in message
+        culprit = table.json_representation_culprit(holder)
+        assert culprit is not None
+        assert isinstance(culprit, NonDataField)
+        assert culprit.field_name == "run"
+        assert culprit.field_type == FunctionType(params=(), result=IntType())
+        assert culprit.typedef.name == "Holder"
 
     def test_exception_descendant_poisons_its_ancestor(self) -> None:
         table = TypeTable()
@@ -3907,20 +4461,255 @@ class TestJsonRepresentationObstacle:
         )
         base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
         assert is_json_convertible(base, table) is False
-        message = table.json_representation_obstacle(base)
-        assert message is not None
-        assert "'handler'" in message
-        assert "Child" in message
+        culprit = table.json_representation_culprit(base)
+        assert culprit == NonDataField(
+            table.typedef_of(700012),
+            "handler",
+            FunctionType(params=(IntType(),), result=IntType()),
+        )
 
     def test_type_variable_is_named_when_nothing_else_is_to_blame(self) -> None:
         table = TypeTable()
-        message = table.json_representation_obstacle(ArrayType(elem=TypeVarType("T")))
-        assert message is not None
-        assert "'T'" in message
+        culprit = table.json_representation_culprit(ArrayType(elem=TypeVarType("T")))
+        assert culprit == FreeTypeVar("T")
 
     def test_unresolved_inference_variable_has_no_specific_obstacle(self) -> None:
         table = TypeTable()
-        assert table.json_representation_obstacle(ArrayType(elem=InferenceVarType(1))) is None
+        assert table.json_representation_culprit(ArrayType(elem=InferenceVarType(1))) is None
+
+    def test_non_hashable_dict_key_is_named(self) -> None:
+        table = TypeTable()
+        culprit = table.json_representation_culprit(
+            DictType(key=ArrayType(elem=IntType()), value=TextType())
+        )
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_non_hashable_dict_key_through_a_nested_declaration_is_named(self) -> None:
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=700035,
+            ),
+        )
+        holder = RecordType(
+            name="Holder",
+            module_id=ENTRY_ID,
+            decl_id=700035,
+            type_args=(ArrayType(elem=IntType()),),
+        )
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(700035), "K", ArrayType(elem=IntType())
+        )
+
+    def test_non_hashable_dict_key_through_a_field_argument_is_named(self) -> None:
+        """A field whose own type supplies the bad key argument, rather than the
+        examined type's own handle, is blamed by field name."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=700035,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Outer",
+                module_id=ENTRY_ID,
+                fields=(
+                    (
+                        "b",
+                        RecordType(
+                            name="Holder",
+                            module_id=ENTRY_ID,
+                            decl_id=700035,
+                            type_args=(ArrayType(elem=IntType()),),
+                        ),
+                    ),
+                ),
+                decl_node_id=700036,
+            ),
+        )
+        outer = RecordType(name="Outer", module_id=ENTRY_ID, decl_id=700036)
+        culprit = table.json_representation_culprit(outer)
+        assert culprit == BadKeyArgument(
+            table.typedef_of(700036), "b", table.typedef_of(700035), "K", ArrayType(elem=IntType())
+        )
+
+    def test_non_hashable_dict_key_nested_inside_a_dict_value_is_named(self) -> None:
+        """A dict whose own key is fine still recurses into its value to find a bad key."""
+        table = TypeTable()
+        inner = DictType(key=ArrayType(elem=IntType()), value=TextType())
+        culprit = table.json_representation_culprit(DictType(key=IntType(), value=inner))
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_non_hashable_dict_key_nested_inside_an_array_is_named(self) -> None:
+        """A structural container other than a dict still recurses to find a bad dict key."""
+        table = TypeTable()
+        culprit = table.json_representation_culprit(
+            ArrayType(elem=DictType(key=ArrayType(elem=IntType()), value=TextType()))
+        )
+        assert culprit == BadDictKey(ArrayType(elem=IntType()))
+
+    def test_bad_dict_key_field_is_named_when_no_argument_supplies_it(self) -> None:
+        """A field whose OWN body (not a type-parameter argument) is a bad dict key,
+        assuming the declaration's own params are Hashable, is a BadDictKeyField."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("d", DictType(key=ArrayType(elem=IntType()), value=IntType())),),
+                decl_node_id=700037,
+            ),
+        )
+        holder = RecordType(name="Holder", module_id=ENTRY_ID, decl_id=700037)
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadDictKeyField(table.typedef_of(700037), "d", ArrayType(elem=IntType()))
+
+    def test_bad_dict_key_field_skips_the_declarations_own_deferred_key_parameter(self) -> None:
+        """A generic ``Holder[K]``'s own key parameter ``K`` is assumed ``Hashable``
+        (deferred to whatever argument a reference supplies) -- ``d: dict[K, int]``
+        must never be wrongly named the culprit; ``e``'s own concrete bad key is."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(
+                    ("d", DictType(key=TypeVarType("K"), value=IntType())),
+                    ("e", DictType(key=ArrayType(elem=IntType()), value=IntType())),
+                ),
+                decl_node_id=800001,
+            ),
+        )
+        holder = RecordType(
+            name="Holder", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=800001
+        )
+        culprit = table.json_representation_culprit(holder)
+        assert culprit == BadDictKeyField(table.typedef_of(800001), "e", ArrayType(elem=IntType()))
+
+    def test_bad_key_argument_nested_inside_an_array_is_named(self) -> None:
+        """A bad key argument reached only through a nested handle (not *t* itself)
+        is still named -- here ``t`` is an ``array``, and the culprit's own handle
+        (``Box[array[int]]``) is one hop inside its element."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800010,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800010, type_args=(ArrayType(elem=IntType()),)
+        )
+        culprit = table.json_representation_culprit(ArrayType(elem=box))
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(800010), "K", ArrayType(elem=IntType())
+        )
+
+    def test_bad_key_argument_nested_inside_an_enum_wrapper_is_named(self) -> None:
+        """A bad key argument reached through a generic enum's own type argument
+        (not one of the enum's own key parameters) is still named, one hop in."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800011,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800011, type_args=(ArrayType(elem=IntType()),)
+        )
+        register_typedef(
+            table,
+            enum_typedef(
+                "Wrap", {"V": {"v": TypeVarType("T")}}, type_params=("T",), decl_id=800012
+            ),
+        )
+        wrap = EnumType(name="Wrap", module_id=ENTRY_ID, decl_id=800012, type_args=(box,))
+        culprit = table.json_representation_culprit(wrap)
+        assert culprit == BadKeyArgument(
+            None, None, table.typedef_of(800011), "K", ArrayType(elem=IntType())
+        )
+
+    def test_free_type_variable_key_argument_is_named_not_a_bad_argument(self) -> None:
+        """A bare free type variable filling another declaration's key parameter is
+        FreeTypeVar -- its real Hashable-ness is unresolved, not wrongly blamed as a
+        concrete bad argument."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800013,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800013, type_args=(TypeVarType("T"),)
+        )
+        culprit = table.json_representation_culprit(ArrayType(elem=box))
+        assert culprit == FreeTypeVar("T")
+
+    def test_free_type_variable_key_argument_is_named_directly_not_a_bad_argument(self) -> None:
+        """The same free-type-variable key argument, examined directly (``Box[T]``
+        itself is *t*, not reached one hop inside a wrapper) is still FreeTypeVar."""
+        table = TypeTable()
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("K",),
+                fields=(("d", DictType(key=TypeVarType("K"), value=IntType())),),
+                decl_node_id=800014,
+            ),
+        )
+        box = RecordType(
+            name="Box", module_id=ENTRY_ID, decl_id=800014, type_args=(TypeVarType("T"),)
+        )
+        culprit = table.json_representation_culprit(box)
+        assert culprit == FreeTypeVar("T")
+
+    def test_free_type_variable_direct_dict_key_is_named_not_a_bad_key(self) -> None:
+        """A bare free type variable as a dict's own direct key is FreeTypeVar, not
+        wrongly blamed as a concrete non-Hashable BadDictKey."""
+        table = TypeTable()
+        culprit = table.json_representation_culprit(DictType(key=TypeVarType("T"), value=IntType()))
+        assert culprit == FreeTypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -3947,6 +4736,146 @@ class TestInhabitationAnalysis:
     def test_referenced_uninhabitable_member_is_rejected_by_program_checking(self) -> None:
         with pytest.raises(AglTypeError):
             _check("record Bad\n  next: Bad\nenum E = ::Bad | Good\n()")
+
+    def test_inline_member_requiring_itself_is_rejected_beside_an_inhabited_member(
+        self,
+    ) -> None:
+        # E is inhabited through B, but A's field needs another A: the member
+        # is a record with no finite value, so it is rejected at its own span.
+        with pytest.raises(AglTypeError) as info:
+            _check("enum E\n  | A(x: E::A)\n  | B\n()")
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == 2
+
+    @pytest.mark.parametrize(
+        ("source", "line"),
+        [
+            ("enum E[T]\n  | A(x: E::A[T])\n  | B(y: T)\n()", 2),
+            ("enum E\n  | A(x: F::C)\n  | B\nenum F\n  | C(y: E::A)\n  | D\n()", 2),
+            ("scope S\n  enum E\n    | A(x: S::E::A)\n    | B\nend S\n\n()", 3),
+        ],
+        ids=["generic-member", "cross-enum-member-cycle", "scoped-member"],
+    )
+    def test_member_requiring_itself_is_rejected_at_its_own_span(
+        self, source: str, line: int
+    ) -> None:
+        with pytest.raises(AglTypeError) as info:
+            _check(source)
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == line
+
+    @staticmethod
+    def _many_parameter_enum(argument: str, arity: int) -> str:
+        """Return an enum whose member ``Ki`` refers back to it with *argument* at position i."""
+        params = [f"A{i}" for i in range(arity)]
+        members = "".join(
+            f"  | K{i}(x: D[{', '.join([*params[:i], argument, *params[i + 1 :]])}])\n"
+            for i in range(arity)
+        )
+        return f"enum D[{', '.join(params)}]\n{members}  | Base(v: A0)\n"
+
+    def test_many_parameter_enum_with_an_uninhabited_argument_is_solved(self) -> None:
+        # Every member passes the uninhabited record on at another position,
+        # so the answer depends on which of 2^16 argument patterns are inhabited.
+        source = "record Bad\n  b: Bad\n" + self._many_parameter_enum("Bad", 16) + "()"
+        with pytest.raises(AglTypeError) as info:
+            _check(source)
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == 1
+
+    def test_many_parameter_enum_with_a_long_inhabited_chain_argument_is_accepted(self) -> None:
+        # The argument is inhabited only at the end of a declaration chain.
+        chain = "".join(f"record L{i}\n  x: L{i + 1}\n" for i in range(12))
+        _check(self._many_parameter_enum("L0", 16) + chain + "record L12\n()")
+
+    def test_mutually_recursive_sum_guarded_by_arrays_is_accepted(self) -> None:
+        # Both members settle only through the enum they are members of.
+        _check("enum A = ::B | ::C\nrecord B\n  x: array[A]\nrecord C\n  y: array[A]\n()")
+
+    @staticmethod
+    def _user_of_boxed_option_table() -> tuple[TypeTable, RecordType, TypeDef]:
+        """Return ``Bad``/``Opt[T]``/``Box[T]`` and ``User`` holding ``Box[Opt[Bad]]``."""
+        table = TypeTable()
+        bad = RecordType("Bad", module_id=ENTRY_ID, decl_id=700041)
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Bad",
+                module_id=ENTRY_ID,
+                fields=(("next", bad),),
+                decl_node_id=bad.decl_id,
+            ),
+        )
+        opt = register_typedef(
+            table,
+            enum_typedef(
+                "Opt",
+                {"Some": {"v": TypeVarType("T")}, "Nothing": {}},
+                type_params=("T",),
+                decl_id=700042,
+            ),
+        )
+        box = register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("x", TypeVarType("T")),),
+                decl_node_id=700043,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="User",
+                module_id=ENTRY_ID,
+                fields=(("u", box.handle((opt.handle((bad,)),))),),
+                decl_node_id=700044,
+            ),
+        )
+        return table, bad, box
+
+    def test_generic_argument_settled_by_a_lower_declaration_is_awaited(self) -> None:
+        # User needs Box[Opt[Bad]]: Opt with an uninhabited argument is first
+        # demanded while User is evaluated, and settles as inhabited (through
+        # Nothing) only afterwards.
+        table, bad, _box = self._user_of_boxed_option_table()
+
+        assert compute_uninhabited(table) == frozenset({bad.decl_id})
+
+    def test_unsettled_argument_nested_in_a_member_field_is_awaited(self) -> None:
+        # A generic argument still unknown while a lower declaration settles
+        # suspends its reader; it must not be read as uninhabited, which would
+        # wrongly strike User or AY.
+        table, bad, box = self._user_of_boxed_option_table()
+        opt2 = register_typedef(
+            table,
+            enum_typedef(
+                "Opt2",
+                {"S2": {"v": box.handle((TypeVarType("T"),))}, "N2": {}},
+                type_params=("T",),
+                decl_id=700045,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="AY",
+                module_id=ENTRY_ID,
+                fields=(("y", opt2.handle((bad,))),),
+                decl_node_id=700046,
+            ),
+        )
+
+        assert compute_uninhabited(table) == frozenset({bad.decl_id})
 
     def test_referenced_enum_member_still_requires_its_own_finite_value(self) -> None:
         table = TypeTable()
@@ -3981,45 +4910,21 @@ class TestInhabitationAnalysis:
 
         assert compute_uninhabited(table) == frozenset({bad.decl_id})
 
-    def test_dangling_nominal_reference_stays_uninhabited(self) -> None:
-        """A malformed table with a missing target does not mark the source inhabited."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                fields=(("missing", RecordType("Missing", module_id=ENTRY_ID)),),
-                decl_node_id=700035,
-            )
-        )
-
-        assert compute_uninhabited(table) == frozenset({700035})
-
-    def test_exception_with_missing_base_stays_uninhabited(self) -> None:
-        """A malformed exception base link is not treated as constructible evidence."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="E",
-                module_id=ENTRY_ID,
-                base=999_999_999,  # never registered: a dangling base identity
-                decl_node_id=700031,
-            )
-        )
-
-        assert compute_uninhabited(table) == frozenset({700031})
-
 
 class TestFiniteClosure:
     def test_nominal_references_walks_nested_type_shapes(self) -> None:
         exc = ExceptionType("Oops", module_id=ENTRY_ID)
         enum = EnumType("Choice", module_id=ENTRY_ID)
         box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID, decl_id=700002)
-        typ = FunctionType(params=(ArrayType(exc),), result=DictType(box))
+        typ = FunctionType(params=(ArrayType(exc),), result=DictType(TextType(), box))
         assert list(nominal_references(typ)) == [exc, box, enum]
         assert list(nominal_references(BoolType())) == []
+
+    def test_nominal_references_walks_dict_key_too(self) -> None:
+        # A nominal reference occurring in KEY position must be yielded too,
+        # not only one occurring in value position.
+        box = RecordType("Box", module_id=ENTRY_ID, decl_id=700701)
+        assert list(nominal_references(DictType(box, IntType()))) == [box]
 
     def test_uniform_self_reference_is_finite(self) -> None:
         # Tree[T] referencing Tree[T]: the parameter-dependency self-loop
@@ -4366,12 +5271,6 @@ class TestFiniteClosure:
             is True
         )
 
-    def test_unregistered_declaration_defaults_to_finite(self) -> None:
-        table = TypeTable()
-        assert (
-            table.has_finite_schema(RecordType("Ghost", module_id=ENTRY_ID, decl_id=999999)) is True
-        )
-
     def test_has_finite_schema_reports_infinite_for_nested_perfect_field(self) -> None:
         # A non-recursive record containing a Perfect[int] field: the
         # reachability query must walk INTO the field's own type_args (not
@@ -4553,89 +5452,6 @@ class TestFiniteClosure:
             is True
         )
 
-    def test_unknown_nested_nominal_argument_counts_as_schema_growth(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(
-                    ("value", TypeVarType("T")),
-                    (
-                        "child",
-                        RecordType(
-                            "R",
-                            type_args=(
-                                RecordType(
-                                    "Unknown",
-                                    type_args=(ArrayType(TypeVarType("T")),),
-                                    module_id=ENTRY_ID,
-                                ),
-                            ),
-                            module_id=ENTRY_ID,
-                            decl_id=700035,
-                        ),
-                    ),
-                ),
-                decl_node_id=700035,
-            )
-        )
-        assert (
-            table.has_finite_schema(
-                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
-            )
-            is False
-        )
-
-    def test_extra_nested_nominal_argument_counts_as_schema_growth(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-                decl_node_id=700002,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(
-                    ("value", TypeVarType("T")),
-                    (
-                        "child",
-                        RecordType(
-                            "R",
-                            type_args=(
-                                RecordType(
-                                    "Box",
-                                    type_args=(TypeVarType("T"), ArrayType(TypeVarType("T"))),
-                                    module_id=ENTRY_ID,
-                                    decl_id=700002,
-                                ),
-                            ),
-                            module_id=ENTRY_ID,
-                            decl_id=700035,
-                        ),
-                    ),
-                ),
-                decl_node_id=700035,
-            )
-        )
-        assert (
-            table.has_finite_schema(
-                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
-            )
-            is False
-        )
-
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
         table.register(
@@ -4785,7 +5601,7 @@ class TestFiniteClosure:
                         "next",
                         RecordType(
                             "Q",
-                            type_args=(DictType(TypeVarType("T")),),
+                            type_args=(DictType(TextType(), TypeVarType("T")),),
                             module_id=ENTRY_ID,
                             decl_id=700043,
                         ),
@@ -4797,6 +5613,39 @@ class TestFiniteClosure:
         assert (
             table.has_finite_schema(
                 RecordType("Q", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700043)
+            )
+            is False
+        )
+
+    def test_growing_via_dict_key_is_infinite(self) -> None:
+        # Q[T] referencing Q[dict[T, int]]: T occurs under the dict
+        # constructor via the KEY position this time, still a proper
+        # subterm of the argument template.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Q",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Q",
+                            type_args=(DictType(TypeVarType("T"), IntType()),),
+                            module_id=ENTRY_ID,
+                            decl_id=700702,
+                        ),
+                    ),
+                ),
+                decl_node_id=700702,
+            )
+        )
+        assert (
+            table.has_finite_schema(
+                RecordType("Q", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700702)
             )
             is False
         )
@@ -4862,50 +5711,27 @@ class TestFiniteClosure:
             is True
         )
 
-    def test_dangling_reference_defaults_to_finite(self) -> None:
-        # A field referencing a declaration that was never registered (same
-        # defensive scenario as the non-data-reachability fixpoint): the
-        # dangling reference must not crash finiteness analysis, and
-        # defaults permissively to finite.
+    def test_schema_canonical_type_collapses_phantom_argument_in_dict_key(self) -> None:
+        # A dict KEY position is canonicalized too: a nominal reference
+        # sitting there has its own phantom argument collapsed to unit,
+        # exactly as one sitting in value position would.
         table = TypeTable()
         table.register(
             TypeDef(
                 kind="record",
-                name="Y",
-                module_id=ENTRY_ID,
-                fields=(("ghost", RecordType("Ghost", module_id=ENTRY_ID)),),
-                decl_node_id=700027,
-            )
-        )
-        assert table.has_finite_schema(RecordType("Y", module_id=ENTRY_ID, decl_id=700027)) is True
-
-    def test_schema_canonical_type_preserves_unregistered_reference_args(self) -> None:
-        table = TypeTable()
-        ghost = RecordType(
-            "Ghost",
-            type_args=(ArrayType(IntType()),),
-            module_id=ENTRY_ID,
-        )
-        assert table.canonical_schema_type(ghost) == ghost
-        assert table.schema_relevant_type_args(ghost) == (ArrayType(IntType()),)
-
-    def test_schema_canonical_type_preserves_extra_defensive_args(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Weird",
+                name="Phantom",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-                decl_node_id=700046,
+                fields=(),
+                decl_node_id=700703,
             )
         )
-        weird = RecordType(
-            "Weird", type_args=(IntType(), TextType()), module_id=ENTRY_ID, decl_id=700046
+        phantom = RecordType("Phantom", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700703)
+        canonical_phantom = RecordType(
+            "Phantom", type_args=(UnitType(),), module_id=ENTRY_ID, decl_id=700703
         )
-        assert table.canonical_schema_type(weird) == weird
-        assert table.schema_relevant_type_args(weird) == (IntType(), TextType())
+        dict_type = DictType(phantom, TextType())
+        assert table.canonical_schema_type(dict_type) == DictType(canonical_phantom, TextType())
 
     def test_argument_template_type_var_foreign_to_source_is_ignored(self) -> None:
         # Defensive: an argument template's type variable that is not among
@@ -5155,6 +5981,37 @@ class TestFiniteClosure:
             )
         )
         holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
+        culprit = table.first_infinite_declaration(holder)
+        assert culprit is not None
+        assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")
+
+    def test_first_infinite_declaration_names_culprit_reached_through_dict_key(self) -> None:
+        # The culprit reference sits in the dict's KEY position this time,
+        # not its value — nominal_references_for_schema must still find it.
+        table = self._perfect_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(
+                    (
+                        "p",
+                        DictType(
+                            RecordType(
+                                "Perfect",
+                                type_args=(IntType(),),
+                                module_id=ENTRY_ID,
+                                decl_id=700037,
+                            ),
+                            TextType(),
+                        ),
+                    ),
+                ),
+                decl_node_id=700704,
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700704)
         culprit = table.first_infinite_declaration(holder)
         assert culprit is not None
         assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")

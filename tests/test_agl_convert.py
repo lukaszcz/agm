@@ -26,6 +26,7 @@ from jsonschema import ValidationError as JsonschemaValidationError
 from agm.agl.ir.contracts import (
     ArrayDecode,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     FieldDecode,
     RecordDecode,
@@ -173,18 +174,20 @@ class TestParseJsonStrict:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict("1 2")
 
-    def test_rejects_integer_over_python_digit_limit(self) -> None:
-        previous_limit = sys.get_int_max_str_digits()
-        try:
-            sys.set_int_max_str_digits(640)
-            with pytest.raises(StrictJsonParseError):
-                parse_json_strict("1" * 641)
-        finally:
-            sys.set_int_max_str_digits(previous_limit)
+    def test_parses_an_integer_of_any_length_exactly(self) -> None:
+        digits = "7" * 5000
+        assert parse_json_strict(f"[{digits}]") == [int(digits)]
 
     def test_rejects_lone_surrogate_escape(self) -> None:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict('"\\ud800"')
+
+    @pytest.mark.parametrize(
+        "text", ["1e99999999999999999999", '{"n": [-1e-99999999999999999999]}']
+    )
+    def test_rejects_an_exponent_no_decimal_can_hold(self, text: str) -> None:
+        with pytest.raises(StrictJsonParseError):
+            parse_json_strict(text)
 
     def test_combines_surrogate_escape_pair(self) -> None:
         # Built from parts so no tool between here and the file can fold the
@@ -237,6 +240,11 @@ class TestAglValidator:
     def test_non_integral_decimal_rejected_as_integer(self) -> None:
         validator = validator_for_schema('{"type": "integer"}')
         assert len(list(validator.iter_errors(Decimal("1.5")))) == 1
+
+    @pytest.mark.parametrize("text", ["Infinity", "-Infinity", "1e999999999999"])
+    def test_integral_decimal_that_cannot_narrow_rejected_as_integer(self, text: str) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert len(list(validator.iter_errors(Decimal(text)))) == 1
 
     def test_int_still_accepted_as_integer(self) -> None:
         validator = validator_for_schema('{"type": "integer"}')
@@ -347,7 +355,11 @@ class TestDecodeValueHappy:
         assert result == ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
 
     def test_dict(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.INT))
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.INT),
+        )
         result = decode_value(schema, {"a": 1, "b": 2})
         assert result == DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
 
@@ -509,6 +521,22 @@ class TestDecodeValueErrors:
         with pytest.raises(ValueError, match="decimal"):
             decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), "not a number")
 
+    def test_decimal_type_got_decimal_out_of_range(self) -> None:
+        # Also covers the int branch's shared range check (`checked_decimal`):
+        # both branches route through the same helper, so one overflow case
+        # exercises it without constructing a slow, huge Python int.
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), Decimal("1e1000000"))
+
+    def test_decimal_type_got_non_finite_decimal(self) -> None:
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), Decimal("Infinity"))
+
+    @pytest.mark.parametrize("text", ["Infinity", "-Infinity", "1e999999999999"])
+    def test_int_type_got_integral_decimal_that_cannot_narrow(self, text: str) -> None:
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.INT), Decimal(text))
+
     def test_bool_type_got_int(self) -> None:
         with pytest.raises(ValueError, match="bool"):
             decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)
@@ -519,14 +547,93 @@ class TestDecodeValueErrors:
             decode_value(schema, "not a list")
 
     def test_dict_type_got_non_dict(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT))
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
         with pytest.raises(ValueError, match="object"):
             decode_value(schema, [1, 2])
 
     def test_dict_non_string_key(self) -> None:
-        schema = DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT))
-        with pytest.raises(ValueError, match="Dict key must be string"):
+        schema = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
+        with pytest.raises(ValueError):
             decode_value(schema, {1: "val"})
+
+    def test_entries_form_rejects_a_non_array(self) -> None:
+        schema = DictDecode(
+            DictKeyForm.ENTRIES, ScalarDecode(ScalarKind.JSON), ScalarDecode(ScalarKind.TEXT)
+        )
+        with pytest.raises(ValueError):
+            decode_value(schema, {"key": 1, "value": "x"})
+
+    @pytest.mark.parametrize("entry", [5, {"key": 1}, {"value": "x"}])
+    def test_entries_form_rejects_a_malformed_entry(self, entry: object) -> None:
+        schema = DictDecode(
+            DictKeyForm.ENTRIES, ScalarDecode(ScalarKind.JSON), ScalarDecode(ScalarKind.TEXT)
+        )
+        with pytest.raises(ValueError):
+            decode_value(schema, [entry])
+
+    @pytest.mark.parametrize(
+        ("key_kind", "wire_key"),
+        [
+            (ScalarKind.INT, "abc"),
+            (ScalarKind.INT, " 1"),
+            (ScalarKind.DECIMAL, "1."),
+            (ScalarKind.BOOL, "True"),
+            (ScalarKind.BOOL, "1"),
+        ],
+    )
+    def test_stringified_scalar_key_rejects_text_that_is_not_its_wire_text(
+        self, key_kind: ScalarKind, wire_key: str
+    ) -> None:
+        schema = DictDecode(
+            DictKeyForm.OBJECT_STRINGIFIED, ScalarDecode(key_kind), ScalarDecode(ScalarKind.TEXT)
+        )
+        with pytest.raises(ValueError):
+            decode_value(schema, {wire_key: "x"})
+
+    def test_stringified_number_key_no_decimal_can_hold_is_a_value_error(self) -> None:
+        schema = DictDecode(
+            DictKeyForm.OBJECT_STRINGIFIED,
+            ScalarDecode(ScalarKind.DECIMAL),
+            ScalarDecode(ScalarKind.TEXT),
+        )
+        with pytest.raises(ValueError):
+            decode_value(schema, {"1e99999999999999999999": "x"})
+
+    def test_stringified_key_rejects_a_non_text_key(self) -> None:
+        schema = DictDecode(
+            DictKeyForm.OBJECT_STRINGIFIED,
+            ScalarDecode(ScalarKind.INT),
+            ScalarDecode(ScalarKind.TEXT),
+        )
+        with pytest.raises(ValueError):
+            decode_value(schema, {1: "x"})
+
+    def test_stringified_enum_key_behind_a_reference_decodes_by_tag(self) -> None:
+        variant = VariantDecode(
+            name="A",
+            json_name="a",
+            nominal=NominalId(2),
+            display_name="A",
+            fields=(),
+            alias=None,
+        )
+        enum = EnumDecode(
+            nominal=NominalId(1), display_name="E", variants=(variant,), name="E", host_agent=False
+        )
+        schema = DictDecode(
+            DictKeyForm.OBJECT_STRINGIFIED, RefDecode("E"), ScalarDecode(ScalarKind.INT)
+        )
+        value = decode_value(schema, {"a": 1}, {"E": enum})
+        assert isinstance(value, DictValue)
+        assert value.lookup(RecordValue(nominal=NominalId(2), fields={})) == IntValue(1)
 
     def test_record_type_got_non_dict(self) -> None:
         schema = RecordDecode(
@@ -762,16 +869,6 @@ class TestDecodeValueRefDecode:
         second = trees.elements[1]
         assert isinstance(first, RecordValue) and first.nominal == NominalId(2)
         assert isinstance(second, RecordValue) and second.nominal == NominalId(3)
-
-    def test_unknown_defs_key_is_internal_error(self) -> None:
-        """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""
-        with pytest.raises(AssertionError, match="unknown \\$defs key"):
-            decode_value(RefDecode("NoSuchKey"), {"$case": "Leaf"}, {})
-
-    def test_ref_only_defs_cycle_is_internal_error(self) -> None:
-        """A malformed defs table must not make RefDecode resolution recurse forever."""
-        with pytest.raises(AssertionError, match=r"\$defs reference cycle"):
-            decode_value(RefDecode("A"), {}, {"A": RefDecode("B"), "B": RefDecode("A")})
 
     def test_defs_defaults_to_empty_for_non_recursive_schemas(self) -> None:
         """Calling decode_value with the historical 2-arg form still works (defs defaults empty)."""

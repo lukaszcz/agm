@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "first_members",
+      "module_roots": ["program_modules/modules/enum_member_injection_kinds"],
+      "params": {"pick": 0},
+      "expect": {"stdout": "rec 4\njust 7\ncool\n0\nlarge\n"}
+    },
+    {
+      "name": "second_members",
+      "module_roots": ["program_modules/modules/enum_member_injection_kinds"],
+      "params": {"pick": 1},
+      "expect": {"stdout": "plain\nnothing\nwarm\n1\ntiny\n"}
+    }
+  ]
+}

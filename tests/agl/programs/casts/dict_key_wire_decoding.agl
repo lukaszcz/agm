@@ -1,0 +1,114 @@
+# `as`/`as?`/`parse` decode a dict from the wire form its key type picks:
+# a text-keyed object, an object whose key texts stringify an int/decimal/bool
+# scalar or an all-nullary enum's effective tag, or an entries array for every
+# other hashable key. Stringified number keys follow the wire-number rules
+# (`"2.0"` fills an int key, `"2.5"` does not). Two wire keys decoding to equal
+# AgL keys fail the conversion with its own error, never `DuplicateKeyError`;
+# so do two object members of the JSON text with one name, in value syntax too.
+
+import std/json
+
+enum Color
+  | Red
+  | @json-name("bleu") Blue
+
+enum Shape
+  | Circle(radius: int)
+  | Square
+
+record Point
+  x: int
+  y: int
+
+enum Tree
+  | Leaf
+  | Node(left: Tree, right: Tree)
+
+record Palette
+  by-color: dict[Color, int]
+  favorite: Color
+
+program def main(mode: int, raw: text) -> unit =
+  try
+    case mode of
+      | 1 =>
+          let d = raw as dict[int, text]
+          print(d as json)
+      | 2 =>
+          let d = raw as dict[decimal, text]
+          print(d as json)
+      | 3 =>
+          let d = raw as dict[bool, text]
+          print(d as json)
+      | 4 =>
+          let d = raw as dict[Color, int]
+          print(d as json)
+      | 5 =>
+          let d = raw as dict[Point, text]
+          print(d as json)
+      | 6 =>
+          let d = raw as dict[Shape, text]
+          print(d as json)
+      | 7 =>
+          let d = raw as dict[json, text]
+          print(d as json)
+      | 8 =>
+          let d = raw as dict[Option[int], text]
+          print(d as json)
+      | 9 =>
+          let d = raw as? dict[int, text]
+          case d of
+            | Some(value) => print(value as json)
+            | None => print("none")
+      | 10 =>
+          let d = raw as? dict[Point, text]
+          case d of
+            | Some(value) => print(value as json)
+            | None => print("none")
+      | 11 =>
+          let d = parse::[dict[int, text]](raw)
+          print(d as json)
+      | 12 =>
+          let d = parse::[dict[Point, text]](raw)
+          print(d as json)
+      | 13 =>
+          let d = raw as dict[int, text]
+          print(d[1])
+      | 14 =>
+          let d: dict[int, text] = exec "echo objects"
+          print(d as json)
+      | 15 =>
+          let d: dict[Point, text] = exec "echo entries"
+          print(d as json)
+      | 16 =>
+          case try-parse::[dict[int, text]](raw) of
+            | Result::Ok(value) => print(value as json)
+            | Result::Err(_) => print("err")
+      | 17 =>
+          let d = json::parse(raw) as? dict[int, text]
+          case d of
+            | Some(value) => print(value as json)
+            | None => print("none")
+      | 18 =>
+          let d = raw as Palette
+          print(d as json)
+      | 19 =>
+          let d = raw as dict[Tree, int]
+          print(d as json)
+      | 20 =>
+          let d = raw as dict[text, int]
+          print(d as json)
+      | 21 =>
+          let j = parse::[json](raw)
+          print(j)
+      | 22 =>
+          let j = json::parse(raw)
+          print(j)
+      | _ =>
+          print(()) # unreachable in scenarios
+  catch CastError =>
+    print("cast-error")
+  catch ValueParseError =>
+    print("parse-error")
+  catch JsonParseError =>
+    print("json-parse-error")

@@ -1,0 +1,2 @@
+record Warm
+  heat: int

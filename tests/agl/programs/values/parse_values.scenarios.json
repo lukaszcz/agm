@@ -29,7 +29,7 @@
       "name": "round_trip_nested_array_option_dict_text_escapes",
       "params": {
         "mode": "round_trip_nested",
-        "input": "Nested(shapes = [Square(side = 1), Circle(radius = 2)], center = Some(Point(x = 1, y = 2)), weights = {a: 1.5, b: -2}, note = \"line1\\nline2\")"
+        "input": "Nested(shapes = [Square(side = 1), Circle(radius = 2)], center = Some(Point(x = 1, y = 2)), weights = {\"a\": 1.5, \"b\": -2}, note = \"line1\\nline2\")"
       },
       "expect": {"stdout": "true\n"}
     },
@@ -89,8 +89,8 @@
       }
     },
     {
-      "name": "parse_json_value_syntax_bare_keys_and_trailing_comma",
-      "params": {"mode": "parse_json", "input": "{a: 1, b: [true, null],}"},
+      "name": "parse_json_value_syntax_quoted_keys_and_trailing_comma",
+      "params": {"mode": "parse_json", "input": "{\"a\": 1, \"b\": [true, null],}"},
       "expect": {"stdout": "{\"a\": 1, \"b\": [true, null]}\n"}
     },
     {
@@ -105,7 +105,7 @@
     },
     {
       "name": "parse_json_equals_value_syntax_literal",
-      "params": {"mode": "parse_json_equals", "input": "{a: 1, b: [true, null]}"},
+      "params": {"mode": "parse_json_equals", "input": "{\"a\": 1, \"b\": [true, null]}"},
       "expect": {"stdout": "true\n"}
     },
     {

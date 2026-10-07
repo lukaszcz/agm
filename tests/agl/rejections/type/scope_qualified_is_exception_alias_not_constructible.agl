@@ -1,0 +1,9 @@
+scope Paint
+  exception Err extends Exception
+
+  type Alias = int
+end Paint
+
+program def main() -> unit =
+  let e: Paint::Err = Paint::Err(message = "m")
+  print(e is Paint::Alias)

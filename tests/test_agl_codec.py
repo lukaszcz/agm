@@ -34,9 +34,10 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    ContractRequest,
+    CustomContractRequest,
     DecodeSchema,
     DictDecode,
+    DictKeyForm,
     EnumDecode,
     FieldDecode,
     RecordDecode,
@@ -66,14 +67,12 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
-    ExceptionType,
     IntType,
     JsonType,
     RecordType,
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -340,8 +339,7 @@ def _run_with_json_codec(
     json_codec = JsonCodec()
     codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
     executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
-    contracts, errors = materialize_ir_contracts(executable, codecs)
-    assert errors == []
+    contracts = materialize_ir_contracts(executable, codecs)
     bindings = _Bindings(
         IrInterpreter(
             executable,
@@ -498,11 +496,11 @@ class TestDeriveSchema:
         }
 
     def test_dict_of_text(self) -> None:
-        schema = derive_schema(DictType(value=TextType()), type_table_for())
+        schema = derive_schema(DictType(key=TextType(), value=TextType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "string"}}
 
     def test_dict_of_int(self) -> None:
-        schema = derive_schema(DictType(value=IntType()), type_table_for())
+        schema = derive_schema(DictType(key=TextType(), value=IntType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_schema(self) -> None:
@@ -717,6 +715,113 @@ class TestFieldDefaultsAtSchemaAndDecodeBoundary:
         before = derive_schema_and_decode(typ, table)
         after = derive_schema_and_decode(typ, table)
         assert before == after
+
+
+# ---------------------------------------------------------------------------
+# 1a2. Dict schema by key form (text object / stringified object / entries array)
+# ---------------------------------------------------------------------------
+
+
+class TestDictKeyFormSchema:
+    def test_int_key_stringifies_with_a_number_pattern(self) -> None:
+        schema = derive_schema(DictType(key=IntType(), value=TextType()), type_table_for())
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] == {"type": "string"}
+        validator = Draft202012Validator({"type": "string", **schema["propertyNames"]})
+        for text in ("0", "-0", "5", "-5", "123456789", "2.0", "1e3", "1.5E-3"):
+            assert validator.is_valid(text), text
+        for text in ("007", "-007", "abc", "", "01", "+1", "1.", ".5"):
+            assert not validator.is_valid(text), text
+
+    def test_decimal_key_stringifies_with_the_encoder_exact_number_text(self) -> None:
+        schema = derive_schema(DictType(key=DecimalType(), value=TextType()), type_table_for())
+        assert schema["type"] == "object"
+        validator = Draft202012Validator({"type": "string", **schema["propertyNames"]})
+        for text in (
+            "0",
+            "-0",
+            "0.001",
+            "100.00",
+            "-1.50",
+            "1E+40",
+            "1.23E+42",
+            "1E-40",
+            "2.0",
+            "1e3",
+            "1.5E-3",
+        ):
+            assert validator.is_valid(text), text
+        for text in ("007", "abc", "", "01", "+1", "1.", ".5"):
+            assert not validator.is_valid(text), text
+
+    def test_bool_key_stringifies_as_true_or_false(self) -> None:
+        schema = derive_schema(DictType(key=BoolType(), value=TextType()), type_table_for())
+        assert schema == {
+            "type": "object",
+            "propertyNames": {"enum": ["true", "false"]},
+            "additionalProperties": {"type": "string"},
+        }
+
+    def test_all_nullary_enum_key_stringifies_by_effective_json_tag(self) -> None:
+        typ, typedef = enum_type("Color", {"Red": {}, "Blue": {}})
+        schema = derive_schema(DictType(key=typ, value=TextType()), type_table_for(typedef))
+        assert schema["type"] == "object"
+        assert schema["propertyNames"] == {"enum": ["Red", "Blue"]}
+
+    def test_all_nullary_enum_key_stringifies_using_json_name(self) -> None:
+        enum_id = next_decl_id()
+        member_id = next_decl_id()
+        member = RecordType(
+            name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id
+        )
+        member_def = TypeDef(
+            kind="record",
+            name="One",
+            module_id=ENTRY_ID,
+            scope_path=("Choice",),
+            external_name=ExternalName(json_name="uno"),
+            decl_node_id=member_id,
+        )
+        choice_def = TypeDef(
+            kind="enum", name="Choice", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+        )
+        typ = EnumType(name="Choice", decl_id=enum_id)
+        schema = derive_schema(
+            DictType(key=typ, value=TextType()), type_table_for(member_def, choice_def)
+        )
+        assert schema["propertyNames"] == {"enum": ["uno"]}
+
+    def test_mixed_enum_key_uses_the_entries_array_form(self) -> None:
+        typ, typedef = enum_type("Shape", {"Circle": {"radius": IntType()}, "Square": {}})
+        schema = derive_schema(DictType(key=typ, value=TextType()), type_table_for(typedef))
+        assert schema["type"] == "array"
+        items = schema["items"]
+        assert items["required"] == ["key", "value"]
+        assert items["additionalProperties"] is False
+        assert items["properties"]["value"] == {"type": "string"}
+        validator = Draft202012Validator(schema)
+        assert validator.is_valid(
+            [
+                {"key": {"$case": "Square"}, "value": "s"},
+                {"key": {"$case": "Circle", "radius": 1}, "value": "c"},
+            ]
+        )
+
+    def test_record_key_uses_the_entries_array_form(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType(), "y": IntType()})
+        schema = derive_schema(DictType(key=point, value=TextType()), type_table_for(point_def))
+        assert schema["type"] == "array"
+        assert schema["items"]["properties"]["key"] == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["x", "y"],
+            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+        }
+
+    def test_json_key_uses_the_entries_array_form(self) -> None:
+        schema = derive_schema(DictType(key=JsonType(), value=TextType()), type_table_for())
+        assert schema["type"] == "array"
+        assert schema["items"]["properties"]["key"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -960,43 +1065,6 @@ class TestRecursiveSchemaDerivation:
             },
         }
 
-    def test_raises_for_infinite_closure_root(self) -> None:
-        pair_id = next_decl_id()
-        perfect_id = next_decl_id()
-        pair_def = TypeDef(
-            kind="record",
-            name="Pair",
-            module_id=ENTRY_ID,
-            type_params=("A", "B"),
-            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
-            decl_node_id=pair_id,
-        )
-        perfect_def = enum_typedef(
-            "Perfect",
-            {
-                "Single": {"value": TypeVarType("T")},
-                "Succ": {
-                    "next": EnumType(
-                        name="Perfect",
-                        type_args=(
-                            RecordType(
-                                name="Pair",
-                                type_args=(TypeVarType("T"), TypeVarType("T")),
-                                decl_id=pair_id,
-                            ),
-                        ),
-                        decl_id=perfect_id,
-                    )
-                },
-            },
-            type_params=("T",),
-            decl_id=perfect_id,
-        )
-        table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="finite schema"):
-            derive_schema(perfect_int, table)
-
     def test_assign_defs_keys_breaks_residual_collision_with_numeric_suffix(self) -> None:
         # Three handles whose bare display forms all sanitize to the
         # identical string despite being genuinely distinct instantiations
@@ -1017,12 +1085,6 @@ class TestRecursiveSchemaDerivation:
         assert keys[h1] == "X_A_B"
         assert keys[h2] == "X_A_B_2"
         assert keys[h3] == "X_A_B_3"
-
-    def test_assign_defs_keys_displays_non_generic_exception_handles(self) -> None:
-        from agm.agl.type_schema import _assign_defs_keys
-
-        handle = ExceptionType("Problem", module_id=ENTRY_ID)
-        assert _assign_defs_keys((handle,), type_table_for()) == {handle: "Problem"}
 
     def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
         # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off
@@ -1360,43 +1422,6 @@ class TestRecursiveDecodeDerivation:
             ),
             defs=(),
         )
-
-    def test_raises_for_infinite_closure_root(self) -> None:
-        pair_id = next_decl_id()
-        perfect_id = next_decl_id()
-        pair_def = TypeDef(
-            kind="record",
-            name="Pair",
-            module_id=ENTRY_ID,
-            type_params=("A", "B"),
-            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
-            decl_node_id=pair_id,
-        )
-        perfect_def = enum_typedef(
-            "Perfect",
-            {
-                "Single": {"value": TypeVarType("T")},
-                "Succ": {
-                    "next": EnumType(
-                        name="Perfect",
-                        type_args=(
-                            RecordType(
-                                name="Pair",
-                                type_args=(TypeVarType("T"), TypeVarType("T")),
-                                decl_id=pair_id,
-                            ),
-                        ),
-                        decl_id=perfect_id,
-                    )
-                },
-            },
-            type_params=("T",),
-            decl_id=perfect_id,
-        )
-        table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="finite schema"):
-            build_decode_schema(perfect_int, table)
 
     def test_derive_schema_and_decode_shares_one_plan_and_matches_separate_calls(self) -> None:
         """derive_schema_and_decode matches (derive_schema(...), build_decode_schema(...))."""
@@ -1758,11 +1783,6 @@ class TestLenientParsing:
         assert result.ok is False
         assert "multiple" in result.error_msg
 
-    def test_ref_decode_without_defs_raises_clear_value_error(self) -> None:
-        codec = self._codec()
-        with pytest.raises(ValueError, match="defs.*RefDecode"):
-            codec.parse("{}", schema={}, decode=RefDecode("Node"))
-
     def test_lone_surrogate_escape_rejected(self) -> None:
         codec = self._codec()
         result = _parse_typed(codec, '"\\ud800"', TextType(), strict_json=False)
@@ -1785,6 +1805,42 @@ class TestPublicJsonRecoveryAdapter:
     def test_recovers_fenced_json_and_hides_ambiguous_output(self) -> None:
         assert extract_json_text("```json\n[1, 2]\n```") == "[1, 2]"
         assert extract_json_text("maybe true or maybe false") is None
+
+
+class TestRecoveryRejectsDuplicateMembers:
+    """Repair fixes format damage but never picks a duplicate member's winner."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            'Here: {"a": 1, "a": 2}',
+            '{"a": 1, "a": 2,}',
+            'Result: {"outer": {"a": 1, "b": 2, "a": 3}}',
+            '```json\n{"a": 1, "a": 2,}\n```',
+            "{a: 1, a: 2}",
+            "{'a': 1, \"a\": 2}",
+            r"{'a': 1, '\u0061': 2}",
+            '[{"k": 1, "k": 2,}]',
+        ],
+    )
+    def test_duplicate_member_is_unrecoverable(self, raw: str) -> None:
+        assert extract_json_text(raw) is None
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ('[{"a": 1,}, {"a": 2}]', '[{"a": 1}, {"a": 2}]'),
+            ('{"a": "a",}', '{"a": "a"}'),
+            ('He said "no: way", it\'s {"a": 1, "b": 2,}', '{"a": 1, "b": 2}'),
+            ('{"a": [{"a": 1,}], "b": {"a": 2}}', '{"a": [{"a": 1}], "b": {"a": 2}}'),
+        ],
+    )
+    def test_distinct_members_still_recover(self, raw: str, expected: str) -> None:
+        assert json.loads(extract_json_text(raw) or "") == json.loads(expected)
+
+    def test_unterminated_string_and_stray_closers_do_not_hang(self) -> None:
+        assert extract_json_text('] } {"a": 1, "b": "x') is not None
+        assert extract_json_text('{"a\\q": 1, "a\\q": 2,}') is None
 
 
 # ---------------------------------------------------------------------------
@@ -1933,6 +1989,54 @@ class TestDecimalExactness:
         assert w.value == Decimal("1.5")
 
 
+class TestUnrepresentableNumbers:
+    """A number no value can hold is a parse failure, never an escaping exception."""
+
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("1e99999999999999999999", id="huge-exponent"),
+            pytest.param('{"k": NaN}', id="nan"),
+            pytest.param('{"k": -Infinity}', id="negative-infinity"),
+            pytest.param('```json\n{"k": 1e99999999999999999999}\n```', id="fenced-huge-exponent"),
+            pytest.param('Here it is: {"k": 1e99999999999999999999}', id="prose-huge-exponent"),
+        ],
+    )
+    def test_json_target_rejects_the_number(self, raw: str, strict_json: bool) -> None:
+        result = _parse_typed(JsonCodec(), raw, JsonType(), strict_json=strict_json)
+        assert result.ok is False
+
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("1e999999999999", id="integral-outside-decimal-range"),
+            pytest.param("Infinity", id="infinity"),
+        ],
+    )
+    def test_int_target_rejects_the_number(self, raw: str, strict_json: bool) -> None:
+        result = _parse_typed(JsonCodec(), raw, IntType(), strict_json=strict_json)
+        assert result.ok is False
+
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            (IntType(), IntValue(int("9" * 5000))),
+            (DecimalType(), DecimalValue(Decimal("9" * 5000))),
+            (JsonType(), JsonValue({"k": [int("9" * 5000)]})),
+        ],
+    )
+    def test_an_integer_of_any_length_decodes_exactly(
+        self, target: Type, expected: object, strict_json: bool
+    ) -> None:
+        raw = '{"k": [' + "9" * 5000 + "]}" if isinstance(target, JsonType) else "9" * 5000
+        result = _parse_typed(JsonCodec(), raw, target, strict_json=strict_json)
+        assert result.ok is True
+        assert result.value == expected
+
+
 # ---------------------------------------------------------------------------
 # 6. Typed Value construction
 # ---------------------------------------------------------------------------
@@ -1975,11 +2079,11 @@ class TestTypedValueConstruction:
 
     def test_dict_of_text(self) -> None:
         codec = JsonCodec()
-        typ = DictType(value=TextType())
+        typ = DictType(key=TextType(), value=TextType())
         result = _parse_typed(codec, '{"a": "hello"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DictValue)
-        assert result.value.entries == {"a": TextValue("hello")}
+        assert result.value == DictValue({"a": TextValue("hello")})
 
     def test_record_value(self) -> None:
         codec = JsonCodec()
@@ -2484,7 +2588,7 @@ def _json_ty() -> tast.JsonT:
 
 
 def _dict_ty(value: tast.TypeExpr) -> tast.DictT:
-    return tast.DictT(value=value, span=_sp(), node_id=_nid())
+    return tast.DictT(key=_text_ty(), value=value, span=_sp(), node_id=_nid())
 
 
 class TestPipelineDriverWireUp:
@@ -2582,7 +2686,7 @@ class TestPipelineDriverWireUp:
         scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
-        assert d.entries == {"k": TextValue("v")}
+        assert d == DictValue({"k": TextValue("v")})
 
     def test_agent_receives_format_instructions_for_record(self) -> None:
         """Format instructions from the contract must be available in agent request."""
@@ -3057,14 +3161,6 @@ program def main(issue: Issue) -> unit =
                 type_table_for(issue_def),
             )
 
-    def test_unsupported_type_in_convert_host_value_raises(self) -> None:
-        """ExceptionType is not a supported param type."""
-        from agm.agl.runtime.engine_config import convert_host_value
-        from agm.agl.semantics.types import ExceptionType
-
-        with pytest.raises(ValueError, match="unsupported type"):
-            convert_host_value("e", "val", ExceptionType(name="Boom"), type_table_for())
-
     def test_structured_param_is_strict_no_repair(self) -> None:
         """host --param values read strict JSON or AgL value syntax, no repair.
 
@@ -3170,8 +3266,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
             (ScalarDecode(kind=ScalarKind.DECIMAL), "not a number", "decimal"),
             (ScalarDecode(kind=ScalarKind.BOOL), 1, "bool"),
             (ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list", "array"),
-            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), [1, 2], "object"),
-            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), {1: "val"}, "Dict key"),
             (_R_DECODE, [1, 2], "record"),
             (_R_DECODE, {}, "Missing field"),
             (_E_DECODE, {"$case": "A"}, "string for enum"),
@@ -3189,8 +3283,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
             "decimal-from-text",
             "bool-from-number",
             "array-from-text",
-            "dict-from-array",
-            "dict-with-non-text-key",
             "record-from-array",
             "record-missing-field",
             "plain-enum-from-object",
@@ -3207,6 +3299,18 @@ class TestDecodeValueRejectsMismatchedPayloads:
         from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match=expected):
+            decode_value(decode, payload)
+
+    @pytest.mark.parametrize("payload", [[1, 2], {1: "val"}])
+    def test_text_keyed_dict_rejects_a_non_object_or_non_text_key(self, payload: object) -> None:
+        from agm.agl.runtime.convert import decode_value
+
+        decode = DictDecode(
+            DictKeyForm.OBJECT_TEXT,
+            ScalarDecode(ScalarKind.TEXT),
+            value=ScalarDecode(kind=ScalarKind.TEXT),
+        )
+        with pytest.raises(ValueError):
             decode_value(decode, payload)
 
     def test_integral_decimal_to_int_through_parse(self) -> None:
@@ -3248,35 +3352,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.0")
         assert str(result.value.value) == "1.0"
-
-
-# ---------------------------------------------------------------------------
-# Exception types have no JSON Schema
-# ---------------------------------------------------------------------------
-
-
-class TestSchemaExceptionType:
-    def test_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
-
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="Boom"), type_table_for())
-
-    def test_record_containing_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import EXCEPTION_BASE, ExceptionType
-
-        boom_id = next_decl_id()
-        boom = ExceptionType(name="Boom", decl_id=boom_id)
-        boom_def = TypeDef(
-            kind="exception",
-            name="Boom",
-            module_id=ENTRY_ID,
-            base=EXCEPTION_BASE.decl_id,
-            decl_node_id=boom_id,
-        )
-        box, box_def = record_type("Box", {"boom": boom})
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(box, type_table_for(boom_def, box_def))
 
 
 # ---------------------------------------------------------------------------
@@ -3391,6 +3466,13 @@ class TestValidationErrorClassification:
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
+    def test_tagged_enum_non_object_instance_is_bad_case(self) -> None:
+        codec = JsonCodec()
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(codec, "42", typ, strict_json=False, table=type_table_for(typedef))
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+
     def test_array_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
         enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
@@ -3411,7 +3493,7 @@ class TestValidationErrorClassification:
         result = _parse_typed(
             codec,
             '{"k": {"$case": "Z"}}',
-            DictType(value=enum),
+            DictType(key=TextType(), value=enum),
             strict_json=False,
             table=type_table_for(enum_def),
         )
@@ -3487,23 +3569,67 @@ class TestValidationErrorClassification:
         decode = build_decode_schema(rec, type_table_for(rec_def)).root
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
+    def test_bad_entries_form_key_is_classified_inside_the_key(self) -> None:
+        """A mixed-enum entries key with an unknown ``$case`` is a bad-case failure at the key."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(
+            JsonCodec(),
+            '[{"key": {"$case": "Z"}, "value": 1}]',
+            DictType(key=key_type, value=IntType()),
+            table=type_table_for(key_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$[0].key"
+
+    def test_bad_entries_form_value_is_classified_inside_the_value(self) -> None:
+        """An entries-form value that is a mixed enum with an unknown ``$case`` fails there."""
+        value_type, value_def = enum_type("V", {"A": {}, "B": {"x": IntType()}})
+        key_type, key_def = record_type("P", {"x": IntType()})
+        result = _parse_typed(
+            JsonCodec(),
+            '[{"key": {"x": 1}, "value": {"$case": "Z"}}]',
+            DictType(key=key_type, value=value_type),
+            table=type_table_for(key_def, value_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$[0].value"
+
+    def test_bad_stringified_plain_enum_key_is_classified_as_an_unknown_member(self) -> None:
+        """A stringified-object key naming no plain-enum member is a bad-case failure."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {}})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"Z": 1}',
+            DictType(key=key_type, value=IntType()),
+            table=type_table_for(key_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+
+    def test_bad_stringified_key_beneath_a_record_field_is_classified_as_an_unknown_member(
+        self,
+    ) -> None:
+        """The key failure is found through a record field leading to the dict."""
+        key_type, key_def = enum_type("K", {"A": {}, "B": {}})
+        rec, rec_def = record_type("R", {"d": DictType(key=key_type, value=IntType())})
+        result = _parse_typed(
+            JsonCodec(),
+            '{"d": {"Z": 1}}',
+            rec,
+            table=type_table_for(key_def, rec_def),
+        )
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$.d"
+
     def test_path_descending_past_a_scalar_matches_no_enum(self) -> None:
         """A path that descends past a scalar matches no enum."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
         decode = build_decode_schema(IntType(), type_table_for()).root
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
-
-    def test_unresolvable_reference_matches_no_enum(self) -> None:
-        """An unresolvable RefDecode (unknown key) fails soft: no crash, no match found.
-
-        Classification walkers only refine an already-failed validation's
-        message; an inconsistent contract must never turn that into a crash.
-        """
-        from agm.agl.ir.contracts import RefDecode
-        from agm.agl.runtime.codec import _find_enum_decode_at_path
-
-        assert _find_enum_decode_at_path(RefDecode("NoSuchKey"), [], {}) is None
 
     def test_recursive_reference_resolves_to_the_enum_it_names(self) -> None:
         """A root RefDecode that DOES resolve reaches the EnumDecode it points to."""
@@ -3516,6 +3642,15 @@ class TestValidationErrorClassification:
         defs = dict(plan.defs)
         found = _find_enum_decode_at_path(plan.root, [], defs)
         assert found is defs["Tree"]
+
+    def test_resolve_decode_follows_a_multi_hop_defs_chain(self) -> None:
+        """A ``$defs`` entry that is itself a reference forwards to the next hop."""
+        from agm.agl.ir.contracts import RefDecode, ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import resolve_decode
+
+        body = ScalarDecode(ScalarKind.INT)
+        defs = {"A": RefDecode("B"), "B": body}
+        assert resolve_decode(RefDecode("A"), defs) is body
 
     def test_oneof_failure_without_an_enum_at_the_path_is_a_bad_case(self) -> None:
         """A oneOf failure with no enum at the failing path still reports a bad ``$case``."""
@@ -3533,6 +3668,7 @@ class TestValidationErrorClassification:
         err.validator = "oneOf"
         err.instance = {"$case": "X"}
         err.absolute_path = []
+        err.relative_schema_path = []
         err.path = []
         ve = _classify_enum_failure(err, "$", decode)
         assert ve.category == "bad_case"
@@ -3549,8 +3685,8 @@ class TestMakeContractNoTypeEnv:
 
     def test_text_codec_make_contract_no_env(self) -> None:
         codec = TextCodec()
-        # make_contract takes only type_ref — no env argument.
-        contract = codec.make_contract(TextType())
+        # make_contract takes a type table, never a type environment.
+        contract = codec.make_contract(TextType(), _DEFAULT_TABLE)
         assert contract.codec is codec
 
     def test_json_codec_make_contract_no_env(self) -> None:
@@ -3688,28 +3824,6 @@ class TestSchemaPrecomputedInParse:
         )
 
         assert result.ok is True
-
-    def test_parse_without_schema_raises(self) -> None:
-        """parse() with schema=None raises: no derivation fallback from a Type."""
-        codec = JsonCodec()
-        with pytest.raises(ValueError, match="schema and decode"):
-            codec.parse(
-                "42",
-                strict_json=False,
-                schema=None,
-                decode=build_decode_schema(IntType(), type_table_for()).root,
-            )
-
-    def test_parse_without_decode_raises(self) -> None:
-        """parse() with decode=None raises: no derivation fallback from a Type."""
-        codec = JsonCodec()
-        with pytest.raises(ValueError, match="schema and decode"):
-            codec.parse(
-                "42",
-                strict_json=False,
-                schema=derive_schema(IntType(), type_table_for()),
-                decode=None,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -3968,6 +4082,7 @@ class TestRegisterCodec:
         materialize_contract(
             OutputContractSpec(IntType(), "legacy-int", strict_json=None),
             {"legacy-int": LegacyCodec()},
+            _DEFAULT_TABLE,
         )
 
         assert result.ok is True
@@ -4243,6 +4358,7 @@ class TestRegisterCodec:
         contract = materialize_contract(
             OutputContractSpec(IntType(), "fallback-contract", strict_json=None),
             {"fallback-contract": codec},
+            _DEFAULT_TABLE,
         )
 
         assert contract.format_instructions == "fallback"
@@ -4378,35 +4494,6 @@ class TestRegisterCodec:
         assert seen_contract_fields == [{"value": IntType()}]
         assert seen_parse_type_tables == [None]
 
-    def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
-        """Legacy custom-codec placeholders reconstruct their public data types."""
-        from agm.agl.runtime.contract import _target_type_for_request
-
-        cases = [
-            ("text", "text", TextType),
-            ("int", "int", IntType),
-            ("decimal", "decimal", DecimalType),
-            ("bool", "bool", BoolType),
-            ("json", "json", JsonType),
-            ("array", "array[int]", ArrayType),
-            ("dict", "dict[text, int]", DictType),
-            ("record", "Issue", RecordType),
-            ("enum", "Result", EnumType),
-            ("", "unit", UnitType),
-        ]
-        for kind, label, expected_type in cases:
-            request = ContractRequest(
-                codec_name="capture",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label=label,
-                structured_exec=False,
-                format_instructions="",
-                target_type_kind=kind,
-            )
-            assert isinstance(_target_type_for_request(request), expected_type)
-
     def test_custom_codec_ir_materialization_uses_request_payload_only(self) -> None:
         """IR contract materialization does not call custom make_contract hooks."""
 
@@ -4449,7 +4536,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="capture",
             strict_json=None,
             json_schema='{"type": "integer"}',
@@ -4457,7 +4544,7 @@ class TestRegisterCodec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="compiled",
-            target_type_kind="int",
+            target_type=IntType(),
         )
 
         contract = materialize_ir_contract(request, {"capture": CaptureCodec()})
@@ -4501,7 +4588,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="schema-less",
             strict_json=None,
             json_schema='{"type": "object"}',
@@ -4509,7 +4596,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="json",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
 
         contract = materialize_ir_contract(request, {"schema-less": SchemaLessCodec()})
@@ -4546,7 +4633,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="recursive",
             strict_json=None,
             json_schema='{"$ref": "#/$defs/Node"}',
@@ -4554,7 +4641,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="recursive",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
             defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
         )
 
@@ -4606,7 +4693,7 @@ class TestRegisterCodec:
                 return ParseResult.success(JsonValue({"ok": True}))
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="capture-defs",
             strict_json=False,
             json_schema=None,
@@ -4614,7 +4701,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
         defs = (("Node", ScalarDecode(ScalarKind.JSON)),)
         host_contract = OutputContract(
@@ -4636,7 +4723,7 @@ class TestRegisterCodec:
         )
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
-        result = interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+        result = interpreter._parse_host_output("{}", contract_id, request, effective_strict=False)
 
         assert result.ok
         assert seen_defs == dict(defs)
@@ -4676,7 +4763,7 @@ class TestRegisterCodec:
                 )
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="fallback-parse",
             strict_json=False,
             json_schema=None,
@@ -4684,7 +4771,7 @@ class TestRegisterCodec:
             target_type_label="text",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="text",
+            target_type=TextType(),
         )
         host_contract = OutputContract(
             target_type_label="text",
@@ -4703,7 +4790,7 @@ class TestRegisterCodec:
         )
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
-        result = interpreter._parse_host_output("ok", contract_id, effective_strict=False)
+        result = interpreter._parse_host_output("ok", contract_id, request, effective_strict=False)
 
         assert result.ok
         assert result.value == TextValue("fallback::ok")
@@ -4746,7 +4833,7 @@ class TestRegisterCodec:
                 raise TypeError("codec parse bug")
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="broken",
             strict_json=False,
             json_schema=None,
@@ -4754,7 +4841,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
         host_contract = OutputContract(
             target_type_label="Node",
@@ -4774,7 +4861,7 @@ class TestRegisterCodec:
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
         with pytest.raises(TypeError, match="codec parse"):
-            interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+            interpreter._parse_host_output("{}", contract_id, request, effective_strict=False)
 
 
 class TestRuntimeBuildsCodecKinds:

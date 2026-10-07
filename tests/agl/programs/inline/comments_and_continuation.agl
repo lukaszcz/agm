@@ -18,8 +18,8 @@ program def main(n: int) -> unit =  # trailing comment on a declaration header
   print total
 
   let pairs = {
-    one: 1,
-    two: 2,
+    "one": 1,
+    "two": 2,
   }
   print pairs
 

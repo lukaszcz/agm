@@ -18,7 +18,7 @@ program def main(n: int) -> unit =
   print false
   print n
   print ["a", "b"]
-  print {alpha: 1, beta: 2}
+  print {"alpha": 1, "beta": 2}
   print(Pair(name = "x", score = 3))
   print(Verdict::Bad(reason = "slow"))
   let j: json = null

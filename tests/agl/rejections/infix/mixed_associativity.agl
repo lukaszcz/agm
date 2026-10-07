@@ -1,5 +1,7 @@
 infixl %% at 5
 infixr ~~ at 5
+def %%(x: int, y: int) -> int = x + y
+def ~~(x: int, y: int) -> int = x * y
 
 program def main() -> unit =
-  1 %% 2 ~~ 3
+  print(1 %% 2 ~~ 3)

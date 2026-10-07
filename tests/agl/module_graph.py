@@ -54,6 +54,7 @@ standard library, through the same parse-then-``build_repl_graph`` sequence
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
@@ -70,7 +71,7 @@ from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+from agm.agl.scope.symbols import ScopeNode, ScopePath, TypeOwner
 from agm.agl.syntax.nodes import Block, ExportDecl, FuncDef, ImportDecl, Program, static_items
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
@@ -118,9 +119,7 @@ def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
     """
     global _std_core_cache, _std_core_next_start_id
     if _std_core_cache is None:
-        priming_program, next_id = parse_program_seeded(
-            "()", start_id=_STD_PRELUDE_SEED_START, resolve_infix=False
-        )
+        priming_program, next_id = parse_program_seeded("()", start_id=_STD_PRELUDE_SEED_START)
         _graph, next_id, new_modules = build_repl_graph(
             priming_program,
             next_id,
@@ -206,7 +205,7 @@ def load_graph(
 def _parse_repl_entry(source: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:
     """Parse one REPL entry as the REPL session does, leaving infix chains to the loader."""
     with spaced_qualifier_collector() as spaced_qualifiers:
-        program, next_node_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+        program, next_node_id = parse_program_seeded(source, start_id=0)
     return program, next_node_id, tuple(spaced_qualifiers)
 
 
@@ -249,8 +248,8 @@ def resolve_entry(
     source: str,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
+    retained_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     origin_path: Path | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
@@ -264,11 +263,10 @@ def resolve_entry(
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
-    *parent_scope*, *ambient_constructor_candidates*, and
-    *ambient_type_names* forward to that function's ``entry_parent_scope``,
-    ``entry_ambient_constructor_candidates`` and ``entry_ambient_type_names``
-    respectively; *origin_path* forwards to
-    ``build_repl_graph``'s ``path``.
+    *parent_scope*, *retained_type_owners* and *retained_scope_nodes* forward
+    to that function's ``entry_repl_session_scope``,
+    ``entry_repl_session_type_paths`` and ``entry_repl_session_scope_nodes``
+    respectively; *origin_path* forwards to ``build_repl_graph``'s ``path``.
 
     *default_stdlib* controls whether ``std/prelude`` is imported into the
     entry, matching real program execution — this is ``True`` by default
@@ -285,20 +283,43 @@ def resolve_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
+        entry_repl_session_scope_nodes=retained_scope_nodes,
     )
     resolved = resolved_program.modules[graph.entry_id].resolved
     return _without_synthetic_import(resolved, import_node_id)
+
+
+def build_inline_entry_graph(
+    source: str,
+    *,
+    origin_path: Path | None = None,
+    default_stdlib: bool = True,
+) -> tuple[ModuleGraph, int | None]:
+    """Parse test-only inline source and build its real graph, with the ``agm exec -c`` transform.
+
+    Shared by :func:`resolve_inline_entry` and
+    :func:`resolve_and_check_inline_entry`, and by a caller that wants the
+    graph itself (for :func:`~tests.agl.qualifier_support.graph_verdict`,
+    which classifies by phase without needing this module's own item-view
+    stripping).
+    """
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
+    return build_module_graph_from_program(
+        parsed.program,
+        next_node_id=parsed.next_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
+    )
 
 
 def resolve_inline_entry(
     source: str,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     origin_path: Path | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
@@ -308,19 +329,13 @@ def resolve_inline_entry(
     admit executable root statements, while static-root tests must retain the
     file source unchanged.
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
-    graph, import_node_id = build_module_graph_from_program(
-        parsed.program,
-        next_node_id=parsed.next_id,
-        origin_path=origin_path,
-        default_stdlib=default_stdlib,
-        spaced_qualifiers=parsed.spaced_qualifiers,
+    graph, import_node_id = build_inline_entry_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
     )
     resolved = _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
@@ -345,7 +360,7 @@ def resolve_repl_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     return _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
@@ -371,7 +386,7 @@ def resolve_and_check_repl_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -384,26 +399,19 @@ def resolve_and_check_inline_entry(
     capabilities: HostCapabilities,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check test-only inline source with the ``agm exec -c`` transform."""
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
-    graph, import_node_id = build_module_graph_from_program(
-        parsed.program,
-        next_node_id=parsed.next_id,
-        origin_path=origin_path,
-        default_stdlib=default_stdlib,
-        spaced_qualifiers=parsed.spaced_qualifiers,
+    graph, import_node_id = build_inline_entry_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -419,8 +427,7 @@ def resolve_and_check_entry(
     capabilities: HostCapabilities,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
     default_stdlib: bool = True,
@@ -445,9 +452,8 @@ def resolve_and_check_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
@@ -487,9 +493,7 @@ def check_resolved(
     """
     if capabilities is None:
         capabilities = _DEFAULT_CAPABILITIES
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
+    env = TypeEnvironment(owner_declarations=resolved.owner_declarations)
     if seed_env is not None:
         env.seed_from(seed_env)
     return _check_prepared_module(resolved, capabilities, env=env)
@@ -549,8 +553,7 @@ def resolve_program_ast(
     *,
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
 ) -> ModuleResolution:
     """Resolve an already-parsed *program* as the entry of a real, single-module graph.
 
@@ -562,9 +565,8 @@ def resolve_program_ast(
     graph = _single_module_graph(program, origin_path=origin_path)
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
 
@@ -575,17 +577,15 @@ def resolve_inline_program_ast(
     next_node_id: int = 1_000_000,
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
 ) -> ModuleResolution:
     """Resolve test-only hand-built inline AST with the command entry transform."""
     wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
     graph = _single_module_graph(wrapped, origin_path=origin_path)
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
-        entry_ambient_type_names=ambient_type_names,
-        entry_parent_scope=parent_scope,
+        entry_repl_session_type_paths=retained_type_owners,
+        entry_repl_session_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
 

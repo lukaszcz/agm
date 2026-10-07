@@ -833,9 +833,8 @@ class _Scanner:
 
         def emit_fragment() -> Token | None:
             nonlocal frag_start
-            if not buf:
+            if frag_start is None:
                 return None
-            assert frag_start is not None
             token = self._make_token(STRING_FRAGMENT, "".join(buf), *frag_start)
             buf.clear()
             frag_start = None
@@ -1099,8 +1098,7 @@ class _Scanner:
         # ``!=``, ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
         # when they appear as standalone reserved spellings.
         if is_identifier_start(ch):
-            end = lexical.scan_name(self._src, start_pos)
-            assert end is not None
+            end = lexical.identifier_end(self._src, start_pos)
             while self._pos < end:
                 self._advance()
             word = self._src[start_pos : self._pos]

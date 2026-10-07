@@ -334,32 +334,14 @@ def _run(
     )
 
 
-def test_session_open_maps_an_undecodable_agent_value_to_a_session_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A declared ``Agent`` variant with no host spec becomes a catchable ``SessionError``.
-
-    The evaluator decodes the agent value before ever reaching the session
-    host (``EffectHandlers._decode_agent_spec``), so a decode failure must
-    surface the same way a host lifecycle failure does -- without any host
-    ever being called.
-    """
-    from agm.agent import spec as agent_spec
-
-    catalog = dict(agent_spec.AGENT_SPECS)
-    del catalog["AgentCommand"]
-    monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
-
-    result = _run(
-        'program def main() -> unit =\n  let session = Session::open(AgentCommand("worker"))\n',
-        _Host(),
-    )
-
-    assert result.error is not None
-    assert result.error.type_name == "SessionError"
-
-
-def test_session_failures_report_the_session_call_location() -> None:
+@pytest.mark.parametrize(
+    "invocation",
+    (
+        'Session::open(AgentCommand("worker"))',
+        'ask("question", agent = AgentCommand("worker"))',
+    ),
+)
+def test_session_failures_report_the_session_call_location(invocation: str) -> None:
     class FailingHost(_Host):
         def open(
             self,
@@ -375,13 +357,12 @@ def test_session_failures_report_the_session_call_location() -> None:
             raise SessionHostError("unavailable", "open")
 
     result = _run(
-        "program def main() -> unit =\n"
-        "  let before = 1\n"
-        '  let session = Session::open(AgentCommand("worker"))\n',
+        f"program def main() -> unit =\n  let before = 1\n  let session = {invocation}\n",
         FailingHost(),
     )
 
     assert result.error is not None
+    assert result.error.type_name == "SessionError"
     assert result.error.line == 3
     assert result.error.col == 17
 
@@ -426,99 +407,6 @@ def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
 
     assert result.error is not None
     assert result.error.type_name == "AgentCallError"
-
-
-def test_agent_method_maps_ephemeral_open_failures_to_session_errors() -> None:
-    class FailingOpenHost(_Host):
-        def open(
-            self,
-            agent: AgentSpec,
-            transport: str,
-            *,
-            name: str = "",
-            permission_mode: PermissionMode = PermissionMode.NONE,
-            sandbox: SandboxLimits | None = None,
-            env: dict[str, str],
-        ) -> str:
-            del permission_mode, sandbox, env
-            raise SessionHostError("unavailable", "open")
-
-    result = _run(
-        'program def main() -> unit =\n  let r: text = AgentCommand("bad").ask("prompt")\n  ()',
-        FailingOpenHost(),
-    )
-
-    assert result.error is not None
-    assert result.error.type_name == "SessionError"
-
-
-def test_free_ask_maps_an_undecodable_agent_value_to_an_agent_call_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A free ``ask`` on a declared ``Agent`` variant with no host spec is a catchable error.
-
-    Decoding happens once, before any ephemeral session opens, so a decode
-    failure never reaches the host.
-    """
-    from agm.agent import spec as agent_spec
-
-    catalog = dict(agent_spec.AGENT_SPECS)
-    del catalog["AgentCommand"]
-    monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
-
-    result = _run(
-        'program def main() -> unit =\n  let r: text = AgentCommand("bad").ask("prompt")\n  ()',
-        _Host(),
-    )
-
-    assert result.error is not None
-    assert result.error.type_name == "AgentCallError"
-
-
-def test_persistent_session_ask_maps_an_undecodable_agent_value_to_a_session_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A session's stored agent losing its host spec between calls becomes a ``SessionError``.
-
-    Decoding happens once per ``ask``, from the session's own snapshot -- so a
-    registry change after a successful ``Session::open`` still surfaces here.
-    """
-    from agm.agent import spec as agent_spec
-
-    class DriftingHost(_Host):
-        def open(
-            self,
-            agent: AgentSpec,
-            transport: str,
-            *,
-            name: str = "",
-            permission_mode: PermissionMode = PermissionMode.NONE,
-            sandbox: SandboxLimits | None = None,
-            env: dict[str, str],
-        ) -> str:
-            handle = super().open(
-                agent,
-                transport,
-                name=name,
-                permission_mode=permission_mode,
-                sandbox=sandbox,
-                env=env,
-            )
-            catalog = dict(agent_spec.AGENT_SPECS)
-            del catalog["AgentClaude"]
-            monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
-            return handle
-
-    result = _run(
-        "program def main() -> unit =\n"
-        '  let session = Session::open(AgentClaude("sonnet", "medium"))\n'
-        '  session.ask("prompt")\n'
-        "  ()",
-        DriftingHost(),
-    )
-
-    assert result.error is not None
-    assert result.error.type_name == "SessionError"
 
 
 def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:

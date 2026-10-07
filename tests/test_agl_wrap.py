@@ -330,7 +330,7 @@ print(x)
     ),
     ids=("lambda", "param", "loop", "catch", "pattern", "as-pattern"),
 )
-def test_wrap_inline_program_treats_any_binder_in_a_declaration_as_shadowing(
+def test_wrap_inline_program_demotes_a_binding_only_lexical_binders_of_its_name_read(
     declaration: str,
 ) -> None:
     program, next_node_id = parse_program_seeded(
@@ -344,6 +344,40 @@ def test_wrap_inline_program_treats_any_binder_in_a_declaration_as_shadowing(
     main = wrapped.body.items[-1]
     assert isinstance(main, FuncDef)
     assert main.body.items == (binding,)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "output"),
+    (
+        ("scope S\n  let x = 5\n  def f() -> int = ::x + x\nend S", "6"),
+        ("scope S\n  def f() -> int = x\n  let x = 5\nend S", "1"),
+        ("def S::f() -> int = (fn(x: int) -> int => x)(5) + x", "6"),
+        ("def S::f() -> int =\n  let y = x\n  let x = 5\n  x + y", "6"),
+        ("def S::f() -> int =\n  for x in [5] do print x done\n  x", "5\n1"),
+        ("def S::f() -> int = (case 5 of | _ as x => x) + x", "6"),
+        ("def S::f(y: int = x, x: int = 0) -> int = y + x", "1"),
+    ),
+    ids=(
+        "anchored-past-a-region-binding",
+        "before-a-region-binding",
+        "beside-a-lambda-parameter",
+        "before-a-local-binding",
+        "outside-a-loop",
+        "outside-a-case-branch",
+        "in-a-default-beside-a-parameter",
+    ),
+)
+def test_wrapped_root_binding_a_declaration_reads_past_a_binder_of_its_name_is_retained(
+    declaration: str, output: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A reference no lexical binder of its name encloses may read the root binding."""
+    result = run_inline_code(
+        PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None),
+        f"let x = 1\n{declaration}\nprint(S::f())",
+    )
+
+    assert result.ok, f"expected success but got: {result.diagnostics!r}"
+    assert capsys.readouterr().out == f"{output}\n"
 
 
 def test_wrap_inline_program_keeps_an_unreferenced_scoped_binding_at_the_root() -> None:

@@ -114,8 +114,14 @@ usage, not catchable in-language, before any statement executes.
 other type reads its external text as one **strict JSON value or AgL value
 syntax literal** (externally supplied values are not chatty agent output, so
 no lenient recovery applies), validated against the declared type: a token
-that parses as strict JSON is read as JSON; any other token is read as one
-[value syntax](#value-syntax) literal instead. An `Agent`-typed value
+that parses as strict JSON and decodes into the declared type is read as JSON;
+any other token is read as one [value syntax](#value-syntax) literal instead
+(so `{}` for a dict whose JSON form is an array of `{"key": …, "value": …}`
+entries, see [Dict wire forms](types.md#dict-wire-forms), is an empty dict
+literal). A token that is neither JSON nor a well-formed literal reports both
+reasons; a token that parses as JSON but neither decodes into the type nor
+reads as a value-syntax literal of it reports its JSON decode failure. An
+`Agent`-typed value
 ([Agents](#agents) above) instead reads a JSON object, then an `Agent`
 member constructor call, then compact shorthand (`claude/opus:high`), and
 otherwise falls back to a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
@@ -128,6 +134,52 @@ table in the value's [JSON shape](agent-calls.md#the-json-wire-format). A
 string nested inside it is read exactly as a top-level config string of that
 position's type is, so a string means the same at every depth; a string in a
 `json` position stays a JSON string.
+
+A native table given for a dict reads each table key as a string of the key
+type would be read at that position, and each value as above, whatever the
+dict's JSON form: `{ "2.0" = "a" }` for an `int` key, `{ Blue = 1 }` or
+`{ bleu = 1 }` for an enum key (declared name or JSON tag, as for a top-level
+string), `{ "Point(x = 1, y = 2)" = "a" }` for a record key, and `{}` for any
+dict. Keys that read to equal keys fail the decode. A dict whose JSON form is
+an entries array also accepts an array of `{ key = …, value = … }` tables,
+giving the entries directly.
+
+For example, dict parameters with `int`, plain-enum and record keys (in
+`prog.agl`, so the config table below is `[prog.main]`):
+
+```agl
+enum Level
+  | Debug
+  | Info
+
+record Point
+  x: int
+  y: int
+
+program def main(
+  by-int: dict[int, text] = {},
+  by-level: dict[Level, int] = {},
+  by-point: dict[Point, text] = {}
+) -> unit =
+  print(by-int)
+  print(by-level)
+  print(by-point)
+```
+
+```text
+--by-int '{1: "one", -2: "two"}'                # value syntax
+--by-int '{"1": "one"}'                         # JSON object, stringified keys
+--by-level '{Debug: 1, Info: 2}'                # bare names are constructors
+--by-point '{Point(x = 1, y = 2): "a"}'         # value syntax
+--by-point '[{"key": {"x": 1, "y": 2}, "value": "a"}]'   # JSON entries
+```
+
+```toml
+[prog.main]
+by-int = { "1" = "one" }
+by-level = { Debug = 1 }
+by-point = { "Point(x = 1, y = 2)" = "a" }
+```
 
 A CLI token, an `@opt-env` variable's value, and a qualified config-table
 string ([Config-file schema](#config-file-schema) below) must all be valid
@@ -151,9 +203,10 @@ host `Agent` parameter does.
 
 A value-syntax literal is a data-only subset of AgL's own expression syntax:
 an integer, decimal, `true`/`false`, a quoted text literal, an `[item, ...]`
-array, a `{key: value, ...}` dict of quoted-or-bare keys, or a constructor
-reference/call — `Name`, `Name()`, or `Name(arg, ..., field = value, ...)`. A
-constructor's arguments bind against its declared fields by the same
+array, a `{key: value, ...}` dict whose keys are value-syntax literals read
+against the declared key type, or a constructor reference/call — `Name`,
+`Name()`, or `Name(arg, ..., field = value, ...)`. A constructor's arguments
+bind against its declared fields by the same
 [zone rules](functions.md#parameters) an ordinary call uses, except that a
 named-only field always takes an explicit `field = value`: value syntax has
 no variables, so the bare-name shorthand an ordinary call allows for a
@@ -164,8 +217,10 @@ the single name immediately enclosing the record's declaration: its innermost
 scope (`Geo::Point(...)`) or, for an inline enum member, its enum
 (`Shape::Square(...)`). A top-level record takes no qualifier. Where an enum
 type is expected, the enum's own name also qualifies any of its members. A
-duplicate dict key is an error. Nesting is
-unrestricted — a constructor argument, array item, or dict value may itself
+bare name is always a constructor, so a text key is quoted (`{"cpu": 2}`); a
+dict inside a `json` value takes text keys only. A key that is equal to an
+earlier one, after reading against the key type, is a duplicate and an error.
+Nesting is unrestricted — a constructor argument, array item, or dict value may itself
 be any value-syntax literal, including another constructor call. `null` and
 a heterogeneous (mixed-type) array or dict are legal only in a `json`-typed
 slot, read as plain data with no constructor calls, since a `json` value has
@@ -201,9 +256,12 @@ offering completion completes it from the filesystem.
 The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
 functions are not valid program-argument types, whether or not the host ever
-supplies a value for the parameter. A [recursive](types.md#recursive-types)
-record or enum parameter decodes normally, subject to the same finite-schema
-restriction as an agent output type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
+supplies a value for the parameter; nor is a type that reaches a
+dict whose key is not `Hashable` or not decodable (an exception key), which
+does not [decode](types.md#dict-wire-forms).
+A [recursive](types.md#recursive-types) record or enum parameter decodes
+normally, subject to the same finite-schema restriction as an agent output
+type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
 
 A rendered record or enum value (see
 [Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules))
@@ -506,6 +564,9 @@ columns are 1-based. `run_start` records the invoked `command` and selected
 `parameters` for host-seeded `@param` bindings, and `config` for other
 host-seeded values. Parameter and config keys use qualified binding names;
 enum values retain their `$case` tag, and decimal values are exact text strings.
+A non-empty dict whose keys are not text is written as an array of
+`{"key": …, "value": …}` entries; text-keyed and empty dicts are objects. Trace
+records encode values by their runtime shape, uniformly across events.
 Cycles and non-data values degrade to markers. Run boundaries delimit each
 execution, including entries appended to a shared file. Positional source
 writes may enable or disable tracing, so records outside the active interval
@@ -544,4 +605,10 @@ A run ends in one of three ways:
    effective JSON name, and the source location of the raise site. A field
    holding a value with a reference cycle ([Types](types.md#cycles)), or a
    value of a kind with no JSON representation, is reported as a placeholder
-   marker, so reporting a failure never fails.
+   marker, so reporting a failure never fails. A field whose declared type
+   has no JSON form is reported from its value alone: an enum member carries
+   its effective `$case` tag ([`@json-name`](attributes.md#name-and-json-name),
+   else `@name`, else the declared name), nested record and exception fields
+   are keyed by their effective JSON names as in the typed encoding, and a
+   non-empty dict with non-`text` keys is an array of `{"key": …, "value": …}`
+   objects.

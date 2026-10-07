@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "sum_and_product_of_two_boundary_values_overflow",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "neg ok\nadd caught: +\nsub ok\nmul caught: *\ndiv ok\n"
+      }
+    },
+    {
+      "name": "opposite_signed_boundary_values_overflow_difference_and_product",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "neg ok\nadd ok\nsub caught: -\nmul caught: *\ndiv ok\n"
+      }
+    },
+    {
+      "name": "division_by_a_tiny_divisor_overflows",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "neg ok\nadd ok\nsub ok\nmul ok\ndiv caught: /\n"
+      }
+    },
+    {
+      "name": "in_range_operands_never_raise",
+      "params": {"mode": 4},
+      "expect": {
+        "stdout": "neg ok\nadd ok\nsub ok\nmul ok\ndiv ok\n"
+      }
+    }
+  ]
+}

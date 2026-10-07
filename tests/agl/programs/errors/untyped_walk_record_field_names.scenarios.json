@@ -1,0 +1,21 @@
+{
+  "scenarios": [
+    {
+      "name": "uncaught_exception_untyped_dict_keys_match_typed_record_field_names",
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {
+            "inners": [
+              {"key": {"xx": 1, "yy": 2, "z": 3}, "value": {"$case": "None"}}
+            ],
+            "c": {"xx": 1, "yy": 2, "z": 3}
+          },
+          "message_contains": [
+            "boom"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+# Scope-qualified constructors in patterns and `is` tests select through the
+# same chain as value position: enum members, records, aliases of either, and
+# nested scopes, matched against enum and precise member-record scrutinees,
+# from the module root and from inside another scope.
+scope S
+  enum Col
+    | Red
+    | Blue
+
+  type C = Col
+
+  record Pixel
+    x: int
+
+  record Blank
+
+  type Px = Pixel
+
+  scope N
+    enum Dir
+      | Up(n: int)
+      | Down
+
+    type D = Dir
+  end N
+end S
+
+enum Shape = ::S::Pixel | ::S::Blank | Empty
+
+scope T
+  def describe(c: S::Col) -> text =
+    case c of
+    | S::C::Red => "t red"
+    | S::Col::Blue => "t blue"
+end T
+
+def col-of(pick: text) -> S::Col =
+  if
+    | pick == "red" => S::Col::Red
+    | else => S::C::Blue
+
+def shape-of(pick: text) -> Shape =
+  if
+    | pick == "red" => S::Px(x = 7)
+    | pick == "blue" => S::Blank
+    | else => Empty
+
+def dir-of(pick: text) -> S::N::Dir =
+  if
+    | pick == "red" => S::N::D::Up(n = 3)
+    | else => S::N::Dir::Down
+
+program def main(pick: text) -> unit =
+  let c = col-of(pick)
+  print(c is S::Col::Red)
+  print(c is S::C::Blue)
+  print(
+    case c of
+    | S::Col::Red => "red"
+    | S::C::Blue => "blue"
+  )
+  print(T::describe(c))
+  let s = shape-of(pick)
+  print(s is S::Pixel)
+  print(s is S::Px)
+  print(s is S::Blank)
+  print(
+    case s of
+    | S::Px(x) => "pixel %{x}"
+    | S::Blank => "blank"
+    | Empty => "empty"
+  )
+  let d = dir-of(pick)
+  print(d is S::N::Dir::Up)
+  print(d is S::N::D::Down)
+  print(
+    case d of
+    | S::N::D::Up(n) => "up %{n}"
+    | S::N::Dir::Down => "down"
+  )
+  let pixel = S::Pixel(x = 2)
+  print(
+    case pixel of
+    | S::Px(x) => x
+  )
+  let red = S::Col::Red
+  print(
+    case red of
+    | S::C::Red => "member red"
+  )

@@ -47,7 +47,6 @@ from agm.agl.ir import (
     IrConstUnit,
     IrDirectCall,
     IrField,
-    IrFieldMode,
     IrFieldSet,
     IrFunctionBody,
     IrFunctionParam,
@@ -84,8 +83,10 @@ from agm.agl.ir import (
 )
 from agm.agl.ir.contracts import (
     ContractRequest,
+    JsonContractRequest,
     ScalarDecode,
     ScalarKind,
+    TargetContractRequest,
     TypeNode,
     TypeNodeField,
     TypeNodeKind,
@@ -281,6 +282,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("left", "right"),
+                field_json_names=("left", "right"),
             )
         },
     )
@@ -333,6 +335,7 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 declared_name="PayloadMember",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             ),
         },
         functions={FN0: _make_fn_desc(fn_sym=SYM0)},
@@ -387,6 +390,7 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             )
         },
     )
@@ -425,7 +429,7 @@ def test_case_without_default_requires_default_for_open_literal_domain() -> None
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrLiteralCaseKey(IrLiteralKind.NUMERIC, 1),
+                        key=IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal(1)),
                         field_bindings=(),
                         body=IrConstUnit(location=LOC),
                     ),
@@ -906,6 +910,7 @@ class TestDeepTierNominalDescriptor:
             kind=NominalKind.RECORD,
             fields=("x", "y"),
             mutable_fields=mutable_fields,
+            field_json_names=("x", "y"),
         )
         with pytest.raises(InvalidIrError, match="mutable fields"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
@@ -1356,6 +1361,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_json_names=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1363,7 +1369,7 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",), NominalId(100), "some", ("x",)),),
             ),
         ),
     )
@@ -1381,6 +1387,7 @@ class TestIrFieldValidation:
                     "some",
                     NominalKind.RECORD,
                     ("x",),
+                    ("x",),
                 ),
             },
         )
@@ -1396,6 +1403,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_json_names=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1403,13 +1411,12 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",), NominalId(100), "some", ("x",)),),
             ),
         ),
     )
-    @pytest.mark.parametrize("mode", (IrFieldMode.EXACT, IrFieldMode.UPPER_BOUND))
     def test_ir_field_unknown_nominal_field_fails_deep_validation(
-        self, descriptor: NominalDescriptor, mode: IrFieldMode
+        self, descriptor: NominalDescriptor
     ) -> None:
         prog = _make_program(
             initializers=(
@@ -1421,7 +1428,6 @@ class TestIrFieldValidation:
                         IrConstInt(LOC, 1),
                         NOM0,
                         "missing",
-                        mode=mode,
                     ),
                 ),
             ),
@@ -1434,40 +1440,12 @@ class TestIrFieldValidation:
                     "some",
                     NominalKind.RECORD,
                     ("x",),
+                    ("x",),
                 ),
             },
         )
         with pytest.raises(InvalidIrError, match="unknown field"):
             validate_ir(prog, deep=True)
-
-    def test_ir_field_upper_bound_uses_declaring_nominal_fields(self) -> None:
-        """Upper-bound mode validates against the bound nominal descriptor."""
-        prog = _make_program(
-            initializers=(
-                IrBind(
-                    LOC,
-                    SYM0,
-                    IrField(
-                        LOC,
-                        IrConstInt(LOC, 1),
-                        NOM0,
-                        "x",
-                        mode=IrFieldMode.UPPER_BOUND,
-                    ),
-                ),
-            ),
-            nominals={
-                NOM0: NominalDescriptor(
-                    nominal=NOM0,
-                    module_id=MOD_A,
-                    scope_path=(),
-                    declared_name="Foo",
-                    kind=NominalKind.RECORD,
-                    fields=("x",),
-                )
-            },
-        )
-        validate_ir(prog, deep=True)
 
     def test_ir_field_empty_name_fails_shallow_validation(self) -> None:
         prog = _make_program(
@@ -1494,6 +1472,7 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=nominal_kind,
             fields=("x",),
+            field_json_names=("x",),
             mutable_fields=frozenset({"x"})
             if mutable and nominal_kind is NominalKind.RECORD
             else frozenset(),
@@ -1522,6 +1501,7 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=NominalKind.RECORD,
             fields=("x",),
+            field_json_names=("x",),
             mutable_fields=frozenset({"x"}),
         )
         prog = _make_program(
@@ -1643,7 +1623,7 @@ def _make_fn_param(sym: SymbolId = SYM1) -> IrFunctionParam:
 
 
 def _make_program_param(*, name: str = "n", required: bool = True) -> IrProgramParam:
-    from agm.agl.ir.contracts import ParamDecoder, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import ParamDecoder
 
     return IrProgramParam(
         name=name,
@@ -2183,6 +2163,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x", "y"),
             field_defaults=(None, IrConstInt(location=LOC, value=0)),
+            field_json_names=("x", "y"),
         )
         make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", UseDefault(1))))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
@@ -2190,6 +2171,8 @@ class TestConstructorFieldUseDefault:
 
     def test_valid_omitted_exception_field_passes(self) -> None:
         """A UseDefault slot on IrMakeException for a defaulted field passes."""
+        from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode, ScalarKind
+
         descriptor = NominalDescriptor(
             nominal=NOM0,
             module_id=MOD_A,
@@ -2198,9 +2181,13 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.EXCEPTION,
             fields=("code",),
             field_defaults=(IrConstInt(location=LOC, value=0),),
+            field_json_names=("code",),
         )
         make = IrMakeException(LOC, NOM0, (("code", UseDefault(0)),))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        prog.exception_field_encodes[NOM0] = (
+            ExceptionFieldEncode("code", "code", EncodePlan(ScalarEncode(ScalarKind.INT))),
+        )
         validate_ir(prog)  # no exception
 
     def test_use_default_out_of_position_raises(self) -> None:
@@ -2213,6 +2200,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x",),
             field_defaults=(IrConstInt(location=LOC, value=0),),
+            field_json_names=("x",),
         )
         make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(99)),))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
@@ -2229,6 +2217,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x",),
             field_defaults=(None,),
+            field_json_names=("x",),
         )
         make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(0)),))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
@@ -2256,6 +2245,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x",),
             field_defaults=(None,),
+            field_json_names=("x",),
         )
         make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", IrConstInt(LOC, 2))))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
@@ -2274,6 +2264,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x", "y"),
             field_defaults=(None, IrConstInt(location=LOC, value=0)),
+            field_json_names=("x", "y"),
         )
         make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("z", IrConstInt(LOC, 2))))
         prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
@@ -2290,6 +2281,7 @@ class TestConstructorFieldUseDefault:
             kind=NominalKind.RECORD,
             fields=("x", "y"),
             field_defaults=(None,),
+            field_json_names=("x", "y"),
         )
         with pytest.raises(InvalidIrError, match="field_defaults"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
@@ -2334,17 +2326,13 @@ class TestExternTargetOperands:
             initializers=initializers,
             functions={FN0: extern},
         )
-        request = ContractRequest(
-            codec_name="json",
-            strict_json=True,
-            json_schema='{"type": "integer"}',
-            decode=ScalarDecode(kind=ScalarKind.INT),
+        schema = '{"type": "integer"}'
+        request = TargetContractRequest(
             target_type_label="int",
-            structured_exec=False,
-            format_instructions="",
-            type_tree=type_tree,
+            json_schema=schema,
+            type_tree=type_tree or TypeTree(root=TypeNode(TypeNodeKind.INT, "int", schema)),
         )
-        return replace(prog, contracts={self._CID: request})
+        return replace(prog, target_contracts={self._CID: request})
 
     def _validate(
         self, *arguments: IrExpr | UseDefault, target_count: int = 1, default: IrExpr | None = None
@@ -2434,8 +2422,16 @@ class TestExternTargetOperands:
         self._validate_tree(self._tree(TypeNode(TypeNodeKind.DICT, "d", "{}", values=items)))
 
     def test_type_tree_unknown_reference_raises(self) -> None:
-        with pytest.raises(InvalidIrError, match="Missing"):
+        with pytest.raises(InvalidIrError):
             self._validate_tree(self._tree(TypeNodeRef("Missing")))
+
+    def test_type_tree_dict_key_unknown_reference_raises(self) -> None:
+        """A dict node's ``keys`` sub-entry is walked too, not only ``values``."""
+        dict_node = TypeNode(
+            TypeNodeKind.DICT, "d", "{}", keys=TypeNodeRef("Missing"), values=TypeNodeRef("Node")
+        )
+        with pytest.raises(InvalidIrError):
+            self._validate_tree(self._tree(dict_node))
 
     def test_type_tree_duplicate_definition_raises(self) -> None:
         tree = self._tree(TypeNodeRef("Node"))
@@ -2678,20 +2674,19 @@ class TestIrExecValidation:
 
     def test_ir_exec_valid_cheap(self) -> None:
         """IrExec with valid location and command expr passes cheap validation."""
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import (
+            TextContractRequest,
+        )
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
+        contract = TextContractRequest(
             codec_name="text",
             strict_json=None,
-            json_schema=None,
-            decode=None,
             target_type_label="text",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
         )
         node = IrExec(
             location=LOC,
@@ -2728,12 +2723,14 @@ class TestIrExecValidation:
 
     def test_contract_refdecode_cycle_raises_deep(self) -> None:
         """Contract decoders must not contain ref-only cycles in their defs."""
-        from agm.agl.ir.contracts import ContractRequest, RefDecode
+        from agm.agl.ir.contracts import (
+            RefDecode,
+        )
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=None,
             json_schema="{}",
@@ -2741,7 +2738,6 @@ class TestIrExecValidation:
             target_type_label="A",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
             defs=(("A", RefDecode("A")),),
         )
         node = IrExec(
@@ -2760,12 +2756,14 @@ class TestIrExecValidation:
 
     def test_contract_duplicate_decode_defs_key_raises_deep(self) -> None:
         """Duplicate decode defs keys are rejected before dict coercion."""
-        from agm.agl.ir.contracts import ContractRequest, RefDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.contracts import (
+            RefDecode,
+        )
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=None,
             json_schema="{}",
@@ -2773,7 +2771,6 @@ class TestIrExecValidation:
             target_type_label="A",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
             defs=(
                 ("A", ScalarDecode(ScalarKind.INT)),
                 ("A", ScalarDecode(ScalarKind.TEXT)),
@@ -2795,12 +2792,15 @@ class TestIrExecValidation:
 
     def test_custom_contract_rejects_defs_without_decode(self) -> None:
         """Custom contracts may carry decode metadata, but defs require a decode root."""
-        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+        from agm.agl.ir.contracts import (
+            CustomContractRequest,
+        )
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.types import TextType
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
+        contract = CustomContractRequest(
             codec_name="custom-json",
             strict_json=None,
             json_schema="{}",
@@ -2808,7 +2808,7 @@ class TestIrExecValidation:
             target_type_label="text",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
+            target_type=TextType(),
             defs=(("A", ScalarDecode(ScalarKind.INT)),),
         )
         node = IrExec(
@@ -2825,22 +2825,23 @@ class TestIrExecValidation:
         with pytest.raises(InvalidIrError, match="defs but decode is None"):
             validate_ir(prog, deep=True)
 
-    def test_text_contract_rejects_stale_json_decode_fields(self) -> None:
-        """Text contracts must not carry stale JSON-only decode fields."""
-        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    def test_custom_contract_with_decode_checks_its_nominals(self) -> None:
+        """A custom contract that does carry a decode schema still gets it nominal-checked."""
+        from agm.agl.ir.contracts import CustomContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.types import IntType
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
-            codec_name="text",
+        contract = CustomContractRequest(
+            codec_name="custom-json",
             strict_json=None,
             json_schema="{}",
             decode=ScalarDecode(ScalarKind.INT),
-            target_type_label="text",
+            target_type_label="int",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
+            target_type=IntType(),
         )
         node = IrExec(
             location=LOC,
@@ -2853,36 +2854,4 @@ class TestIrExecValidation:
             parse_error_retries=IrConstInt(location=LOC, value=0),
         )
         prog = self._make_prog_with_contract(node, {cid: contract})
-        with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
-            validate_ir(prog, deep=True)
-
-    def test_unit_contract_rejects_stale_json_decode_fields(self) -> None:
-        """Unit contracts skip parsing and must not carry JSON decode fields."""
-        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-        from agm.agl.ir.ids import ContractId
-        from agm.agl.ir.nodes import IrExec
-
-        cid = ContractId(value=0)
-        contract = ContractRequest(
-            codec_name="json",
-            strict_json=None,
-            json_schema="{}",
-            decode=ScalarDecode(ScalarKind.INT),
-            target_type_label="unit",
-            structured_exec=False,
-            format_instructions="",
-            is_unit=True,
-        )
-        node = IrExec(
-            location=LOC,
-            command=IrConstText(location=LOC, value="echo hi"),
-            env=IrConstText(location=LOC, value="env"),
-            cwd=IrConstText(location=LOC, value="cwd"),
-            timeout=IrConstText(location=LOC, value="timeout"),
-            sandbox=IrConstText(location=LOC, value="sandbox"),
-            contract_id=cid,
-            parse_error_retries=IrConstInt(location=LOC, value=0),
-        )
-        prog = self._make_prog_with_contract(node, {cid: contract})
-        with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
-            validate_ir(prog, deep=True)
+        validate_ir(prog, deep=True)  # no exception

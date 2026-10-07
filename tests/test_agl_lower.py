@@ -20,7 +20,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
+from agm.agl.ir.contracts import (
+    ConversionFailureMode,
+    ConversionStrategy,
+    RecordEncode,
+    ToJsonRecipe,
+)
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
     IrArith,
@@ -43,7 +48,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrDirectCall,
     IrField,
-    IrFieldMode,
     IrIf,
     IrIndex,
     IrIndirectCall,
@@ -60,13 +64,13 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrNominalCaseKey,
+    IrNot,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
-    IrUnary,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -78,7 +82,6 @@ from agm.agl.ir.operations import (
     IntToDecimal,
     IterKind,
     ToJson,
-    UnaryOp,
 )
 from agm.agl.ir.program import (
     ExecutableProgram,
@@ -119,7 +122,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     Lambda,
     LetDecl,
-    Placeholder,
     VarRef,
 )
 from agm.agl.typecheck.env import CheckedModule
@@ -187,7 +189,7 @@ def _repl_entry(
     )
     resolved = resolve_program(
         graph,
-        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+        entry_repl_session_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
     checked_program = check_program(resolved, _caps(), entry_seed_env=seed_env)
     result = compile_program_matches(checked_program)
@@ -233,8 +235,10 @@ def test_repl_promotion_requires_imported_runtime_modules_to_be_available() -> N
     plan = ReplPromotionPlan(
         source_declaration_ids=(frozenset({10}),),
         initializers=(InitializerOrigin(source_index=0, is_function=True),),
-        declaration_dependencies={},
+        declaration_dependencies={10: frozenset()},
         imported_module_dependencies={10: frozenset({library_id})},
+        scope_region_source_indices={},
+        use_declaration_source_indices={},
     )
 
     assert plan.completed_declaration_ids({0}, set()) == frozenset()
@@ -414,13 +418,6 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.sites)
 
 
-def test_direct_lowerer_helper_requires_successful_match_compilation() -> None:
-    source = "case true of | true => 1"
-
-    with pytest.raises(AssertionError):
-        _make_lowerer(_check(source), source)
-
-
 def test_private_lowerer_requires_complete_match_site_mapping_argument() -> None:
     sites = signature(_Lowerer).parameters["sites"]
 
@@ -470,14 +467,6 @@ def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
     assert lowerer._compute_captures_for(
         update.value.body, update.value.params, update.value.node_id, set()
     ) == (IrCapture(box_symbol, by_cell=False),)
-
-
-def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
-    source = "1"
-    lowerer = _make_lowerer(_check(source), source)
-
-    with pytest.raises(AssertionError, match="non-nominal result"):
-        lowerer._nominal_for_constructor_result(IntType())
 
 
 def test_constructor_descriptor_carries_lowered_field_defaults() -> None:
@@ -598,11 +587,13 @@ class TestCompileCoercion:
         assert result is None
 
     def test_dict_int_to_json_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), JsonType())
+        result = compile_coercion(DictType(TextType(), IntType()), JsonType())
         assert result is None
 
     def test_dict_int_to_dict_decimal_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(DecimalType()))
+        result = compile_coercion(
+            DictType(TextType(), IntType()), DictType(TextType(), DecimalType())
+        )
         assert result is None
 
     def test_record_field_mismatch_is_none(self) -> None:
@@ -1200,9 +1191,16 @@ class TestSourcesTable:
         assert len(prog.sources) == 1
 
     def test_source_display_name(self) -> None:
+        """An inline entry with no backing file gets the frontend's own label.
+
+        Matches ``modules.loader.entry_source_id``'s default label for a
+        source with no file -- the same label static diagnostics for this
+        module would carry -- rather than the module identity's internal
+        ``"<entry>"`` spelling.
+        """
         prog = _lower("()")
         (src_id,) = prog.sources
-        assert prog.sources[src_id].display_name == "<entry>"
+        assert prog.sources[src_id].display_name == "<code>"
 
     def test_source_normalized_text(self) -> None:
         src = "()"
@@ -1670,10 +1668,9 @@ class TestIrFieldLowering:
 
         assert isinstance(result, IrField)
         assert result.field == "myfield"
-        assert result.mode is IrFieldMode.EXACT
 
-    def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
-        """Field access on abstract Exception records a static upper bound."""
+    def test_abstract_exception_field_access_projects_the_base_nominal(self) -> None:
+        """Field access on abstract Exception projects against Exception's own nominal."""
         from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
         from agm.agl.modules.ids import STD_PRELUDE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
@@ -1694,17 +1691,22 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
+        exception_decl_id = require_reserved_nominal_id("Exception")
         checked.node_types[unit_lit.node_id] = ExceptionType(
-            "Exception", STD_PRELUDE_ID, decl_id=require_reserved_nominal_id("Exception")
+            "Exception", STD_PRELUDE_ID, decl_id=exception_decl_id
         )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
         assert isinstance(result, IrField)
-        assert result.mode is IrFieldMode.UPPER_BOUND
+        assert result.nominal == NominalId(exception_decl_id)
 
-    def test_base_exception_catch_field_access_lowers_to_upper_bound(self) -> None:
-        """A source catch binder uses the abstract declaration as its bound."""
+    def test_base_exception_catch_field_access_projects_the_declared_catch_type(self) -> None:
+        """A source catch binder projects fields against its declared catch type.
+
+        ``error`` is declared ``Exception``, not the concretely raised ``Abort``;
+        the projection's nominal must follow the declared type, not the runtime one.
+        """
         source = """\
 let result = try
   raise Abort(message = "failed")
@@ -1712,7 +1714,15 @@ catch Exception as error =>
   error.message
 result
 """
-        program = _lower(source)
+        checked = _check(source)
+        (exception_decl_id,) = {
+            t.decl_id for t in checked.node_types.values() if isinstance(t, ExceptionType)
+        } - {
+            t.decl_id
+            for t in checked.node_types.values()
+            if isinstance(t, ExceptionType) and t.name == "Abort"
+        }
+        program = lower_compiled_module(compile_checked_module(checked), source_text=source)
         projections = tuple(
             field
             for initializer in program.modules[program.entry_module].initializers
@@ -1721,20 +1731,7 @@ result
         )
 
         assert projections
-        assert all(field.mode is IrFieldMode.UPPER_BOUND for field in projections)
-
-    def test_kind_for_non_container_raises_assertion(self) -> None:
-        """_kind_for_container raises AssertionError for a non-container type.
-
-        Defensive guard: can only be triggered by a compiler bug (well-typed IR
-        never passes a non-container type here).
-        """
-        import pytest
-
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        with pytest.raises(AssertionError, match="compiler bug"):
-            lowerer._kind_for_container(IntType())
+        assert all(field.nominal == NominalId(exception_decl_id) for field in projections)
 
 
 # ---------------------------------------------------------------------------
@@ -2308,24 +2305,6 @@ class TestPartialCallLowering:
         assert isinstance(captured_arg.value, IrLoad)
         assert captured_arg.value.symbol == captured_bind.symbol
 
-    def test_lower_expr_placeholder_guard(self) -> None:
-        import pytest
-
-        from agm.agl.syntax.spans import SourceSpan
-
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        span = SourceSpan(
-            start_line=1,
-            start_col=0,
-            end_line=1,
-            end_col=1,
-            start_offset=0,
-            end_offset=1,
-        )
-        with pytest.raises(AssertionError, match="placeholder"):
-            lowerer.lower_expr(Placeholder(index=None, span=span, node_id=999_001))
-
 
 # ---------------------------------------------------------------------------
 # lower_program: multi-module golden test
@@ -2742,6 +2721,7 @@ class TestHostOpLowering:
         assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
 
     def test_unit_exec_lowers_to_outputless_contract(self) -> None:
+        from agm.agl.ir.contracts import UnitContractRequest
         from agm.agl.ir.nodes import IrExec
 
         prog = _lower('exec("emit")\n()')
@@ -2752,8 +2732,7 @@ class TestHostOpLowering:
         ]
         contract = prog.contracts[node.contract_id]
 
-        assert contract.codec_name == "none"
-        assert contract.is_unit is True
+        assert isinstance(contract, UnitContractRequest)
 
     def test_ask_request_lowers_to_ir_ask_request_with_its_contract(self) -> None:
         """ask-request lowers to IrAskRequest carrying the contract it describes."""
@@ -3296,6 +3275,7 @@ class TestIrConvertLowering:
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
+        assert isinstance(conv.recipe, ToJsonRecipe)
         assert isinstance(conv.recipe.encode, RecordEncode)
 
     def test_json_as_test_lowers_to_ir_convert_return_bool(self) -> None:
@@ -3307,7 +3287,7 @@ class TestIrConvertLowering:
             f"'as? json' must emit IrConvert, not {type(conv).__name__}"
         )
         assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
-        assert conv.recipe.strategy is ConversionStrategy.TO_JSON
+        assert isinstance(conv.recipe, ToJsonRecipe)
 
 
 # ---------------------------------------------------------------------------
@@ -3723,9 +3703,8 @@ class TestLoopDesugar:
         assert len(item1.branches) == 1
         assert item1.has_else is False
         cond1 = item1.branches[0].cond
-        assert isinstance(cond1, IrUnary), "item 1 condition must be IrUnary (not)"
-        assert cond1.op is UnaryOp.NOT
-        assert isinstance(cond1.value, IrIterHasNext), "item 1 IrUnary.value must be IrIterHasNext"
+        assert isinstance(cond1, IrNot), "item 1 condition must be IrNot"
+        assert isinstance(cond1.value, IrIterHasNext), "item 1 IrNot.value must be IrIterHasNext"
         assert isinstance(item1.branches[0].body, IrBreak), "item 1 branch body must be IrBreak"
 
         # Item 2: for-var bind — IrBind(for_var, IrIterNext(__it))
@@ -3741,8 +3720,7 @@ class TestLoopDesugar:
         assert len(item3.branches) == 1
         assert item3.has_else is False
         cond3 = item3.branches[0].cond
-        assert isinstance(cond3, IrUnary), "item 3 condition must be IrUnary (not)"
-        assert cond3.op is UnaryOp.NOT
+        assert isinstance(cond3, IrNot), "item 3 condition must be IrNot"
         assert isinstance(item3.branches[0].body, IrBreak), "item 3 branch body must be IrBreak"
 
         # Item 4: bound check — IrIf (GE outer)
@@ -4050,8 +4028,7 @@ class TestRangeForDesugar:
         assert isinstance(item3, IrIf)
         assert item3.has_else is False
         cond3 = item3.branches[0].cond
-        assert isinstance(cond3, IrUnary)
-        assert cond3.op is UnaryOp.NOT
+        assert isinstance(cond3, IrNot)
 
     def test_range_with_until_guard(self) -> None:
         """``for i in 1 to 10 until i > 7`` body includes range items + until guard."""
@@ -4148,7 +4125,7 @@ class TestRangeForDesugar:
         item1 = body.items[0]
         assert isinstance(item1, IrIf)
         cond = item1.branches[0].cond
-        assert isinstance(cond, IrUnary)
+        assert isinstance(cond, IrNot)
         assert isinstance(cond.value, IrIterHasNext), "collection for item 1 must use IrIterHasNext"
         item2 = body.items[1]
         assert isinstance(item2, IrBind)

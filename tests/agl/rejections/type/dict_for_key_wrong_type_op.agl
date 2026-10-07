@@ -1,0 +1,8 @@
+# `for` binds the loop variable at the dict's key type K, not text, so an
+# operation that requires text rejects an int key exactly like any other
+# int-typed value.
+program def main() -> unit =
+  let d: dict[int, text] = {}
+  for k in d do
+    print(k ++ "x")
+  done

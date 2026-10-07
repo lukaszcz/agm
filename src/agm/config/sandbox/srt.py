@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-from agm.config.general import agm_home_dir
+from agm.config.home import agm_home_dir
 from agm.project.layout import (
     project_config_dir,
     project_deps_dir,

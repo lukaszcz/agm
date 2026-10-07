@@ -7,7 +7,7 @@ from pathlib import Path, PureWindowsPath
 
 import semver
 
-from agm.config.general import agm_home_dir
+from agm.config.home import agm_home_dir
 from agm.packages.errors import PackageInstallError
 from agm.packages.layout import store_root_path
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest

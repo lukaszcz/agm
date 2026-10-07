@@ -14,15 +14,15 @@ from agm.agent.session import (
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
-    SessionCapabilities,
     SessionHostError,
     SessionOpenRequest,
     SessionOperation,
+    SessionOperations,
     SessionService,
     SessionStats,
     create_agl_session_host,
 )
-from agm.agent.spec import AgentCommand, AgentPi, PermissionMode
+from agm.agent.spec import AgentCommand, AgentPi, PermissionMode, SessionTransport
 from agm.agent.transport import AgentCallInfo, AgentOutputPhase
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
@@ -30,12 +30,14 @@ from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
 from agm.sandbox.request import SandboxLimits
 from tests._agl_helpers import hermetic_get_sandbox_context
 
+ALL_OPERATIONS = frozenset(SessionOperation)
+
 
 @dataclass
 class FakeBackend:
     """In-memory backend used to observe the session service's behavior."""
 
-    capabilities: SessionCapabilities
+    supported: frozenset[SessionOperation] = ALL_OPERATIONS
     continues_conversation: bool = True
     response: SessionAskResponse = field(
         default_factory=lambda: SessionAskResponse(content="answer")
@@ -50,8 +52,17 @@ class FakeBackend:
     close_calls: int = 0
     close_error: Exception | None = None
 
-    def open(self, request: SessionOpenRequest) -> None:
-        self.open_requests.append(request)
+    @property
+    def operations(self) -> SessionOperations:
+        def native[T](operation: SessionOperation, method: T) -> T | None:
+            return method if operation in self.supported else None
+
+        return SessionOperations(
+            compact=native(SessionOperation.COMPACT, self.compact),
+            fork=native(SessionOperation.FORK, self.fork),
+            set_name=native(SessionOperation.SET_NAME, self.set_name),
+            stats=native(SessionOperation.STATS, self.stats),
+        )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         self.ask_requests.append(request)
@@ -88,12 +99,12 @@ class FakeBackend:
 
 
 class FakeBackendFactory:
-    def __init__(self, capabilities: SessionCapabilities | None = None) -> None:
-        self.capabilities = capabilities or SessionCapabilities.all()
+    def __init__(self, supported: frozenset[SessionOperation] = ALL_OPERATIONS) -> None:
+        self.supported = supported
         self.backends: list[FakeBackend] = []
 
-    def __call__(self, agent: object, transport: str) -> SessionBackend:
-        backend = FakeBackend(capabilities=self.capabilities)
+    def __call__(self, request: SessionOpenRequest) -> SessionBackend:
+        backend = FakeBackend(self.supported, open_requests=[request])
         self.backends.append(backend)
         return backend
 
@@ -114,14 +125,13 @@ def _assert_error(operation: str, action: object) -> None:
 
 
 def test_agl_session_host_adapts_all_lifecycle_operations() -> None:
-    capabilities = SessionCapabilities(frozenset(SessionOperation))
-    parent = FakeBackend(capabilities)
-    child = FakeBackend(capabilities)
+    parent = FakeBackend()
+    child = FakeBackend()
     parent.fork_result = child
-    created: list[tuple[object, str]] = []
+    created: list[SessionOpenRequest] = []
 
-    def backend_for(agent: object, transport: str) -> SessionBackend:
-        created.append((agent, transport))
+    def backend_for(request: SessionOpenRequest) -> SessionBackend:
+        created.append(request)
         return parent
 
     host = AglSessionHost(SessionService(backend_for))
@@ -137,7 +147,7 @@ def test_agl_session_host_adapts_all_lifecycle_operations() -> None:
     host.close(handle)
     host.close_all()
 
-    assert created[0][1] == "cli"
+    assert created[0].transport == SessionTransport.CLI
     assert parent.ask_requests == [SessionAskRequest("hello")]
     assert parent.compact_requests == ["retain"]
     assert parent.reset_calls == 1
@@ -154,31 +164,34 @@ def test_agl_session_host_adapts_all_lifecycle_operations() -> None:
 def test_production_session_host_selects_and_rejects_transports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agm.agent.session.rpc import PiRpcSessionBackend
+    from agm.agent.session import rpc
 
-    monkeypatch.setattr(
-        PiRpcSessionBackend, "_start", lambda self, _agent, _operation, name="": None
-    )
+    spawned: list[list[str]] = []
+
+    def spawn(agent: AgentPi, command: list[str], operation: str, *_args: object) -> object:
+        spawned.append(command)
+        return object()
+
+    monkeypatch.setattr(rpc, "_spawn", spawn)
+    monkeypatch.setattr(rpc, "_terminate", lambda _child: None)
     host = create_agl_session_host(
         idle_timeout=1.0, get_sandbox_context=hermetic_get_sandbox_context()
     )
     pi = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(pi, "Rpc", env={})
     host.close(handle)
+    assert len(spawned) == 1
     command = AgentCommand(command="echo %{SESSION_ID}")
     command_handle = host.open(command, "Cli", env={})
     host.close(command_handle)
     with pytest.raises(AglSessionHostError):
         host.open(command, "Rpc", env={})
-    with pytest.raises(AglSessionHostError):
-        host.open(command, "bad", env={})
 
 
 def test_agl_session_host_rejects_closed_and_unknown_sessions() -> None:
     """Agent decoding now happens in the evaluator; the host only sees specs."""
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
-    backend = FakeBackend(capabilities)
-    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
+    backend = FakeBackend(frozenset())
+    host = AglSessionHost(SessionService(lambda _request: backend))
     agent = AgentCommand(command="worker")
     handle = host.open(agent, "Cli", env={})
     assert host.ask(handle, "hello") == "answer"
@@ -191,9 +204,8 @@ def test_agl_session_host_rejects_closed_and_unknown_sessions() -> None:
 
 
 def test_agl_session_host_preserves_success_response_metadata_and_call_info() -> None:
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
     backend = FakeBackend(
-        capabilities,
+        frozenset(),
         response=SessionAskResponse(
             content="answer",
             metadata={"elapsed": 1.5, "provider": "pi"},
@@ -207,7 +219,7 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
             ),
         ),
     )
-    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
+    host = AglSessionHost(SessionService(lambda _request: backend))
     agent = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(agent, "Rpc", env={})
 
@@ -233,9 +245,8 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
 
 
 def test_agl_session_host_translates_host_and_ask_failures() -> None:
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
-    backend = FakeBackend(capabilities)
-    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
+    backend = FakeBackend(frozenset())
+    host = AglSessionHost(SessionService(lambda _request: backend))
     agent = AgentCommand(command="worker")
     handle = host.default(agent, "Cli", env={})
     assert host.default(agent, "Cli", env={}) == handle
@@ -268,14 +279,14 @@ def test_open_ask_and_close_manage_a_live_session() -> None:
     service, factory = _service()
     agent = object()
 
-    handle = service.open(agent, "cli", name="named", env={})
+    handle = service.open(agent, SessionTransport.CLI, name="named", env={})
     response = service.ask(handle, SessionAskRequest(prompt="hello"))
     service.close(handle)
 
     UUID(handle)
     backend = factory.backends[0]
     assert backend.open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", name="named", env={})
+        SessionOpenRequest(agent=agent, transport=SessionTransport.CLI, name="named", env={})
     ]
     assert response == SessionAskResponse(content="answer")
     assert backend.ask_requests == [SessionAskRequest(prompt="hello")]
@@ -284,7 +295,7 @@ def test_open_ask_and_close_manage_a_live_session() -> None:
 
 def test_close_is_idempotent_but_closed_unknown_and_forged_handles_cannot_be_used() -> None:
     service, _ = _service()
-    handle = service.open(object(), "cli", env={})
+    handle = service.open(object(), SessionTransport.CLI, env={})
 
     service.close(handle)
     service.close(handle)
@@ -296,9 +307,9 @@ def test_close_is_idempotent_but_closed_unknown_and_forged_handles_cannot_be_use
 
 
 def test_unsupported_operations_fail_before_the_backend_is_called() -> None:
-    capabilities = SessionCapabilities.all() - {SessionOperation.COMPACT}
-    service, factory = _service(FakeBackendFactory(capabilities))
-    handle = service.open(object(), "cli", env={})
+    supported = ALL_OPERATIONS - {SessionOperation.COMPACT}
+    service, factory = _service(FakeBackendFactory(supported))
+    handle = service.open(object(), SessionTransport.CLI, env={})
 
     _assert_error("compact", lambda: service.compact(handle, "make room"))
 
@@ -309,8 +320,8 @@ def test_default_session_snapshots_the_first_agent_and_returns_it_after_changes(
     service, factory = _service()
     first_agent = object()
 
-    first = service.default(first_agent, "cli", env={})
-    second = service.default(object(), "rpc", env={})
+    first = service.default(first_agent, SessionTransport.CLI, env={})
+    second = service.default(object(), SessionTransport.RPC, env={})
 
     assert second == first
     assert len(factory.backends) == 1
@@ -319,8 +330,8 @@ def test_default_session_snapshots_the_first_agent_and_returns_it_after_changes(
 
 def test_reset_all_discards_handles_and_starts_a_fresh_default_generation() -> None:
     service, factory = _service()
-    first_default = service.default(AgentCommand("first"), "cli", env={})
-    explicit = service.open(AgentCommand("other"), "cli", env={})
+    first_default = service.default(AgentCommand("first"), SessionTransport.CLI, env={})
+    explicit = service.open(AgentCommand("other"), SessionTransport.CLI, env={})
     service.close(explicit)
 
     service.reset_all()
@@ -328,15 +339,15 @@ def test_reset_all_discards_handles_and_starts_a_fresh_default_generation() -> N
     assert [backend.close_calls for backend in factory.backends] == [1, 1]
     assert not service.is_known(first_default)
     assert not service.is_known(explicit)
-    next_default = service.default(AgentCommand("second"), "cli", env={})
+    next_default = service.default(AgentCommand("second"), SessionTransport.CLI, env={})
     assert next_default != first_default
     assert len(factory.backends) == 3
 
 
 def test_reset_all_retains_failed_closes_for_cleanup_retry() -> None:
     service, factory = _service()
-    failed = service.open(AgentCommand("failed"), "cli", env={})
-    closed = service.open(AgentCommand("closed"), "cli", env={})
+    failed = service.open(AgentCommand("failed"), SessionTransport.CLI, env={})
+    closed = service.open(AgentCommand("closed"), SessionTransport.CLI, env={})
     factory.backends[0].close_error = RuntimeError("busy")
 
     with pytest.raises(ExceptionGroup):
@@ -351,8 +362,8 @@ def test_reset_all_retains_failed_closes_for_cleanup_retry() -> None:
 
 def test_reset_all_starts_a_fresh_default_even_when_another_close_fails() -> None:
     service, factory = _service()
-    first_default = service.default(AgentCommand("default"), "cli", env={})
-    other = service.open(AgentCommand("other"), "cli", env={})
+    first_default = service.default(AgentCommand("default"), SessionTransport.CLI, env={})
+    other = service.open(AgentCommand("other"), SessionTransport.CLI, env={})
     factory.backends[1].close_error = RuntimeError("busy")
 
     with pytest.raises(ExceptionGroup):
@@ -361,15 +372,15 @@ def test_reset_all_starts_a_fresh_default_even_when_another_close_fails() -> Non
     assert not service.is_known(first_default)
     assert service.is_known(other)
 
-    next_default = service.default(AgentCommand("second"), "cli", env={})
+    next_default = service.default(AgentCommand("second"), SessionTransport.CLI, env={})
     assert next_default != first_default
     assert service.ask(next_default, SessionAskRequest(prompt="hello")).content == "answer"
 
 
 def test_close_all_closes_live_backends_once_and_is_safe_to_repeat() -> None:
     service, factory = _service()
-    first = service.open(object(), "cli", env={})
-    second = service.open(object(), "rpc", env={})
+    first = service.open(object(), SessionTransport.CLI, env={})
+    second = service.open(object(), SessionTransport.RPC, env={})
     service.close(first)
 
     service.close_all()
@@ -383,7 +394,7 @@ def test_close_all_closes_live_backends_once_and_is_safe_to_repeat() -> None:
 def test_close_all_attempts_every_session_and_leaves_failures_retryable() -> None:
     service, factory = _service()
     errors = [RuntimeError("first close failed"), None, RuntimeError("third close failed")]
-    handles = [service.open(object(), "cli", env={}) for _ in errors]
+    handles = [service.open(object(), SessionTransport.CLI, env={}) for _ in errors]
     for backend, error in zip(factory.backends, errors, strict=True):
         backend.close_error = error
 
@@ -411,7 +422,7 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
 
     response = service.with_ephemeral(
         agent,
-        "cli",
+        SessionTransport.CLI,
         lambda handle: service.ask(handle, SessionAskRequest(prompt="hello")),
         env={},
     )
@@ -419,7 +430,7 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
     assert response == SessionAskResponse(content="answer")
     assert factory.backends[0].close_calls == 1
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", ephemeral=True, env={})
+        SessionOpenRequest(agent=agent, transport=SessionTransport.CLI, ephemeral=True, env={})
     ]
     assert service._entries == {}
 
@@ -438,7 +449,7 @@ def test_agl_host_single_prompt_ephemeral_lifecycle_retires_its_agent_mapping() 
     assert factory.backends[0].open_requests == [
         SessionOpenRequest(
             agent=AgentCommand("worker"),
-            transport="cli",
+            transport=SessionTransport.CLI,
             single_prompt=True,
             ephemeral=True,
             env={},
@@ -509,7 +520,7 @@ def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
     assert factory.backends[0].open_requests == [
         SessionOpenRequest(
             agent=AgentCommand("worker"),
-            transport="cli",
+            transport=SessionTransport.CLI,
             single_prompt=True,
             ephemeral=True,
             env={},
@@ -543,7 +554,11 @@ def _ask_ephemeral(
 ) -> SessionAskResponse:
     """Ask through one short-lived session, as the AgL ephemeral ask does."""
     return service.with_ephemeral(
-        agent, "cli", lambda handle: service.ask(handle, request), single_prompt=True, env={}
+        agent,
+        SessionTransport.CLI,
+        lambda handle: service.ask(handle, request),
+        single_prompt=True,
+        env={},
     )
 
 
@@ -555,7 +570,9 @@ def test_ephemeral_ask_returns_its_response_after_closing() -> None:
 
     assert response == SessionAskResponse(content="answer")
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", single_prompt=True, ephemeral=True, env={})
+        SessionOpenRequest(
+            agent=agent, transport=SessionTransport.CLI, single_prompt=True, ephemeral=True, env={}
+        )
     ]
     assert factory.backends[0].close_calls == 1
 
@@ -564,8 +581,8 @@ def test_ephemeral_ask_closes_after_a_backend_failure() -> None:
     factory = FakeBackendFactory()
     error = RuntimeError("transport failed")
 
-    def make_failing_backend(agent: object, transport: str) -> SessionBackend:
-        backend = FakeBackend(capabilities=factory.capabilities, ask_error=error)
+    def make_failing_backend(request: SessionOpenRequest) -> SessionBackend:
+        backend = FakeBackend(factory.supported, ask_error=error)
         factory.backends.append(backend)
         return backend
 
@@ -594,9 +611,9 @@ def test_ephemeral_ask_preserves_an_ask_error_when_close_also_fails() -> None:
         ),
     )
 
-    def make_failing_backend(agent: object, transport: str) -> SessionBackend:
+    def make_failing_backend(request: SessionOpenRequest) -> SessionBackend:
         backend = FakeBackend(
-            capabilities=factory.capabilities,
+            factory.supported,
             ask_error=ask_error,
             close_error=RuntimeError("close failed"),
         )
@@ -624,8 +641,8 @@ def test_ephemeral_ask_surfaces_a_close_failure_after_a_successful_ask() -> None
     factory = FakeBackendFactory()
     close_error = RuntimeError("close failed")
 
-    def make_failing_backend(agent: object, transport: str) -> SessionBackend:
-        backend = FakeBackend(capabilities=factory.capabilities, close_error=close_error)
+    def make_failing_backend(request: SessionOpenRequest) -> SessionBackend:
+        backend = FakeBackend(factory.supported, close_error=close_error)
         factory.backends.append(backend)
         return backend
 
@@ -640,9 +657,9 @@ def test_ephemeral_ask_surfaces_a_close_failure_after_a_successful_ask() -> None
 
 def test_fork_returns_a_distinct_live_handle_and_reset_preserves_the_original_handle() -> None:
     service, factory = _service()
-    original = service.open(object(), "cli", env={})
+    original = service.open(object(), SessionTransport.CLI, env={})
     backend = factory.backends[0]
-    forked_backend = FakeBackend(capabilities=SessionCapabilities.all())
+    forked_backend = FakeBackend()
     backend.fork_result = forked_backend
 
     forked = service.fork(original)
@@ -676,7 +693,7 @@ def test_service_stores_and_forks_the_open_time_sandbox_mode() -> None:
     assert service._entries[handle].permission_mode == PermissionMode.UNRESTRICTED
     assert service._entries[handle].sandbox == limits
 
-    backend.fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+    backend.fork_result = FakeBackend()
     forked = service.fork(handle)
 
     assert service._entries[forked].permission_mode == PermissionMode.UNRESTRICTED
@@ -697,7 +714,7 @@ def test_agl_session_host_snapshot_exposes_the_open_time_sandbox_mode() -> None:
     handle = host.open(
         agent, "Cli", permission_mode=PermissionMode.UNRESTRICTED, sandbox=limits, env={}
     )
-    factory.backends[0].fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+    factory.backends[0].fork_result = FakeBackend()
     forked = host.fork(handle)
 
     snapshot = host.snapshot(handle)
@@ -719,7 +736,7 @@ def test_a_fork_of_an_ephemeral_session_outlives_its_own_close() -> None:
     host = AglSessionHost(service)
     agent = AgentCommand(command="worker")
     parent = host.open_ephemeral(agent, "Cli", env={})
-    factory.backends[0].fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+    factory.backends[0].fork_result = FakeBackend()
 
     forked = host.fork(parent)
     host.close(forked)
@@ -736,7 +753,7 @@ def test_a_fork_of_an_ephemeral_session_outlives_its_own_close() -> None:
 
 def test_supported_operations_dispatch_to_the_backend() -> None:
     service, factory = _service()
-    handle = service.open(object(), "rpc", env={})
+    handle = service.open(object(), SessionTransport.RPC, env={})
 
     service.compact(handle)
     service.set_name(handle, "renamed")

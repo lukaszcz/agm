@@ -70,7 +70,7 @@ class TestDiscoverProgramDeclarationsFromSourceVersionMismatch:
     ) -> None:
         """The ``--help``/completion path degrades gracefully on a mismatch."""
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         programs = discover_program_declarations_from_source("program def main() -> unit = ()")
 

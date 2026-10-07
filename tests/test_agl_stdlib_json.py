@@ -14,7 +14,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, AglJson, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import JsonValue, RecordValue, TextValue
-from tests._agl_helpers import option_nominal_descriptors
+from tests._agl_helpers import key_exception_descriptor, option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _JSON_MODULE = ModuleId(("std", "json"))
@@ -27,6 +27,8 @@ _OPTION_SOME = NominalId(9_400_005)
 
 class _JsonCompanion(Protocol):
     def parse(self, raw: str) -> object: ...
+
+    def parse_lenient(self, raw: str) -> object: ...
 
     def get(self, value: object, key: str) -> object: ...
 
@@ -45,15 +47,9 @@ def _json_companion() -> _JsonCompanion:
                 declared_name="JsonParseError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
-            _KEY_ERROR: NominalDescriptor(
-                nominal=_KEY_ERROR,
-                module_id=ModuleId(("std", "errors")),
-                scope_path=(),
-                declared_name="KeyError",
-                kind=NominalKind.EXCEPTION,
-                fields=("message", "key"),
-            ),
+            _KEY_ERROR: key_exception_descriptor(_KEY_ERROR, "KeyError"),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         },
     )
@@ -72,7 +68,7 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
     for raw in ([], True):
         with pytest.raises(AglException) as exc_info:
             companion.get(AglJson(raw), "missing")
-        assert exc_info.value.value.fields["key"] == TextValue("missing")
+        assert exc_info.value.value.fields["key"] == TextValue('"missing"')
         assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == RecordValue(
             _OPTION_NONE, {}
         )
@@ -84,6 +80,26 @@ def test_json_companion_parse_rejects_a_lone_surrogate_escape() -> None:
 
     with pytest.raises(AglException) as exc_info:
         companion.parse(raw)
+    assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue(raw)
+
+
+def test_json_companion_parse_rejects_a_duplicate_member_name() -> None:
+    companion = _json_companion()
+    raw = '{"a": 1, "a": 2}'
+
+    with pytest.raises(AglException) as exc_info:
+        companion.parse(raw)
+    assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue(raw)
+
+
+def test_json_companion_parse_lenient_rejects_escaped_duplicate_member_names() -> None:
+    companion = _json_companion()
+    raw = r"{'a': 1, '\u0061': 2}"
+
+    with pytest.raises(AglException) as exc_info:
+        companion.parse_lenient(raw)
     assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
     assert exc_info.value.value.fields["raw"] == TextValue(raw)
 

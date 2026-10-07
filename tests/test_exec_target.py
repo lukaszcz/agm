@@ -50,7 +50,7 @@ class TestResolveExecTarget:
         target = resolve_exec_target(
             file=None, code="print 1", home=tmp_path, proj_dir=None, cwd=tmp_path
         )
-        assert target == InlineSource()
+        assert target == InlineSource("print 1")
 
     def test_neither_file_nor_command_is_an_error(self, tmp_path: Path) -> None:
         target = resolve_exec_target(

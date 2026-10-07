@@ -59,7 +59,7 @@ def test_core_stdlib_is_bare_by_default() -> None:
 
 def test_no_stdlib_disables_default_open_import() -> None:
     with pytest.raises(AglScopeError, match="'Some' is not defined"):
-        resolve_inline_entry("let x: Option[int] = Some(value = 1)\nx\n", default_stdlib=False)
+        resolve_inline_entry("let x = Some(value = 1)\nx\n", default_stdlib=False)
 
 
 def test_no_stdlib_reports_bare_print_as_undefined() -> None:
@@ -525,12 +525,16 @@ def test_exception_in_applied_field_type_is_built_before_rejection() -> None:
         )
 
 
-def test_exception_extends_cycle_is_uninhabitable() -> None:
+@pytest.mark.parametrize("field_type", ("int", "int = 1"))
+def test_exception_extends_cycle_is_uninhabitable(field_type: str) -> None:
     # A extends B and B extends A: an `extends` cycle gives neither side
     # independent evidence to become inhabited, so both stay uninhabited —
     # the same inhabitation fixpoint that rejects field recursion.
     with pytest.raises(AglTypeError, match="uninhabitable"):
-        _check("exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n")
+        _check(
+            f"exception A extends B\n  a: {field_type}\n"
+            f"exception B extends A\n  b: {field_type}\n()\n"
+        )
 
 
 def test_lowerer_skips_builtin_function_definitions() -> None:
@@ -552,6 +556,41 @@ def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
         "shallow-copy(1)\n",
         default_stdlib=False,
     )
+
+
+def test_builtin_free_function_direct_call_checks_declared_bound() -> None:
+    """A ``builtin def``'s own constraint block is checked like any other
+    generic declaration's, at its direct-call instantiation site."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\ndef f(x: int) -> int = x\ncopy(f)\n",
+            default_stdlib=False,
+        )
+
+
+def test_builtin_free_function_referenced_value_checks_declared_bound() -> None:
+    """A bare reference to a bounded builtin free function, fixed by its
+    let-annotated expected type, still checks the bound once resolved."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\n"
+            "def f(x: int) -> int = x\n"
+            "let g: (int -> int) -> int -> int = copy\n"
+            "g(f)\n",
+            default_stdlib=False,
+        )
+
+
+def test_builtin_free_function_explicit_type_application_checks_declared_bound() -> None:
+    """An explicit ``copy::[T]`` value application also checks the declared bound."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\n"
+            "def f(x: int) -> int = x\n"
+            "let g = copy::[int -> int]\n"
+            "g(f)\n",
+            default_stdlib=False,
+        )
 
 
 def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:

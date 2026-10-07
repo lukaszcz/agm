@@ -1,0 +1,36 @@
+# A spelling is looked up as its whole path, against every source. Beside the
+# `palette` module route, an own `scope palette` declares its own paths: an
+# own declaration wins at its path, and every other `palette::` path still
+# reaches the module. `/palette::` reads the module alone and `::palette::`
+# the own scope alone.
+import palette
+
+scope palette
+  enum Color
+    | Light
+    | Dark
+end palette
+
+def module-color(pick: text) -> /palette::Color =
+  if
+    | pick == "red" => /palette::Color::Red
+    | else => /palette::Color::Blue
+
+def own-color(pick: text) -> palette::Color =
+  if
+    | pick == "red" => palette::Color::Light
+    | else => ::palette::Color::Dark
+
+program def main(pick: text) -> unit =
+  let m = module-color(pick)
+  print(m is palette::Red)
+  print(
+    case m of
+    | palette::Red => "red"
+    | palette::Blue => "blue"
+  )
+  print(
+    case own-color(pick) of
+    | palette::Color::Light => "light"
+    | palette::Color::Dark => "dark"
+  )

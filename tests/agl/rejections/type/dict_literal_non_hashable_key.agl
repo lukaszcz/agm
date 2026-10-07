@@ -1,0 +1,5 @@
+# A non-empty dict literal's key type must satisfy Hashable, even when the
+# literal itself never needs to hash (array is never Hashable outright).
+program def main() -> unit =
+  let d = {[1]: "a"}
+  print d

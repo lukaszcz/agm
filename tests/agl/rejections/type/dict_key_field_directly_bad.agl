@@ -1,0 +1,6 @@
+record Holder
+  d: dict[array[int], int]
+
+program def main() -> unit =
+  let h: Holder = Holder(d = {})
+  print(h as json)

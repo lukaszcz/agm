@@ -1,0 +1,20 @@
+# A type name lives only in the type namespace: a local enum never hides the
+# builtin `render` or an imported function of the same spelling, and both
+# names keep denoting the local types in annotations.
+import lib::{paint}
+
+enum render
+  | A
+  | B
+
+enum paint
+  | Red
+  | Blue
+
+def pick(start: int) -> paint = if start > 1 => paint::Blue else => paint::Red
+
+program def main(start: int) -> unit =
+  let kind: render = if start > 1 => render::B else => render::A
+  print(render(start))
+  print(paint(start))
+  print("%{kind is render::B} %{pick(start) is paint::Blue}")

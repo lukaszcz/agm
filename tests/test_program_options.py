@@ -134,6 +134,7 @@ def _registered_command_flags() -> set[str]:
 
     command = RegisteredProgramCommand(
         "tools run",
+        "tools/run::main",
         CommandRegistration("tools", "tools/run::main"),
         registered_run_options(click.Context(typer.main.get_command(cli.app))),
     )

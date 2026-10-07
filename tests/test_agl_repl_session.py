@@ -10,21 +10,38 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
 from unittest.mock import patch
 
 import pytest
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import (
+    AglError,
+    HiddenMemberError,
+    ReferencedMemberError,
+    type_name_not_a_value,
+)
 from agm.agl.ir.static_keys import StaticBindingKey
+from agm.agl.matchcompile import NonExhaustiveMatchError
 from agm.agl.modules.ids import ModuleId
+from agm.agl.parser import AglSyntaxError
+from agm.agl.recursion import NestingTooDeepError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import ParamBindingInfo
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    NoVisibleConstructorError,
+    UnknownMemberError,
+    UseDeclarationOrigin,
+)
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -34,6 +51,7 @@ from agm.agl.semantics.types import (
     DecimalType,
     EnumType,
     ExceptionType,
+    FunctionType,
     IntType,
     JsonType,
     RecordType,
@@ -45,13 +63,27 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     IntValue,
+    JsonValue,
     RecordValue,
     TextValue,
     UnitValue,
+    Value,
 )
+from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
+from tests.agl.qualifier_support import (
+    accepted,
+    all_groupings,
+    assert_repl_verdicts,
+    eval_grouped_final,
+    eval_setup_entries,
+    legal_groupings,
+    origin_kinds,
+    rejected,
+)
 
 # ---------------------------------------------------------------------------
 # Session construction
@@ -261,6 +293,54 @@ class TestPersistence:
         assert is_result.ok, is_result.diagnostics
         assert is_result.value == BoolValue(True)
 
+    def test_non_hashable_descendant_cannot_revoke_retained_hashable_exception(self) -> None:
+        session = ReplSession(default_stdlib=False)
+        assert session.eval_entry("exception Base extends Exception").ok
+        assert session.eval_entry("def key(e: Base) -> dict[Base, int] = {e: 1}").ok
+
+        descendant = session.eval_entry("exception Bad extends Base\n  xs: array[int]")
+
+        assert not descendant.ok
+        assert descendant.diagnostics
+        assert session.eval_entry('key(Base(message = "base"))').ok
+        assert session.eval_entry("exception Good extends Base\n  code: int").ok
+        assert session.eval_entry('key(Good(message = "good", code = 1))').ok
+
+    def test_json_cast_encodes_a_later_entrys_subtype_by_its_own_fields(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Base extends Exception\n  code: int\ndef enc(e: Base) -> json = e as json"
+        ).ok
+        assert session.eval_entry("exception Kid extends Base\n  extra: text").ok
+
+        result = session.eval_entry('enc(Kid(message = "m", code = 1, extra = "x"))')
+
+        assert result.ok, result.diagnostics
+        assert result.value == JsonValue({"message": "m", "code": 1, "extra": "x"})
+
+    def test_json_cast_of_a_later_entrys_subtype_with_a_function_field_fails(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "def enc(e: Base) -> json = e as json\n"
+            "def try-enc(e: Base) -> Option[json] = e as? json"
+        ).ok
+        assert session.eval_entry("exception Kid extends Base\n  f: (int) -> int").ok
+        assert session.eval_entry('let kid = Kid(message = "m", code = 1, f = fn(x) => x)').ok
+
+        raised = session.eval_entry("enc(kid)")
+        caught = session.eval_entry('try enc(kid) catch CastError => "cast failed" as json')
+        tested = session.eval_entry("try-enc(kid).is-some()")
+
+        assert not raised.ok
+        assert raised.error is not None
+        assert raised.error.type_name == "CastError"
+        assert caught.ok, caught.diagnostics
+        assert caught.value == JsonValue("cast failed")
+        assert tested.ok, tested.diagnostics
+        assert tested.value == BoolValue(False)
+
     def test_exception_downcast_keeps_its_identity_across_a_redeclaration(self) -> None:
         session = open_session()
         assert session.eval_entry(
@@ -448,17 +528,15 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
-    def test_retained_alias_scope_rejects_a_method_with_its_structural_target(self) -> None:
+    def test_a_method_beneath_a_retained_alias_is_rejected(self) -> None:
         session = open_session()
         assert session.eval_entry("type Callback = (int) -> bool").ok
 
         rejected = session.eval_entry("def Callback::bad(self) -> int = 1")
 
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message
-        assert "alias scope" in message
-        assert "Callback" in message
-        assert "int -> bool" in message
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 5, 13)
 
     def test_retained_alias_redeclared_as_a_record_accepts_a_method_in_a_later_entry(
         self,
@@ -472,17 +550,27 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_record_redeclared_as_an_alias_still_rejects_a_method(self) -> None:
+    def test_retained_record_redeclared_as_an_alias_rejects_a_method_beneath_it(self) -> None:
         session = open_session()
         assert session.eval_entry("record Alias\n  x: int").ok
 
-        rejected = session.eval_entry("type Alias = int\ndef Alias::m(self) -> int = 1")
+        rejected = session.eval_entry("type Alias = int -> int\ndef Alias::m(self) -> int = 1")
 
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message
-        assert "alias scope" in message
-        assert "Alias" in message
-        assert "int" in message
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (2, 5, 10)
+        assert session.eval_entry("Alias(x = 1).x").value == IntValue(1)
+
+    def test_an_alias_replacing_a_type_with_a_declaration_beneath_it_is_rejected(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record Box\n  x: int\nrecord Box::Extra").ok
+
+        rejected = session.eval_entry("type Box = int")
+
+        assert type(rejected.failure) is AglScopeError
+        diagnostic = rejected.diagnostics[0]
+        assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (1, 1, 15)
+        assert session.eval_entry("Box(x = 1).x").value == IntValue(1)
 
     def test_method_named_after_a_builtin_call_does_not_shadow_the_builtin(
         self, capsys: pytest.CaptureFixture[str]
@@ -611,8 +699,6 @@ class TestPersistence:
 
     def test_graph_loader_agl_error_retains_related_notes(self) -> None:
         from unittest.mock import patch
-
-        from agm.agl.syntax.spans import SourceSpan
 
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
@@ -1085,7 +1171,7 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == ArrayValue([IntValue(1)])
 
-    def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
+    def test_retained_relative_use_reads_its_target_again_in_each_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("scope Source\n  def value() -> int = 1\nend Source").ok
         assert session.eval_entry("scope Outer\n  use Source::*\nend Outer").ok
@@ -1096,9 +1182,10 @@ class TestScopedBindingRetention:
         declared = session.eval_entry("scope Outer\n  def selected() -> int = value()\nend Outer")
         result = session.eval_entry("Outer::selected()")
 
+        # Outer::Source, at the first step `Source` tries from Outer, now wins the retained use.
         assert declared.ok, declared.diagnostics
         assert result.ok, result.diagnostics
-        assert result.value == IntValue(1)
+        assert result.value == IntValue(2)
 
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
@@ -1222,9 +1309,163 @@ class TestCrossEntryScopeCollision:
         result = s.eval_entry("A::B::x")
 
         assert not result.ok
-        assert any(
-            "A::B" in d.message and "member" in d.message.lower() for d in result.diagnostics
-        )
+        assert result.error is None
+        assert result.diagnostics
+
+
+_OWN = "let own: N = N::Own\n"
+_SCOPED_DEEP = "scope s\n  record Deep\nend s"
+_SCOPED_E = "scope s\n  enum E\n    | A\n    | B\nend s"
+_BOX = ("record Box", "scope Box\n  record Extra\nend Box", "enum N\n  | ::Box::Extra\n  | Own")
+
+# Declarations, the entry-size groupings that keep each entry's references meaning the
+# same declarations, and probes with their result (``None``: rejected).
+_GROUPING_CASES: dict[
+    str, tuple[tuple[str, ...], tuple[tuple[int, ...], ...], tuple[tuple[str, Value | None], ...]]
+] = {
+    "scoped-record-referenced": (
+        (_SCOPED_DEEP, "enum N\n  | ::s::Deep\n  | Own"),
+        ((2,), (1, 1)),
+        (
+            ("let deep: N = Deep\ndeep is Deep", BoolValue(True)),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is Deep", BoolValue(False)),
+        ),
+    ),
+    "scoped-record-referenced-then-enum-redeclared": (
+        (_SCOPED_DEEP, "enum N\n  | ::s::Deep\n  | Own", "enum N\n  | Own"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("Deep", None),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", None),
+            (_OWN + "own is Deep", None),
+            ("case s::Deep of\n  | s::Deep => 1", IntValue(1)),
+        ),
+    ),
+    "scoped-inline-member-referenced": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own"),
+        ((2,), (1, 1)),
+        (
+            ("let e: s::E = A\ne is A", BoolValue(True)),
+            (_OWN + "case own of\n  | A => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is A", BoolValue(False)),
+        ),
+    ),
+    "scoped-inline-member-referenced-then-enum-redeclared": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own", "enum N\n  | Own"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("let e: s::E = s::E::A\ncase e of\n  | A => 1\n  | _ => 2", None),
+            ("let e: s::E = s::E::A\ne is A", None),
+            ("let e: s::E = s::E::A\ne is s::E::A", BoolValue(True)),
+        ),
+    ),
+    "root-enum-superseded": (
+        ("enum E = A | B", "enum N\n  | ::E::A\n  | Own", "enum E = C | D"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("E::A", None),
+            (_OWN + "case own of\n  | A => 1\n  | _ => 2", None),
+            (_OWN + "own is E::A", None),
+            ("let e: E = E::C\ne is E::C", BoolValue(True)),
+        ),
+    ),
+    "scoped-enum-superseded": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own", "scope s\n  enum E = C | D\nend s"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("s::E::A", None),
+            (_OWN + "case own of\n  | s::E::A => 1\n  | _ => 2", None),
+            (_OWN + "own is A", None),
+            ("let e: s::E = s::E::C\ne is s::E::C", BoolValue(True)),
+        ),
+    ),
+    "referenced-record-superseded": (
+        ("record Deep", "enum N\n  | ::Deep\n  | Own", "type Deep = int"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("let v: N = Deep", None),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", None),
+            (_OWN + "own is Deep", None),
+            (_OWN + "own is N::Own", BoolValue(True)),
+        ),
+    ),
+    "member-scope-retired": (
+        (
+            "enum Color = Red | Green",
+            "scope Color::Red\n  record Extra\nend Color::Red",
+            "enum N\n  | ::Color::Red::Extra\n  | Own",
+            "enum Color = Blue",
+        ),
+        # (2, 2) and (1, 1, 2) are excluded: they would put the referenced
+        # member's own reference and the redeclaration retiring it in one
+        # entry, which is a static error in its own right (see
+        # ``test_declaring_an_alias_in_the_same_entry_that_retires_its_target``
+        # ``_fails_every_position``), not a grouping this scenario's
+        # declarations can set up successfully.
+        ((3, 1), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
+        (
+            ("Extra", None),
+            (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", None),
+            (_OWN + "own is Extra", None),
+            ("let c: Color = Color::Blue\nc is Color::Blue", BoolValue(True)),
+        ),
+    ),
+    "type-scope-owner-replaced": (
+        (*_BOX, "record Box\n  v: int"),
+        ((1, 3), (2, 2), (3, 1), (1, 1, 2), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
+        (
+            ("let e: N = Extra\ne is Extra", BoolValue(True)),
+            (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is Extra", BoolValue(False)),
+            ("Box(v = 3).v", IntValue(3)),
+        ),
+    ),
+}
+
+
+def _grouping_params() -> list[object]:
+    return [
+        pytest.param(case, sizes, id=f"{case}-{'+'.join(map(str, sizes))}")
+        for case, (_, groupings, _) in _GROUPING_CASES.items()
+        for sizes in groupings
+    ]
+
+
+def _grouping_params_for(n: int) -> list[object]:
+    """``sizes`` params covering every grouping of *n* declarations into entries."""
+    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in all_groupings(n)]
+
+
+def _setup_groupings(expected: frozenset[tuple[int, ...]]) -> list[object]:
+    """``sizes`` params for exactly *expected*, a declaration sequence's legal groupings.
+
+    Not every way to split a declaration sequence into REPL entries is a
+    legal session -- an entry's header items must precede its non-header
+    ones, and a declaration can't share an entry with one that later retires
+    its own source. *expected* is verified, at run time, against a fresh
+    evaluation of the actual declarations by
+    ``test_declaration_groupings_are_exactly_their_expected_legal_set`` --
+    this function only turns the already-verified set into parameters, so
+    that no test collects a session or writes a file before it even runs.
+    """
+    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in sorted(expected)]
+
+
+def _color_and_n_session(tmp_path: Path) -> ReplSession:
+    """A fresh session over the same ``m``/``n`` modules as
+    ``TestRetainedAliasTargetIdentity._session``, under *tmp_path*."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    return ReplSession(cwd=tmp_path)
+
+
+def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
+    """Evaluate *decls* on *session* as one entry per *sizes*; every entry must succeed."""
+    eval_grouped_final(session, decls, sizes)
 
 
 class TestBareConstructorVisibilityAcrossEntries:
@@ -1302,6 +1543,146 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert isinstance(bare.value, RecordValue)
         assert bare.value.fields["amount"] == IntValue(1)
 
+    def test_later_root_enum_reference_makes_an_earlier_scoped_record_bare(self) -> None:
+        """A referenced member's terminal name is injected as in file mode."""
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+
+        value = s.eval_entry("let deep: N = Deep\ndeep is Deep")
+        pattern = s.eval_entry("case own of\n  | Deep => 1\n  | _ => 2")
+        tested = s.eval_entry("own is Deep")
+
+        assert value.value == BoolValue(True), value.diagnostics
+        assert pattern.value == IntValue(2), pattern.diagnostics
+        assert tested.value == BoolValue(False), tested.diagnostics
+
+    def test_redeclared_root_enum_no_longer_injects_its_referenced_member(self) -> None:
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+        assert s.eval_entry("enum N\n  | Own").ok
+
+        assert not s.eval_entry("s::Deep is Deep").ok
+        assert not s.eval_entry("Deep").ok
+        assert s.eval_entry("s::Deep").ok
+
+    @pytest.mark.parametrize(
+        "redeclaration", ("type Deep = int", "enum Deep = A | B", "enum Deep[T] = X(v: T)")
+    )
+    def test_retained_root_enum_injects_no_superseded_referenced_record(
+        self, redeclaration: str
+    ) -> None:
+        """A referenced record superseded by another type is no longer the enum's bare member."""
+        s = open_session()
+        assert s.eval_entry("record Deep").ok
+        assert s.eval_entry("enum N\n  | ::Deep\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        assert s.eval_entry(redeclaration).ok
+
+        assert not s.eval_entry("let v: N = Deep").ok
+        assert not s.eval_entry("own is Deep").ok
+
+    def test_retained_root_enum_injects_no_record_superseded_in_the_same_entry(self) -> None:
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+
+        result = s.eval_entry("scope s\n  record Deep\n    y: int\nend s\n\nlet v: N = Deep")
+
+        assert not result.ok
+
+    def test_retained_root_enum_keeps_injecting_an_imported_referenced_record(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("record Deep\n", encoding="utf-8")
+        s = ReplSession(cwd=tmp_path)
+        assert s.eval_entry("import lib").ok
+        assert s.eval_entry("enum N\n  | lib::Deep\n  | Own").ok
+
+        result = s.eval_entry("let deep: N = Deep\ndeep is Deep")
+
+        assert result.value == BoolValue(True), result.diagnostics
+
+    @pytest.mark.parametrize(("case", "sizes"), _grouping_params())
+    def test_constructor_visibility_does_not_depend_on_entry_grouping(
+        self, case: str, sizes: tuple[int, ...]
+    ) -> None:
+        """Every grouping of the same declarations into entries leaves the same constructors."""
+        sources, _, probes = _GROUPING_CASES[case]
+        s = open_session()
+        _eval_grouped(s, sources, sizes)
+
+        for probe, expected in probes:
+            result = s.eval_entry(probe)
+            if expected is None:
+                # Rejected statically (an unknown/hidden name), not crashed at
+                # runtime for an unrelated reason.
+                assert result.diagnostics, probe
+                assert result.error is None, probe
+            else:
+                assert result.value == expected, (probe, result.diagnostics)
+
+    def test_retired_member_scope_leaves_its_referenced_record_undefined(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color = Red | Green").ok
+        assert s.eval_entry("scope Color::Red\n  record Extra\nend Color::Red").ok
+        assert s.eval_entry("enum N\n  | ::Color::Red::Extra\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        assert s.eval_entry("enum Color = Blue").ok
+
+        assert s.eval_entry("1").value == IntValue(1)
+        assert not s.eval_entry("Extra").ok
+        assert not s.eval_entry("own is Extra").ok
+        assert not s.eval_entry("case own of\n  | Extra => 1\n  | _ => 2").ok
+
+    @pytest.mark.parametrize(
+        "probe",
+        (
+            "{q}::A",
+            "own is {q}::A",
+            "case own of\n  | {q}::A => 1\n  | _ => 2",
+            "A",
+            "own is A",
+            "case own of\n  | A => 1\n  | _ => 2",
+        ),
+        ids=(
+            "qualified-value",
+            "qualified-is",
+            "qualified-pattern",
+            "bare-value",
+            "bare-is",
+            "bare-pattern",
+        ),
+    )
+    @pytest.mark.parametrize("same_entry", (False, True), ids=("later-entry", "same-entry"))
+    @pytest.mark.parametrize(
+        ("qualifier", "declare"),
+        (("E", "{}"), ("s::E", "scope s\n  {}\nend s")),
+        ids=("root", "scoped"),
+    )
+    def test_superseded_enum_member_is_gone_from_the_enum_referencing_it(
+        self, qualifier: str, declare: str, same_entry: bool, probe: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry(declare.format("enum E = A | B")).ok
+        assert s.eval_entry(f"enum N\n  | ::{qualifier}::A\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        redeclare = declare.format("enum E = C | D")
+        use = probe.format(q=qualifier)
+
+        if same_entry:
+            result = s.eval_entry(f"{redeclare}\n\n{use}")
+        else:
+            assert s.eval_entry(redeclare).ok
+            result = s.eval_entry(use)
+
+        # Rejected statically (the superseded member is gone), not crashed at
+        # runtime for an unrelated reason.
+        assert result.diagnostics
+        assert result.error is None
+
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
         s = open_session()
 
@@ -1312,6 +1693,1428 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert result.ok, result.diagnostics
         assert isinstance(result.value, RecordValue)
         assert result.value.fields["amount"] == IntValue(1)
+
+
+_PAINT_SCOPE = (
+    "scope Paint\n"
+    "  enum Col\n    | Red\n    | Blue\n\n"
+    "  type Palette = Col\n\n"
+    "  record Pixel\n    x: int\n\n"
+    "  type Px = Pixel\n"
+    "end Paint"
+)
+
+
+class TestScopeQualifiedConstructorsAcrossEntries:
+    """A scope declared in an earlier entry qualifies patterns and ``is`` tests."""
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("c is Paint::Col::Red", BoolValue(False)),
+            ("c is Paint::Palette::Blue", BoolValue(True)),
+            ("case c of | Paint::Palette::Red => 1 | Paint::Col::Blue => 2", IntValue(2)),
+            ("case Paint::Px(x = 4) of | Paint::Pixel(x) => x", IntValue(4)),
+            ("case Paint::Pixel(x = 5) of | Paint::Px(x) => x", IntValue(5)),
+        ],
+    )
+    def test_qualified_spellings_select_like_values(self, entry: str, expected: Value) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Palette::Blue").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "form",
+        ["c is {}", "case c of | {}(x) => 1 | _ => 2"],
+    )
+    @pytest.mark.parametrize(
+        ("member", "qualified_error"),
+        [
+            ("Missing", UnknownMemberError),
+            ("Palette", AglTypeError),
+            ("Pixel", AglTypeError),
+            ("Px", AglTypeError),
+        ],
+    )
+    def test_spelling_outside_the_enum_is_rejected_qualified_and_bare(
+        self, form: str, member: str, qualified_error: type[AglError]
+    ) -> None:
+        """A member the scope lacks is a scope error, one outside the enum a type error."""
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
+
+        with pytest.raises(AglError) as qualified:
+            s.type_of(form.format(f"Paint::{member}"))
+        with pytest.raises(AglError) as bare:
+            s.type_of(form.format(member))
+
+        assert type(qualified.value) is qualified_error
+        assert type(bare.value) is NoVisibleConstructorError
+
+    def test_missing_member_of_a_scoped_enum_is_rejected_alike_by_is_and_patterns(self) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
+
+        tested = s.eval_entry("c is Paint::Col::Nope")
+        matched = s.eval_entry("case c of | Paint::Col::Nope => 1 | _ => 2")
+
+        assert not tested.ok
+        assert [d.message for d in tested.diagnostics] == [d.message for d in matched.diagnostics]
+
+    @pytest.mark.parametrize("type_name", ["Paint::Col", "Paint::Palette", "::Paint::Col"])
+    def test_scoped_enum_type_is_not_a_value(self, type_name: str) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+
+        result = s.eval_entry(f"print({type_name})")
+
+        expected = type_name_not_a_value(type_name, SourceSpan(1, 1, 1, 1, 0, 0))
+        assert [d.message for d in result.diagnostics] == [str(expected)]
+
+
+class TestRetainedAliasTargetIdentity:
+    """A retained alias keeps the target identity it resolved at its own
+    declaration, forever: a later local redeclaration of the alias's target
+    spelling, or a later import that shadows it, must never re-select what
+    the alias names -- a stale member of the earlier declaration becomes a
+    static error rather than crashing, and the alias's own member stays
+    reachable.
+    """
+
+    def _session(self, tmp_path: Path) -> ReplSession:
+        (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+        (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+        return ReplSession(cwd=tmp_path)
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::X",
+            "case d of\n  | C::X => 1\n  | _ => 2",
+            "d is C::X",
+            "fn(x: C::X) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_local_redeclaration_of_the_alias_target_leaves_a_stale_member_a_static_error(
+        self, tmp_path: Path, use: str
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("enum Color = X | Y").ok
+        assert s.eval_entry("let d: C = m::Color::Red").ok
+
+        with pytest.raises(AglError) as excinfo:
+            s.type_of(use)
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::Red",
+            "case d of\n  | C::Red => 1\n  | _ => 2",
+            "d is C::Red",
+            "fn(x: C::Red) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_local_redeclaration_of_the_alias_target_leaves_its_own_member_reachable(
+        self, tmp_path: Path, use: str
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("enum Color = X | Y").ok
+        assert s.eval_entry("let d: C = m::Color::Red").ok
+
+        s.type_of(use)
+
+        value = s.eval_entry("let d2 = C::Red\nd2")
+        assert value.ok, value.diagnostics
+        matched = s.eval_entry("let c: C = m::Color::Red\ncase c of | C::Red => 1 | _ => 2")
+        assert matched.value == IntValue(1)
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::Green",
+            "case c of\n  | C::Green => 1\n  | _ => 2",
+            "c is C::Green",
+            "fn(x: C::Green) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_later_wildcard_import_of_a_same_named_module_does_not_retarget_the_alias(
+        self, tmp_path: Path, use: str
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("import n::*").ok
+        assert s.eval_entry("let c: C = m::Color::Green").ok
+
+        s.type_of(use)
+
+        value = s.eval_entry("let x = C::Red\nx")
+        assert value.ok, value.diagnostics
+        tested = s.eval_entry("c is C::Green")
+        assert tested.value == BoolValue(True)
+
+    _LOCALLY_SHADOWED_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "enum Color = X",
+        "import m::*",
+    )
+    _LOCALLY_SHADOWED_PROBE = "let d: C = C::Green"
+    _LOCALLY_SHADOWED_GROUPINGS = frozenset({(1, 1, 1, 1), (1, 1, 2), (2, 1, 1), (2, 2)})
+
+    @pytest.mark.parametrize(
+        "sizes",
+        _setup_groupings(_LOCALLY_SHADOWED_GROUPINGS),
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """An alias declared through a ``hiding`` import keeps that hiding once
+        its own spelling is shadowed by a later, unrelated local declaration,
+        even though a later unrestricted reimport would otherwise have lifted
+        it: the alias no longer selects exactly its original target, so it
+        freezes at its declaration-time projection instead of re-deriving one
+        from a spelling that is now ambiguous."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
+        assert s.eval_entry(self._LOCALLY_SHADOWED_PROBE).ok
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    @pytest.mark.parametrize(
+        "sizes",
+        _setup_groupings(_LOCALLY_SHADOWED_GROUPINGS),
+    )
+    def test_a_bare_query_for_a_frozen_hidden_alias_member_matches_type_ofs_class(
+        self, tmp_path: Path, sizes: tuple[int, ...]
+    ) -> None:
+        """The REPL's bare-entry fallback (typing ``C::Red`` alone) must agree
+        with :meth:`~agm.agl.repl.session.ReplSession.type_of` about a member
+        the alias's declaration-time snapshot freezes as hidden, even though
+        the current (post-shadowing) scope would resolve the spelling
+        differently: the fallback never re-resolves against anything but the
+        one snapshot every other position already uses."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
+        assert s.eval_entry(self._LOCALLY_SHADOWED_PROBE).ok
+
+        bare = s.eval_entry("C::Red")
+        assert bare.kind != "type"
+        assert not bare.ok
+        with pytest.raises(HiddenMemberError):
+            s.type_of("C::Red")
+
+    def test_a_hiding_alias_frozen_by_shadowing_keeps_its_own_member_reachable(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        assert s.eval_entry("enum Color = X").ok
+        assert s.eval_entry("import m::*").ok
+
+        assert s.eval_entry("C::Green").ok
+        assert not s.eval_entry("C::X").ok
+
+    _REOPENED_UNDER_FRESH_ALIAS_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "enum Color = X",
+        "import m as mm\nuse mm::*",
+    )
+    _REOPENED_UNDER_FRESH_ALIAS_PROBE = "let d: C = C::Green"
+    _REOPENED_UNDER_FRESH_ALIAS_GROUPINGS = frozenset({(1, 1, 1, 1), (2, 1, 1)})
+
+    @pytest.mark.parametrize(
+        "sizes",
+        _setup_groupings(_REOPENED_UNDER_FRESH_ALIAS_GROUPINGS),
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_reopened_under_a_fresh_alias(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """The same freeze as a plain unrestricted reimport, but the later
+        step reopens the module under a fresh import alias and ``use``s it,
+        rather than reimporting the bare module path directly."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._REOPENED_UNDER_FRESH_ALIAS_DECLS, sizes)
+        assert s.eval_entry(self._REOPENED_UNDER_FRESH_ALIAS_PROBE).ok
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    _BECOMES_AMBIGUOUS_DECLS = (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "import n::*",
+    )
+    _BECOMES_AMBIGUOUS_PROBE = "let d: C = C::Green"
+    _BECOMES_AMBIGUOUS_GROUPINGS = frozenset({(1, 1, 1), (2, 1)})
+
+    @pytest.mark.parametrize(
+        "sizes",
+        _setup_groupings(_BECOMES_AMBIGUOUS_GROUPINGS),
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_becomes_ambiguous(
+        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        """The same freeze, but the later step makes the spelling ambiguous
+        between two imported modules instead of shadowing it with a local
+        declaration."""
+        s = self._session(tmp_path)
+        _eval_grouped(s, self._BECOMES_AMBIGUOUS_DECLS, sizes)
+        assert s.eval_entry(self._BECOMES_AMBIGUOUS_PROBE).ok
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+
+class TestEnumVariantExpansionNeverContributesABareType:
+    """A bare-exposed cross-module enum's variant name is a constructor and
+    pattern candidate only -- it never becomes a bare type, whatever use form
+    reaches it, the REPL counterpart of the file-mode coverage in
+    ``tests/test_agl_namespace_wiring.py``.
+    """
+
+    def _write_modules(self, tmp_path: Path) -> None:
+        (tmp_path / "other.agl").write_text("record Rec\n  x: int\n", encoding="utf-8")
+        pk = tmp_path / "pk"
+        pk.mkdir()
+        (pk / "lib.agl").write_text(
+            "import other\n\nenum E = other::Rec | Other\n", encoding="utf-8"
+        )
+
+    @pytest.mark.parametrize(
+        "setup",
+        (
+            "import pk/* as F\nuse F::*",
+            "import pk/lib\nuse pk/lib::*",
+            "import pk/lib::*",
+            "import pk/* as F\nuse F::{E}",
+        ),
+        ids=("facade-wildcard-use", "plain-import-use", "import-star", "selective-use"),
+    )
+    def test_the_variant_name_is_unknown_in_type_position(self, tmp_path: Path, setup: str) -> None:
+        self._write_modules(tmp_path)
+        s = ReplSession(cwd=tmp_path)
+        for decl in setup.split("\n"):
+            assert s.eval_entry(decl).ok
+
+        with pytest.raises(AglTypeError) as excinfo:
+            s.type_of("fn(x: Other) => 1")
+        assert type(excinfo.value) is AglTypeError
+
+    @pytest.mark.parametrize(
+        "setup",
+        (
+            "import pk/* as F\nuse F::*",
+            "import pk/lib\nuse pk/lib::*",
+            "import pk/lib::*",
+        ),
+        ids=("facade-wildcard-use", "plain-import-use", "import-star"),
+    )
+    def test_the_variant_name_still_resolves_as_a_bare_constructor(
+        self, tmp_path: Path, setup: str
+    ) -> None:
+        """Contrasts with the type-position rejection above; a selective
+        ``use`` of the enum alone (``use F::{E}``) has no counterpart here --
+        it never bare-exposes the enum's variants at all, not even as a
+        value."""
+        self._write_modules(tmp_path)
+        s = ReplSession(cwd=tmp_path)
+        for decl in setup.split("\n"):
+            assert s.eval_entry(decl).ok
+
+        value = s.eval_entry("let f = fn(x: E) => 1\nf(Other)")
+        assert value.ok, value.diagnostics
+        pattern = s.eval_entry("let v: E = Other\ncase v of | Other => 1 | _ => 0")
+        assert pattern.value == IntValue(1)
+
+
+class TestScopedRetainedAliasTargetIdentity:
+    """The same freeze-on-shadowed-or-ambiguous-spelling rule (see
+    ``TestRetainedAliasTargetIdentity``), for an alias reached through a
+    named-scope ``use`` rather than an import.
+    """
+
+    _LOCALLY_SHADOWED_DECLS = (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::* hiding E::A",
+        "type C = E",
+        "enum E = Z",
+        "use s::*",
+    )
+    _LOCALLY_SHADOWED_PROBE = "let d: C = C::B"
+    _LOCALLY_SHADOWED_GROUPINGS = frozenset({(1, 1, 1, 1, 1), (1, 2, 1, 1)})
+
+    @pytest.mark.parametrize(
+        "sizes",
+        _setup_groupings(_LOCALLY_SHADOWED_GROUPINGS),
+    )
+    @pytest.mark.parametrize(
+        "use",
+        ("C::A", "case d of\n  | C::A => 1\n  | _ => 2", "d is C::A", "fn(x: C::A) => 1"),
+        ids=("value", "pattern", "is", "type"),
+    )
+    def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
+        self, use: str, sizes: tuple[int, ...]
+    ) -> None:
+        s = ReplSession()
+        _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
+        assert s.eval_entry(self._LOCALLY_SHADOWED_PROBE).ok
+
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
+
+    def test_a_hiding_alias_frozen_by_shadowing_keeps_its_own_member_reachable(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope s\n  enum E = A | B\nend s").ok
+        assert s.eval_entry("use s::* hiding E::A").ok
+        assert s.eval_entry("type C = E").ok
+        assert s.eval_entry("enum E = Z").ok
+        assert s.eval_entry("use s::*").ok
+
+        assert s.eval_entry("C::B").ok
+        assert not s.eval_entry("C::Z").ok
+
+
+def test_an_indirect_alias_keeps_its_declaration_time_members_once_its_target_is_retired() -> None:
+    """A retained alias reached through a ``use`` route falls back to its
+    declaration-time members once the route it was declared through no
+    longer exists: redeclaring the enum that owned the alias's target member
+    scope retires that scope, but the alias -- declared before the
+    retirement -- must keep resolving exactly as it did at declaration time,
+    rather than crashing for lack of a current target owner.
+    """
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+    ):
+        assert s.eval_entry(decl).ok
+
+    before = s.eval_entry("let v = C::A\nv")
+    assert before.ok, before.diagnostics
+
+    assert s.eval_entry("enum Foo | New").ok
+
+    after = s.eval_entry("let v = C::A\nv")
+    assert after.ok, after.diagnostics
+    assert after.value == before.value
+
+
+def test_an_enum_referenced_member_through_an_alias_with_a_retired_target_is_a_static_error() -> (
+    None
+):
+    """An enum's referenced member spelled through an alias whose target has
+    been retired is rejected statically, not crashed: following the alias
+    chain finds no current owner for the retired link, so the checker treats
+    the spelling as naming no record, exactly as an unrelated bad spelling
+    would.
+    """
+    s = ReplSession(default_stdlib=False)
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+    ):
+        assert s.eval_entry(decl).ok
+
+    result = s.eval_entry("enum N\n  | ::C\n  | Own")
+    assert not result.ok
+    assert result.diagnostics
+    assert result.error is None
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_keeps_its_declaration_time_target_once_a_same_path_enum_is_declared_again(
+    use: str,
+) -> None:
+    """An alias's target identity survives its path being retired and reused.
+
+    ``Foo::Old`` is retired (superseding ``Foo | Old`` with ``Foo | New``)
+    and then redeclared, so a fresh ``Foo::Old::E`` occupies the same scope
+    path the alias's original target did. The alias's target is the original
+    declaration, not that path, so it still reaches its own declaration-time
+    members (``A``) and never the unrelated new declaration's (``X``).
+    """
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+        "enum Foo | Old",
+        "enum Foo::Old::E = X | Y",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    s.type_of(use)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::X",
+        "case d of\n  | C::X => 1\n  | _ => 2",
+        "d is C::X",
+        "fn(x: C::X) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_rejects_a_member_of_a_same_path_enum_declared_after_its_target_is_retired(
+    use: str,
+) -> None:
+    """The unrelated, later-declared enum at the alias's target's retired path
+    never lends the alias its own members: ``X`` is a member of the fresh
+    ``Foo::Old::E``, not of the declaration the alias actually names, so it
+    is a static error rather than a stale-identity crash."""
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+        "enum Foo | Old",
+        "enum Foo::Old::E = X | Y",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(use)
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+def _assert_alias_fails_in_its_declaring_entry(use: str) -> None:
+    """Shared body: an alias declared in the same entry that retires its
+    target never comes into being, at whichever position *use* probes.
+
+    When the ``use`` an alias would be reached through, and the redeclaration
+    that retires it, both land in the one entry that also declares the alias,
+    every position sees the same, entry-local picture: the alias's target is
+    already gone before the entry's own declarations are even resolved, so it
+    fails to resolve there -- exactly like file mode, where such a
+    redeclaration and reference could never coexist in one compilation unit.
+    """
+    s = ReplSession()
+    for decl in ("enum Foo | Old", "enum Foo::Old::E = A | B", "use Foo::Old::*"):
+        assert s.eval_entry(decl).ok
+
+    result = s.eval_entry(f"type C = E\nenum Foo | New\n{use}")
+    assert not result.ok
+    assert result.diagnostics
+    assert result.error is None
+
+    # The failed entry leaves the session exactly as it was: the alias never
+    # comes into being, and the original target is still reachable by its own
+    # path, untouched by the never-promoted redeclaration.
+    assert not s.eval_entry("C::A").ok
+    assert s.eval_entry("Foo::Old::E::A").ok
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_value_position() -> None:
+    """The alias's value spelling ``C::A`` never resolves: its target enum is
+    retired before this entry's own declarations are resolved."""
+    _assert_alias_fails_in_its_declaring_entry("C::A")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_pattern_position() -> (
+    None
+):
+    """The alias's constructor pattern ``C::A`` never resolves, for the same
+    reason its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("case (C::A) of\n  | C::A => 1\n  | _ => 2")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_is_position() -> None:
+    """The alias's ``is`` spelling ``C::A`` never resolves, for the same
+    reason its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("(C::A) is C::A")
+
+
+def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_position() -> None:
+    """The alias's type spelling ``C::A`` never resolves, for the same reason
+    its value spelling does not."""
+    _assert_alias_fails_in_its_declaring_entry("fn(x: C::A) => 1")
+
+
+_RETIRING_DECLS = ("enum Foo | Old", "enum Foo::Old::E = A | B", "enum Foo | New")
+
+
+@pytest.mark.parametrize(
+    "history",
+    (
+        _RETIRING_DECLS,
+        ("\n".join(_RETIRING_DECLS[:2]), _RETIRING_DECLS[2]),
+    ),
+    ids=("separate", "declared-together"),
+)
+def test_retired_member_scope_is_rejected_at_every_type_and_value_spelling(
+    tmp_path: Path, history: tuple[str, ...]
+) -> None:
+    """Once a redeclaration retires ``Foo::Old``'s member scope, every
+    spelling of what it used to hold -- the qualified value, the member's
+    own type, and the retired enum's own type -- names no member of the live
+    ``Foo``. Only these histories are legal: an entry declaring ``Foo`` twice
+    fails."""
+    assert_repl_verdicts(
+        tmp_path,
+        {},
+        history,
+        {
+            "value": rejected("Foo::Old::E::A", UnknownMemberError, "Foo::Old::E::A"),
+            "type-member": rejected(
+                "fn(x: Foo::Old::E::A) => 1", UnknownMemberError, "Foo::Old::E::A"
+            ),
+            "type-owner": rejected("fn(x: Foo::Old::E) => 1", UnknownMemberError, "Foo::Old::E"),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_reaches_its_target_member_after_its_path_is_redeclared_as_a_record(use: str) -> None:
+    """A retained alias's target keeps naming its own declaration even when a
+    later declaration at the same path is a record rather than another enum:
+    the identity comparison, not the path's current shape, decides whether
+    the alias's own member is still reachable."""
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type C = E",
+        "scope s\n  record E\nend s",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    s.type_of(use)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::Red",
+        "case c of\n  | C::Red => 1\n  | _ => 2",
+        "c is C::Red",
+        "fn(r: C::Red) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_retained_alias_does_not_reach_a_member_its_import_hides(tmp_path: Path, use: str) -> None:
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import m::* hiding Color::Red").ok
+    assert s.eval_entry("type C = Color").ok
+    assert s.eval_entry("let c: C = C::Green").ok
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+    assert s.eval_entry("c is C::Green").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(3))
+def test_retained_alias_hidden_set_is_recomputed_against_a_later_import(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """A later import that lifts an earlier ``hiding`` must reach a retained alias too.
+
+    A retained alias's ``hidden`` set must not stay frozen at the state its
+    declaring entry saw: once a later, unrestricted import of the same module
+    also contributes ``Color::Red``, the alias must reach it exactly as a
+    direct qualified reference does, regardless of how the declarations were
+    split into entries.
+    """
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(
+        s, ("import m::* hiding Color::Red", "type C = Color", "import m::{Color}"), sizes
+    )
+
+    value = s.eval_entry("let v = C::Red\nv")
+    assert value.ok, value.diagnostics
+    assert value.value == s.eval_entry("Color::Red").value
+    assert s.eval_entry("fn(r: C::Red) => 1").ok
+    matched = s.eval_entry("let c: C = Color::Red\ncase c of | C::Red => 1 | _ => 2")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("let c: C = Color::Red\nc is C::Red").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(3))
+def test_retained_alias_of_an_imported_alias_reaches_members(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """An alias of an alias imported wholesale must reach the enum's members.
+
+    ``m2`` re-exports ``base::Color`` under its own alias ``K``; a REPL alias
+    ``C`` of that imported alias must reach ``Color``'s members exactly as
+    file mode does (see ``TestAliasOfAliasReachesEveryMember`` in
+    ``test_agl_alias_owner_reachability.py``), regardless of how the
+    declarations are split into entries.
+    """
+    (tmp_path / "base.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "m2.agl").write_text("import base\ntype K = base::Color\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m2::*", "type C = K", "let x: C = C::Green"), sizes)
+
+    assert s.eval_entry("x").ok
+    assert s.eval_entry("fn(g: C::Green) => 1").ok
+    matched = s.eval_entry("case x of\n  | C::Green => 1\n  | _ => 2")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("x is C::Green").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(1))
+def test_owner_own_path_referenced_member_is_accepted_through_wildcard_import(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """``Box::Item`` (``Item``'s own path is ``Box``) selects like a declared member.
+
+    Mirrors ``referenced-member-declared-in-enum-scope-wildcard-import`` in
+    ``test_agl_enum_owner_selection.py`` for the REPL, across every value,
+    pattern, ``is``, and type position.
+    """
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m::*",), sizes)
+
+    value = s.eval_entry("let v: Box = Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
+    assert s.eval_entry("fn(i: Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | Box::Item(n) => n | Empty => 0")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("v is Box::Item").value == BoolValue(True)
+
+
+def test_owner_own_path_referenced_member_is_accepted_through_a_qualified_import(
+    tmp_path: Path,
+) -> None:
+    """The same own-path referenced member, spelled through a module-qualified import."""
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import m").ok
+
+    value = s.eval_entry("let v: m::Box = m::Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
+    assert s.eval_entry("fn(i: m::Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | m::Box::Item(n) => n | m::Empty => 0")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("v is m::Box::Item").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(2))
+def test_owner_own_path_referenced_member_is_accepted_through_a_use_alias(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """The same own-path referenced member, spelled through a ``use``-opened import alias.
+
+    Mirrors ``test_owner_own_path_referenced_member_is_accepted_through_wildcard_import``:
+    the alias import and its ``use`` may land in one entry or split across
+    two, and every value, pattern, ``is``, and type position must agree
+    either way.
+    """
+    (tmp_path / "m.agl").write_text(
+        "record Box::Item\n  n: int\n\nenum Box = Empty | Box::Item\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m as mm", "use mm::*"), sizes)
+
+    value = s.eval_entry("let v: Box = Box::Item(n = 1)\nv")
+    assert value.ok, value.diagnostics
+    assert s.eval_entry("fn(i: Box::Item) => 1").ok
+    matched = s.eval_entry("case v of | Box::Item(n) => n | Empty => 0")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("v is Box::Item").value == BoolValue(True)
+
+
+@pytest.mark.parametrize("sizes", _grouping_params_for(2))
+def test_bare_enum_variant_from_a_use_alias_is_stable_across_entry_groupings(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """A plain enum's variants stay bare-matchable through a ``use``-opened
+    import alias regardless of whether its import and its ``use`` land in
+    one entry or are split across two.
+
+    A ``use``'s bare enum-variant exposure was previously a declaration-time
+    side effect never recorded in the ``use``'s own snapshot, so promoting it
+    to a later entry silently dropped the variants -- this passed only when
+    the import, the ``use``, and every position below shared one entry. A
+    plain variant has no bare type of its own (only a referenced member
+    does, covered by
+    ``test_owner_own_path_referenced_member_is_accepted_through_a_use_alias``),
+    so only its value, pattern, and ``is`` positions apply here.
+    """
+    (tmp_path / "m.agl").write_text("enum Color = Red(n: int) | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(s, ("import m as mm", "use mm::*"), sizes)
+
+    value = s.eval_entry("let c: Color = Red(n = 1)\nc")
+    assert value.ok, value.diagnostics
+    matched = s.eval_entry("let c: Color = Green\ncase c of | Red(n) => n | Green => 2")
+    assert matched.value == IntValue(2)
+    tested = s.eval_entry("let c: Color = Green\nc is Green")
+    assert tested.value == BoolValue(True), tested.diagnostics
+
+
+def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
+    tmp_path: Path,
+) -> None:
+    """An imported generic enum's referenced member stays rejected once applied.
+
+    ``Stored[T]`` is imported, then spelled with explicit type arguments
+    (``Stored[int]::...``); an inline member of that applied owner
+    constructs fine, but its referenced member must still be rejected,
+    exactly as the unapplied owner is.
+    """
+    (tmp_path / "gen.agl").write_text(
+        "record Saved\n  id: int\nenum Stored[T] = ::Saved | Kept(value: T)\n", encoding="utf-8"
+    )
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import gen::{Stored}").ok
+
+    assert s.eval_entry("Stored[int]::Kept(value = 1)").ok
+    bare = s.eval_entry("Stored[int]::Saved")
+    assert bare.kind != "type"
+    assert not bare.ok
+    with pytest.raises(ReferencedMemberError):
+        s.type_of("Stored[int]::Saved")
+    with pytest.raises(ReferencedMemberError):
+        s.type_of("fn(x: Stored[int]::Saved) => 1")
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
+    sizes: tuple[int, ...], use: str
+) -> None:
+    """A local ``use ... hiding`` that narrows an earlier glob ``use`` must be
+    honoured through an alias exactly as it is directly, in every position,
+    matching file mode, regardless of how the declarations are split into
+    entries -- every grouping that keeps each entry's own header items ahead
+    of its non-header ones, the only ones any module admits.
+    """
+    s = ReplSession()
+    _eval_grouped(
+        s,
+        (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            "type C = E",
+            "use s::* hiding E::A\nlet d: C = C::B",
+        ),
+        sizes,
+    )
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+
+
+@pytest.mark.parametrize(
+    "alias_decl",
+    ("type C = E", "type K = E\ntype C = K"),
+    ids=("direct-alias", "two-link-chain"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_a_bare_query_through_a_narrowed_alias_chain_matches_type_ofs_class(
+    sizes: tuple[int, ...], alias_decl: str
+) -> None:
+    """The bare-entry fallback agrees with ``type_of`` through the same
+    narrowing chain as
+    ``test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses``,
+    whatever grouping produced it, directly aliased or through a two-link
+    chain."""
+    s = ReplSession()
+    _eval_grouped(
+        s,
+        (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            alias_decl,
+            "use s::* hiding E::A\nlet d: C = C::B",
+        ),
+        sizes,
+    )
+
+    bare = s.eval_entry("C::A")
+    assert bare.kind != "type"
+    assert not bare.ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of("C::A")
+
+
+_RETAINED_BASE = (
+    "scope s\n  record Base\n    x: int\n  record Base::Inner\n    y: int\n"
+    "  record Base::Inner::Deep\n    z: int\n  def Base::f() -> int = 1\n"
+    "\n"
+    "  scope Base\n    let b = 2\n  end Base\nend s"
+)
+
+
+@pytest.mark.parametrize(
+    "use",
+    ("G::Inner(y = 1)", "fn(x: G::Inner) => 1", "G::Inner::Deep(z = 1)", "G::f()", "G::b"),
+    ids=("nested-value", "nested-type", "deeper", "function", "binding"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_a_narrowing_local_use_hides_every_path_beneath_a_retained_alias_target(
+    tmp_path: Path, sizes: tuple[int, ...], use: str
+) -> None:
+    """An alias of a type an earlier entry declared stands for every path
+    beneath it, so a later local ``use ... hiding`` removing those paths hides
+    them through the alias too, while the alias itself still constructs."""
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(
+        s,
+        (
+            _RETAINED_BASE,
+            "use s::*",
+            "type G = Base",
+            "use s::* hiding Base::Inner, Base::f, Base::b\nlet d: G = G(x = 1)",
+        ),
+        sizes,
+    )
+
+    assert str(s.type_of("G(x = 1)")) == "record s::Base\n  x: int"
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+
+
+def test_a_bare_query_for_a_hidden_member_through_a_scoped_alias_matches_type_ofs_class(
+    tmp_path: Path,
+) -> None:
+    """A qualified bare query for a hidden import member through a named-scope
+    alias (``t::C::Red``) is rejected with the exact same class as
+    ``fn(x: t::C::Red) => 1``."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import m::* hiding Color::Red").ok
+    assert s.eval_entry("scope t\n  type C = Color\nend t").ok
+
+    bare = s.eval_entry("t::C::Red")
+    assert bare.kind != "type"
+    assert not bare.ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of("t::C::Red")
+    with pytest.raises(HiddenMemberError):
+        s.type_of("fn(x: t::C::Red) => 1")
+
+
+def test_a_bare_query_for_a_hidden_applied_generic_variant_matches_type_ofs_class() -> None:
+    """A qualified bare query for a hidden variant of an applied generic
+    (``E[int]::A``) is rejected with the exact same class as
+    ``fn(x: E[int]::A) => 1``."""
+    s = ReplSession()
+    assert s.eval_entry("scope s\n  enum E[T] = A(x: T) | B\nend s").ok
+    assert s.eval_entry("use s::* hiding E::A").ok
+
+    bare = s.eval_entry("E[int]::A")
+    assert bare.kind != "type"
+    assert not bare.ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of("E[int]::A")
+    with pytest.raises(HiddenMemberError):
+        s.type_of("fn(x: E[int]::A) => 1")
+
+
+@pytest.mark.parametrize(
+    "use",
+    ("D::Red", "case c of\n  | D::Red => 1\n  | _ => 2", "c is D::Red", "fn(x: D::Red) => 1"),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize("sizes", _grouping_params_for(4))
+def test_alias_chain_reaches_a_lifted_import_at_every_link(
+    tmp_path: Path, sizes: tuple[int, ...], use: str
+) -> None:
+    """A chain of aliases must reach a member a later import lifts back in,
+    at every link of the chain and at every position, regardless of how the
+    declarations are split into entries."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    _eval_grouped(
+        s,
+        ("import m::* hiding Color::Red", "type K = Color", "type C = K", "import m::{Color}"),
+        sizes,
+    )
+    assert s.eval_entry("type D = C\nlet c: D = Color::Green").ok
+
+    for owner in ("K", "C", "D"):
+        assert s.eval_entry(f"{owner}::Red").ok
+
+    s.type_of(use)
+
+
+def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
+    """A two-link chain of generic aliases must still reach its target's member."""
+    s = ReplSession()
+    for decl in (
+        "enum E[T] = A(x: T) | B",
+        "type K[T] = E[T]",
+        "type C[T] = K[T]",
+    ):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("C[int]::A(x = 1)").ok
+
+
+def test_alias_of_a_generic_alias_chain_reaches_a_lifted_member() -> None:
+    """A chain of generic aliases must reach a member a later ``use`` lifts
+    back in, mirroring ``test_alias_chain_reaches_a_lifted_import_at_every_link``
+    for a generic target."""
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E[T] = A(x: T) | B\nend s",
+        "use s::* hiding E::A",
+        "type K[T] = E[T]",
+        "type C[T] = K[T]",
+        "use s::*",
+    ):
+        assert s.eval_entry(decl).ok
+
+    for owner in ("K", "C"):
+        assert s.eval_entry(f"{owner}[int]::A(x = 1)").ok
+
+
+_TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS = (
+    "scope s\n  enum E = A | B\nend s",
+    "use s::*",
+    "type K = E",
+    "type C = K",
+    "use s::* hiding E::A",
+)
+_TWO_LINK_ALIAS_CHAIN_NARROWED_GROUPINGS = frozenset(
+    {(1, 1, 1, 1, 1), (1, 1, 2, 1), (1, 2, 1, 1), (1, 3, 1)}
+)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
+        "(C::A) is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    _setup_groupings(_TWO_LINK_ALIAS_CHAIN_NARROWED_GROUPINGS),
+)
+def test_a_two_link_alias_chain_narrows_with_a_later_local_use(
+    use: str, sizes: tuple[int, ...]
+) -> None:
+    """A local ``use ... hiding`` that narrows an earlier glob ``use`` must
+    reach through a two-link alias chain (``C`` of ``K`` of ``E``), not only
+    a single alias, regardless of how the declarations are split into
+    entries -- both links agree, and both hide the narrowed member."""
+    s = ReplSession()
+    _eval_grouped(s, _TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS, sizes)
+
+    assert s.eval_entry("K::B").ok
+    assert s.eval_entry("C::B").ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of("K::A")
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
+
+
+def test_alias_freezes_a_member_hidden_by_an_ambiguous_later_import(tmp_path: Path) -> None:
+    """An alias's reach freezes once its own spelling stops picking out a
+    single owner: a later import of a same-named enum from another module
+    makes the bare spelling ambiguous, so the alias keeps resolving its
+    member exactly as its own declaration did."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    for decl in ("import m::* hiding Color::Red", "type C = Color", "import n::*"):
+        assert s.eval_entry(decl).ok
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of("C::Red")
+    assert s.eval_entry("C::Green").ok
+
+
+def test_alias_freezes_a_member_hidden_by_a_later_locally_shadowing_enum(tmp_path: Path) -> None:
+    """An alias's reach also freezes once a later, locally declared enum of
+    the same bare name shadows the import its target was reached through:
+    the alias keeps naming its own declaration-time member, and a member the
+    fresh, unrelated enum declares is simply not one of the alias's own
+    members."""
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    for decl in (
+        "import m::* hiding Color::Red",
+        "type C = Color",
+        "import n::*",
+        "enum Color = X | Y",
+    ):
+        assert s.eval_entry(decl).ok
+
+    with pytest.raises(HiddenMemberError):
+        s.type_of("C::Red")
+    assert s.eval_entry("C::Green").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("C::X")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+def test_alias_keeps_declaration_time_members_once_its_hidden_target_is_redeclared() -> None:
+    """An alias's target being redeclared after a narrowing ``use`` lifts the
+    narrowing's effect through the alias, since the narrowing then has
+    nothing left to hide: a fresh enum at the same path is a fresh
+    declaration, not the alias's target, so the alias keeps resolving its own
+    declaration-time members regardless.
+
+    Explicit grouping (one entry per declaration): merging the narrowing use
+    with the redeclaration would change what the alias's own declaration saw,
+    which is a different scenario (see the freeze tests above).
+    """
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type C = E",
+        "use s::* hiding E::A",
+        "scope s\n  enum E = X | Y\nend s",
+    ):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("C::A").ok
+    assert s.eval_entry("C::B").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("C::X")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+class TestUseThenRedeclare:
+    """A scope's members re-derive against a later redeclaration of the same
+    scope reached through an earlier ``use``, never against the stale
+    snapshot the ``use`` originally saw."""
+
+    def test_bare_wildcard_use_reaches_a_redeclared_scopes_new_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            "scope s\n  enum E = A | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+        assert s.eval_entry("fn(x: E::C) => 1").ok
+        with pytest.raises(AglError) as excinfo:
+            s.type_of("E::B")
+        assert not isinstance(excinfo.value, HiddenMemberError)
+
+    def test_bare_named_use_reaches_a_redeclared_scopes_new_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::{E}",
+            "scope s\n  enum E = A | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+        assert s.eval_entry("fn(x: E::C) => 1").ok
+
+    def test_a_use_hiding_clause_still_applies_after_the_scope_gains_a_member(self) -> None:
+        s = ReplSession()
+        for decl in (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::* hiding E::A",
+            "scope s\n  enum E = A | B | C\nend s",
+        ):
+            assert s.eval_entry(decl).ok
+
+        assert s.eval_entry("E::C").ok
+        with pytest.raises(HiddenMemberError):
+            s.type_of("E::A")
+
+    @pytest.mark.parametrize(
+        ("scope", "use", "probe", "value"),
+        (
+            ("scope s\n  def f() -> int = {}\nend s", "use s::*", "f()", IntValue(2)),
+            ("scope s\n  record P\n    x: int\nend s", "use s::*", "P(x = 2).x", IntValue(2)),
+            ("scope s\n  enum E = Red | Green\nend s", "use s::E::*", "[Green]", None),
+        ),
+    )
+    @pytest.mark.parametrize("region", (False, True))
+    def test_repeating_a_use_after_a_redeclaration_leaves_only_the_new_member(
+        self,
+        tmp_path: Path,
+        scope: str,
+        use: str,
+        probe: str,
+        value: IntValue | None,
+        region: bool,
+    ) -> None:
+        def at(entry: str) -> str:
+            return f"scope r\n  let v = {entry}\nend r" if region else entry
+
+        s = ReplSession(cwd=tmp_path)
+        for decl in (
+            scope.format(1),
+            f"scope r\n  {use}\nend r" if region else use,
+            scope.format(2),
+            f"scope r\n  {use}\nend r" if region else use,
+        ):
+            assert s.eval_entry(decl).ok
+        result = s.eval_entry(at(probe))
+        assert result.failure is None
+        if value is not None and not region:
+            assert result.value == value
+
+
+def test_a_new_type_declared_in_a_used_scope_is_reachable_bare() -> None:
+    """A type a ``use``-opened scope gains after the ``use`` must be reachable
+    exactly as one it already had, in constructor and type position alike."""
+    s = ReplSession()
+    for decl in ("scope s\n  record R\nend s", "use s::*", "scope s\n  record Q\nend s"):
+        assert s.eval_entry(decl).ok
+
+    assert s.eval_entry("fn(x: Q) => 1").ok
+    assert s.eval_entry("let q: Q = Q()").ok
+    assert s.eval_entry("Q()").ok
+
+
+def test_a_runtime_failed_entrys_redeclaration_before_the_failure_point_is_promoted() -> None:
+    """A redeclaration completed before a later runtime failure in the same
+    entry is promoted -- the same completion rule every other declaration
+    follows -- but one written after the failure point never took effect,
+    leaving the scope's earlier member reachable and the new one absent."""
+    s = ReplSession()
+    for decl in ("scope s\n  enum E = A | B\nend s", "use s::*"):
+        assert s.eval_entry(decl).ok
+
+    failed = s.eval_entry("let boom: int = [1][5]\n\nscope s\n  enum E = A | C\nend s")
+    assert not failed.ok
+    assert failed.error is not None
+
+    assert s.eval_entry("fn(x: E::B) => 1").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of("E::C")
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "E::C",
+        "case (E::C) of\n  | E::C => 1\n  | _ => 2",
+        "(E::C) is E::C",
+        "fn(x: E::C) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_a_statically_failed_entrys_redeclaration_never_takes_effect(use: str) -> None:
+    """An entry that fails statically never takes effect at all, unlike a
+    runtime failure's completed prefix: the scope's earlier member stays
+    reachable and the new one stays absent, in every position."""
+    s = ReplSession()
+    for decl in ("scope s\n  enum E = A | B\nend s", "use s::*"):
+        assert s.eval_entry(decl).ok
+
+    failed = s.eval_entry('scope s\n  enum E = A | C\nend s\n\nlet bad: int = "x"')
+    assert not failed.ok
+    assert failed.error is None
+
+    assert s.eval_entry("fn(x: E::B) => 1").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(use)
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+_USE_OPENED_SCOPE_REDECLARED_DECLS = (
+    "scope s\n  enum E = A | B\nend s",
+    "use s::*",
+    "type C = E",
+    "scope s\n  enum E = X | Y\nend s",
+)
+_USE_OPENED_SCOPE_REDECLARED_PROBE = "let d: C = C::A"
+_USE_OPENED_SCOPE_REDECLARED_GROUPINGS = frozenset({(1, 1, 1, 1), (1, 2, 1)})
+
+
+@pytest.mark.parametrize(
+    ("works", "fails"),
+    (
+        ("C::A", "C::X"),
+        ("case d of\n  | C::A => 1\n  | _ => 2", "case d of\n  | C::X => 1\n  | _ => 2"),
+        ("d is C::A", "d is C::X"),
+        ("fn(x: C::A) => 1", "fn(x: C::X) => 1"),
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize("sizes", _setup_groupings(_USE_OPENED_SCOPE_REDECLARED_GROUPINGS))
+def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
+    sizes: tuple[int, ...], works: str, fails: str
+) -> None:
+    """An alias declared through a use-opened scope keeps naming its own
+    declaration once that scope is redeclared with different members, in
+    every position, matching file mode, regardless of how the declarations
+    are split into entries -- only groupings that set up successfully are
+    exercised (see ``_setup_groupings``).
+    """
+    s = ReplSession()
+    _eval_grouped(s, _USE_OPENED_SCOPE_REDECLARED_DECLS, sizes)
+    assert s.eval_entry(_USE_OPENED_SCOPE_REDECLARED_PROBE).ok
+    s.type_of(works)
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(fails)
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+@pytest.mark.parametrize(
+    ("decls", "make_session", "probe", "expected"),
+    (
+        pytest.param(
+            TestRetainedAliasTargetIdentity._LOCALLY_SHADOWED_DECLS,
+            None,
+            TestRetainedAliasTargetIdentity._LOCALLY_SHADOWED_PROBE,
+            TestRetainedAliasTargetIdentity._LOCALLY_SHADOWED_GROUPINGS,
+            id="locally_shadowed",
+        ),
+        pytest.param(
+            TestRetainedAliasTargetIdentity._REOPENED_UNDER_FRESH_ALIAS_DECLS,
+            None,
+            TestRetainedAliasTargetIdentity._REOPENED_UNDER_FRESH_ALIAS_PROBE,
+            TestRetainedAliasTargetIdentity._REOPENED_UNDER_FRESH_ALIAS_GROUPINGS,
+            id="reopened_under_fresh_alias",
+        ),
+        pytest.param(
+            TestRetainedAliasTargetIdentity._BECOMES_AMBIGUOUS_DECLS,
+            None,
+            TestRetainedAliasTargetIdentity._BECOMES_AMBIGUOUS_PROBE,
+            TestRetainedAliasTargetIdentity._BECOMES_AMBIGUOUS_GROUPINGS,
+            id="becomes_ambiguous",
+        ),
+        pytest.param(
+            TestScopedRetainedAliasTargetIdentity._LOCALLY_SHADOWED_DECLS,
+            ReplSession,
+            TestScopedRetainedAliasTargetIdentity._LOCALLY_SHADOWED_PROBE,
+            TestScopedRetainedAliasTargetIdentity._LOCALLY_SHADOWED_GROUPINGS,
+            id="scoped_locally_shadowed",
+        ),
+        pytest.param(
+            _TWO_LINK_ALIAS_CHAIN_NARROWED_DECLS,
+            ReplSession,
+            None,
+            _TWO_LINK_ALIAS_CHAIN_NARROWED_GROUPINGS,
+            id="two_link_alias_chain_narrowed",
+        ),
+        pytest.param(
+            _USE_OPENED_SCOPE_REDECLARED_DECLS,
+            ReplSession,
+            _USE_OPENED_SCOPE_REDECLARED_PROBE,
+            _USE_OPENED_SCOPE_REDECLARED_GROUPINGS,
+            id="use_opened_scope_redeclared",
+        ),
+    ),
+)
+def test_declaration_groupings_are_exactly_their_expected_legal_set(
+    tmp_path: Path,
+    decls: tuple[str, ...],
+    make_session: Callable[[], ReplSession] | None,
+    probe: str | None,
+    expected: frozenset[tuple[int, ...]],
+) -> None:
+    """Every ``_setup_groupings`` call site's expected set matches a fresh
+    determination of its declaration sequence's actual legal groupings
+    (:func:`~tests.agl.qualifier_support.legal_groupings`), so a stale
+    hand-picked set -- one that silently drops or over-admits a grouping --
+    fails loudly here instead of only ever showing up as a missing
+    parametrization elsewhere."""
+    session_factory = (
+        (lambda: _color_and_n_session(tmp_path)) if make_session is None else make_session
+    )
+
+    def is_legal(session: ReplSession, sizes: tuple[int, ...]) -> bool:
+        if not eval_setup_entries(session, decls, sizes):
+            return False
+        return probe is None or session.eval_entry(probe).ok
+
+    assert legal_groupings(all_groupings(len(decls)), session_factory, is_legal) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1912,6 +3715,32 @@ class TestBuiltinIdentityAcrossEntries:
         assert result.ok, result.diagnostics
         assert result.error is None
 
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
+    def test_root_builtin_declared_across_repl_entries_and_an_import_is_rejected(
+        self, tmp_path: Path, grouping: str
+    ) -> None:
+        """A session's own root builtin conflicts with an imported module's
+        same-scoped one exactly as it would in one module (see
+        ``test_root_builtin_declared_in_two_modules_is_rejected``), whether the
+        session's own declaration and the import land in the same entry or an
+        earlier one: the session's declaration owns no source in a later
+        entry's own module graph for the whole-program check to find there, so
+        this rejection must not depend on how the two are grouped into entries.
+        """
+        declaration = f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+        (tmp_path / "lib.agl").write_text(declaration, encoding="utf-8")
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+
+        decls = (declaration, "import lib::{ExecResult}")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = eval_grouped_final(session, decls, sizes)
+
+        assert not result.ok
+        assert result.diagnostics
+
     def test_unpromoted_builtin_record_declaration_does_not_displace_the_live_one(
         self,
     ) -> None:
@@ -1959,6 +3788,118 @@ class TestBuiltinIdentityAcrossEntries:
         equal = s.eval_entry("a == b")
         assert equal.ok, equal.diagnostics
         assert equal.value == BoolValue(True)
+
+
+class TestBuiltinDeclarationSupersessionAcrossEntries:
+    """The session's builtin-uniqueness bookkeeping tracks only the current
+    declarations: a later promoted declaration at the same scoped name
+    supersedes an earlier one instead of clashing with it, every kind of
+    ``builtin`` bare declaration participates (not only types), and a plain
+    (non-``builtin``) declaration is never mistaken for one.
+    """
+
+    def test_a_root_builtin_def_redeclared_across_entries_supersedes_the_earlier_one(
+        self,
+    ) -> None:
+        s = open_session(default_stdlib=False)
+        first = s.eval_entry("builtin def print[T](value: T) -> unit")
+        second = s.eval_entry("builtin def print[T](value: T) -> unit")
+
+        assert first.ok, first.diagnostics
+        assert second.ok, second.diagnostics
+        assert s.eval_entry("print(1)").ok
+
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
+    def test_a_builtin_structural_alias_declared_in_an_entry_and_an_import_still_clash(
+        self, tmp_path: Path, grouping: str
+    ) -> None:
+        (tmp_path / "libp.agl").write_text("builtin type path = text", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+
+        decls = ("builtin type path = text", "import libp")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = eval_grouped_final(session, decls, sizes)
+
+        assert not result.ok
+        assert result.diagnostics
+
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
+    def test_a_scoped_builtin_def_declared_in_an_entry_and_an_import_still_clash(
+        self, tmp_path: Path, grouping: str
+    ) -> None:
+        declaration = "scope S\n  builtin def print[T](value: T) -> unit\nend S"
+        (tmp_path / "libs.agl").write_text(declaration, encoding="utf-8")
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+
+        decls = (declaration, "import libs")
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        result = eval_grouped_final(session, decls, sizes)
+
+        assert not result.ok
+        assert result.diagnostics
+
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("separate-entries"))
+    )
+    def test_a_plain_alias_of_a_scoped_builtin_enum_does_not_clash_with_an_unrelated_import(
+        self, tmp_path: Path, grouping: str
+    ) -> None:
+        """A plain (non-``builtin``) alias of a ``builtin enum`` must not itself
+        be counted as a builtin identity: importing an unrelated module that
+        separately declares its own builtin enum at the same scope path the
+        local alias occupies must not be rejected as though the alias's own
+        scope had redeclared a builtin there."""
+        agent_variants = (
+            "\n    | AgentCommand(command: text)"
+            '\n    | AgentClaude(model: text = "", thinking: text = "")'
+            '\n    | AgentCodex(model: text = "", thinking: text = "")'
+            '\n    | AgentPi(provider: text = "", model: text = "", thinking: text = "")'
+        )
+        (tmp_path / "libeb.agl").write_text(
+            f"scope B\n  builtin enum Agent{agent_variants}\nend B", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        own_enum = f"scope A\n  builtin enum Agent{agent_variants}\nend A"
+        own_alias = "scope B\n  type Agent = A::Agent\nend B"
+
+        sizes = (2,) if grouping == "single-entry" else (1, 1)
+        _eval_grouped(session, (own_enum, own_alias), sizes)
+
+        result = session.eval_entry("import libeb")
+
+        assert result.ok, result.diagnostics
+
+    def test_a_builtin_declared_under_a_retired_enum_member_scope_no_longer_clashes(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``builtin`` declared under an enum member's own nested scope path
+        is retired along with that member scope: once a later entry
+        redeclares the owning enum without that member, the session's
+        builtin-uniqueness bookkeeping must drop the retired scoped name, so
+        importing a module that declares the SAME scoped builtin afterward is
+        accepted rather than rejected as a clash with a name the session no
+        longer holds."""
+        fields = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed-out: bool\n"
+        (tmp_path / "lib.agl").write_text(
+            f"builtin record Color::Old::ExecResult\n{fields}", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry(f"builtin record Color::Old::ExecResult\n{fields}").ok
+        assert session.eval_entry("enum Color | New").ok
+
+        result = session.eval_entry("import lib")
+
+        assert result.ok, result.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -2608,7 +4549,11 @@ enum Agent
     def test_referenced_enum_keeps_its_original_record_member_after_record_supersession(
         self,
     ) -> None:
-        """A retained enum selects its member by handle, not its record's current name."""
+        """A retained enum selects its member by handle, not its record's current name.
+
+        A bare pattern or ``is`` test selects only a visible constructor, which
+        the superseding record now is.
+        """
         session = open_session()
         assert session.eval_entry("record R\n  old: int").ok
         assert session.eval_entry("type OldR = R").ok
@@ -2621,10 +4566,8 @@ enum Agent
         narrowed = session.eval_entry("(old as OldR).old")
         not_a_member = session.eval_entry('let fresh: E = R(fresh = "new")')
 
-        assert matched.ok, matched.diagnostics
-        assert matched.value == IntValue(1)
-        assert tested.ok, tested.diagnostics
-        assert tested.value == BoolValue(True)
+        assert not matched.ok
+        assert not tested.ok
         assert narrowed.ok, narrowed.diagnostics
         assert narrowed.value == IntValue(1)
         assert not not_a_member.ok
@@ -2658,7 +4601,11 @@ enum Agent
         assert decoded.value.fields == {"value": IntValue(1)}
 
     def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
-        """Old and new enum-member handles remain independently matchable and castable."""
+        """Old and new enum-member handles remain independently castable.
+
+        A bare pattern or ``is`` test selects only a visible constructor, so it
+        names no superseded member.
+        """
         session = open_session()
         assert session.eval_entry("enum E\n  | A(old: int)").ok
         assert session.eval_entry("type OldA = E::A").ok
@@ -2674,10 +4621,8 @@ enum Agent
         new_cast = session.eval_entry("(new as E::B).fresh")
         current_member_on_old_value = session.eval_entry("old as E::B")
 
-        assert old_case.ok, old_case.diagnostics
-        assert old_case.value == IntValue(1)
-        assert old_is.ok, old_is.diagnostics
-        assert old_is.value == BoolValue(True)
+        assert not old_case.ok
+        assert not old_is.ok
         assert old_cast.ok, old_cast.diagnostics
         assert old_cast.value == IntValue(1)
         assert new_case.ok, new_case.diagnostics
@@ -2687,6 +4632,71 @@ enum Agent
         assert new_cast.ok, new_cast.diagnostics
         assert new_cast.value == TextValue("new")
         assert not current_member_on_old_value.ok
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "old is Green",
+            "case old of\n  | Green => 1\n  | _ => 2",
+            "case old of\n  | Green() => 1\n  | _ => 2",
+            "tinted is Tint",
+            "case tinted of\n  | Tint() => 1\n  | _ => 2",
+            "case tinted of\n  | Tint(level) => level\n  | _ => 0",
+        ),
+    )
+    def test_superseded_enum_member_is_no_visible_bare_constructor(self, use: str) -> None:
+        """Bare patterns and ``is`` tests select only visible constructors."""
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Green\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
+        assert session.eval_entry("let old: A = A::Green").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        assert not session.eval_entry(use).ok
+
+    def test_superseded_enum_member_values_survive_without_bare_spellings(self) -> None:
+        """A superseded member's value still matches ``_``, casts, and renders."""
+        from agm.agl.repl.render import render_entry_result
+
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        wildcard = session.eval_entry("case tinted of\n  | _ => 1")
+        field = session.eval_entry("(tinted as OldTint).level")
+        echoed = session.eval_entry("tinted")
+
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
+        assert field.value == IntValue(3), field.diagnostics
+        assert echoed.ok, echoed.diagnostics
+        assert render_entry_result(echoed, echo=True) == "A::Tint(\n  level = 3\n)"
+
+    @pytest.mark.parametrize(
+        ("use", "expected"),
+        (
+            ("case tinted of\n  | OldTint(level) => level\n  | _ => 0", IntValue(3)),
+            ("tinted is OldA::Tint", BoolValue(True)),
+            ("case tinted of\n  | OldA::Tint(level) => level\n  | _ => 0", IntValue(3)),
+            ("tinted is OldTint", BoolValue(True)),
+        ),
+    )
+    def test_superseded_enum_member_is_spelled_through_an_earlier_alias(
+        self, use: str, expected: Value
+    ) -> None:
+        """Only an alias declared before the redeclaration still spells a superseded member."""
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
+        assert session.eval_entry("type OldA = A").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        result = session.eval_entry(use)
+
+        assert result.value == expected, result.diagnostics
 
     def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
         self,
@@ -2751,12 +4761,444 @@ enum Agent
         assert result.value.fields == {"x": IntValue(1)}
         assert not cross.ok
 
+    @pytest.mark.parametrize(
+        "redeclaration",
+        ["record Box[T]\n  w: T\n  z: int", "record Box\n  q: int"],
+        ids=["generic", "non-generic"],
+    )
+    def test_generic_alias_constructs_the_record_it_named_after_a_redeclaration(
+        self, redeclaration: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Box[T]\n  v: T").ok
+        old = s.eval_entry("Box(v = 0)")
+        assert s.eval_entry("type B[T] = Box[T]").ok
+        assert s.eval_entry(redeclaration).ok
+
+        built = s.eval_entry("B(v = 1)")
+
+        assert built.ok, built.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(built.value, RecordValue)
+        assert built.value.nominal == old.value.nominal
+        assert built.value.fields == {"v": IntValue(1)}
+
+    def test_applied_generic_alias_constructor_keeps_the_record_it_named(self) -> None:
+        s = open_session()
+        assert s.eval_entry("record Box[T]\n  v: T").ok
+        old = s.eval_entry("Box(v = 0)")
+        assert s.eval_entry("type B[T] = Box[T]").ok
+        assert s.eval_entry("record Box[T]\n  w: text").ok
+
+        constructor = s.eval_entry("let f = B::[int]")
+        built = s.eval_entry("f(1)")
+
+        assert constructor.ok, constructor.diagnostics
+        assert constructor.value_type == FunctionType(params=(IntType(),), result=old.value_type)
+        assert built.ok, built.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(built.value, RecordValue)
+        assert built.value.nominal == old.value.nominal
+        assert built.value.fields == {"v": IntValue(1)}
+
+    @pytest.mark.parametrize(
+        "use",
+        [
+            "let kept: Alias[int]::Member = old",
+            "record Holder\n  member: Alias[int]::Member\nHolder(member = old)",
+        ],
+        ids=["annotation", "field"],
+    )
+    def test_owner_applied_alias_member_keeps_the_enum_it_named(self, use: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Source[T]\n  | Member(value: T)").ok
+        assert s.eval_entry("type Alias[T] = Source[T]").ok
+        assert s.eval_entry("let old = Source::Member(value = 1)").ok
+        assert s.eval_entry("enum Source[T]\n  | Member(flag: bool)").ok
+
+        result = s.eval_entry(use)
+
+        assert result.ok, result.diagnostics
+
+    @staticmethod
+    def _session_with_retained_enum_aliases() -> ReplSession:
+        s = open_session()
+        assert s.eval_entry("enum Slot[T]\n  | Filled(value: T)\n  | Empty").ok
+        assert s.eval_entry("type Count = Slot[int]").ok
+        assert s.eval_entry("type Holder[T] = Slot[T]").ok
+        assert s.eval_entry("type Rows[A] = Slot[array[A]]").ok
+        return s
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("Count::Filled(value = 1).value", IntValue(1)),
+            ("let kept: Count::Filled = Slot::Filled(value = 2)\nkept.value", IntValue(2)),
+            ("Holder::Filled(value = 3).value", IntValue(3)),
+            ("Holder[int]::Filled(value = 4).value", IntValue(4)),
+            (
+                "let slot: Count = Count::Empty\n"
+                "case slot of | Count::Filled(value) => value | Count::Empty => 5",
+                IntValue(5),
+            ),
+            ("let slot: Count = Count::Filled(value = 6)\nslot is Count::Filled", BoolValue(True)),
+            ("Rows::Filled(value = [7]).value.size()", IntValue(1)),
+            (
+                "let slot: Slot[array[int]] = Slot::Filled(value = [8, 9])\n"
+                "case slot of | Rows::Filled(value) => value.size() | Rows::Empty => 0",
+                IntValue(2),
+            ),
+        ],
+    )
+    def test_retained_enum_alias_selects_its_members(self, entry: str, expected: object) -> None:
+        s = self._session_with_retained_enum_aliases()
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            'Count::Filled(value = "x")',
+            "let held: Holder::Filled = Slot::Filled(value = 1)",
+            'let slot: Slot[text] = Slot::Filled(value = "t")\nslot is Count::Filled',
+            "Rows::Filled(value = 1)",
+            "let slot: Slot[int] = Slot::Filled(value = 1)\n"
+            "case slot of | Rows::Filled(value) => 1 | _ => 0",
+            "let wrap: (int) -> Slot[int] = Rows::Filled",
+        ],
+        ids=[
+            "argument",
+            "unapplied-generic-alias",
+            "is-test",
+            "parameterized-alias-argument",
+            "parameterized-alias-pattern",
+            "parameterized-alias-value",
+        ],
+    )
+    def test_retained_enum_alias_member_keeps_the_alias_type_arguments(self, entry: str) -> None:
+        s = self._session_with_retained_enum_aliases()
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "A::Saved(id = 1)",
+            "case status of | A::Saved(id) => id | _ => 0",
+            "status is A::Saved",
+            "status as A::Saved",
+        ],
+        ids=["value", "pattern", "is-test", "type"],
+    )
+    def test_retained_enum_alias_selects_only_inline_members(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Saved\n  id: int\nenum Status = ::Saved | Fresh(n: int)").ok
+        assert s.eval_entry("type A = Status\nlet status: Status = Saved(id = 1)").ok
+        assert s.eval_entry("A::Fresh(n = 2).n").value == IntValue(2)
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Saved"
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "N::Top(id = 3)",
+            "case w of | N::Top(id) => id | _ => 0",
+            "w is N::Top",
+            "fn(t: N::Top) => t.id",
+        ],
+        ids=["value", "pattern", "is-test", "type"],
+    )
+    def test_retained_enum_referencing_a_retained_record_rejects_its_owner_spelling(
+        self, entry: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int").ok
+        assert s.eval_entry("enum N = ::Top | Own2\nlet w: N = Top(id = 1)").ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Top"
+        assert not s.eval_entry("let t: N::Top = Top(id = 3)").ok
+
+    @pytest.mark.parametrize(
+        ("entry", "member"),
+        [
+            ("N::Top(id = 3)", "Top"),
+            ("N::Alias(id = 3)", "Alias"),
+            ("case w of | N::Top(id) => id | _ => 0", "Top"),
+            ("w is N::Alias", "Alias"),
+            ("fn(t: N::Top) => t.id", "Top"),
+            ("fn(t: N::Alias) => t.id", "Alias"),
+        ],
+    )
+    def test_retained_enum_referencing_a_retained_alias_rejects_both_spellings(
+        self, entry: str, member: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int\ntype Alias = Top").ok
+        assert s.eval_entry("enum N = ::Alias | Own2\nlet w: N = Top(id = 1)").ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == member
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Top(id = 3).id", "w is ::Top", "case w of | ::Top(id) => id | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_qualifier_names_a_retained_referenced_record(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int").ok
+        assert s.eval_entry("enum N = ::Top | Own2\nlet w: N = Top(id = 1)").ok
+
+        assert s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Red", "a is ::Red", "case a of | ::Red => 1 | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_member_ambiguous_across_entries(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum A = Red | Green").ok
+        assert s.eval_entry("enum B = Red | Blue\nlet a: A = A::Green").ok
+
+        with pytest.raises(AmbiguousConstructorError):
+            s.type_of(entry)
+
+    def test_current_module_member_follows_enum_supersession(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum A = Red | Green").ok
+        assert s.eval_entry("enum A = Red | Blue\nlet a: A = A::Blue").ok
+
+        assert s.eval_entry("a is ::Red").value == BoolValue(False)
+        assert s.eval_entry("case ::Red as A of | ::Red => 1 | _ => 0").value == IntValue(1)
+        with pytest.raises(AglScopeError):
+            s.type_of("::Green")
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Pass", "verdict is ::Pass", "case verdict of | ::Pass => 1 | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_member_referenced_by_a_retained_enum(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry(
+            "scope checks\n  enum Review = Pass | Fail(reason: text)\nend checks"
+        ).ok
+        assert s.eval_entry(
+            "enum Verdict = ::checks::Review::Pass | Maybe\nlet verdict: Verdict = Verdict::Maybe"
+        ).ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Pass"
+
+    @pytest.mark.parametrize("name", ["Col", "C", "I"])
+    def test_retained_type_name_is_not_a_value_in_a_later_entry(self, name: str) -> None:
+        """A type an earlier entry declared names no value, as in a program file."""
+        s = open_session()
+        assert s.eval_entry("enum Col\n  | Red\n  | Paint(n: int)").ok
+        assert s.eval_entry("type C = Col\ntype I = int").ok
+
+        with pytest.raises(AglTypeError):
+            s.type_of(f"print({name})")
+        assert not s.eval_entry(f"print({name})").ok
+
+    @pytest.mark.parametrize(
+        "entries",
+        [
+            (
+                "enum A::Slot[T]\n  | Filled(value: T)\n  | Empty",
+                "use A::*",
+                "type X = Slot[int]",
+            ),
+            ("use A::*\nenum A::Slot[T]\n  | Filled(value: T)\n  | Empty\ntype X = Slot[int]",),
+        ],
+        ids=["across-entries", "one-entry"],
+    )
+    def test_alias_of_a_used_enum_selects_its_members(self, entries: tuple[str, ...]) -> None:
+        s = open_session()
+        for entry in entries:
+            assert s.eval_entry(entry).ok
+
+        result = s.eval_entry(
+            "let slot: X = X::Filled(value = 2)\n"
+            "let filled = slot is X::Filled\n"
+            "case slot of | X::Filled(value) => value + (if filled => 1 else => 0) | X::Empty => 0"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("Ints::Filled(value = 2)", "2"),
+            ("I::Filled(value = 2)", "2"),
+            ("Nested::Filled(value = 2)", "2"),
+            ("Rows::Filled(value = [2])", "[2]"),
+        ],
+        ids=["used", "renamed", "nested-scope", "generic"],
+    )
+    def test_used_scope_alias_qualifies_a_constructor_value(
+        self, value: str, expected: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Held[T]\n  | Filled(value: T)\n  | Empty").ok
+        assert s.eval_entry(
+            "scope R\n"
+            "  type Ints = Held[int]\n"
+            "  type Rows[A] = Held[array[A]]\n"
+            "\n"
+            "  scope N\n"
+            "    type Nested = Held[int]\n"
+            "  end N\n"
+            "end R"
+        ).ok
+
+        result = s.eval_entry(
+            "scope M\n"
+            "  use R::*\n"
+            "  use R::{Ints as I}\n"
+            "  use R::N::*\n"
+            f'  let made = "%{{({value}).value}}"\n'
+            "end M\n"
+            "M::made"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue(expected)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "Point::Point(x = 1).x",
+            "P::P(x = 1).x",
+            "P::Point(x = 1).x",
+            "case Point(x = 1) of | Point::Point(x) => x",
+            "case Point(x = 1) of | P::P(x) => x",
+        ],
+    )
+    def test_retained_record_qualifies_its_own_constructor(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        assert s.eval_entry("type P = Point").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["Point::Foo(x = 1)", "P::Foo(x = 1)", "case Point(x = 1) of | P::Foo(x) => x"],
+    )
+    def test_retained_record_rejects_a_foreign_member_name(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        assert s.eval_entry("type P = Point").ok
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "P::P(x = 1)",
+            "P::Point(x = 1)",
+            "let make = P::P\nmake(1)",
+            "case P(x = 1) of | P::P(x) => P(x = x)",
+        ],
+    )
+    def test_record_alias_owner_keeps_its_target_after_a_redeclaration(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        old = s.eval_entry("Point(x = 1)")
+        assert s.eval_entry("type P = Point").ok
+        assert s.eval_entry("record Point\n  y: int").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == old.value.nominal
+        assert not s.eval_entry("P::P(y = 1)").ok
+        assert not s.eval_entry("P::Point(y = 1)").ok
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("C::Mem(v = 1).v", IntValue(1)),
+            (
+                "let kept: C = C::Mem(v = 2)\ncase kept of | C::Mem(v) => v | C::Nil => 0",
+                IntValue(2),
+            ),
+            ("let make = C::Mem\nmake(3).v", IntValue(3)),
+            ("let kept: C = C::Mem(v = 4)\nkept is C::Mem", BoolValue(True)),
+            ("let kept: C = C::Nil\nkept is C::Mem", BoolValue(False)),
+        ],
+    )
+    def test_enum_alias_owner_keeps_its_target_after_a_redeclaration(
+        self, entry: str, expected: object
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Src[T]\n  | Mem(v: T)\n  | Nil").ok
+        assert s.eval_entry("type C = Src[int]").ok
+        assert s.eval_entry("enum Src[T]\n  | Other(w: T)").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "C::Other(w = 1)",
+            'C::Mem(v = "s")',
+            "let other: Src[int] = Src::Other(w = 1)\nother is C::Mem",
+        ],
+    )
+    def test_enum_alias_owner_rejects_the_redeclared_target_members(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Src[T]\n  | Mem(v: T)\n  | Nil").ok
+        assert s.eval_entry("type C = Src[int]").ok
+        assert s.eval_entry("enum Src[T]\n  | Other(w: T)").ok
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["s::A::A(z = 1).z", "s::A::Q(z = 1).z", "case s::Q(z = 1) of | s::A::A(z) => z"],
+    )
+    def test_retained_scope_region_alias_qualifies_its_target(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Q\n  x: int").ok
+        assert s.eval_entry("scope s\n  record Q\n    z: int\n  type A = Q\nend s").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_redeclaring_a_record_as_an_enum_reports_a_diagnostic_not_a_crash(self) -> None:
         """A record's construction spelling does not outlive its declaration.
 
         Once the name belongs to an enum, the record form it used to accept
-        is reported as a diagnostic rather than routed into the enum's
-        variant-constructor path, which has no variant to build.
+        is reported as a diagnostic, exactly as for an enum declared in the
+        same program, rather than building the superseded record.
         """
         s = open_session()
         assert s.eval_entry("record R\n  a: int").ok
@@ -2770,7 +5212,6 @@ enum Agent
         # fails, but with an empty message that says nothing about why.
         [stale_diagnostic] = stale.diagnostics
         assert "R" in stale_diagnostic.message
-        assert "constructor" in stale_diagnostic.message
         assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
@@ -2824,6 +5265,61 @@ enum Agent
         fresh = session.eval_entry("Color::New")
         assert not retired.ok
         assert fresh.ok, fresh.diagnostics
+
+    def test_redeclaring_an_enum_retires_a_type_nested_under_an_old_member(self) -> None:
+        """A retired member scope's record is also gone as a type, not only as a constructor."""
+        session = open_session()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta\n  value: int").ok
+
+        assert session.eval_entry("enum Color | New").ok
+
+        retired = session.eval_entry("fn(x: Color::Old::Meta) => 1")
+        assert not retired.ok
+        assert retired.diagnostics
+
+    def test_a_runtime_failed_redeclaration_does_not_retire_an_unpromoted_members_scope(
+        self,
+    ) -> None:
+        """A partially-promoted entry retires only the member scopes of a type
+        path it actually replaced: when an enum redeclaration itself fails at
+        runtime and is never promoted, an earlier member's own nested type
+        must stay resolvable and constructible exactly as before."""
+        session = open_session()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta\n  value: int").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nenum Color | New'
+        )
+        assert not failed.ok
+        assert failed.error is not None
+
+        kept_type = session.eval_entry("fn(x: Color::Old::Meta) => 1")
+        assert kept_type.ok, kept_type.diagnostics
+
+        kept_value = session.eval_entry("let q = Color::Old::Meta(value = 2)\nq")
+        assert kept_value.ok, kept_value.diagnostics
+
+    def test_redeclaring_an_enum_as_a_record_retires_its_members_as_types(self) -> None:
+        """A record replacing an enum also retires the enum's members as types.
+
+        A same-name enum-to-enum redeclaration already rejects a superseded
+        member's type; a record redeclaration must reject it exactly the same
+        way, rather than leaving the superseded enum's member spellable as a
+        type merely because the redeclaration is not itself an enum.
+        """
+        session = open_session()
+        assert session.eval_entry("enum E\n  | A(v: int)\n  | B").ok
+
+        assert session.eval_entry("record E\n  x: int").ok
+
+        as_type = session.eval_entry("E::A")
+        as_param = session.eval_entry("fn(a: E::A) => 1")
+        assert not as_type.ok
+        assert as_type.diagnostics
+        assert not as_param.ok
+        assert as_param.diagnostics
 
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
@@ -3225,7 +5721,7 @@ class TestRecursiveTypesAcrossEntries:
         assert still_catches_old.ok, still_catches_old.diagnostics
         assert still_catches_old.value == TextValue("caught-old")
 
-    def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
+    def test_enum_variant_on_an_old_typed_value_is_no_visible_constructor(self) -> None:
         s = open_session()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
         assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
@@ -3234,23 +5730,25 @@ class TestRecursiveTypesAcrossEntries:
         old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
         fresh = s.eval_entry("Color::Blue")
         cross_match = s.eval_entry("case old of\n  | Blue() => 1\n  | Green() => 0")
+        wildcard = s.eval_entry("case old of\n  | _ => 1")
 
-        assert old_match.ok, old_match.diagnostics
-        assert old_match.value == IntValue(1)
+        assert not old_match.ok
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
 
     def test_phantom_generic_member_on_a_retained_value_survives_enum_redeclaration(self) -> None:
-        """A fieldless member remains matchable without recovering its enum arguments."""
+        """A retained member value stays usable, but its superseded constructor is not visible."""
         s = open_session()
         assert s.eval_entry("enum E[T]\n  | A").ok
         assert s.eval_entry("let old = A").ok
         assert s.eval_entry("enum E[T]\n  | B").ok
 
         matched = s.eval_entry("case old of\n  | A() => 1")
+        wildcard = s.eval_entry("case old of\n  | _ => 1")
 
-        assert matched.ok, matched.diagnostics
-        assert matched.value == IntValue(1)
+        assert not matched.ok
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
 
     def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
         """An old enum's members cannot be joined through its reused name."""
@@ -3275,10 +5773,9 @@ class TestRecursiveTypesAcrossEntries:
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
         """A qualifier is a type name, so it names the newest declaration.
 
-        A bare constructor pattern follows the subject's own declaration and
-        keeps destructuring a value built before the redeclaration, but a
-        pattern that spells the enum out qualifies against the enum the name
-        means now — which is not the subject's — and is rejected.
+        A pattern that spells the enum out qualifies against the enum the name
+        means now — which is not the subject's — and is rejected; a bare
+        pattern selects only the visible constructor, likewise the newest one.
         """
         s = open_session()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
@@ -3289,8 +5786,7 @@ class TestRecursiveTypesAcrossEntries:
         qualified = s.eval_entry("case old of\n  | E::A(x) => x")
         fresh = s.eval_entry("let fresh: E = E::A(x = 2)\ncase fresh of\n  | E::A(x) => x")
 
-        assert bare.ok, bare.diagnostics
-        assert bare.value == IntValue(1)
+        assert not bare.ok
         assert not qualified.ok
         assert fresh.ok, fresh.diagnostics
         assert fresh.value == IntValue(2)
@@ -3384,6 +5880,37 @@ class TestEchoData:
 
         assert result.ok, result.diagnostics
         assert render_entry_result(result, echo=True) == rendered
+
+    @pytest.mark.parametrize(
+        ("source", "rendered"),
+        (
+            ('{"a b": 1, "q\\"": 2}', '{\n  "a b": 1,\n  "q\\"": 2\n}'),
+            ("{1: [true]}", "{\n  1: [\n    true\n  ]\n}"),
+            ("{1.50: 1}", "{\n  1.5: 1\n}"),
+            ("{false: 1}", "{\n  false: 1\n}"),
+            ("{Color::Tint(level = 2): 1}", "{\n  Color::Tint(level = 2): 1\n}"),
+            ("{Point(x = 1, y = 2): 1}", "{\n  Point(x = 1, y = 2): 1\n}"),
+            ('{({"k": [1]} as json): 1}', '{\n  {"k": [1]}: 1\n}'),
+        ),
+    )
+    def test_dict_echo_renders_each_key_on_one_line_in_value_syntax(
+        self, source: str, rendered: str
+    ) -> None:
+        """REPL echo spells every dict key in value syntax, one line per key."""
+        from agm.agl.repl.render import render_entry_result
+
+        session = open_session()
+        assert session.eval_entry("enum Color\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("record Point\n  x: int\n  y: int").ok
+        expression = session.eval_entry(source)
+        binding = session.eval_entry(f"let d = {source}")
+
+        assert expression.ok, expression.diagnostics
+        assert binding.ok, binding.diagnostics
+        assert render_entry_result(expression, echo=True) == rendered
+        echoed_binding = render_entry_result(binding, echo=True)
+        assert echoed_binding is not None
+        assert echoed_binding.endswith(f" = {rendered}")
 
     @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
@@ -4058,6 +6585,41 @@ class TestUnpromotedDeclarationTables:
         assert "Pair" not in session.type_names()
         assert not session.eval_entry("def take(xs: Pair[int]) -> int = 1").ok
 
+    @pytest.mark.parametrize(
+        ("setup", "declarations", "spelling", "promoted"),
+        [
+            pytest.param("", "type A = int", "A", False, id="root-alias"),
+            pytest.param("", "type A = int", "::A", False, id="anchored-root-alias"),
+            pytest.param("", "scope S\n  type A = int\nend S", "S::A", False, id="region-alias"),
+            pytest.param(
+                "", "scope S\n  type A = int\nend S", "::S::A", False, id="anchored-region-alias"
+            ),
+            pytest.param(
+                "import lib::*",
+                "scope S\n  type A = bool\nend S",
+                "A",
+                True,
+                id="imported-alias-beside-a-region-alias",
+            ),
+        ],
+    )
+    def test_a_declaration_is_promoted_only_with_the_alias_it_selects(
+        self, tmp_path: Path, setup: str, declarations: str, spelling: str, promoted: bool
+    ) -> None:
+        """A function whose signature names an alias the failed entry never promotes stays out."""
+        (tmp_path / "lib.agl").write_text("type A = int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        if setup:
+            assert session.eval_entry(setup).ok
+
+        failed = session.eval_entry(
+            f"def take(x: {spelling}) -> int = 1\nlet boom: int = [1][5]\n{declarations}"
+        )
+
+        assert not failed.ok
+        assert session.eval_entry("take", check_only=True).ok is promoted
+
 
 # ---------------------------------------------------------------------------
 # Exactly-once agent dispatch
@@ -4088,6 +6650,22 @@ class TestExactlyOnce:
         assert asked.ok, asked.diagnostics
         assert _text(asked.value) == "the-answer"
         assert agent.calls == 1
+
+    def test_check_only_keeps_a_diverging_bindings_type_without_evaluating_or_promoting(
+        self,
+    ) -> None:
+        from agm.agl.semantics.types import BottomType
+
+        session = open_session()
+        result = session.eval_entry(
+            'let doomed: int = raise Abort(message = "stop")', check_only=True
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value is None
+        assert isinstance(result.value_type, BottomType)
+        assert not session.eval_entry("doomed").ok
+        assert session.eval_entry("let doomed = 3").value == IntValue(3)
 
     def test_standalone_ask_echo_is_unquoted(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -4554,6 +7132,7 @@ class TestContractError:
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
         assert any("bad contract" in d.message for d in r.diagnostics)
+        assert r.failure is None
         # Atomic: nothing promoted.
         assert s.bindings() == []
 
@@ -4566,6 +7145,139 @@ class TestEntryResultShape:
         assert r.trace_path is None  # no --trace-file → no trace path
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.ok = False
+
+
+class TestEntryResultFailure:
+    """``failure`` carries the structured static error behind a rejected entry.
+
+    One test per site that sets it, plus the required ``None`` cases: success,
+    a runtime raise, and the diagnostic paths with no originating ``AglError``
+    (a malformed module parameter, a surrogate-escaped environment variable, a
+    failed extern companion import, and contract materialization).
+    """
+
+    def test_parse_error_sets_failure(self) -> None:
+        s = open_session()
+        text = "let = oops"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglSyntaxError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "="
+
+    def test_transcript_parse_error_sets_failure(self, tmp_path: Path) -> None:
+        text = "let = oops\n"
+        f = tmp_path / "syntax.agl"
+        f.write_text(text, encoding="utf-8")
+        s = open_session()
+        results = s.load_file(f)
+        assert len(results) == 1
+        assert not results[0].ok
+        failure = results[0].failure
+        assert isinstance(failure, AglSyntaxError)
+        span = failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "="
+
+    def test_scope_error_sets_failure(self) -> None:
+        s = open_session()
+        text = "undefined_name_xyz"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglScopeError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_typecheck_error_sets_failure(self) -> None:
+        s = open_session()
+        text = 'let b: int = "oops"'
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, AglTypeError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_match_compile_error_sets_failure(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Shape\n  | Circle\n  | Square").ok
+        text = "let f = fn(s: Shape) => case s of | Circle => 1"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, NonExhaustiveMatchError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "case s of | Circle => 1"
+
+    def test_lowering_nesting_too_deep_sets_failure_with_no_span(self) -> None:
+        s = open_session()
+        text = "let deep: int = " + "+".join(["1"] * 1200)
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, NestingTooDeepError)
+        # Stack exhaustion has no single originating source location.
+        assert r.failure.span is None
+
+    def test_type_entry_hidden_member_sets_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "m.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+        s = repl_session_with_root(tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        text = "C::Red"
+        r = s.eval_entry(text)
+        assert not r.ok
+        assert isinstance(r.failure, HiddenMemberError)
+        span = r.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == text
+
+    def test_successful_entry_has_no_failure(self) -> None:
+        s = open_session()
+        r = s.eval_entry("1 + 1")
+        assert r.ok
+        assert r.failure is None
+
+    def test_runtime_error_has_no_failure(self) -> None:
+        s = open_session()
+        r = s.eval_entry("let z: decimal = 1 / 0")
+        assert not r.ok
+        assert r.error is not None
+        assert r.failure is None
+
+    def test_malformed_module_parameter_has_no_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {params[0].key: "oops"}
+
+        s = repl_session_with_root(tmp_path, param_seed_resolver=resolve)
+        r = s.eval_entry("import settings\nsettings::value")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
+
+    def test_surrogate_environment_variable_has_no_failure(self) -> None:
+        s = ReplSession(process_environment={"LEGACY": "a" + "\udc00" + "b"})
+        s.open()
+        r = s.eval_entry("1 + 1")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
+
+    def test_failed_extern_companion_import_has_no_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "extlib.agl").write_text(
+            "extern def add_one(x: int) -> int\n", encoding="utf-8"
+        )
+        (tmp_path / "extlib.py").write_text("def add_one(x)\n  return x + 1\n", encoding="utf-8")
+        s = repl_session_with_root(tmp_path)
+        r = s.eval_entry("import extlib::*")
+        assert not r.ok
+        assert r.diagnostics
+        assert r.failure is None
 
 
 # ---------------------------------------------------------------------------
@@ -5097,10 +7809,10 @@ class TestInfixDecl:
 
     def test_infixl_usable_in_subsequent_entry(self) -> None:
         # ``infixl`` declared in one entry must make the operator usable in a
-        # later entry (the fixity persists across entries for parsing).
+        # later entry (the fixity persists across entries).
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        assert s.eval_entry("infixl +++ at 5").ok
         r = s.eval_entry("1 +++ 2")
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -5108,8 +7820,8 @@ class TestInfixDecl:
 
     def test_infixr_usable_in_subsequent_entry(self) -> None:
         s = open_session(default_stdlib=False)
-        s.eval_entry("infixr << at 40")
         s.eval_entry('def <<(x: text, y: text) -> text = "(%{x}%{y})"')
+        assert s.eval_entry("infixr << at 40").ok
         r = s.eval_entry('"a" << "b" << "c"')
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -5119,8 +7831,8 @@ class TestInfixDecl:
         # A relative priority (``at prio > + 1``) declared in one entry must
         # keep binding correctly when the operator is used in a later entry.
         s = open_session(default_stdlib=False)
-        s.eval_entry("infixl |> at prio > + 1")
         s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
+        assert s.eval_entry("infixl |> at prio > + 1").ok
         r = s.eval_entry("1 + 2 |> 3 > 20")
         assert r.ok, r.diagnostics
         assert r.value is not None
@@ -5132,8 +7844,8 @@ class TestInfixDecl:
         # Redeclaring an infix operator in a later entry updates its fixity
         # (mirrors how ``let``/``record`` redefinitions shadow in the REPL).
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        assert s.eval_entry("infixl +++ at 5").ok
         # Redeclare with a different priority; the operator is still usable.
         r_decl = s.eval_entry("infixl +++ at 7")
         assert r_decl.ok, r_decl.diagnostics
@@ -5145,10 +7857,10 @@ class TestInfixDecl:
         # A relative priority may reference a user operator declared in an earlier
         # entry; the reference resolves against the accumulated fixity.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
-        s.eval_entry("infixl *** at prio +++ + 1")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         s.eval_entry("def ***(x: int, y: int) -> int = x * y")
+        assert s.eval_entry("infixl +++ at 5").ok
+        assert s.eval_entry("infixl *** at prio +++ + 1").ok
         # ``+++`` binds at 5, ``***`` at 6 (tighter), so ``1 +++ 2 *** 3``
         # groups as ``1 +++ (2 *** 3)`` = 1 + (2*3) = 7.
         r = s.eval_entry("1 +++ 2 *** 3")
@@ -5201,9 +7913,12 @@ class TestInfixDecl:
             cwd=root,
         )
 
-        declared = s.eval_entry("import operators::*\ninfixl +++ at prio %% + 1")
+        declared = s.eval_entry(
+            "import operators::*\n"
+            "def +++(x: int, y: int) -> int = x * 100 + y\n"
+            "infixl +++ at prio %% + 1"
+        )
         assert declared.ok, declared.diagnostics
-        assert s.eval_entry("def +++(x: int, y: int) -> int = x * 100 + y").ok
 
         result = s.eval_entry("1 %% 2 +++ 3")
 
@@ -5211,12 +7926,14 @@ class TestInfixDecl:
         assert result.value is not None
         assert _int(result.value) == 213
 
-    def test_session_fixity_conflicts_with_a_bare_visible_import(self, tmp_path: Path) -> None:
+    def test_session_operator_beats_a_bare_visible_import(self, tmp_path: Path) -> None:
         from agm.agl.modules.roots import assemble_roots
 
         root = tmp_path / "modules"
         root.mkdir()
-        (root / "operators.agl").write_text("infixr %% at 5\n")
+        (root / "operators.agl").write_text(
+            "infixr %% at 5\ndef %%(x: int, y: int) -> int = x * y\n"
+        )
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
@@ -5227,17 +7944,18 @@ class TestInfixDecl:
             cwd=root,
         )
 
-        assert s.eval_entry("infixl %% at 5").ok
         assert s.eval_entry("def %%(x: int, y: int) -> int = x + y").ok
-        result = s.eval_entry("import operators::*\n1 %% 2")
+        assert s.eval_entry("infixl %% at 5").ok
+        result = s.eval_entry("import operators::*\n1 %% 2 %% 3")
 
-        assert not result.ok
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 6
 
     def test_infix_decl_survives_reset(self) -> None:
         # ``:reset`` clears ALL session state, including accumulated fixity.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
-        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y\ninfixl +++ at 5")
+        assert s.eval_entry("1 +++ 2").ok
         s.reset()
         r = s.eval_entry("1 +++ 2")
         assert not r.ok  # fixity gone after reset
@@ -5245,8 +7963,8 @@ class TestInfixDecl:
     def test_type_of_uses_accumulated_infix(self) -> None:
         # ``:type`` parses with the session's accumulated fixity too.
         s = open_session()
-        s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.eval_entry("infixl +++ at 5")
         assert s.type_of("1 +++ 2") == "int"
 
 
@@ -5319,7 +8037,7 @@ class TestImports:
         assert not s.eval_entry("original()").ok
         assert s.eval_entry("replacement()").value == IntValue(2)
 
-    def test_single_member_alias_use_is_replaced_by_parent_target(self) -> None:
+    def test_a_tail_use_keeps_a_rename_of_its_target(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
@@ -5329,37 +8047,58 @@ class TestImports:
 
         assert replacement.ok, replacement.diagnostics
         assert session.eval_entry("new()").value == IntValue(2)
-        assert not session.eval_entry("selected()").ok
+        assert session.eval_entry("selected()").value == IntValue(1)
 
-    def test_single_member_alias_replacement_applies_to_its_entry_transactionally(
-        self,
-    ) -> None:
+    def test_a_rename_keeps_a_tail_use_of_its_target(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::{old}").ok
 
-        failed = session.eval_entry("use Source::new as selected\nold()")
+        renamed = session.eval_entry("use Source::new as selected\nold() + selected()")
 
-        assert not failed.ok
-        assert session.eval_entry("old()").value == IntValue(1)
+        assert renamed.ok, renamed.diagnostics
+        assert renamed.value == IntValue(3)
+        assert session.eval_entry("old() + selected()").value == IntValue(3)
 
-        replacement = session.eval_entry("use Source::new as selected\nselected()")
-
-        assert replacement.ok, replacement.diagnostics
-        assert replacement.value == IntValue(2)
-        assert not session.eval_entry("old()").ok
-
-    def test_single_member_alias_replacement_can_reuse_the_exposed_name(self) -> None:
+    def test_a_rename_keeps_a_rename_of_its_target_to_another_name(self) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
-        assert session.eval_entry("use Source::old as selected").ok
+        assert session.eval_entry("use Source::old as first").ok
 
-        replacement = session.eval_entry("use Source::new as selected\nselected()")
+        renamed = session.eval_entry("use Source::new as second")
 
+        assert renamed.ok, renamed.diagnostics
+        assert session.eval_entry("first() + second()").value == IntValue(3)
+
+    @pytest.mark.parametrize(
+        ("earlier", "later", "read", "before", "after"),
+        [
+            ("use Source::old as selected", "use Source::new as selected", "selected()", 1, 2),
+            ("use Source::old as selected", "use Other::new as selected", "selected()", 1, 4),
+            ("use Source as selected", "use Other as selected", "selected::old()", 1, 3),
+        ],
+        ids=["same-target", "another-target", "whole-scope"],
+    )
+    def test_a_rename_replaces_an_earlier_rename_to_its_name_transactionally(
+        self, earlier: str, later: str, read: str, before: int, after: int
+    ) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "scope Source\n  def old() -> int = 1\n\n  def new() -> int = 2\nend Source\n\n"
+            "scope Other\n  def old() -> int = 3\n\n  def new() -> int = 4\nend Other"
+        ).ok
+        assert session.eval_entry(earlier).ok
+
+        failed = session.eval_entry(f'{later}\nlet bad: int = "not an int"')
+
+        assert not failed.ok
+        assert session.eval_entry(read).value == IntValue(before)
+        replacement = session.eval_entry(f"{later}\n{read}")
         assert replacement.ok, replacement.diagnostics
-        assert replacement.value == IntValue(2)
+        assert replacement.value == IntValue(after)
+        assert session.eval_entry(read).value == IntValue(after)
 
     def test_nested_whole_target_alias_does_not_replace_its_parent_use(self) -> None:
         session = open_session()
@@ -5373,7 +8112,21 @@ class TestImports:
         assert aliased.value == IntValue(3)
         assert session.eval_entry("old()").value == IntValue(1)
 
-    def test_nested_single_member_alias_replacement_keeps_other_retained_headers(
+    def test_a_rename_spelled_through_a_retained_rename_of_its_name_keeps_it(
+        self, tmp_path: Path
+    ) -> None:
+        """``use M::Inner as M`` reads through the retained ``M``, so it never replaces it."""
+        assert_repl_verdicts(
+            tmp_path,
+            {
+                "lib": "scope S\n  def g() -> int = 2\n\n  scope Inner\n    def f() -> int = 1\n"
+                "  end Inner\nend S"
+            },
+            ("import lib", "use lib::S as M", "use M::Inner as M"),
+            {"inner": accepted("M::f()", "int"), "outer": accepted("M::g()", "int")},
+        )
+
+    def test_a_nested_rename_keeps_the_retained_tail_use_of_its_target(
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
@@ -5404,9 +8157,12 @@ class TestImports:
 
         assert replacement.ok, replacement.diagnostics
         assert replacement.value == IntValue(2)
-        assert not session.eval_entry(
-            "scope Outer\n\n  scope Inner\n    def stale() -> int = old()\n  end Inner\nend Outer"
-        ).ok
+        kept = session.eval_entry(
+            "scope Outer\n\n  scope Inner\n    def kept() -> int = old()\n  end Inner\nend Outer"
+            "\n\nOuter::Inner::kept()"
+        )
+        assert kept.ok, kept.diagnostics
+        assert kept.value == IntValue(1)
 
     def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
@@ -5434,7 +8190,7 @@ class TestImports:
             "scope Outer\n  def read() -> int = old()\nend Outer\n\nOuter::read()"
         ).ok
 
-    def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
+    def test_relative_use_replaces_a_retained_one_its_target_now_resolves_like(
         self,
     ) -> None:
         session = open_session()
@@ -5442,17 +8198,35 @@ class TestImports:
         assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
 
-        result = session.eval_entry(
-            "scope Outer\n"
-            "  use Source::{new}\n"
-            "  def both() -> int = old() + new()\n"
-            "end Outer\n"
-            "\n"
-            "Outer::both()"
+        # Both uses now spell the scopes Source and Outer::Source.
+        replaced = session.eval_entry(
+            "scope Outer\n  use Source::{new}\n  def both() -> int = old() + new()\nend Outer"
+        )
+        declared = session.eval_entry(
+            "scope Outer\n  use Source::{new}\n  def only() -> int = new()\nend Outer"
         )
 
+        assert not replaced.ok
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::only()")
         assert result.ok, result.diagnostics
-        assert result.value == IntValue(3)
+        assert result.value == IntValue(2)
+
+    def test_method_path_through_a_region_holding_a_retained_use_declares_its_own_type(
+        self,
+    ) -> None:
+        session = open_session()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
+
+        declared = session.eval_entry(
+            "record Outer::Source\n  x: int\ndef Outer::Source::m(self) -> int = self.x"
+        )
+
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::Source(x = 2).m()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
 
     def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
         session = open_session()
@@ -5466,6 +8240,24 @@ class TestImports:
 
         assert not replacement.ok
         assert not session.eval_entry("Outer::captured()").ok
+
+    def test_replacing_a_use_hides_its_old_constructor_in_the_replacement_entry(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "scope Source\n  record Old\n    x: int\n\n  record New\n    y: int\nend Source"
+        ).ok
+        assert session.eval_entry("use Source::{Old}").ok
+        assert session.eval_entry("Old(x = 1)").ok
+
+        for probe in (
+            "Old(x = 1)",
+            "fn(o: Source::Old) => case o of\n  | Old(x) => x",
+            "fn(o: Source::Old) => o is Old",
+        ):
+            replaced = session.eval_entry(f"use Source::{{New}}\n{probe}", check_only=True)
+            assert isinstance(replaced.failure, AglScopeError), probe
+        assert session.eval_entry("use Source::{New}\nNew(y = 2)").ok
+        assert not session.eval_entry("Old(x = 1)").ok
 
     def test_regional_import_tail_does_not_canonicalize_an_unrelated_use(
         self, tmp_path: Path
@@ -5563,50 +8355,69 @@ class TestImports:
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("old()").ok
 
-    def test_retained_imported_use_survives_import_alias_change(self, tmp_path: Path) -> None:
+    def test_retained_imported_use_reads_the_import_alias_in_force(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib as Old").ok
         assert session.eval_entry("use Old::*").ok
 
         changed = session.eval_entry("import lib as New")
-        result = session.eval_entry("value()")
 
         assert changed.ok, changed.diagnostics
+        assert not session.eval_entry("value()").ok
+        assert session.eval_entry("use New::*").ok
+        result = session.eval_entry("value()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_imported_use_reports_when_a_replacement_hides_its_target(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_imported_use_reads_nothing_a_replacement_hides(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope S\n  def value() -> int = 1\nend S\n", encoding="utf-8"
         )
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib\nuse lib::S::*").ok
+        assert session.eval_entry("value()").value == IntValue(1)
 
         replacement = session.eval_entry("let other = 2\nimport lib hiding S")
 
-        assert not replacement.ok
-        assert replacement.diagnostics[0].message
-        # The complaint locates the import that hid the route, not a placeholder line.
-        assert replacement.diagnostics[0].line == 2
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry("value()").ok
 
-    def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_use_of_a_used_scope_reads_only_earlier_uses(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope Nested\n  def value() -> int = 1\nend Nested\n", encoding="utf-8"
         )
         session = repl_session_with_root(tmp_path)
         assert session.eval_entry("import lib as Old").ok
         assert session.eval_entry("use Old::*").ok
+        assert session.eval_entry("use Nested::*").ok
+        assert session.eval_entry("value()").value == IntValue(1)
+
         assert session.eval_entry("import lib as New").ok
+        assert not session.eval_entry("value()").ok
 
+        # A use reads only the uses before it, so the retained one stays empty.
+        assert session.eval_entry("use New::*").ok
+        assert not session.eval_entry("value()").ok
         result = session.eval_entry("use Nested::*\nvalue()")
-
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
+
+    def test_retained_use_combines_an_import_a_later_entry_adds(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Agent\n  def f() -> int = 1\nend Agent\n", encoding="utf-8"
+        )
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry('scope Agent\n  def h() -> text = "own"\nend Agent').ok
+        assert session.eval_entry("use Agent::*").ok
+        assert not session.eval_entry("f()").ok
+
+        assert session.eval_entry("import lib::*").ok
+
+        imported = session.eval_entry("f()")
+        assert imported.ok, imported.diagnostics
+        assert imported.value == IntValue(1)
+        assert session.eval_entry("h()").value == TextValue("own")
 
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
@@ -5651,7 +8462,7 @@ class TestImports:
         assert result.value == IntValue(1)
         assert not session.eval_entry("second()").ok
 
-    def test_retained_wildcard_facade_refreshes_only_its_original_import(
+    def test_retained_wildcard_facade_use_reads_every_import_of_its_alias(
         self, tmp_path: Path
     ) -> None:
         package = tmp_path / "pkg"
@@ -5666,15 +8477,16 @@ class TestImports:
         (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
         assert session.eval_entry("import unrelated/* as Facade").ok
 
-        refreshed = session.eval_entry("first() + second()")
+        refreshed = session.eval_entry("first() + second() + intruder()")
         assert refreshed.ok, refreshed.diagnostics
-        assert refreshed.value == IntValue(3)
-        assert not session.eval_entry("intruder()").ok
+        assert refreshed.value == IntValue(6)
 
+        # The direct import replaces pkg/a's; the facade keeps pkg/b.
         assert session.eval_entry("import pkg/a as Direct").ok
-        fallback = session.eval_entry("first() + second()")
-        assert fallback.ok, fallback.diagnostics
-        assert fallback.value == IntValue(3)
+        assert not session.eval_entry("first()").ok
+        remaining = session.eval_entry("second() + Direct::first()")
+        assert remaining.ok, remaining.diagnostics
+        assert remaining.value == IntValue(3)
 
     def test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries(
         self, tmp_path: Path
@@ -5694,6 +8506,34 @@ class TestImports:
         )
         assert declared.ok, declared.diagnostics
         result = session.eval_entry("Outer::describe(lib::Color::Red)")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_named_scope_retained_wildcard_facade_use_reaches_a_referenced_enum_member(
+        self, tmp_path: Path
+    ) -> None:
+        """A named scope's retained wildcard facade use re-derives a
+        referenced (``::Name``) enum member's bare constructor across entries
+        exactly like an inline member (see
+        ``test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries``)."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text(
+            "record Rec\n  x: int\n\nenum E = ::Rec | Other\n", encoding="utf-8"
+        )
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "  def make() -> Rec = Rec(x = 1)\n"
+            "  def describe(r: Rec) -> int = r.x\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::describe(Outer::make())")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
@@ -5720,14 +8560,9 @@ class TestImports:
         stale = session.eval_entry("scope Outer\n  def readSecond() -> int = second()\nend Outer")
         assert not stale.ok
 
-    def test_named_scope_retained_wildcard_facade_use_survives_direct_reimport_of_its_members(
+    def test_named_scope_retained_wildcard_facade_use_reads_nothing_once_its_imports_are_replaced(
         self, tmp_path: Path
     ) -> None:
-        """Once every module a wildcard facade discovered is ALSO reimported
-        directly under its own alias, the facade's own resolved origin no
-        longer matches any current declaration -- the retained contribution
-        must fall back to what is still independently importable rather than
-        losing its members."""
         package = tmp_path / "pkg"
         package.mkdir()
         (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
@@ -5739,14 +8574,14 @@ class TestImports:
 
         assert session.eval_entry("import pkg/a as Q1\nimport pkg/b as Q2").ok
 
+        assert not session.eval_entry(
+            "scope Outer\n  def readFirst() -> int = first()\nend Outer"
+        ).ok
         declared = session.eval_entry(
-            "scope Outer\n"
-            "  def readFirst() -> int = first()\n"
-            "  def readSecond() -> int = second()\n"
-            "end Outer"
+            "scope Outer\n  def read() -> int = Q1::first() + Q2::second()\nend Outer"
         )
         assert declared.ok, declared.diagnostics
-        result = session.eval_entry("Outer::readFirst() + Outer::readSecond()")
+        result = session.eval_entry("Outer::read()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(3)
 
@@ -5816,9 +8651,7 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert session.eval_entry("Outer::check()").value == IntValue(33)
 
-    def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_separate_wildcard_aliases_combine_under_a_use(self, tmp_path: Path) -> None:
         alpha = tmp_path / "alpha"
         beta = tmp_path / "beta"
         alpha.mkdir()
@@ -5830,7 +8663,175 @@ class TestImports:
         assert session.eval_entry("import alpha/* as Facade").ok
         assert session.eval_entry("import beta/* as Facade").ok
 
-        assert not session.eval_entry("use Facade::*").ok
+        assert session.eval_entry("use Facade::*").ok
+        assert session.eval_entry("first() + second()").value == IntValue(3)
+
+    def test_retained_wildcard_facade_use_exposes_a_grown_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        """A type a wildcard facade only later discovers is usable in type
+        position exactly where its value position already is."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        (package / "b.agl").write_text("record Second\n  n: int\n", encoding="utf-8")
+
+        typed = session.eval_entry("fn(x: Second) => 1")
+        valued = session.eval_entry("Second(n = 1)")
+
+        assert typed.ok, typed.diagnostics
+        assert valued.ok, valued.diagnostics
+
+    def test_named_scope_retained_wildcard_facade_use_exposes_a_grown_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+        (package / "b.agl").write_text("record Second\n  n: int\n", encoding="utf-8")
+
+        typed = session.eval_entry("scope Outer\n  def typed(x: Second) -> int = 1\nend Outer")
+        valued = session.eval_entry(
+            "scope Outer\n  def valued() -> Second = Second(n = 1)\nend Outer"
+        )
+
+        assert typed.ok, typed.diagnostics
+        assert valued.ok, valued.diagnostics
+
+    def test_retained_wildcard_facade_use_loses_a_shrunk_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        """A type a wildcard facade's glob stops matching is gone from type
+        position exactly where its value position already is, while an
+        unrelated still-matched type keeps both."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("record Second\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        removed.unlink()
+
+        kept_typed = session.eval_entry("fn(x: First) => 1")
+        kept_valued = session.eval_entry("First(n = 1)")
+        lost_typed = session.eval_entry("fn(x: Second) => 1")
+        lost_valued = session.eval_entry("Second(n = 1)")
+
+        assert kept_typed.ok, kept_typed.diagnostics
+        assert kept_valued.ok, kept_valued.diagnostics
+        assert not lost_typed.ok
+        assert not lost_valued.ok
+        with pytest.raises(AglTypeError) as typed_error:
+            session.type_of("fn(x: Second) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(AglScopeError):
+            session.type_of("Second(n = 1)")
+
+    def test_named_scope_retained_wildcard_facade_use_loses_a_shrunk_type_at_every_position(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record First\n  n: int\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("record Second\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
+        ).ok
+        removed.unlink()
+
+        kept_typed = session.eval_entry("scope Outer\n  def typed(x: First) -> int = 1\nend Outer")
+        kept_valued = session.eval_entry(
+            "scope Outer\n  def valued() -> First = First(n = 1)\nend Outer"
+        )
+        lost_typed = session.eval_entry(
+            "scope Outer\n  def typed2(x: Second) -> int = 1\nend Outer"
+        )
+        lost_valued = session.eval_entry(
+            "scope Outer\n  def valued2() -> Second = Second(n = 1)\nend Outer"
+        )
+
+        assert kept_typed.ok, kept_typed.diagnostics
+        assert kept_valued.ok, kept_valued.diagnostics
+        assert not lost_typed.ok
+        assert not lost_valued.ok
+        with pytest.raises(UnknownMemberError) as typed_error:
+            session.type_of("fn(x: Outer::Second) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(UnknownMemberError):
+            session.type_of("Outer::Second(n = 1)")
+
+    def test_wildcard_facade_use_type_position_survives_alias_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record Old\n  n: int\n", encoding="utf-8")
+        (package / "b.agl").write_text("record New\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as OldAlias\nuse OldAlias::{Old}").ok
+
+        replacement = session.eval_entry("import pkg/* as NewAlias\nuse NewAlias::{New}")
+        assert replacement.ok, replacement.diagnostics
+
+        new_typed = session.eval_entry("fn(x: New) => 1")
+        new_valued = session.eval_entry("New(n = 1)")
+        old_typed = session.eval_entry("fn(x: Old) => 1")
+        old_valued = session.eval_entry("Old(n = 1)")
+
+        assert new_typed.ok, new_typed.diagnostics
+        assert new_valued.ok, new_valued.diagnostics
+        assert not old_typed.ok
+        assert not old_valued.ok
+        with pytest.raises(AglTypeError) as typed_error:
+            session.type_of("fn(x: Old) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(AglScopeError):
+            session.type_of("Old(n = 1)")
+
+    def test_named_scope_wildcard_facade_use_type_position_survives_alias_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("record Old\n  n: int\n", encoding="utf-8")
+        (package / "b.agl").write_text("record New\n  n: int\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as OldAlias\n\nscope Outer\n  use OldAlias::{Old}\nend Outer"
+        ).ok
+
+        replacement = session.eval_entry(
+            "import pkg/* as NewAlias\n\nscope Outer\n  use NewAlias::{New}\nend Outer"
+        )
+        assert replacement.ok, replacement.diagnostics
+
+        new_typed = session.eval_entry("scope Outer\n  def typed(x: New) -> int = 1\nend Outer")
+        new_valued = session.eval_entry(
+            "scope Outer\n  def valued() -> New = New(n = 1)\nend Outer"
+        )
+        old_typed = session.eval_entry("scope Outer\n  def typed2(x: Old) -> int = 1\nend Outer")
+        old_valued = session.eval_entry(
+            "scope Outer\n  def valued2() -> Old = Old(n = 1)\nend Outer"
+        )
+
+        assert new_typed.ok, new_typed.diagnostics
+        assert new_valued.ok, new_valued.diagnostics
+        assert not old_typed.ok
+        assert not old_valued.ok
+        with pytest.raises(UnknownMemberError) as typed_error:
+            session.type_of("fn(x: Outer::Old) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(UnknownMemberError):
+            session.type_of("Outer::Old(n = 1)")
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
         session = open_session()
@@ -5871,6 +8872,34 @@ class TestImports:
         assert replacement.ok, replacement.diagnostics
         assert s.eval_entry("new()").value == IntValue(2)
         assert not s.eval_entry("old()").ok
+
+    @pytest.mark.parametrize(
+        ("original", "use", "construct"),
+        (
+            ("record NS::R\n  x: int", "use NS::{R as Q}", "Q(y = 7).y"),
+            ("record NS::R\n  x: int", "use NS::{R}", "R(y = 7).y"),
+            ("record R0\n  x: int\n\ntype NS::R = R0", "use NS::{R as Q}", "Q(y = 7).y"),
+            (
+                "record NS::R\n  x: int",
+                "scope Outer\n  use NS::{R as Q}\nend Outer",
+                "scope Outer\n  def make() -> int = Q(y = 7).y\nend Outer\n\nOuter::make()",
+            ),
+        ),
+    )
+    def test_retained_use_selects_the_redeclared_constructor(
+        self, original: str, use: str, construct: str
+    ) -> None:
+        """A redeclared use source supersedes: the retained use names only the newest one."""
+        s = open_session()
+        assert s.eval_entry(original).ok
+        assert s.eval_entry(use).ok
+        assert s.eval_entry("record NS::R\n  y: int").ok
+
+        result = s.eval_entry(construct)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(7)
+        assert not s.eval_entry(construct.replace("y = 7", "x = 7")).ok
 
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
         s = open_session()
@@ -6516,29 +9545,61 @@ class TestImports:
         assert s.eval_entry("arithmetic::add()").ok
         assert s.eval_entry("mul()").ok
 
-    def test_generic_graph_load_error_surfaces_as_diagnostic(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("unreadable", ("undecodable", "directory"))
+    def test_unreadable_module_file_surfaces_as_diagnostic(
+        self, tmp_path: Path, unreadable: str
     ) -> None:
-        # Covers the last-resort ``except Exception`` fallback in
-        # ``_eval_entry``: a generic error from the graph loader
-        # (not an AglSyntaxError or module error) must still surface as a
-        # failed entry with a diagnostic rather than an uncaught exception.
-        import agm.agl.modules.loader as loader_mod
-
-        original_build = loader_mod.build_repl_graph
-
-        def bad_build(*args: object, **kwargs: object) -> object:
-            raise RuntimeError("unexpected loader failure")
-
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def noop(n: int) -> int = n\n")
+        """A module file that cannot be read as text fails the entry, not the session."""
+        broken = tmp_path / "mylib.agl"
+        if unreadable == "undecodable":
+            broken.write_bytes(b"\xff\xfe not utf-8 \x80")
+        else:
+            broken.mkdir()
         s = repl_session_with_root(tmp_path)
-        monkeypatch.setattr(loader_mod, "build_repl_graph", bad_build)
-        r = s.eval_entry("import mylib\nnoop(1)")
+
+        r = s.eval_entry("import mylib\n()")
+
         assert not r.ok
-        assert len(r.diagnostics) >= 1
-        assert "unexpected loader failure" in r.diagnostics[0].message
-        monkeypatch.setattr(loader_mod, "build_repl_graph", original_build)
+        assert r.diagnostics
+        assert s.eval_entry("1 + 1").ok
+
+    @pytest.mark.parametrize(
+        "stage",
+        (
+            "agm.agl.modules.loader.build_repl_graph",
+            "agm.agl.scope.program.resolve_program",
+            "agm.agl.typecheck.program.check_program",
+        ),
+    )
+    def test_internal_frontend_failure_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+    ) -> None:
+        """An internal frontend failure is a crash, never an entry diagnostic."""
+        (tmp_path / "mylib.agl").write_text("def noop(n: int) -> int = n\n")
+        s = repl_session_with_root(tmp_path)
+        module_name, attribute = stage.rsplit(".", 1)
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("internal")
+
+        monkeypatch.setattr(importlib.import_module(module_name), attribute, fail)
+        with pytest.raises(RuntimeError):
+            s.eval_entry("import mylib\nmylib::noop(1)")
+
+    def test_internal_failure_while_opening_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``open`` reports source failures only; an internal failure escapes it."""
+        import agm.agl.typecheck.program as program_mod
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("internal")
+
+        # No standard library: the bootstrap image cache never serves this open.
+        s = ReplSession(default_stdlib=False)
+        monkeypatch.setattr(program_mod, "check_program", fail)
+        with pytest.raises(RuntimeError):
+            s.open()
 
     def test_region_scoped_import_retains_its_qualifier_route_across_entries(
         self, tmp_path: Path
@@ -6668,6 +9729,46 @@ class TestImports:
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 3
+
+
+# ---------------------------------------------------------------------------
+# A qualifier ambiguous across two facade-imported modules (both matching the
+# same route) is one condition regardless of where it is written. Every position reports it alike:
+# ``AmbiguousQualificationError``, never a position-specific class.
+# ---------------------------------------------------------------------------
+
+
+class TestAmbiguousQualifierClassAgreement:
+    def _session(self, tmp_path: Path) -> ReplSession:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("enum Thing\n  | Red\n  | Blue\n", encoding="utf-8")
+        (package / "b.agl").write_text("enum Thing\n  | Red\n  | Yellow\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        setup = session.eval_entry(
+            "import pkg/* as Facade\nimport pkg/a\nlet v: pkg/a::Thing = pkg/a::Thing::Red"
+        )
+        assert setup.ok, setup.diagnostics
+        return session
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("Facade::Thing -> int", id="function-type"),
+            pytest.param("int -> array[Facade::Thing]", id="type-argument"),
+        ],
+    )
+    def test_an_entry_only_a_type_spells_reports_the_type_position_verdict(
+        self, tmp_path: Path, text: str
+    ) -> None:
+        """An entry that is no value expression at all is read as a type alone."""
+        session = self._session(tmp_path)
+        result = session.eval_entry(text, check_only=True)
+        assert not result.ok
+        assert isinstance(result.failure, AmbiguousQualificationError)
+        span = result.failure.span
+        assert span is not None
+        assert text[span.start_offset : span.end_offset] == "Facade::Thing"
 
 
 # ---------------------------------------------------------------------------
@@ -7269,6 +10370,18 @@ class TestBareTypeEntry:
         assert isinstance(r.value_type, ArrayType)
         assert isinstance(r.value_type.elem, IntType)
 
+    def test_multi_statement_entry_is_not_mistaken_for_a_type_entry(self) -> None:
+        """A failed entry spanning more than one statement keeps its own failure.
+
+        The type-entry fallback wraps the whole failed entry as a synthetic
+        alias body; a multi-statement entry parses into more than one item,
+        so the fallback declines and the original failure surfaces.
+        """
+        s = open_session()
+        r = s.eval_entry("int\nlet x = 1")
+        assert not r.ok
+        assert r.kind != "type"
+
     def test_bare_generic_enum_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -7293,6 +10406,33 @@ class TestBareTypeEntry:
         assert r.kind == "type"
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            pytest.param("Box[Option]", id="applied-owner-nested-arg"),
+            pytest.param("Option[Box]", id="applied-owner-nested-arg-swapped"),
+            pytest.param("array[Option]", id="array-elem"),
+            pytest.param("dict[text, Box]", id="dict-value"),
+            pytest.param("(int) -> Option", id="function-result"),
+            pytest.param("Result[int, Option]", id="applied-type-arg"),
+        ],
+    )
+    def test_nested_unapplied_generic_keeps_original_failure(self, expr: str) -> None:
+        """A nested unapplied generic must not be echoed as though it were the whole entry.
+
+        Regression: the whole entry's own span was never compared against the
+        raised ``UnappliedGenericTypeError``'s span, so any unapplied generic
+        reached while resolving a *nested* type argument (not the entry's own
+        top-level spelling) was echoed as if it had been asked for directly.
+        """
+        s = open_session()
+        s.eval_entry("record Box[T]\n  v: T")
+
+        r = s.eval_entry(expr)
+
+        assert not r.ok
+        assert r.kind != "type"
 
     def test_use_exposed_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -7358,26 +10498,52 @@ class TestBareTypeEntry:
 
         assert not session.eval_entry("Other::Box").ok
 
-    @pytest.mark.parametrize(
-        "local_route",
-        (
-            "use S as a\n\nscope S\n  record Box[T]\n    value: T\nend S",
-            "scope a\n  record Box[T]\n    value: T\nend a",
-        ),
-    )
-    def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
-        self, tmp_path: Path, local_route: str
+    def test_qualified_unapplied_generic_rejects_distinct_use_alias_and_import_routes(
+        self, tmp_path: Path
     ) -> None:
+        """A qualified ambiguity is rejected identically applied or bare.
+
+        ``a::Box[int]`` (applied) and ``a::Box`` (bare, unapplied) must both
+        raise the exact same ambiguity class: an ambiguous qualifier is never
+        treated as a valid-but-unapplied generic reference.
+        """
         (tmp_path / "a.agl").write_text("record Box[T]\n  value: T\n")
         session = open_session(
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
-        setup = session.eval_entry(f"import a\n{local_route}")
+        setup = session.eval_entry(
+            "import a\nuse S as a\n\nscope S\n  record Box[T]\n    value: T\nend S"
+        )
         assert setup.ok, setup.diagnostics
 
         assert not session.eval_entry("a::Box[int]").ok
         assert not session.eval_entry("a::Box").ok
+        with pytest.raises(AmbiguousQualificationError):
+            session.type_of("a::Box[int]")
+        with pytest.raises(AmbiguousQualificationError):
+            session.type_of("a::Box")
+
+    def test_qualified_generic_type_entry_prefers_an_own_scope_over_a_module_route(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        (tmp_path / "a.agl").write_text("record Box[T]\n  value: T\n  imported: int\n")
+        session = open_session(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
+        )
+        setup = session.eval_entry("import a\n\nscope a\n  record Box[T]\n    value: T\nend a")
+        assert setup.ok, setup.diagnostics
+
+        for entry in ("a::Box[int]", "a::Box"):
+            result = session.eval_entry(entry)
+            assert result.ok, result.diagnostics
+            assert "imported" not in render_entry_result(result, echo=True)
+        routed = session.eval_entry("/a::Box")
+        assert routed.ok, routed.diagnostics
+        assert "imported" in render_entry_result(routed, echo=True)
 
     def test_qualified_unapplied_generic_displays_equivalent_duplicate_routes(
         self, tmp_path: Path
@@ -7474,176 +10640,46 @@ class TestBareTypeEntry:
             == "<type:\nenum std/prelude::Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
-    def test_builtin_type_entry_works_when_graph_env_is_unavailable(self, tmp_path: Path) -> None:
-        from agm.agl.repl.render import render_entry_result
+    def test_type_entry_matches_plain_entry_when_graph_env_is_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare type entry is only ever a fallback for a failed plain entry.
 
-        s = open_session(stdlib_root=tmp_path / "missing-stdlib")
-        r = s.eval_entry("int")
-        assert r.ok
-        assert r.kind == "type"
-        assert render_entry_result(r, echo=True) == "<type: int>"
-
-    def test_ambiguous_imported_generic_entry_keeps_original_failure(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.parser import parse_type_expr
-        from agm.agl.scope.imports import ImportEnv
-        from agm.agl.semantics.types import RecordType
-        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
-
-        left = ModuleId(("left",))
-        right = ModuleId(("right",))
-        left_def = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType(name="Box", module_id=left),
-        )
-        right_def = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType(name="Box", module_id=right),
-        )
-        env = TypeEnvironment(
-            program_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
-            import_env=ImportEnv(
-                contributions={},
-                unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
-            ),
-        )
-        s = open_session()
-        assert s._try_generic_type_entry(parse_type_expr("Box"), env) is None
-
-    def test_qualified_unapplied_generic_resolution_edges(self) -> None:
-        from agm.agl.modules.ids import ENTRY_ID, ModuleId
-        from agm.agl.parser import parse_type_expr
-        from agm.agl.scope.imports import ImportEnv, ModuleContribution
-        from agm.agl.semantics.types import RecordType
-        from agm.agl.syntax.types import NameT
-        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
-
-        local_def = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType(name="Box"),
-        )
-        local_expr = parse_type_expr("::Box")
-        assert isinstance(local_expr, NameT)
-        assert local_expr.qualifier is not None
-
-        local_env = TypeEnvironment()
-        local_env.register_generic_type("Box", local_def)
-        assert local_env.resolve_qualified_unapplied_generic_type(
-            local_expr.qualifier,
-            "Box",
-        ) == ("Box", local_def)
-
-        empty_env = TypeEnvironment()
-        assert (
-            empty_env.resolve_qualified_unapplied_generic_type(
-                local_expr.qualifier,
-                "Box",
-            )
-            is None
-        )
-
-        graph_env = TypeEnvironment(program_generic_table={(ENTRY_ID, "Box"): local_def})
-        assert graph_env.resolve_qualified_unapplied_generic_type(
-            local_expr.qualifier,
-            "Box",
-        ) == ("Box", local_def)
-
-        lib = ModuleId(("lib",))
-        qualified_expr = parse_type_expr("missing::Box")
-        assert isinstance(qualified_expr, NameT)
-        assert qualified_expr.qualifier is not None
-        no_handle_env = TypeEnvironment(
-            program_generic_table={},
-            import_env=ImportEnv(contributions={}, unqualified={}),
-        )
-        assert (
-            no_handle_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.qualifier,
-                "Box",
-            )
-            is None
-        )
-
-        no_name_env = TypeEnvironment(
-            program_generic_table={},
-            import_env=ImportEnv(
-                contributions={lib: ModuleContribution(lib, {}, False, frozenset({"missing"}))},
-                unqualified={},
-            ),
-        )
-        assert (
-            no_name_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.qualifier,
-                "Box",
-            )
-            is None
-        )
-
-        missing = ModuleId(("missing",))
-        no_generic_env = TypeEnvironment(
-            program_generic_table={},
-            import_env=ImportEnv(
-                contributions={
-                    missing: ModuleContribution(
-                        missing,
-                        {"Box": (missing, "Box")},
-                        True,
-                        frozenset(),
-                        {"Box": (missing, "Box")},
-                    )
-                },
-                unqualified={},
-            ),
-        )
-        assert (
-            no_generic_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.qualifier,
-                "Box",
-            )
-            is None
-        )
-
-    def test_qualified_unapplied_generic_resolution_prefers_local_named_scope(self) -> None:
-        """A non-empty qualifier may name a local scope, not only an import route.
-
-        ``A::Box`` for a locally-declared ``scope A`` generic must resolve
-        without any import environment; a ``/``-anchored qualifier (always an
-        import route) must never be resolved against the same local name.
+        When the module graph itself cannot build, both fail the same way --
+        there is no separate, graph-independent builtin resolution.
         """
-        from agm.agl.parser import parse_type_expr
-        from agm.agl.semantics.types import RecordType
-        from agm.agl.syntax.types import NameT
-        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
+        s = open_session(stdlib_root=tmp_path / "missing-stdlib")
+        value_result = s.eval_entry("5")
+        type_result = s.eval_entry("int")
+        assert not value_result.ok
+        assert not type_result.ok
+        assert [d.source_label for d in type_result.diagnostics] == [
+            d.source_label for d in value_result.diagnostics
+        ]
 
-        local_def = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType(name="Box", scope_path=("A",)),
-        )
-        env = TypeEnvironment()
-        env.register_generic_type("A::Box", local_def)
+    def test_ambiguous_bare_generic_entry_is_ambiguous_in_every_position(self) -> None:
+        """Two same-named generics from distinct ``use``s: no position picks either one.
 
-        local_expr = parse_type_expr("A::Box")
-        assert isinstance(local_expr, NameT)
-        assert local_expr.qualifier is not None
-        assert env.resolve_qualified_unapplied_generic_type(
-            local_expr.qualifier,
-            "Box",
-        ) == ("A::Box", local_def)
+        No constructor is named ``G``, so the bare value asks which type, as
+        the annotation does: both are ambiguous among the two ``use``
+        contributions.
+        """
+        session = open_session()
+        assert session.eval_entry("scope s\n  enum G[T] = A(x: T)\nend s").ok
+        assert session.eval_entry("scope t\n  enum G[T] = B(x: T)\nend t").ok
+        assert session.eval_entry("use s::*").ok
+        assert session.eval_entry("use t::*").ok
 
-        module_expr = parse_type_expr("/A::Box")
-        assert isinstance(module_expr, NameT)
-        assert module_expr.qualifier is not None
-        assert (
-            env.resolve_qualified_unapplied_generic_type(
-                module_expr.qualifier,
-                "Box",
-            )
-            is None
-        )
+        for entry in ("G", "G[int]"):
+            result = session.eval_entry(entry)
+            assert not result.ok
+            assert result.kind != "type"
+
+        expected = {(UseDeclarationOrigin, "s::G"), (UseDeclarationOrigin, "t::G")}
+        for text in ("G", "fn(x: G) => 1"):
+            with pytest.raises(AmbiguousQualificationError) as ambiguous:
+                session.type_of(text)
+            assert origin_kinds(ambiguous.value) == expected
 
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep
@@ -7703,6 +10739,61 @@ class TestBareTypeEntry:
         r = s.eval_entry("int")
         assert r.ok
         assert render_entry_result(r, echo=False) is None
+
+    def test_bare_hidden_member_query_is_rejected_not_echoed_as_a_type(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare ``Owner::member`` query for a member a ``use`` hides must be
+        rejected with the exact diagnostic class ``fn(x: Owner::member) => 1``
+        raises, never silently echoed as a type."""
+        (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+        s = ReplSession(cwd=tmp_path)
+        assert s.eval_entry("import m::* hiding Color::Red").ok
+        assert s.eval_entry("type C = Color").ok
+        failed = s.eval_entry("import m::{Color}\nlet boom: int = [1][5]")
+        assert not failed.ok
+
+        typed = s.eval_entry("fn(x: C::Red) => 1")
+        assert not typed.ok
+        with pytest.raises(HiddenMemberError):
+            s.type_of("fn(x: C::Red) => 1")
+
+        bare = s.eval_entry("C::Red")
+        assert bare.kind != "type"
+        assert not bare.ok
+        with pytest.raises(HiddenMemberError):
+            s.type_of("C::Red")
+        # The diagnostic must be pinned to the entry's own span ("C::Red" is
+        # six columns wide), never offset by internal re-parsing.
+        assert [(d.line, d.column, d.end_line, d.end_column) for d in bare.diagnostics] == [
+            (1, 1, 1, 7)
+        ]
+
+    def test_bare_referenced_member_query_is_rejected_not_echoed_as_a_type(self) -> None:
+        """A bare ``Owner::member`` query for a member the owner only
+        references (not one of its inline members) must be rejected with the
+        exact diagnostic class ``fn(x: Owner::member) => 1`` raises, never
+        echoed as a type."""
+        s = open_session()
+        assert s.eval_entry(
+            "record Saved\n  id: int\nenum Status = ::Saved | Fresh(n: int)\ntype A = Status"
+        ).ok
+
+        typed = s.eval_entry("fn(x: A::Saved) => 1")
+        assert not typed.ok
+        with pytest.raises(ReferencedMemberError):
+            s.type_of("fn(x: A::Saved) => 1")
+
+        bare = s.eval_entry("A::Saved")
+        assert bare.kind != "type"
+        assert not bare.ok
+        with pytest.raises(ReferencedMemberError):
+            s.type_of("A::Saved")
+        # The diagnostic must be pinned to the entry's own span ("A::Saved" is
+        # eight columns wide), never offset by internal re-parsing.
+        assert [(d.line, d.column, d.end_line, d.end_column) for d in bare.diagnostics] == [
+            (1, 1, 1, 9)
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -8255,16 +11346,7 @@ class TestSessionOpen:
     def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
         self, tmp_path: Path
     ) -> None:
-        """A module under the stdlib root that fails to read is a diagnostic, not a crash.
-
-        ``open`` documents "Never raises": every failure
-        ``load_and_check_program`` can produce must come back as a diagnostic
-        tuple, the same as it already does for a syntax/scope/type error. A
-        module file's own I/O failure -- invalid UTF-8 here, the same class of
-        failure a permission-denied file would raise via
-        ``agm.core.fs.read_text`` -- must not surface as an unhandled
-        ``UnicodeDecodeError``, which would break the "Never raises" contract.
-        """
+        """A module under the stdlib root that fails to read is a diagnostic, not a crash."""
         std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()
         (std_dir / "prelude.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
@@ -8294,7 +11376,7 @@ class TestDeferredStdlibResolution:
         # Must not raise: resolution has not happened yet.
         s = ReplSession()
 
-        # The lazy failure is caught by ``open``'s own "Never raises" contract.
+        # The lazy failure is reported by ``open`` as a diagnostic.
         diagnostics = s.open()
         assert diagnostics
         assert "0.0.1" in diagnostics[0].message

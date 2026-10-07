@@ -74,8 +74,11 @@ no entries; their `program def`s stay ordinary functions. A run initializes
 every module's static bindings, then calls the selected program.
 
 Inline `-c` source without a `program def` is wrapped in a synthetic
-parameterless `program def main`. The REPL has no entry: a `program def`
-declared there is an ordinary function.
+parameterless `program def main`. Its statements and declarations are
+resolved in source order, with the same verdicts as the same declarations in
+a file: a root `let`/`var` is a declaration whose name collides with a scope
+path or another declaration's path exactly as there, and `::x` reaches it. The
+REPL has no entry: a `program def` declared there is an ordinary function.
 
 ### Parameters
 
@@ -93,10 +96,11 @@ table > declared default. A required parameter with no external value is a
 host invocation error, reported before anything executes. Parameter types
 must be JSON-wire-serializable: `text` crosses verbatim, every other type
 reads its external text as strict JSON or an [AgL value syntax
-literal](host-environment.md#value-syntax); `unit` and function types are
-rejected. A name-addressable parameter cannot spell an
-[engine setting](#engine-settings) name, since both share one flag and config
-namespace. Full resolution and help rules:
+literal](host-environment.md#value-syntax); `unit`, function types, and
+types reaching a dict whose key is not `Hashable` or not decodable (an
+exception key) are rejected. A name-addressable
+parameter cannot spell an [engine setting](#engine-settings) name, since both
+share one flag and config namespace. Full resolution and help rules:
 [Host environment](host-environment.md#program-arguments).
 
 An `@param` static binding is a separate host input owned by its declaring

@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING, ContextManager, Literal, NoReturn, Protocol, a
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
 from agm.agent.transport import AgentOutputCallback, AgentOutputType
 from agm.agent.values import agent_spec_shape
-from agm.agl.ir.builtin_nominals import resolve_standard_member_name
+from agm.agl.ir.builtin_nominals import resolve_standard_member_name, standard_member_name
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    CustomContractRequest,
+    JsonContractRequest,
+    TextContractRequest,
+    UnitContractRequest,
+)
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
     IrAsk,
@@ -40,7 +47,7 @@ from agm.agl.runtime.agents import (
 )
 from agm.agl.runtime.agents import agent_value as encode_agent_value
 from agm.agl.runtime.codec import ParseResult
-from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
+from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.externs import ActiveCall, ExternRegistry, ExternRuntimeState
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_value
@@ -82,8 +89,8 @@ from agm.agl.semantics.values import (
     DecimalValue,
     DictValue,
     ExceptionValue,
+    FunctionValue,
     IntValue,
-    IrClosureValue,
     JsonValue,
     RecordValue,
     TextValue,
@@ -129,12 +136,17 @@ class EffectCtx(Protocol):
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
-    def _make_extern_callable_proxy(self, closure: IrClosureValue) -> object: ...
+    def _make_extern_callable_proxy(self, function: FunctionValue) -> object: ...
 
     def _extern_call_window(self) -> ContextManager[None]: ...
 
     def _parse_host_output(
-        self, raw: str, contract_id: ContractId, *, effective_strict: bool
+        self,
+        raw: str,
+        contract_id: ContractId,
+        contract: TextContractRequest | JsonContractRequest | CustomContractRequest,
+        *,
+        effective_strict: bool,
     ) -> ParseResult: ...
 
 
@@ -149,6 +161,15 @@ def _decode_exec_streams(stdout: CapturedOutput, stderr: CapturedOutput) -> tupl
     stderr_text, stderr_note = stderr.text_or_note("stderr")
     notes = [note for note in (stdout_note, stderr_note) if note is not None]
     return stdout_text.rstrip("\n"), stderr_text.rstrip("\n"), "; ".join(notes)
+
+
+def _contract_json_schema(contract: ContractRequest) -> str | None:
+    """Return *contract*'s canonical JSON Schema string, or ``None`` for a
+    codec that carries none (the text codec, or a custom codec whose
+    ``make_contract`` hook derived no schema)."""
+    if isinstance(contract, JsonContractRequest | CustomContractRequest):
+        return contract.json_schema
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +266,7 @@ class EffectHandlers:
                     location=location,
                     resolve_span=self._ctx._extern_span_resolver,
                 ),
-                contracts=self._ctx._program.contracts if extern.target_count else None,
+                contracts=self._ctx._program.target_contracts if extern.target_count else None,
             )
 
     # ------------------------------------------------------------------
@@ -388,12 +409,7 @@ class EffectHandlers:
         env_expr: IrExpr,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
-        agent_val = self._ctx._eval(agent_expr)
-        if not isinstance(agent_val, RecordValue):
-            raise TypeError(
-                "IrAsk agent must evaluate to an Agent member record, "
-                f"got {type(agent_val).__name__}"
-            )
+        agent_val = cast(RecordValue, self._ctx._eval(agent_expr))
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
         max_attempts = self._eval_max_attempts(retries_expr, contract_id)
         permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
@@ -422,8 +438,10 @@ class EffectHandlers:
         vars_value: Value = (
             value if isinstance(value, DictValue) else cast(RecordValue, value).fields["vars"]
         )
-        entries = cast(DictValue, vars_value).entries
-        return {name: cast(TextValue, entry).value for name, entry in entries.items()}
+        return {
+            name: cast(TextValue, entry).value
+            for name, entry in cast(DictValue, vars_value).text_items()
+        }
 
     def _eval_max_attempts(self, retries_expr: IrExpr, contract_id: ContractId) -> int:
         """Evaluate a ``parse-error-retries`` operand once into the attempt budget.
@@ -440,7 +458,9 @@ class EffectHandlers:
                     nominals=self._ctx._program.builtin_nominals,
                 )
             )
-        can_retry = self._ctx._program.contracts[contract_id].can_fail_parsing
+        can_retry = isinstance(
+            self._ctx._program.contracts[contract_id], (JsonContractRequest, CustomContractRequest)
+        )
         return 1 + retries if can_retry else 1
 
     def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
@@ -454,13 +474,10 @@ class EffectHandlers:
         return permission_mode_and_limits(self._decode_sandbox_mode(sandbox_val))
 
     def _decode_sandbox_mode(self, sandbox_val: Value) -> AgentSandboxMode:
-        """Decode an already-evaluated ``AgentSandbox`` value into its canonical union."""
-        if not isinstance(sandbox_val, RecordValue):
-            raise TypeError(
-                "value must evaluate to an AgentSandbox member record, "
-                f"got {type(sandbox_val).__name__}"
-            )
-        return decode_agent_sandbox(sandbox_val, self._ctx._program.builtin_nominals)
+        """Decode a checked ``AgentSandbox`` operand or validated builtin setting."""
+        return decode_agent_sandbox(
+            cast(RecordValue, sandbox_val), self._ctx._program.builtin_nominals
+        )
 
     def _session_error(self, error: SessionHostError) -> NoReturn:
         """Map a host lifecycle failure to the catchable SessionError shape."""
@@ -489,36 +506,25 @@ class EffectHandlers:
 
     def _contract_carriers(
         self, contract_id: ContractId
-    ) -> tuple[OutputContract | TypelessOutputContract | None, object | None]:
+    ) -> tuple[OutputContract | None, object | None]:
         """Return the output contract and decoded JSON schema carried by an ask."""
         contract = self._ctx._program.contracts[contract_id]
-        if contract.is_unit:
+        if isinstance(contract, UnitContractRequest):
             return None, None
-        json_schema = (
-            None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
-        )
-        output_contract = self._ctx._host_contracts.get(contract_id) or TypelessOutputContract(
-            target_type=contract.target_type_label,
-            codec_name=contract.codec_name,
-            strict_json=contract.strict_json,
-            format_instructions=contract.format_instructions,
-            json_schema=json_schema,
-            structured_exec=contract.structured_exec,
-        )
-        return output_contract, json_schema
+        raw_schema = _contract_json_schema(contract)
+        json_schema = None if raw_schema is None else cast(object, json.loads(raw_schema))
+        return self._ctx._host_contracts[contract_id], json_schema
 
     _SESSION_TRANSPORT_MEMBERS = tuple(member.value for member in SessionTransport)
 
     def _transport_name(self, value: RecordValue) -> str:
         """Return the bare ``SessionTransport`` member name *value* projects onto."""
-        name = resolve_standard_member_name(
+        return standard_member_name(
             value.nominal,
             "SessionTransport",
             self._SESSION_TRANSPORT_MEMBERS,
             self._ctx._program.builtin_nominals,
         )
-        assert name is not None
-        return name
 
     def _session_value(
         self, handle: str, agent: RecordValue, transport: str, sandbox: Value
@@ -549,18 +555,8 @@ class EffectHandlers:
         )
 
     def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
-        """Decode *agent* into its dispatched host specification, or raise ``SessionAgentError``.
-
-        The interpreter decodes an ``Agent`` value to its host specification
-        exactly once, here, before any session host sees it, and applies the
-        host's agent defaults (``_resolve_agent_spec``) to the result -- never
-        to the AgL value itself. An invalid value surfaces as the same
-        AgL-visible ``SessionAgentError`` a session ``open`` reports.
-        """
-        try:
-            spec = decode_agent_value(agent, self._ctx._program.builtin_nominals)
-        except ValueError as error:
-            raise SessionAgentError(str(error), "open") from error
+        """Decode *agent* into its host specification, once, before any session host sees it."""
+        spec = decode_agent_value(agent, self._ctx._program.builtin_nominals)
         resolve = self._ctx._resolve_agent_spec
         return spec if resolve is None else resolve(spec)
 
@@ -747,7 +743,7 @@ class EffectHandlers:
         contract_id: ContractId,
         max_attempts: int,
         node: IrAsk,
-        output_contract: OutputContract | TypelessOutputContract | None,
+        output_contract: OutputContract | None,
         json_schema: object | None,
         permission_mode: PermissionMode,
         sandbox: SandboxLimits | None,
@@ -761,10 +757,7 @@ class EffectHandlers:
         or fails. A target that can never fail parsing opens single-prompt.
         """
         contract = self._ctx._program.contracts[contract_id]
-        try:
-            spec = self._decode_agent_spec(agent)
-        except SessionAgentError as error:
-            self._invalid_agent_error(agent, error)
+        spec = self._decode_agent_spec(agent)
         transport = self._resolve_session_transport(spec, None)
 
         def ask_in_session(handle: str) -> Value:
@@ -823,11 +816,8 @@ class EffectHandlers:
         )
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
-        try:
-            spec = self._decode_agent_spec(agent)
-            env = self._ctx._session_host.snapshot(handle).env
-        except SessionHostError as error:
-            self._session_error(error)
+        spec = self._decode_agent_spec(agent)
+        env = self._ctx._session_host.snapshot(handle).env
         return self._eval_session_ask_attempts(
             handle=handle,
             agent=agent,
@@ -873,7 +863,7 @@ class EffectHandlers:
         contract_id: ContractId,
         max_attempts: int,
         node: IrAsk | IrSessionAsk,
-        output_contract: OutputContract | TypelessOutputContract | None,
+        output_contract: OutputContract | None,
         dispatch: Callable[[AgentRequest], str],
         permission_mode: PermissionMode,
         sandbox: SandboxLimits | None,
@@ -907,10 +897,10 @@ class EffectHandlers:
             raw = dispatch(request)
             if request.output_callback is not None:
                 request.output_callback("final", raw)
-            if contract.is_unit:
+            if isinstance(contract, UnitContractRequest):
                 return UNIT_VALUE
             result = self._ctx._parse_host_output(
-                raw, contract_id, effective_strict=effective_strict
+                raw, contract_id, contract, effective_strict=effective_strict
             )
             self._ctx._trace.parse_result(
                 ok=result.ok,
@@ -938,7 +928,7 @@ class EffectHandlers:
             last_errors=last_errors,
             max_attempts=max_attempts,
             target_type_label=contract.target_type_label,
-            json_schema=contract.json_schema,
+            json_schema=_contract_json_schema(contract),
         )
 
     def eval_ir_session_op(self, node: IrSessionOp) -> Value:
@@ -988,12 +978,7 @@ class EffectHandlers:
         sandbox_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
-        agent_value = self._ctx._eval(agent_expr)
-        if not isinstance(agent_value, RecordValue):
-            raise TypeError(
-                "IrAskRequest agent must evaluate to an Agent member record, "
-                f"got {type(agent_value).__name__}"
-            )
+        agent_value = cast(RecordValue, self._ctx._eval(agent_expr))
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
         max_attempts = self._eval_max_attempts(retries_expr, contract_id)
         # The AgL-visible request carries the raw evaluated AgentSandbox value
@@ -1004,6 +989,7 @@ class EffectHandlers:
         contract = self._ctx._program.contracts[contract_id]
         nominals = self._ctx._program.builtin_nominals
         agent_request = nominals.resolve("AgentRequest")
+        json_schema = _contract_json_schema(contract)
         return RecordValue(
             nominal=agent_request.nominal,
             fields={
@@ -1013,9 +999,9 @@ class EffectHandlers:
                 "format-instructions": self._optional_text(contract.format_instructions),
                 "json-schema": (
                     none_value(nominals=nominals)
-                    if contract.json_schema is None
+                    if json_schema is None
                     else some_value(
-                        JsonValue(cast(object, json.loads(contract.json_schema))),
+                        JsonValue(cast(object, json.loads(json_schema))),
                         nominals=nominals,
                     )
                 ),
@@ -1261,11 +1247,9 @@ class EffectHandlers:
         cmd = self._text_of(self._ctx._eval(command_expr))
         env = self._decode_environ(self._ctx._eval(env_expr))
         nominals = self._ctx._program.builtin_nominals
-        cwd_value = self._ctx._eval(cwd_expr)
-        assert isinstance(cwd_value, RecordValue)
+        cwd_value = cast(RecordValue, self._ctx._eval(cwd_expr))
         cwd_text = option_text(cwd_value, nominals=nominals)
-        timeout_value = self._ctx._eval(timeout_expr)
-        assert isinstance(timeout_value, RecordValue)
+        timeout_value = cast(RecordValue, self._ctx._eval(timeout_expr))
         timeout_text = option_text(timeout_value, nominals=nominals)
         if timeout_text is None:
             timeout = None
@@ -1319,13 +1303,13 @@ class EffectHandlers:
             self._raise_nonzero_exit_error(cmd, returncode, stdout, stderr)
 
         # 5. Unit contract: successful output is deliberately discarded.
-        if contract.is_unit:
+        if isinstance(contract, UnitContractRequest):
             return UNIT_VALUE
 
         # 6. Text codec: return stdout directly
         exit_code = returncode if returncode is not None else 0
         captured = self._decode_exec_stdout(cmd, exit_code, stdout)
-        if contract.codec_name == "text":
+        if isinstance(contract, TextContractRequest):
             return TextValue(captured)
 
         # 7. Parse/retry loop for typed exec
@@ -1350,7 +1334,7 @@ class EffectHandlers:
                 last_raw = self._decode_exec_stdout(cmd, rc2 if rc2 is not None else 0, stdout2)
 
             result = self._ctx._parse_host_output(
-                last_raw or "", contract_id, effective_strict=effective_strict
+                last_raw or "", contract_id, contract, effective_strict=effective_strict
             )
             self._ctx._trace.parse_result(
                 ok=result.ok,

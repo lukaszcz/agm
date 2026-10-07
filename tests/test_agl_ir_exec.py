@@ -216,7 +216,7 @@ def test_t6_spawn_error() -> None:
 
 
 def test_t7_retry_success() -> None:
-    """exec() with Retry(n:1): first invocation returns bad JSON, retry succeeds."""
+    """exec() with one parse retry: first invocation returns bad JSON, retry succeeds."""
     call_count = [0]
 
     def fake_shell(
@@ -286,7 +286,7 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
 
 
 def test_t8_retry_exhaustion() -> None:
-    """exec() with Retry(n:2): all 3 attempts return bad JSON → ExecError.
+    """exec() with two parse retries: all 3 attempts return bad JSON → ExecError.
 
     Routes through evaluate_ir_raises_with_shell and keeps shell failures in
     the ExecError family.
@@ -299,7 +299,7 @@ def test_t8_retry_exhaustion() -> None:
 
 @pytest.mark.parametrize("retries,expected_runs", [(0, 1), (1, 2), (2, 3)])
 def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_runs: int) -> None:
-    """Retry(n) spends exactly n + 1 attempts, each one re-running the command."""
+    """A retry count n spends exactly n + 1 attempts, each one re-running the command."""
     runs: list[str] = []
 
     def fake_shell(
@@ -369,7 +369,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     import unittest.mock
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import JsonContractRequest
     from agm.agl.ir.ids import ContractId, NominalId, SourceId
     from agm.agl.ir.nodes import IrConstText, IrExec, IrMakeDict, IrMakeRecord
     from agm.agl.ir.program import (
@@ -393,7 +393,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         start_col=0,
     )
     cid = ContractId(value=0)
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=False,
         json_schema='{"type":"integer"}',
@@ -401,7 +401,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     node = IrExec(
         location=loc,
@@ -577,7 +576,7 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
 
 
 def test_t12_retry_then_nonzero_exit() -> None:
-    """exec() with Retry(n:1): first attempt returns bad JSON, retry exits non-zero.
+    """exec() with one parse retry: first attempt returns bad JSON, retry exits non-zero.
 
     Verifies that the retry-error path through _run_exec_shell raises ExecError.
     """

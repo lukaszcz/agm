@@ -1,0 +1,9 @@
+# A record with a `var` field is not deeply immutable, so it is not
+# Hashable and cannot be used at a dict hashing site as the key type.
+record Counter
+  var count: int
+
+program def main() -> unit =
+  let d: dict[Counter, text] = {}
+  let key = Counter(count = 1)
+  print(key in d)

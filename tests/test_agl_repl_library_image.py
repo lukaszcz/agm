@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.repl import ReplSession
-from agm.agl.semantics.values import BoolValue, IntValue, TextValue
+from agm.agl.semantics.values import IntValue, TextValue
 
 
 def _open_session(root: Path | None = None) -> ReplSession:
@@ -145,7 +145,7 @@ class TestRedeclarations:
         assert session.eval_entry("enum E\n  | B(fresh: text)").ok
         assert session.eval_entry('let new: E = B(fresh = "new")').ok
 
-        assert session.eval_entry("old is A").value == BoolValue(True)
+        assert not session.eval_entry("old is A").ok
         assert session.eval_entry("(old as OldA).old").value == IntValue(1)
         assert session.eval_entry("(new as E::B).fresh").value == TextValue("new")
         assert not session.eval_entry("old as E::B").ok
@@ -176,9 +176,7 @@ def test_session_operators_do_not_change_imported_function_behavior(tmp_path: Pa
     assert session.eval_entry("infixr <+> at 9\ndef <+>(a: int, b: int) -> int = a - b").ok
 
     assert session.eval_entry("combined()").value == IntValue(10)
-    ambiguous = session.eval_entry("8 <+> 3 <+> 1")
-    assert not ambiguous.ok
-    assert ambiguous.diagnostics
+    assert session.eval_entry("8 <+> 3 <+> 1").value == IntValue(6)
     assert session.eval_entry("combined()").value == IntValue(10)
 
 

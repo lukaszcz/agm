@@ -1,0 +1,32 @@
+# Every instantiation form (inferred call, explicit `::[T]`, method receiver,
+# a first-class value fixed by its expected type, partial application, and a
+# bound method value) checks its bound once type arguments are solved; a
+# bounded caller may reach a bounded callee through its own type variable
+# (transitive propagation, including a `Hashable` caller satisfying an `Eq`
+# callee); and a generic wrapper over a bounded array method needs the same
+# bound its wrapped call does.
+record Point
+  x: int
+  y: int
+
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+def relay[T]{Eq T}(a: T, b: T) -> bool = same(a, b)
+def relay-hashable[T]{Hashable T}(a: T, b: T) -> bool = same(a, b)
+def find[T]{Eq T}(xs: array[T], v: T) -> bool = xs.contains(v)
+
+program def main(seed: int) -> unit =
+  print(same(seed, 5))
+  print(same::[int](seed, seed + 1))
+  print(relay(seed, 5))
+  print(relay-hashable(seed, 5))
+  let cmp: (int, int) -> bool = same
+  print(cmp(seed, 5))
+  let check = same(seed, ?)
+  print(check(5))
+  print(check(seed + 1))
+  let pts = [Point(x = seed, y = seed), Point(x = 5, y = 5)]
+  print(pts.contains(Point(x = 5, y = 5)))
+  print(pts.index-of(Point(x = 5, y = 5)))
+  let has = pts.contains
+  print(has(Point(x = 5, y = 5)))
+  print(find(pts, Point(x = seed, y = seed)))

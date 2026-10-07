@@ -32,7 +32,7 @@ pattern_field  ::= pattern                                (* positional sub-patt
 
 Matches anything, binds nothing. The same spelling is the unreadable discard
 binder in `let _ = value` and `var _ = value`; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding).
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding).
 
 <!-- agl-check: fragment -->
 ```agl
@@ -71,9 +71,9 @@ case result of
 ```
 
 At a `case` branch root, a bare name is never a variable binder: it must
-denote a visible fieldless enum-member constructor. By contrast, a bare `let`-root name
+denote a visible fieldless constructor. By contrast, a bare `let`-root name
 always introduces an immutable binder visible in the continuation; see
-[Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
+[Bindings and scope](bindings-and-scope.md#let-immutable-binding). Ordinary
 value bindings do not alter case-constructor lookup; capitalization carries no
 meaning ([Lexical structure](lexical-structure.md)).
 
@@ -97,7 +97,11 @@ Restrictions:
 - The literal's type must be comparable with the scrutinee's static type
   (same type after `int → decimal` widening); an `int` pattern against a
   `text` scrutinee — or any scalar literal against a `json` scrutinee other
-  than `null` — is a static error, not a silently dead branch.
+  than `null` — is a static error, not a silently dead branch. A scrutinee
+  whose static type is a generic type parameter `T` (bare, or a field typed
+  `T`) never admits a literal pattern, bound or not ([Constraint
+  blocks](generics.md#constraint-blocks)): a literal's own type can never
+  structurally equal a type variable's.
 
 ### Constructor patterns
 
@@ -106,7 +110,7 @@ enum, and optionally destructures its fields. A pattern is a constructor
 pattern when it is one of:
 
 - a **bare name at a `case` branch root that denotes a visible constructor** —
-  matches a fieldless enum member only (see below),
+  matches a fieldless record only (see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
 - a **qualified** `Enum::member`, `Record::Record(…)`,
   `module::Enum::member`, or `module::Record` form.
@@ -126,7 +130,8 @@ def summarize(review: Review) -> text =
 The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
 When a bare name is classified as a constructor, it matches **fieldless**
-members only. A bare name for a member that has fields is a static error:
+records only, whether an enum member, a standalone record, or an alias leading
+to one. A bare name for a record that has fields is a static error:
 write `Fail()` to ignore its fields or destructure them — even when every
 field has a `=` default, unlike a bare constructor reference in value
 position, which constructs immediately with its defaults (see [Fieldless and
@@ -135,15 +140,26 @@ references](expressions.md#fieldless-and-all-defaulted-constructor-references)).
 Empty parentheses
 ignore every field, including named-only fields. The call and qualified forms
 apply to every member record and to standalone records; the bare form is a
-convenience for the common fieldless case. A local record constructor such as
+convenience for the common fieldless case. A record constructor such as
 `Record(…)` is an unqualified call form; its owner-qualified form repeats the
-record name: `Record::Record(…)`.
+record name, `Record::Record(…)`, and either position may instead name an
+alias leading to the record. A pattern spelled through an alias matches the
+declaration the alias denotes, at the alias's type arguments (see
+[Type aliases](types.md#type-aliases)).
 
 Constructor ownership in patterns is directed by the scrutinee's static
-nominal type. When two enums contribute the same unqualified member spelling,
-or a record constructor spelling collides with an injected member name, the
-scrutinee type selects the intended constructor, so the pattern needs no
-qualification.
+nominal type, among the constructors visible where the pattern is written —
+at every [lookup step](scopes.md#names-and-visibility) there, not only the
+nearest one that has the spelling, so a same-named member of an enum in a
+nearer scope never hides the scrutinee's own member. Candidates constructing
+one declaration at the scrutinee's type arguments, such as a member reached
+through two aliases, are one candidate. A
+spelling no visible constructor of that type shares is a static error, even
+when the type has a member of that name — for instance when only a function
+returning the type was imported. When two enums contribute the same
+unqualified member spelling, or a record constructor spelling collides with an
+injected member name, the scrutinee type selects the intended constructor when
+both are visible, so the pattern needs no qualification.
 
 #### Module-qualified constructor patterns
 
@@ -162,8 +178,11 @@ case value of
 
 The prefix may name an owning enum type (`Color::Red`), a module and owning
 type (`mylib::Color::Red` or `mylib::Point`), or the current module
-(`::Color::Red` or `::Point`). A module may also qualify an exposed enum-member
-constructor directly (`mylib::Red`). Qualification states the owner explicitly
+(`::Color::Red` or `::Point`). An enum owner qualifies only its inline
+members, and a module qualifier alone (`mylib::Red`, `::Red`) selects from that
+module's surface; see
+[Module-qualified enum members](modules.md#module-qualified-enum-members).
+Qualification states the owner explicitly
 but is not required when the scrutinee type selects a same-spelled constructor;
 when present, it must identify the scrutinee's exact nominal type. A module route uses slash segments,
 as in `company/colors::Color::Red` or `company/colors::Point`; constructor
@@ -171,7 +190,10 @@ qualification itself uses `::`, never `.`. A named scope qualifies a pattern,
 or an `is`/`is not` right-hand side ([Expressions](expressions.md)), through
 the same chain, so a scoped constructor or exception is written with its
 exact path (`Shapes::Point(x)`, `mylib::Shapes::Point(x)`); see
-[Scopes](scopes.md).
+[Scopes](scopes.md). A qualified pattern spelling is looked up by its whole
+path exactly as in a value: the module's own declaration at that path wins,
+else the one imported or `use`-provided one, and `/` or `::` anchors the
+reading ([Lexical structure](lexical-structure.md#qualifier-chains)).
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 

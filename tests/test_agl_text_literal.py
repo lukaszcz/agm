@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 from decimal import Decimal
 
 import pytest
@@ -21,7 +22,7 @@ from agm.agl.value_syntax.nodes import TextNode
 from agm.agl.value_syntax.reader import read_value
 from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 _TEXT_CORPUS = (
     '"',
@@ -47,7 +48,7 @@ _TEXT_CORPUS = (
 def test_text_encoders_agree(value: str) -> None:
     """Rendered text and text match witnesses use the same AgL literal form."""
     assert render_value(TextValue(value), _NO_DESCRIPTORS, quote_strings=True) == render_witness(
-        LiteralWitness(LiteralKind.TEXT, value)
+        LiteralWitness(LiteralKind.TEXT, value), lambda decl, _node: decl[2]
     )
 
 
@@ -86,6 +87,22 @@ def test_text_literal_surface_constants_define_escape_directions() -> None:
 def test_scalar_text_spells_a_decimal_without_scientific_notation() -> None:
     assert scalar_text(Decimal("1.50")) == "1.5"
     assert scalar_text(Decimal("1E+2")) == "100"
+
+
+def test_scalar_text_spells_more_than_28_significant_digits_exactly() -> None:
+    # A decimal is range-checked, not precision-checked, at creation, so it
+    # can carry more digits than the pinned arithmetic context's own
+    # precision. Rendering must still be exact -- not context-rounded.
+    value = Decimal("1.2345678901234567890123456789012345")
+    assert scalar_text(value) == "1.2345678901234567890123456789012345"
+
+
+def test_scalar_text_ignores_the_ambient_context() -> None:
+    # Rendering never consults the ambient decimal context (unlike
+    # Decimal.normalize, which would round under a narrower one).
+    value = Decimal("1.2345678901234567890123456789012345")
+    with decimal.localcontext(decimal.Context(prec=5)):
+        assert scalar_text(value) == "1.2345678901234567890123456789012345"
 
 
 def test_scalar_text_spells_ints_and_bools_the_way_agl_does() -> None:

@@ -99,7 +99,6 @@ from agm.agl.typecheck.builtin_contracts import (
 )
 from agm.agl.typecheck.env import (
     AglTypeError,
-    ConstructorSignature,
     GenericTypeDef,
     TypeEnvironment,
 )
@@ -295,16 +294,14 @@ class _TypeBuilder:
         self.reconcile_inline_member_arities()
 
         for item in self._static_type_items(program.body.items):
-            path = tuple(segment.name for segment in item.scope_path)
-            with self._env.type_scope(path):
-                if isinstance(item, RecordDef):
-                    self._build_record(item)
-                elif isinstance(item, EnumDef):
-                    self._build_enum(item)
-                elif isinstance(item, ExceptionDef):
-                    self._build_exception(item)
-                else:
-                    self._validate_alias(item)
+            if isinstance(item, RecordDef):
+                self._build_record(item)
+            elif isinstance(item, EnumDef):
+                self._build_enum(item)
+            elif isinstance(item, ExceptionDef):
+                self._build_exception(item)
+            else:
+                self._validate_alias(item)
 
         self._finalize_exceptions()
         self._finalize_enums()
@@ -379,7 +376,12 @@ class _TypeBuilder:
                     expected_contracts=BUILTIN_ALIAS_TARGETS,
                 )
                 self._env.unregister_name(item.name)
-                self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+                self._env.register_alias(
+                    item.name,
+                    item.type_expr,
+                    type_params=item.type_params,
+                    declaration_span=item.span,
+                )
                 if item.is_builtin:
                     self._builtin_alias_defs[item.name] = item
 
@@ -393,21 +395,18 @@ class _TypeBuilder:
         """
         for stmt in self._enum_defs.values():
             type_vars = frozenset(stmt.type_params)
-            path = tuple(segment.name for segment in stmt.scope_path)
-            with self._env.type_scope(path):
-                for member in stmt.members:
-                    if not isinstance(member, VariantDef):
-                        continue
-                    field_types = tuple(
-                        self._resolve_field_type(field, type_vars=type_vars)
-                        for field in member.fields
-                    )
-                    captured_params = tuple(
-                        param
-                        for param in stmt.type_params
-                        if any(param in free_type_vars(field_type) for field_type in field_types)
-                    )
-                    self._replace_inline_member_handle(stmt, member, captured_params)
+            for member in stmt.members:
+                if not isinstance(member, VariantDef):
+                    continue
+                field_types = tuple(
+                    self._resolve_field_type(field, type_vars=type_vars) for field in member.fields
+                )
+                captured_params = tuple(
+                    param
+                    for param in stmt.type_params
+                    if any(param in free_type_vars(field_type) for field_type in field_types)
+                )
+                self._replace_inline_member_handle(stmt, member, captured_params)
 
     def _clear_inline_member_names(self, enum: EnumDef) -> None:
         """Release member record names from a superseded enum declaration."""
@@ -420,6 +419,11 @@ class _TypeBuilder:
                 and typedef.is_inline_enum_member
             ):
                 self._env.unregister_name(f"{enum.name}::{typedef.name}")
+
+    def _enum_identity(self, enum: EnumDef) -> int:
+        """Return the declaration identity of *enum*, declared in this module."""
+        enum_scope_path = tuple(segment.name for segment in enum.scope_path)
+        return _decl_identity(self._module_id, enum_scope_path, _bare_name(enum.name), enum.node_id)
 
     def _register_inline_member_handle(self, enum: EnumDef, member: VariantDef) -> None:
         """Register an inline enum member as its scoped record type."""
@@ -435,7 +439,7 @@ class _TypeBuilder:
     ) -> None:
         """Make a member's type shell agree with its current captured parameters."""
         enum_name = _bare_name(enum.name)
-        scope_path = (*tuple(segment.name for segment in enum.scope_path), enum_name)
+        enum_scope_path = tuple(segment.name for segment in enum.scope_path)
         member_name = f"{enum.name}::{member.name}"
         self._env.unregister_name(member_name)
         decl_id = _member_identity(enum, member, self._module_id)
@@ -443,8 +447,11 @@ class _TypeBuilder:
             name=member.name,
             type_args=tuple(TypeVarType(param) for param in type_params),
             module_id=self._module_id,
-            scope_path=scope_path,
+            scope_path=(*enum_scope_path, enum_name),
             decl_id=decl_id,
+        )
+        self._env.type_table.declare_inline_member(
+            self._enum_identity(enum), enum.type_params, template
         )
         if type_params:
             self._env.register_generic_type(
@@ -548,15 +555,12 @@ class _TypeBuilder:
                 continue
             if (_bare_name(stmt.name) in _DERIVED_BUILTIN_SHAPES) != derived:
                 continue
-            typedef = self._resolved_defs.get(stmt.name)
-            assert typedef is not None, "compiler bug: builtin type is not registered"
-            base_type: ExceptionType | None = None
-            if typedef.base is not None:
-                base_def = self._env.type_table.get_by_id(typedef.base)
-                assert base_def is not None, "compiler bug: builtin base is not registered"
-                base_handle = base_def.handle()
-                assert isinstance(base_handle, ExceptionType)
-                base_type = base_handle
+            typedef = self._resolved_defs[stmt.name]
+            base_type = (
+                None
+                if typedef.base is None
+                else self._env.type_table.typedef_of(typedef.base).exception_handle()
+            )
             self._validate_builtin_shape(
                 stmt,
                 typedef,
@@ -566,10 +570,8 @@ class _TypeBuilder:
         if derived:
             return
         for alias in self._builtin_alias_defs.values():
-            path = tuple(segment.name for segment in alias.scope_path)
             if not alias.type_params:
-                with self._env.type_scope(path):
-                    target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
+                target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
                 if target == BUILTIN_ALIAS_TARGETS[_bare_name(alias.name)]:
                     continue
             raise AglTypeError(
@@ -614,19 +616,13 @@ class _TypeBuilder:
             )
         self._declared[name] = span
 
-    def _field_zones(self, fields: tuple[Param, ...]) -> tuple[tuple[str, ParamZone], ...]:
+    def _field_zones(self, fields: tuple[Param, ...]) -> tuple[ParamZone, ...]:
         """Each field's own declared ``@arg-*`` zone, in declaration order.
 
-        Computed once and fed to both a ``TypeDef``'s ``field_kinds`` and the
-        constructor-kind registration, so the two never disagree about a
-        field's zone. Used by records, generic records, and enum members; an
-        exception's own fields honor their declared zone the same way, but
-        (unlike a record's) are never registered into the constructor-kind
-        table — inheriting the base's kinds through the ``extends`` chain is
-        ``TypeTable.field_kinds``'s job instead (walked on demand from
-        ``TypeDef.base``, no build-ordering step needed).
+        An exception's inherited zones come from ``TypeTable.field_kinds``,
+        which walks the ``extends`` chain on demand.
         """
-        return tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in fields)
+        return tuple(self._attributes.param_zones[fd.node_id] for fd in fields)
 
     @staticmethod
     def _field_has_default(fields: tuple[Param, ...]) -> tuple[bool, ...]:
@@ -668,33 +664,23 @@ class _TypeBuilder:
         return resolved
 
     def _build_record(self, stmt: RecordDef) -> None:
-        """Resolve a record's fields and register its ``TypeDef`` + constructor kinds.
+        """Resolve a record's fields and register its ``TypeDef``.
 
         A generic record's ``GenericTypeDef`` (name, type params, handle
         template) was already registered in phase 1 so that forward references
         to it resolve regardless of declaration order; its ``TypeDef`` reuses
-        that template's identity and it publishes a constructor signature over
-        the field templates. A plain record takes its identity from its own
-        declaration and needs neither.
+        that template's identity. A plain record takes its identity from its
+        own declaration.
         """
         type_params = stmt.type_params
         fields = self._resolve_fields(
             stmt.fields, kind="record", owner=stmt.name, type_vars=frozenset(type_params)
         )
         self._check_field_external_names(stmt.fields, owner=stmt.name)
-        template: RecordType | None = None
-        if type_params:
-            gdef = self._env.get_generic_type(stmt.name)
-            assert gdef is not None, (
-                f"compiler bug: generic record {stmt.name!r} not pre-registered"
-            )
-            candidate = gdef.template
-            assert isinstance(candidate, RecordType)
-            template = candidate
+        template = self._env.generic_type_of(stmt.name).template if type_params else None
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
-        field_kind_pairs = self._field_zones(stmt.fields)
         typedef = TypeDef(
             kind="record",
             name=bare_name,
@@ -703,7 +689,7 @@ class _TypeBuilder:
             type_params=type_params,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
-            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
+            field_kinds=self._field_zones(stmt.fields),
             field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             # A generic record keeps the identity of the handle template
@@ -722,26 +708,6 @@ class _TypeBuilder:
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
-        if template is not None:
-            self._env.register_constructor_signature(
-                ConstructorSignature(
-                    owner_name=stmt.name,
-                    field_names=tuple(fields.keys()),
-                    field_templates=tuple(fields.values()),
-                    result_template=template,
-                    type_params=type_params,
-                )
-            )
-        # Register field kinds for this record constructor, under the same
-        # owning identity as the TypeDef just above (its declaring module,
-        # like every other declaration — including a builtin one).
-        self._env.register_constructor_field_kinds(
-            bare_name,
-            field_kind_pairs,
-            scope_path=scope_path,
-            module_id=module_id,
-            decl_id=typedef.decl_node_id,
-        )
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -808,7 +774,6 @@ class _TypeBuilder:
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             )
             decl_id = _member_identity(stmt, vd, module_id)
-            field_kind_pairs = self._field_zones(vd.fields)
             member_def = TypeDef(
                 kind="record",
                 name=vd.name,
@@ -817,7 +782,7 @@ class _TypeBuilder:
                 type_params=captured_params,
                 fields=tuple(fields.items()),
                 mutable_fields=_mutable_field_names(vd.fields),
-                field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
+                field_kinds=self._field_zones(vd.fields),
                 field_has_default=self._field_has_default(vd.fields),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
@@ -827,13 +792,6 @@ class _TypeBuilder:
                 doc=self._attributes.docs.get(vd.node_id),
             )
             member_defs.append(member_def)
-            self._env.register_constructor_field_kinds(
-                vd.name,
-                field_kind_pairs,
-                scope_path=member_scope_path,
-                module_id=module_id,
-                decl_id=decl_id,
-            )
             self._replace_inline_member_handle(stmt, vd, captured_params)
             members.append(
                 RecordType(
@@ -894,7 +852,9 @@ class _TypeBuilder:
         if base_name is None and not stmt.is_builtin:
             base_type = self._env.type_table.exception_root()
         elif base_name is not None:
-            resolved_base = self._env.resolve_named_type(base_name, span=stmt.span)
+            resolved_base = self._env.resolve_selected_type_name(
+                stmt.node_id, base_name, span=stmt.span
+            )
             if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
                     f"Exception '{stmt.name}' extends unknown exception '{base_name}'.",
@@ -918,7 +878,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             abstract=base_type is None,
             base=None if base_type is None else base_type.decl_id,
-            field_kinds=tuple(zone for _fname, zone in self._field_zones(stmt.fields)),
+            field_kinds=self._field_zones(stmt.fields),
             field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
@@ -952,15 +912,9 @@ class _TypeBuilder:
             if item.base is not None:
                 module_id = self._module_id
                 scope_path = tuple(segment.name for segment in item.scope_path)
-                typedef = self._env.type_table.get(module_id, _bare_name(item.name), scope_path)
-                assert typedef is not None, "compiler bug: exception is not registered"
-                assert typedef.base is not None
-                base_typedef = self._env.type_table.get_by_id(typedef.base)
-                assert base_typedef is not None, (
-                    f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
-                )
-                base_handle = base_typedef.handle()
-                assert isinstance(base_handle, ExceptionType)
+                table = self._env.type_table
+                typedef = table.named(module_id, _bare_name(item.name), scope_path)
+                base_handle = table.ancestor_defs(typedef.decl_node_id)[0].exception_handle()
                 base_fields = self._env.type_table.exception_fields(base_handle)
                 for fd in item.fields:
                     if fd.name in base_fields:
@@ -988,8 +942,7 @@ class _TypeBuilder:
             typedef = self._resolved_defs[stmt.name]
             entries: list[tuple[str, SourceSpan, ExternalName]] = []
             for member, record_member in zip(stmt.members, typedef.members, strict=True):
-                member_def = self._env.type_table.get_by_id(record_member.decl_id)
-                assert member_def is not None, "compiler bug: enum member is not registered"
+                member_def = self._env.type_table.typedef_of(record_member.decl_id)
                 entries.append((member_def.name, member.span, member_def.external_name))
             _check_external_name_siblings(entries, owner=stmt.name, noun="member")
 
@@ -1105,40 +1058,19 @@ class _TypeBuilder:
         declaration order.
         """
         # A field is always annotated: the grammar's ``field_def`` requires it.
-        assert fd.type_expr is not None
-        return self._env.resolve_type_expr(fd.type_expr, span=fd.span, type_vars=type_vars)
+        annotation = cast(TypeExpr, fd.type_expr)
+        return self._env.resolve_type_expr(annotation, span=fd.span, type_vars=type_vars)
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
-        """Resolve a generic enum's member-record definitions and constructors."""
+        """Resolve a generic enum's member-record definitions."""
         type_params = stmt.type_params
-        gdef = self._env.get_generic_type(stmt.name)
-        assert gdef is not None, f"compiler bug: generic enum {stmt.name!r} not pre-registered"
-        template = gdef.template
-        assert isinstance(template, EnumType)
+        template = self._env.generic_type_of(stmt.name).template
         typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset(type_params))
         typedef = replace(typedef, decl_node_id=template.decl_id)
         self._resolved_defs[stmt.name] = typedef
         for member_def in member_defs:
             self._env.type_table.register(member_def)
         self._env.type_table.register(typedef)
-        for member in stmt.members:
-            if not isinstance(member, VariantDef):
-                continue
-            member_type = next(
-                member_type for member_type in typedef.members if member_type.name == member.name
-            )
-            fields = self._env.type_table.record_fields(member_type)
-            self._env.register_constructor_signature(
-                ConstructorSignature(
-                    owner_name=member_type.name,
-                    field_names=tuple(fields),
-                    field_templates=tuple(fields.values()),
-                    result_template=member_type,
-                    type_params=tuple(
-                        arg.name for arg in member_type.type_args if isinstance(arg, TypeVarType)
-                    ),
-                )
-            )
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.

@@ -118,32 +118,45 @@ def _handle_reset(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text="Session reset.")
 
 
-def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:type EXPR`` — type-check EXPR against the session and print its type.
+def _static_query(query: Callable[[], MetaOutcome]) -> MetaOutcome:
+    """Run one static session query; its rejection is shown as its formatted diagnostic.
 
-    No evaluation, no promotion.  An empty EXPR prints a usage hint; any
-    pipeline failure (syntax / scope / type / non-expression) is caught and
-    returned as a clean error string so it never escapes ``dispatch_meta``.
+    Any pipeline failure (syntax / scope / type) becomes a clean error
+    string, so it never escapes ``dispatch_meta``.
     """
     from agm.agl.diagnostics import AglError, format_diagnostic
 
-    if not arg:
-        return MetaOutcome(text="usage: :type EXPR")
     try:
-        type_str = ctx.session.type_of(arg)
+        return query()
     except AglError as exc:
         return MetaOutcome(text=format_diagnostic(exc.to_diagnostic(), source_name=None))
-    return MetaOutcome(text=type_str)
+
+
+def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
+    """``:type EXPR`` — type-check EXPR against the session and print its type.
+
+    No evaluation, no promotion.  An empty EXPR prints a usage hint.
+    """
+    if not arg:
+        return MetaOutcome(text="usage: :type EXPR")
+    return _static_query(lambda: MetaOutcome(text=ctx.session.type_of(arg)))
 
 
 def _handle_info(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:info NAME`` — display the current binding, function, or type as AgL."""
+    """``:info NAME`` — display the current binding, function, or type as AgL.
+
+    A name scope rejects shows scope's diagnostic, exactly as an entry spelling it would.
+    """
     if not arg or len(arg.split()) != 1:
         return MetaOutcome(text="usage: :info NAME")
-    info = ctx.session.info_of(arg)
+    return _static_query(lambda: _info_outcome(arg, ctx.session.info_of(arg)))
+
+
+def _info_outcome(name: str, info: str | None) -> MetaOutcome:
+    """Show one ``:info`` description of *name*, or that *name* is no identifier."""
     if info is None:
-        return MetaOutcome(text=f"Unknown identifier {arg!r}.")
-    return MetaOutcome(text=info, highlight_as_agl=True, agl_ranges=_info_agl_ranges(info, arg))
+        return MetaOutcome(text=f"Unknown identifier {name!r}.")
+    return MetaOutcome(text=info, highlight_as_agl=True, agl_ranges=_info_agl_ranges(info, name))
 
 
 _INFO_SECTION_RE = re.compile(r"^(?:Binding|Signature|Type|Value):\n", re.MULTILINE)
@@ -343,31 +356,13 @@ _COMMANDS: list[MetaCommand] = [
 ]
 
 
-# Module-level caches for the command index and name tuple.  Both are rebuilt
-# once at import time (when ``_COMMANDS`` is fully populated).
-_command_index_cache: dict[str, MetaCommand] | None = None
-_command_names_cache: tuple[str, ...] | None = None
-
-
-def _rebuild_caches() -> None:
-    """Rebuild both module-level caches from the current ``_COMMANDS`` list."""
-    global _command_index_cache, _command_names_cache
-    index: dict[str, MetaCommand] = {}
-    names: list[str] = []
-    for command in _COMMANDS:
-        for name in command.names:
-            index[name] = command
-            names.append(f":{name}")
-    _command_index_cache = index
-    _command_names_cache = tuple(names)
-
-
-def _command_index() -> dict[str, MetaCommand]:
-    """Return the cached name → command lookup, building it on first call."""
-    if _command_index_cache is None:
-        _rebuild_caches()
-    assert _command_index_cache is not None
-    return _command_index_cache
+# Name → command lookup and ``:``-prefixed names, derived once from ``_COMMANDS``.
+_COMMAND_INDEX: dict[str, MetaCommand] = {
+    name: command for command in _COMMANDS for name in command.names
+}
+_COMMAND_NAMES: tuple[str, ...] = tuple(
+    f":{name}" for command in _COMMANDS for name in command.names
+)
 
 
 def meta_command_names() -> tuple[str, ...]:
@@ -376,10 +371,7 @@ def meta_command_names() -> tuple[str, ...]:
     This is the single source of truth shared with the console completer so
     tab-completion always matches the live registry.
     """
-    if _command_names_cache is None:
-        _rebuild_caches()
-    assert _command_names_cache is not None
-    return _command_names_cache
+    return _COMMAND_NAMES
 
 
 def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
@@ -391,13 +383,12 @@ def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
     clean error outcome rather than raising.
     """
     body = line.strip()
-    assert body.startswith(":")  # the loop only calls us for ``:`` lines
     without_colon = body[1:]
     parts = without_colon.split(None, 1)
     name = parts[0] if parts else ""
     arg = parts[1].strip() if len(parts) > 1 else ""
 
-    command = _command_index().get(name)
+    command = _COMMAND_INDEX.get(name)
     if command is None:
         return MetaOutcome(text=f"Unknown command ':{name}'. Type :help for the command list.")
     return command.handler(arg, ctx)

@@ -20,16 +20,16 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from types import CodeType, ModuleType
+from types import CodeType, MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import BuiltinNominals
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import ExceptionFieldEncode, TargetContractRequest
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId
 from agm.agl.ir.program import FunctionDescriptor, NominalDescriptor, ValueDescriptors
 from agm.agl.modules.ids import ModuleId
@@ -46,6 +46,7 @@ from agm.agl.runtime.boundary import (
     current_descriptors,
     decode_boundary_value,
     encode_boundary_value,
+    store_dict_entry,
     synthesize_nominal_classes,
 )
 from agm.agl.runtime.type_contracts import TypeContract, build_type_contract
@@ -56,7 +57,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     ContractValue,
     DictValue,
-    IrClosureValue,
+    FunctionValue,
     TextValue,
     Value,
 )
@@ -238,7 +239,7 @@ class _CompanionRuntime:
     def active_span(self) -> "Location | None":
         """The span of the extern call active in this context, if any.
 
-        Read by ``IrInterpreter._invoke_crossed_closure`` for a companion
+        Read by ``IrInterpreter._invoke_crossed_function`` for a companion
         callback that is itself an extern: it has no AgL call site of its
         own, so it inherits the outer call's span instead.
         """
@@ -410,31 +411,31 @@ class ExternCallWindow:
         )
 
 
-class _ClosureInvoker(Protocol):
-    """The evaluator-owned execution hook for one crossed AgL closure."""
+class _FunctionInvoker(Protocol):
+    """The evaluator-owned execution hook for one crossed AgL function value."""
 
     def __call__(self, args: tuple[Value, ...]) -> Value: ...
 
 
 class AglCallableProxy:
-    """A Python callable backed by an AgL closure during an extern call.
+    """A Python callable backed by an AgL function value during an extern call.
 
     The evaluator supplies execution while this runtime-side adapter owns
     Python argument/result conversion and the invocation-window guard.
     """
 
-    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke")
+    __slots__ = ("_arity", "_function", "_require_active_window", "_invoke")
 
     def __init__(
         self,
         *,
         arity: int,
-        closure: IrClosureValue,
+        function: FunctionValue,
         require_active_window: Callable[[], None],
-        invoke: _ClosureInvoker,
+        invoke: _FunctionInvoker,
     ) -> None:
         self._arity = arity
-        self._closure = closure
+        self._function = function
         self._require_active_window = require_active_window
         self._invoke = invoke
 
@@ -451,7 +452,7 @@ class AglCallableProxy:
         try:
             return encode_boundary_value(self._invoke(values), current_descriptors())
         except AglRaise as exc:
-            raise AglException(exc.exc) from exc
+            raise AglException(exc.exc, span=exc.span) from exc
 
 
 class ExternCallable(Protocol):
@@ -467,6 +468,12 @@ class ExternCallable(Protocol):
     """
 
     def __call__(self, *args: object) -> object: ...
+
+
+_NO_FUNCTIONS: Mapping[FunctionId, FunctionDescriptor] = MappingProxyType({})
+_NO_EXCEPTION_FIELD_ENCODES: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] = (
+    MappingProxyType({})
+)
 
 
 def _comparable_shape(descriptor: NominalDescriptor) -> tuple[object, tuple[bool, ...]]:
@@ -515,14 +522,18 @@ class ExternRegistry:
         self._nominal_classes: dict[NominalId, type[object]] = {}
         self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
         self._function_by_id: dict[FunctionId, FunctionDescriptor] = {}
+        self._exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
         # Keyed by request identity; the entry pins its request so the id stays unique.
-        self._type_contracts: dict[int, tuple[ContractRequest, TypeContract]] = {}
+        self._type_contracts: dict[int, tuple[TargetContractRequest, TypeContract]] = {}
 
     def set_nominals(
         self,
         descriptors: dict[NominalId, NominalDescriptor],
         *,
-        functions: Mapping[FunctionId, FunctionDescriptor] | None = None,
+        functions: Mapping[FunctionId, FunctionDescriptor] = _NO_FUNCTIONS,
+        exception_field_encodes: Mapping[
+            NominalId, tuple[ExceptionFieldEncode, ...]
+        ] = _NO_EXCEPTION_FIELD_ENCODES,
     ) -> None:
         """Materialize this program's companion-visible nominal classes, insert-only.
 
@@ -540,12 +551,13 @@ class ExternRegistry:
         :meth:`_agl_module` consults that snapshot to decide which identity a
         companion's bare/dotted nominal lookup resolves to at import time.
 
-        *functions* accumulates alongside *descriptors* into the same program
-        descriptor view :meth:`_program_descriptors` publishes for a companion
-        import (see :meth:`load_companion`), so a view a companion builds at
-        import time renders correctly. Omitted by direct-registry callers that
-        never need that view -- companion import without it still succeeds,
-        just with no nominal/function spellings recorded yet.
+        *functions* and *exception_field_encodes* accumulate alongside
+        *descriptors* into the same program descriptor view
+        :meth:`_program_descriptors` publishes for a companion import (see
+        :meth:`load_companion`), so a view a companion builds at import time
+        renders correctly. Omitted by direct-registry callers that never need
+        that view -- companion import without it still succeeds, just with no
+        nominal/function spellings recorded yet.
         """
         if self_validation_enabled():
             for nominal, descriptor in descriptors.items():
@@ -565,8 +577,8 @@ class ExternRegistry:
             )
             self._nominal_classes.update(classes)
         self._nominal_by_id.update(descriptors)
-        if functions is not None:
-            self._function_by_id.update(functions)
+        self._function_by_id.update(functions)
+        self._exception_field_encodes.update(exception_field_encodes)
 
     def _program_descriptors(self) -> ValueDescriptors:
         """The program descriptor view accumulated by :meth:`set_nominals`.
@@ -577,7 +589,11 @@ class ExternRegistry:
         real, non-empty descriptor slot rather than the detached one in
         :mod:`agm.agl.runtime.boundary`.
         """
-        return ValueDescriptors(nominals=self._nominal_by_id, functions=self._function_by_id)
+        return ValueDescriptors(
+            nominals=self._nominal_by_id,
+            functions=self._function_by_id,
+            exception_field_encodes=self._exception_field_encodes,
+        )
 
     def _agl_module(self) -> ModuleType:
         """Build the temporary ``agl`` module exposed while importing a companion.
@@ -676,15 +692,11 @@ class ExternRegistry:
             f"agm_agl_extern_companion__{module_id.synthetic_name_component()}"
             f"__{len(self._by_path)}"
         )
-        spec = importlib.util.spec_from_file_location(
-            synthetic_name,
-            canonical,
-            loader=_CompanionBytecodeLoader(synthetic_name, str(canonical), stamp),
-        )
-        # A supplied source-file loader always yields a spec; ``None`` would
-        # mean the location carries a suffix no loader recognizes.
-        assert spec is not None and spec.loader is not None, (
-            f"cannot build an import spec for companion {canonical}"
+        loader = _CompanionBytecodeLoader(synthetic_name, str(canonical), stamp)
+        # A supplied source-file loader always yields a spec with that loader set.
+        spec = cast(
+            importlib.machinery.ModuleSpec,
+            importlib.util.spec_from_file_location(synthetic_name, canonical, loader=loader),
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[synthetic_name] = module
@@ -692,7 +704,7 @@ class ExternRegistry:
         sys.modules["agl"] = self._agl_module()
         try:
             with active_descriptors(self._program_descriptors()):
-                spec.loader.exec_module(module)
+                loader.exec_module(module)
         except Exception as exc:
             raise self._import_error(module_id, canonical, exc) from exc
         finally:
@@ -743,11 +755,8 @@ class ExternRegistry:
         if cached is not None:
             return cached
 
-        module = self._by_module.get(module_id)
-        assert module is not None, (
-            f"module {module_id.display()!r} has no loaded companion; "
-            "load_companion must be called before resolve"
-        )
+        # load_companion is always called for module_id before resolve.
+        module = self._by_module[module_id]
         if not hasattr(module, name):
             raise ExternResolutionError(module_id, name)
         value: object = cast(object, getattr(module, name))
@@ -764,9 +773,9 @@ class ExternRegistry:
         *,
         nominals: BuiltinNominals,
         descriptors: ValueDescriptors,
-        function_encoder: Callable[[IrClosureValue], object] | None = None,
+        function_encoder: Callable[[FunctionValue], object] | None = None,
         active_call: ActiveCall | None = None,
-        contracts: Mapping[ContractId, ContractRequest] | None = None,
+        contracts: Mapping[ContractId, TargetContractRequest] | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -798,8 +807,9 @@ class ExternRegistry:
         call so ``runtime.state``/``runtime.trace`` inside *fn* reach them;
         absent direct callers use detached host state and a no-op trace
         instead.
-        *function_encoder* turns an AgL closure into a callable proxy and is
-        published for the call's extent, so every closure a companion reaches
+        *function_encoder* turns an AgL function value (a closure or a
+        constructor) into a callable proxy and is published for the call's
+        extent, so every function value a companion reaches
         -- through an argument, a retained view, or a nested container --
         encodes through the interpreter it is running under. Like
         *active_call*, it is scoped to this call's context: a thread the
@@ -832,7 +842,7 @@ class ExternRegistry:
                 ):
                     result = fn(*encoded_args)
             except AglException as exc:
-                raise AglRaise(exc.value) from exc
+                raise AglRaise(exc.value, span=exc.span) from exc
             except AglCyclicValue as exc:
                 raise cyclic_value_raise(nominals=nominals) from exc
             except Exception as exc:
@@ -865,7 +875,7 @@ class ExternRegistry:
                 ) from exc
 
     def _type_contract(
-        self, contracts: Mapping[ContractId, ContractRequest], value: ContractValue
+        self, contracts: Mapping[ContractId, TargetContractRequest], value: ContractValue
     ) -> TypeContract:
         """Return *value*'s ``TypeContract``, built once per request alongside the classes."""
         request = contracts[value.contract_id]
@@ -951,17 +961,19 @@ def _array(values: Sequence[object]) -> AglArrayView:
     )
 
 
-def _dict(values: dict[str, object]) -> AglDictView:
+def _dict(values: Mapping[object, object] | Iterable[tuple[object, object]]) -> AglDictView:
     """Construct the companion representation of a new AgL dict.
 
-    Bound as ``agl.dict``; see :func:`_array` for where its descriptors come from.
+    Bound as ``agl.dict``; takes a mapping or an iterable of ``(key, value)``
+    pairs. Keys are any key :func:`decode_dict_key` accepts, and each pair is
+    stored by AgL equality, so a later pair replaces an equal earlier key
+    (see :func:`_array` for where the view's descriptors come from).
     """
-    entries: dict[str, Value] = {}
-    for key, value in values.items():
-        if not isinstance(key, str):
-            raise TypeError("AgL dict keys must be str")
-        entries[key] = decode_boundary_value(value)
-    return AglDictView(DictValue(entries), current_descriptors())
+    entries = DictValue()
+    pairs = values.items() if isinstance(values, Mapping) else values
+    for key, value in pairs:
+        store_dict_entry(entries, key, value)
+    return AglDictView(entries, current_descriptors())
 
 
 def _option_none(option_cls: type) -> object:

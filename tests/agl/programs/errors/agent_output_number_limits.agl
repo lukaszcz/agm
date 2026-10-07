@@ -1,0 +1,19 @@
+# An agent response holding a number no value can hold -- an exponent past any
+# decimal, an integral decimal outside the decimal range narrowed to `int`, or
+# a non-finite constant -- is an ordinary parse failure in both strict and
+# lenient JSON modes: it reaches `parse-error-retries` (here, one retry)
+# instead of crashing. An integer literal of any length decodes exactly.
+record Reading
+  n: decimal
+
+record Count
+  n: int
+
+program def main() -> unit =
+  let meter: Agent = AgentCommand("meter")
+  let reading: Reading = meter.ask("Read the meter.", parse-error-retries = 1)
+  print reading.n
+  let count: Count = meter.ask("Count the items.", parse-error-retries = 1)
+  print count.n
+  let raw: json = meter.ask("Report raw data.", parse-error-retries = 1)
+  print raw

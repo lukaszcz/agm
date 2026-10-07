@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_member_through_owner",
+      "params": {"pick": 3},
+      "expect": {
+        "stdout": "fresh 3\nanchored fresh 3\nalias fresh 3\n9\nfalse\ntrue\ntrue\nfalse\ntrue\n4\nfresh 8\n"
+      }
+    },
+    {
+      "name": "referenced_member_at_its_own_path",
+      "params": {"pick": -5},
+      "expect": {
+        "stdout": "saved 5\nanchored saved 5\nalias saved 7\n12\ntrue\nfalse\nfalse\ntrue\nfalse\n4\nfresh 8\n"
+      }
+    }
+  ]
+}

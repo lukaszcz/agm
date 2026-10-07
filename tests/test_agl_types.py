@@ -188,8 +188,8 @@ class TestNominalWideningComparable:
         node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
         tree_int = EnumType("Tree", (IntType(),), decl_id=4)
 
-        assert comparable_types(tree_int, node_int, table)
-        assert comparable_types(leaf, tree_int, table)
+        assert comparable_types(tree_int, node_int, table, bounds={})
+        assert comparable_types(leaf, tree_int, table, bounds={})
 
     def test_non_members_and_sibling_members_stay_incomparable(self) -> None:
         table, _node, leaf, other, _tree = _member_assignability_table()
@@ -197,10 +197,10 @@ class TestNominalWideningComparable:
         node_text = RecordType("Node", (TextType(),), scope_path=("Tree",), decl_id=1)
         tree_int = EnumType("Tree", (IntType(),), decl_id=4)
 
-        assert not comparable_types(other, tree_int, table)
-        assert not comparable_types(node_text, tree_int, table)
-        assert not comparable_types(node_int, leaf, table)
-        assert not comparable_types(ArrayType(leaf), ArrayType(tree_int), table)
+        assert not comparable_types(other, tree_int, table, bounds={})
+        assert not comparable_types(node_text, tree_int, table, bounds={})
+        assert not comparable_types(node_int, leaf, table, bounds={})
+        assert not comparable_types(ArrayType(leaf), ArrayType(tree_int), table, bounds={})
 
     def test_enum_compares_with_a_wider_enum_either_way(self) -> None:
         table, node, leaf, other, _tree = _member_assignability_table()
@@ -218,9 +218,9 @@ class TestNominalWideningComparable:
         wide_int = EnumType("Wide", (IntType(),), decl_id=5)
         wide_text = EnumType("Wide", (TextType(),), decl_id=5)
 
-        assert comparable_types(tree_int, wide_int, table)
-        assert comparable_types(wide_int, tree_int, table)
-        assert not comparable_types(tree_int, wide_text, table)
+        assert comparable_types(tree_int, wide_int, table, bounds={})
+        assert comparable_types(wide_int, tree_int, table, bounds={})
+        assert not comparable_types(tree_int, wide_text, table, bounds={})
 
     def test_exception_compares_with_an_ancestor_either_way(self) -> None:
         table = TypeTable()
@@ -235,13 +235,13 @@ class TestNominalWideningComparable:
                 )
             )
 
-        assert comparable_types(derived, base, table)
-        assert comparable_types(base, derived, table)
-        assert not comparable_types(derived, sibling, table)
+        assert comparable_types(derived, base, table, bounds={})
+        assert comparable_types(base, derived, table, bounds={})
+        assert not comparable_types(derived, sibling, table, bounds={})
 
     def test_json_still_rejects_absorbable_scalars(self) -> None:
-        assert not comparable_types(TextType(), JsonType(), _EMPTY_TABLE)
-        assert not comparable_types(JsonType(), IntType(), _EMPTY_TABLE)
+        assert not comparable_types(TextType(), JsonType(), _EMPTY_TABLE, bounds={})
+        assert not comparable_types(JsonType(), IntType(), _EMPTY_TABLE, bounds={})
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,10 @@ class TestTypeReprAndKind:
         assert repr(ArrayType(elem=IntType())) == "array[int]"
 
     def test_dict_repr(self) -> None:
-        assert repr(DictType(value=TextType())) == "dict[text, text]"
+        assert repr(DictType(key=TextType(), value=TextType())) == "dict[text, text]"
+
+    def test_dict_repr_with_non_text_key(self) -> None:
+        assert repr(DictType(key=IntType(), value=TextType())) == "dict[int, text]"
 
     def test_record_repr(self) -> None:
         assert repr(RecordType(name="Point")) == "Point"
@@ -416,7 +419,7 @@ class TestTypeReprAndKind:
         assert ArrayType(elem=IntType()).kind == "array"
 
     def test_dict_kind(self) -> None:
-        assert DictType(value=IntType()).kind == "dict"
+        assert DictType(key=TextType(), value=IntType()).kind == "dict"
 
     def test_record_kind(self) -> None:
         assert RecordType(name="R").kind == "record"
@@ -473,7 +476,12 @@ class TestIsJsonShaped:
         assert is_json_shaped(ArrayType(elem=IntType())) is True
 
     def test_dict_of_json_shaped_is_json_shaped(self) -> None:
-        assert is_json_shaped(DictType(value=TextType())) is True
+        assert is_json_shaped(DictType(key=TextType(), value=TextType())) is True
+
+    def test_dict_with_non_text_key_is_not_json_shaped(self) -> None:
+        # A native JSON object slot has no representation for a non-text key,
+        # even when the value is itself JSON-shaped.
+        assert is_json_shaped(DictType(key=IntType(), value=TextType())) is False
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +498,7 @@ class TestIsScalarJsonShaped:
         assert is_scalar_json_shaped(ArrayType(elem=IntType())) is False
 
     def test_dict_is_not_scalar_json_shaped(self) -> None:
-        assert is_scalar_json_shaped(DictType(value=IntType())) is False
+        assert is_scalar_json_shaped(DictType(key=TextType(), value=IntType())) is False
 
     def test_record_is_not_scalar_json_shaped(self) -> None:
         assert is_scalar_json_shaped(RecordType(name="R")) is False
@@ -561,42 +569,42 @@ class TestComparableTypes:
     # New types: never comparable (even with themselves).
 
     def test_unit_vs_unit_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE) is False
+        assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE, bounds={}) is False
 
     def test_function_vs_same_function_not_comparable(self) -> None:
         f = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f, f, _EMPTY_TABLE) is False
+        assert comparable_types(f, f, _EMPTY_TABLE, bounds={}) is False
 
     def test_function_vs_function_not_comparable(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=IntType())
         f2 = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f1, f2, _EMPTY_TABLE) is False
+        assert comparable_types(f1, f2, _EMPTY_TABLE, bounds={}) is False
 
     def test_unit_vs_text_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE) is False
+        assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE, bounds={}) is False
 
     def test_function_vs_text_not_comparable(self) -> None:
         f = FunctionType(params=(), result=UnitType())
-        assert comparable_types(f, TextType(), _EMPTY_TABLE) is False
+        assert comparable_types(f, TextType(), _EMPTY_TABLE, bounds={}) is False
 
     # Regression: existing scalar comparability is unchanged.
     def test_int_vs_int_comparable(self) -> None:
-        assert comparable_types(IntType(), IntType(), _EMPTY_TABLE) is True
+        assert comparable_types(IntType(), IntType(), _EMPTY_TABLE, bounds={}) is True
 
     def test_text_vs_text_comparable(self) -> None:
-        assert comparable_types(TextType(), TextType(), _EMPTY_TABLE) is True
+        assert comparable_types(TextType(), TextType(), _EMPTY_TABLE, bounds={}) is True
 
     def test_int_vs_decimal_comparable(self) -> None:
-        assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE) is True
+        assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE, bounds={}) is True
 
     def test_decimal_vs_int_comparable(self) -> None:
-        assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE) is True
+        assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE, bounds={}) is True
 
     def test_bool_vs_bool_comparable(self) -> None:
-        assert comparable_types(BoolType(), BoolType(), _EMPTY_TABLE) is True
+        assert comparable_types(BoolType(), BoolType(), _EMPTY_TABLE, bounds={}) is True
 
     def test_int_vs_text_not_comparable(self) -> None:
-        assert comparable_types(IntType(), TextType(), _EMPTY_TABLE) is False
+        assert comparable_types(IntType(), TextType(), _EMPTY_TABLE, bounds={}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -641,25 +649,17 @@ class TestTypeEnvironmentPrelude:
         assert fields["message"] == TextType()
         assert fields["limit"] == IntType()
 
-    def test_resolve_named_type_exec_result(self) -> None:
+    def test_exec_result_is_a_builtin_record(self) -> None:
         env = TypeEnvironment()
-        t = env.resolve_named_type("ExecResult")
+        t = env.get_type("ExecResult")
         assert isinstance(t, RecordType)
         assert t.name == "ExecResult"
 
-    def test_resolve_named_type_agent(self) -> None:
+    def test_agent_is_a_builtin_enum(self) -> None:
         env = TypeEnvironment()
-        t = env.resolve_named_type("Agent")
+        t = env.get_type("Agent")
         assert isinstance(t, EnumType)
         assert t.name == "Agent"
-
-    def test_source_type_match_requires_graph_context(self) -> None:
-        env = TypeEnvironment()
-
-        assert (
-            env.match_source_type_qname(ModuleId.from_path("library/remote"), "Remote", IntType())
-            is None
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +792,10 @@ class TestTypeVarType:
     def test_repr(self) -> None:
         assert repr(TypeVarType("T")) == "T"
 
+    def test_repr_renders_method_type_slot_wildcard_as_underscore(self) -> None:
+        """A receiver-prefix `_` wildcard's private rigid name never leaks."""
+        assert repr(TypeVarType("__method_type_slot_1_0")) == "_"
+
     def test_equality_same_name(self) -> None:
         assert TypeVarType("T") == TypeVarType("T")
 
@@ -807,13 +811,14 @@ class TestTypeVarType:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE, bounds={}) is False
 
     def test_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE, bounds={}) is False
 
     def test_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
+        t = TypeVarType("T")
+        assert comparable_types(t, t, _EMPTY_TABLE, bounds={}) is False
 
     def test_assignable_to_same_typevar(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
@@ -890,7 +895,7 @@ class TestInferenceVarType:
         "typ",
         [
             ArrayType(InferenceVarType("T")),
-            DictType(InferenceVarType("T")),
+            DictType(TextType(), InferenceVarType("T")),
             FunctionType(params=(InferenceVarType("T"),), result=InferenceVarType("T")),
             RecordType("Box", type_args=(InferenceVarType("T"),)),
             EnumType("Option", type_args=(InferenceVarType("T"),)),
@@ -906,7 +911,7 @@ class TestInferenceVarType:
         variable = InferenceVarType("T")
         typ = FunctionType(
             params=(ArrayType(variable),),
-            result=RecordType("Box", type_args=(DictType(variable),)),
+            result=RecordType("Box", type_args=(DictType(TextType(), variable),)),
         )
 
         assert tuple(item for item in iter_type(typ) if item == variable) == (variable, variable)
@@ -961,16 +966,6 @@ class TestInferenceVarType:
             )
         )
         assert compute_finite_closure(finite_table).infinite == frozenset()
-
-    def test_schema_walkers_reject_flexible_variables(self) -> None:
-        from agm.agl.semantics.type_table import create_seeded_type_table
-        from tests._agl_helpers import derive_schema
-
-        variable = InferenceVarType("T")
-        table = create_seeded_type_table()
-
-        with pytest.raises(TypeError):
-            derive_schema(variable, table)
 
 
 # ---------------------------------------------------------------------------
@@ -1063,25 +1058,39 @@ class TestTypeTemplateMatch:
     def test_nested_containers_and_functions_require_consistent_binding(self) -> None:
         variable = TypeVarType("T")
         template = FunctionType(
-            params=(ArrayType(variable), DictType(variable)),
+            params=(ArrayType(variable), DictType(TextType(), variable)),
             result=variable,
         )
         matching = FunctionType(
-            params=(ArrayType(IntType()), DictType(IntType())),
+            params=(ArrayType(IntType()), DictType(TextType(), IntType())),
             result=IntType(),
         )
         conflicting = FunctionType(
-            params=(ArrayType(IntType()), DictType(TextType())),
+            params=(ArrayType(IntType()), DictType(TextType(), TextType())),
             result=IntType(),
         )
 
         assert match_type_template(template, matching, ("T",)) is not None
         assert match_type_template(template, conflicting, ("T",)) is None
 
+    def test_dict_key_position_is_matched_structurally(self) -> None:
+        # The key is a template hole too, matched and required consistent
+        # exactly like the value.
+        template = DictType(TypeVarType("K"), TypeVarType("K"))
+        matching = DictType(IntType(), IntType())
+        conflicting = DictType(IntType(), TextType())
+
+        assert match_type_template(template, matching, ("K",)) == TypeTemplateMatch(
+            (("K", IntType()),)
+        )
+        assert match_type_template(template, conflicting, ("K",)) is None
+
     def test_shape_nominal_and_rigid_leaf_mismatches_do_not_match(self) -> None:
         module = ModuleId.from_path("library/remote")
 
-        assert match_type_template(ArrayType(IntType()), DictType(IntType()), ()) is None
+        assert (
+            match_type_template(ArrayType(IntType()), DictType(TextType(), IntType()), ()) is None
+        )
         assert (
             match_type_template(
                 EnumType("Remote", module_id=module),
@@ -1163,7 +1172,11 @@ class TestHelpers:
         assert free_type_vars(ArrayType(TypeVarType("T"))) == frozenset({"T"})
 
     def test_free_type_vars_dict(self) -> None:
-        assert free_type_vars(DictType(TypeVarType("V"))) == frozenset({"V"})
+        assert free_type_vars(DictType(TextType(), TypeVarType("V"))) == frozenset({"V"})
+
+    def test_free_type_vars_dict_key(self) -> None:
+        # The key is a structural child too: a variable occurring there is free.
+        assert free_type_vars(DictType(TypeVarType("K"), TypeVarType("V"))) == frozenset({"K", "V"})
 
     def test_free_type_vars_function(self) -> None:
         ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
@@ -1201,9 +1214,14 @@ class TestHelpers:
         assert result == ArrayType(IntType())
 
     def test_substitute_dict(self) -> None:
-        t = DictType(TypeVarType("V"))
+        t = DictType(TextType(), TypeVarType("V"))
         result = substitute(t, {"V": TextType()})
-        assert result == DictType(TextType())
+        assert result == DictType(TextType(), TextType())
+
+    def test_substitute_dict_key(self) -> None:
+        t = DictType(TypeVarType("K"), IntType())
+        result = substitute(t, {"K": TextType()})
+        assert result == DictType(TextType(), IntType())
 
     def test_substitute_function(self) -> None:
         ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
@@ -1252,13 +1270,14 @@ class TestCapabilityGates:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_typevar_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE, bounds={}) is False
 
     def test_typevar_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE, bounds={}) is False
 
     def test_typevar_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
+        t = TypeVarType("T")
+        assert comparable_types(t, t, _EMPTY_TABLE, bounds={}) is False
 
     def test_typevar_assignable_to_same(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
@@ -1459,7 +1478,7 @@ class TestNominalEquality:
         assert ArrayType(IntType()) != ArrayType(TextType())
 
     def test_dict_type_stays_structural(self) -> None:
-        assert DictType(IntType()) != DictType(TextType())
+        assert DictType(TextType(), IntType()) != DictType(TextType(), TextType())
 
     def test_function_type_stays_structural(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=TextType())

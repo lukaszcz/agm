@@ -1,0 +1,5 @@
+# unit is not data and is never Hashable, so it cannot be a dict key at a
+# hashing site.
+program def main() -> unit =
+  let d: dict[unit, text] = {}
+  print(() in d)

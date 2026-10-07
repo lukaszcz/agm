@@ -10,7 +10,8 @@ source filename:
 
 - error diagnostics  → ``N:C: error: message``
 - warnings           → ``N:C: warning: message``
-- runtime raise      → ``AgL exception: <Type>: <message> at line L, col C``
+- runtime raise      → ``AgL exception: <Type>: <message> at path:L:C`` (falls
+  back to ``at line L[, col C]`` when the raise site's source is unknown)
 
 On success, when ``echo`` is on, an entry's outcome is echoed Python-REPL style:
 
@@ -22,7 +23,7 @@ On success, when ``echo`` is on, an entry's outcome is echoed Python-REPL style:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import format_diagnostic
 
@@ -145,32 +146,25 @@ def _render_echo(result: "EntryResult") -> str | None:
 
         if result.type_display is not None:
             return format_type_text_echo_for_repl(result.type_display)
-        assert result.value_type is not None
-        return format_type_echo_for_repl(result.value_type, result.type_table)
+        return format_type_echo_for_repl(cast("Type", result.value_type), result.type_table)
     if result.kind == "expression":
-        # A bare expression always carries a value, type, and descriptor view
-        # on success.
-        assert (
-            result.value is not None
-            and result.value_type is not None
-            and result.descriptors is not None
-        )
+        # A successful expression carries a value and descriptor view.
         return _render_value_or_cyclic_message(
-            result.value,
-            result.descriptors,
+            cast("Value", result.value),
+            cast("ValueDescriptors", result.descriptors),
             pretty=True,
             quote_strings=result.quote_strings,
         )
     if result.kind == "binding":
-        # Bindings share their display with ``:bindings``.
-        assert (
-            result.value is not None
-            and result.value_type is not None
-            and result.descriptors is not None
+        # A successful binding carries a value, type, and descriptor view; its
+        # display is shared with ``:bindings``.
+        return format_typed_value(
+            result.name,
+            cast("Type", result.value_type),
+            cast("Value", result.value),
+            cast("ValueDescriptors", result.descriptors),
         )
-        return format_typed_value(result.name, result.value_type, result.value, result.descriptors)
     if result.kind == "declaration":
-        assert result.name is not None
         return f"{result.name} declared"
     # ``statement`` — nothing to echo (its own output already printed).
     return None

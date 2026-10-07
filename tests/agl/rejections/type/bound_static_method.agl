@@ -1,0 +1,8 @@
+scope Box
+  def make[T]{Eq T}(value: T) -> T = value
+end Box
+
+def double(n: int) -> int = n * 2
+
+program def main() -> unit =
+  print(Box::make(double))

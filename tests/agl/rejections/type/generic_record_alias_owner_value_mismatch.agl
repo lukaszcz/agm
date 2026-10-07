@@ -1,0 +1,8 @@
+record Box[T]
+  value: T
+
+type B = Box[int]
+
+program def main() -> unit =
+  let make = B::B
+  print(make("s"))

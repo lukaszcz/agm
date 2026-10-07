@@ -1,0 +1,14 @@
+scope Paint
+  record Pixel
+    x: int
+
+  record Stray
+end Paint
+
+enum Shape = ::Paint::Pixel | Empty
+
+program def main() -> unit =
+  let s: Shape = Empty
+  case s of
+    | Paint::Stray => print "stray"
+    | _ => print "other"

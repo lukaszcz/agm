@@ -1,0 +1,41 @@
+# One identity-based `hiding`: a `use` alias reads what the import keeps, a
+# scope a re-export withholds is supplied by another import, and a hidden
+# record does not claim the bare spelling of an enum member.
+import colors::*
+import records::* hiding Red
+
+scope Alias
+  import lib::* hiding S::x
+  use S as Y
+
+  def get(n: int) -> int =
+    if
+      | n == 0 => Y::y()
+      | else => Y::y() * 10
+end Alias
+
+scope Withheld
+  import facade::*
+  import other::*
+  use T as U
+
+  def get(n: int) -> int =
+    if
+      | n == 0 => S::x() + U::t()
+      | else => U::t() + U::w()
+end Withheld
+
+scope Members
+  def make(n: int) -> Color =
+    if
+      | n == 0 => Red
+      | else => Blue
+
+  def name(c: Color) -> text =
+    case c of
+      | Red => "red"
+      | Blue => "blue"
+end Members
+
+program def main(n: int) -> unit =
+  print("%{Alias::get(n)} %{Withheld::get(n)} %{Members::name(Members::make(n))}")

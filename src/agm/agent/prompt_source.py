@@ -16,7 +16,6 @@ class PromptSourceOptions:
     prompt_file: str | None
     config_prompt: str | None
     config_prompt_file: str | None
-    default_prompt_file: Path | None = None
 
 
 def resolve_prompt_source(
@@ -24,7 +23,7 @@ def resolve_prompt_source(
     *,
     cwd: Path,
 ) -> str | Path | None:
-    """Resolve the effective prompt source from CLI, config, and default values."""
+    """Resolve the effective prompt source from CLI and config values, or ``None``."""
 
     if options.prompt is not None:
         return options.prompt
@@ -34,4 +33,4 @@ def resolve_prompt_source(
         return options.config_prompt
     if options.config_prompt_file is not None:
         return Path(options.config_prompt_file)
-    return options.default_prompt_file
+    return None

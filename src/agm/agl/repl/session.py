@@ -18,6 +18,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 
 from __future__ import annotations
 
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -29,7 +30,6 @@ from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.externs import ExternRuntimeState
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
-from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
 
 if TYPE_CHECKING:
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from agm.agent.spec_defaults import AgentSpecResolver
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.infix import Fixity
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import ValueDescriptors
@@ -52,13 +53,19 @@ if TYPE_CHECKING:
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode
+    from agm.agl.scope.symbols import (
+        BindingRef,
+        ConstructorRef,
+        DeclarationKey,
+        ScopeNode,
+        TypeOwner,
+    )
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
+    from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
-        InfixAssoc,
         Program,
         ScopeRegion,
         TypeAlias,
@@ -70,7 +77,6 @@ if TYPE_CHECKING:
         CheckedModule,
         ConstructorSignature,
         FunctionSignature,
-        GenericTypeDef,
         TypeEnvironment,
     )
     from agm.packages.model import PackageInfo
@@ -122,10 +128,15 @@ class _BootstrapSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class _InfoReference:
-    """Binding and constructor identities selected for one ``:info`` name."""
+    """Binding, constructor, and type declaration one ``:info`` name selects, and its spelling."""
 
     binding: "BindingRef | None"
     constructor: "ConstructorRef | None"
+    type_key: "DeclarationKey | None"
+    reference: "VarRef"
+    # Query-scoped view carrying this reference's own ad-hoc qualifier
+    # identities; read only by :meth:`ReplSession._constructor_signature`.
+    type_env: "TypeEnvironment"
 
 
 # Bootstrap images retain complete frontend graphs, so keep only a small working
@@ -150,20 +161,19 @@ def has_runnable_statements(text: str) -> bool:
     the real AgL lexer and looks for any non-trivial token — the lexer skips
     whitespace and comments entirely and emits no tokens for blank/comment-only
     input, while synthetic layout tokens (``_NEWLINE`` / ``_INDENT`` /
-    ``_DEDENT``) carry no statement, so they are ignored.  Any lexer error (a
-    half-typed entry never reaches here, but be defensive) is treated as
-    *runnable* so the entry flows on to ``eval_entry`` and surfaces a real
-    diagnostic rather than being silently dropped.
+    ``_DEDENT``) carry no statement, so they are ignored.  A lexically invalid
+    entry is treated as *runnable* so the entry flows on to ``eval_entry`` and
+    surfaces a real diagnostic rather than being silently dropped.
 
     Shared by the interactive console (blank-line handling) and ``load_file``
     (an empty / comment-only file loads as a benign no-op).  Such source parses
     to an empty module, so this only spares the caller a pointless pipeline run.
     """
-    from agm.agl.lexer import tokenize
+    from agm.agl.lexer import LexError, tokenize
 
     try:
         return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
-    except Exception:  # defensive: lexer errors are treated as runnable
+    except LexError:
         return True
 
 
@@ -184,10 +194,31 @@ def _region_path(region: "ScopeRegion") -> tuple[str, ...]:
     return tuple(path)
 
 
+def _static_verdict[T](probe: Callable[[], T]) -> T | AglError:
+    """Run one static REPL probe, returning its rejection as a value instead of raising it.
+
+    The one boundary where an introspection probe's diagnostic becomes data:
+    a caller weighing two readings of one spelling inspects both verdicts.
+    """
+    try:
+        return probe()
+    except AglError as exc:
+        return exc
+
+
 def _format_repl_location(span: "SourceSpan") -> str:
     """Render a declaration source location for REPL introspection."""
     label = "<repl>" if span.source.label == "<agl>" else span.source.label
     return f"{label}:{span.start_line}:{span.start_col}"
+
+
+def _declared_spelling(scope_path: tuple[str, ...], decl_name: str) -> str:
+    """How ``:info`` names a declaration: its path *scope_path*/*decl_name* in its module.
+
+    Never the queried spelling nor module-qualified (``def Base::h`` for
+    ``G::h`` with ``type G = Base``, ``def print`` for ``log::print``).
+    """
+    return "::".join((*scope_path, decl_name))
 
 
 def _format_repl_signature(signature: "FunctionSignature") -> str:
@@ -197,6 +228,11 @@ def _format_repl_signature(signature: "FunctionSignature") -> str:
     return f"{generic}({', '.join(params)}) -> {signature.result!r}"
 
 
+def _indefinite(kind: str) -> str:
+    """Prefix a type *kind* (``record``, ``enum``, ``exception``) with its indefinite article."""
+    return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}"
+
+
 def _format_info_section(label: str, code: str, location: str | None = None) -> str:
     """Format one labelled ``:info`` code section and an optional location."""
     indented_code = "\n".join(f"  {line}" for line in code.splitlines())
@@ -204,13 +240,19 @@ def _format_info_section(label: str, code: str, location: str | None = None) -> 
     return f"{label}:\n{indented_code}{location_line}"
 
 
-def _format_constructor_signature(name: str, signature: "ConstructorSignature") -> str:
-    """Render one constructor's AgL call signature for ``:info``."""
+def _format_constructor_signature(signature: "ConstructorSignature") -> str:
+    """Render one constructor's AgL call signature for ``:info``, headed by its declared path.
+
+    The path is the constructed record's or exception's (``Src::Mem`` for
+    ``C::Mem`` with ``type C = Src[int]``).
+    """
+    result = signature.result_template
+    name = _declared_spelling(result.scope_path, result.name)
     generic = f"[{', '.join(signature.type_params)}]" if signature.type_params else ""
     params = ", ".join(
         f"{field}: {typ!r}" for field, typ in zip(signature.field_names, signature.field_templates)
     )
-    return f"{name}{generic}({params}) -> {signature.result_template!r}"
+    return f"{name}{generic}({params}) -> {result!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +313,7 @@ class ReplSession:
         )
         self._builtin_var_seed: dict[BuiltinVarKey, Value] = {}
         self._builtin_var_values: dict[BuiltinVarKey, Value] = {}
+        # The host reports a configuration failure from it as an ``AglError``.
         self._param_seed_resolver = param_seed_resolver
         # Decoded parameter values survive in the session alongside host-backed
         # builtin values. They are passed to each fresh interpreter, which only
@@ -369,9 +412,18 @@ class ReplSession:
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
-        # Each retained type-owned path maps to its rendered alias target, or
-        # None for a nominal type.
-        self._session_type_paths: dict[tuple[str, ...], str | None] = {}
+        # Each retained type-owned path maps to the owner it resolved to when
+        # declared, so a retained alias keeps its target across entries.
+        self._session_type_paths: dict[tuple[str, ...], TypeOwner] = {}
+        # Builtin type and def identities of the current declarations, keyed by
+        # scoped name to the declaring module and its enclosing scope path. A
+        # REPL entry's own source cannot see an earlier entry's builtin
+        # declaration in its module graph (each entry recompiles a fresh entry
+        # module), so ``validate_builtin_declaration_uniqueness`` reads this
+        # instead to catch a later entry importing the same scoped builtin.
+        self._session_builtin_declarations: dict[
+            tuple[str, ...], tuple["ModuleId", tuple[str, ...]]
+        ] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
@@ -379,21 +431,6 @@ class ReplSession:
         self._next_node_id: int = 0
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
-        # Constructor candidates from prior promoted entries, keyed by constructor
-        # name → ordered tuple of ConstructorRef.  Passed to resolve_program()
-        # as ambient so that subsequent entries can reference constructors from
-        # prior entries.
-        self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
-        # The subset of the above that were bare-visible (not only
-        # qualifier-visible) at the end of the entry that declared them.
-        # Replayed verbatim in a later entry so a same-module candidate whose
-        # owner path is a retained named scope keeps whichever visibility it
-        # actually had, instead of that being re-derived from the owner
-        # path's shape (see ``_Resolver.run``'s ``ambient_bare_constructor_keys``).
-        self._ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
-        # Type names declared in prior promoted entries, for qualified constructor
-        # access (``Owner::variant``) across REPL entries.
-        self._ambient_type_names: frozenset[str] = frozenset()
 
         # Module roots configuration.
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
@@ -428,18 +465,10 @@ class ReplSession:
         # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
-        # Resolved user infix fixity declared in prior promoted entries
-        # (operator name → ``(priority, associativity)``). The module-graph
-        # assembler merges it with each entry's import-visible fixities.
-        self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
+        # The fixities prior promoted entries declared, by operator name: the
+        # session is one module, so each entry declares them too.
+        self._accumulated_infix: dict[str, Fixity] = {}
         self._entry_pipeline = EntryPipeline(self)
-
-    @staticmethod
-    def _assert_checked_state_closed(checked: "CheckedModule") -> None:
-        """Assert that a checked entry satisfies the shared lowering boundary."""
-        from agm.agl.typecheck.env import assert_checked_module_closed
-
-        assert_checked_module_closed(checked)
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``PipelineDriver`` validation)."""
@@ -459,9 +488,9 @@ class ReplSession:
         same way here as everywhere else. A stdlib version mismatch therefore
         surfaces from inside the caller's own try/except
         (:meth:`open`, :meth:`eval_entry`) instead of from
-        construction. The resolved path is cached back onto ``_stdlib_root``
-        once found, so a later :reset -- which only clears ``_roots`` -- reuses
-        it rather than re-resolving.
+        construction; it is raised as an ``AglError``. The resolved path is
+        cached back onto ``_stdlib_root`` once found, so a later :reset --
+        which only clears ``_roots`` -- reuses it rather than re-resolving.
         """
         if self._roots is not None:
             return self._roots
@@ -469,13 +498,16 @@ class ReplSession:
 
         from agm.agl.modules.roots import assemble_roots
         from agm.config.context import current_config_context
-        from agm.config.module_roots import resolve_stdlib_root
+        from agm.config.module_roots import StdlibResolutionError, resolve_stdlib_root
 
         cwd = self._cwd if self._cwd is not None else Path.cwd()
         if self._stdlib_root is None:
-            self._stdlib_root = resolve_stdlib_root(
-                home=current_config_context(cwd=cwd).home, anchor=cwd
-            )
+            try:
+                self._stdlib_root = resolve_stdlib_root(
+                    home=current_config_context(cwd=cwd).home, anchor=cwd
+                )
+            except StdlibResolutionError as exc:
+                raise AglError(str(exc)) from exc
         self._roots = assemble_roots(
             invocation_root=cwd,
             stdlib_root=self._stdlib_root,
@@ -506,26 +538,20 @@ class ReplSession:
         the standard-library companion, if any, imported) only once an entry
         actually executes, exactly as today.
 
-        Returns the rejection diagnostics, or an empty tuple on success.
-        Never raises: a host calls this once, right after constructing the
-        session and before it accepts any entry or prints a banner. Every
-        checked frontend failure ``load_and_check_program`` can raise -- a
-        syntax, module-loading, scope, or type error -- is a subclass of
-        ``AglError``; a bare ``except Exception`` beneath it also adapts an
-        unchecked failure reading a module file (a permission error, invalid
-        UTF-8) or resolving the default stdlib root, raised lazily by
-        :meth:`_ensure_roots` the first time it runs -- exactly as
-        :meth:`EntryPipeline.eval_entry` adapts the same raises for an
-        ordinary entry.
+        Returns the rejection diagnostics, or an empty tuple on success. A
+        host calls this once, right after constructing the session and before
+        it accepts any entry or prints a banner. Every source, module-loading,
+        stdlib-root, or configuration failure is an ``AglError`` and becomes a
+        diagnostic, exactly as :meth:`EntryPipeline.eval_entry` reports it for
+        an ordinary entry.
         """
-        from agm.agl.diagnostics import AglError
         from agm.agl.parser import parse_program_seeded
 
         host_env = self._runtime.host_environment()
         try:
             roots = self._ensure_roots()
-        except Exception as exc:
-            return (Diagnostic(message=str(exc), line=1),)
+        except AglError as exc:
+            return (exc.to_diagnostic(),)
         cache_key = self._bootstrap_cache_key(roots, host_env.capabilities)
         with _bootstrap_cache_lock:
             if cache_key is not None:
@@ -555,8 +581,6 @@ class ReplSession:
                 )
             except AglError as exc:
                 return (exc.to_diagnostic(),)
-            except Exception as exc:
-                return (Diagnostic(message=str(exc), line=1),)
 
             self._loaded_lib_modules.update(loaded.new_modules)
             self._pending_param_raw_values.update(loaded.raw_param_values)
@@ -704,7 +728,7 @@ class ReplSession:
     # Core evaluation
     # ------------------------------------------------------------------
 
-    def eval_entry(self, text: str) -> EntryResult:
+    def eval_entry(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Parse → resolve → typecheck → matchcompile → lower/eval one entry.
 
         Completed runtime initializers are promoted even when a later initializer
@@ -719,136 +743,129 @@ class ReplSession:
         successfully as values are never intercepted, so record constructors and
         bindings keep their normal echo.
         """
-        result = self._eval_entry_pipeline(text)
+        result = self._eval_entry_pipeline(text, check_only=check_only)
         if not result.ok:
-            type_result = self._try_type_entry(text)
+            type_result = self._try_type_entry(text, value_failure=result.failure)
             if type_result is not None:
                 return type_result
         return result
 
-    def _try_type_entry(self, text: str) -> EntryResult | None:
+    def _try_type_entry(self, text: str, *, value_failure: AglError | None) -> EntryResult | None:
         """Attempt to interpret *text* as a bare type-expression entry.
 
         Returns a ``kind == "type"`` :class:`EntryResult` echoing the resolved
         type when *text* parses as a single type expression AND resolves to a
-        known type in the session type environment; returns ``None`` otherwise
-        so the caller keeps the original failure result.
+        known type; returns ``None`` otherwise so the caller keeps the
+        original failure result.
 
         This is a REPL-only convenience (the language is unchanged): typing a
         type is not a value expression, so without it the entry would surface
-        ``'X' is not defined.``.  Like :meth:`type_of`, this never evaluates,
-        promotes, advances the node-id counter, or mutates session state.  The parse uses
-        throwaway node ids; only the resolved :class:`Type` or generic type
-        definition display is kept.
+        ``'X' is not defined.``.  *text* is parsed standalone as a type
+        expression -- its own spans, throwaway ids -- and wrapped
+        programmatically in a synthetic ``type <fresh> = text`` declaration,
+        run through the same entry pipeline and session scope as any other
+        entry: scope is the one place that decides whether an owner is hidden
+        or referenced-only, for every position, so a bare type entry is
+        rejected exactly as it is in ``fn(x: text) => 1``.
+
+        The synthetic program is the *only* resolution attempted -- never
+        re-resolved against some other environment. A rejected type reading
+        stands in for the value reading's failure (*value_failure*) only when
+        *text* is no value expression at all (it failed to parse as one):
+        otherwise the value reading's verdict is the entry's. A bare
+        unapplied generic (e.g. ``Option``) cannot be an alias body either,
+        but its selected declaration is already known -- the rejection of the
+        alias carries it directly -- so its definition is displayed from
+        there instead, but only when the unapplied reference *is* the whole
+        entry (its span equals *text*'s parsed span): a generic nested inside
+        the entry (e.g. a type argument, as in ``Box[Option]``) is not what
+        was asked for.
+
+        Like :meth:`type_of`, this never evaluates, promotes, advances the
+        node-id counter, or mutates session state: the synthetic declaration
+        is discarded once its resolved type (or generic definition) is read.
         """
-        from agm.agl.parser import AglSyntaxError, parse_type_expr
-        from agm.agl.typecheck import AglTypeError
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.repl.type_display import format_generic_type_def_for_repl
+        from agm.agl.typecheck import UnappliedGenericTypeError
 
-        try:
-            type_expr = parse_type_expr(text, start_id=self._next_node_id)
-        except AglSyntaxError:
+        parsed = _static_verdict(lambda: self._parse_type_entry(text))
+        if isinstance(parsed, AglError):
             return None
-
-        type_envs = [self._type_env]
-        program_type_env = self._build_type_entry_program_env()
-        if program_type_env is not None:
-            type_envs.append(program_type_env)
-
-        for type_env in type_envs:
-            generic_result = self._try_generic_type_entry(type_expr, type_env)
-            if generic_result is not None:
-                return generic_result
-            try:
-                typ = type_env.resolve_type_expr(type_expr)
-            except AglTypeError:
-                continue
+        type_expr, next_node_id, spaced_qualifiers = parsed
+        program, fresh_name, next_node_id = self._type_probe_program(type_expr, next_node_id)
+        host_env = self._runtime.host_environment()
+        checked_program = _static_verdict(
+            lambda: self._entry_pipeline.resolve_and_check_program(
+                program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
+            )[1]
+        )
+        if isinstance(checked_program, UnappliedGenericTypeError) and (
+            checked_program.span == type_expr.span
+        ):
             return EntryResult(
                 kind="type",
                 name=None,
                 value=None,
-                value_type=typ,
+                value_type=None,
+                type_display=format_generic_type_def_for_repl(
+                    checked_program.display_name,
+                    checked_program.generic_def,
+                    self._type_env.type_table,
+                ),
                 diagnostics=[],
                 warnings=[],
                 error=None,
                 ok=True,
-                type_table=type_env.type_table,
             )
-        return None
+        if isinstance(checked_program, AglError):
+            return (
+                self._fail_static(checked_program, [])
+                if isinstance(value_failure, AglSyntaxError)
+                else None
+            )
 
-    def _try_generic_type_entry(
-        self,
-        type_expr: "TypeExpr",
-        type_env: "TypeEnvironment",
-    ) -> EntryResult | None:
-        """Return a type-entry result for a bare unapplied generic, if any."""
-        from agm.agl.repl.type_display import format_generic_type_def_for_repl
-        from agm.agl.syntax.types import NameT
-        from agm.agl.typecheck import AglTypeError
-
-        if not isinstance(type_expr, NameT):
-            return None
-        try:
-            if type_expr.qualifier is None:
-                resolved = type_env.resolve_unapplied_generic_type(
-                    type_expr.name,
-                    span=type_expr.span,
-                )
-            else:
-                resolved = type_env.resolve_qualified_unapplied_generic_type(
-                    type_expr.qualifier,
-                    type_expr.name,
-                    span=type_expr.span,
-                )
-        except AglTypeError:
-            return None
-        if resolved is None:
-            return None
-        display_name, gdef = resolved
+        checked = checked_program.modules[checked_program.entry_id]
+        typ = checked_program.program_type_table[(checked_program.entry_id, (), fresh_name)]
         return EntryResult(
             kind="type",
             name=None,
             value=None,
-            value_type=None,
-            type_display=format_generic_type_def_for_repl(display_name, gdef, type_env.type_table),
+            value_type=typ,
             diagnostics=[],
             warnings=[],
             error=None,
             ok=True,
+            type_table=checked.type_env.type_table,
         )
 
-    def _build_type_entry_program_env(self) -> "TypeEnvironment | None":
-        """Build a throwaway program-level type env for std/imported type entries."""
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
-        from agm.agl.parser import AglSyntaxError, parse_program_seeded
-        from agm.agl.scope import AglScopeError
-        from agm.agl.typecheck import AglTypeError
+    def _parse_type_entry(self, text: str) -> tuple["TypeExpr", int, tuple["SpacedQualifier", ...]]:
+        """Parse *text* standalone as one type expression, with the spaced qualifiers it writes."""
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_type_expr_seeded
 
-        host_env = self._runtime.host_environment()
-        try:
-            program, next_start_id = parse_program_seeded(
-                "()", start_id=self._next_node_id, resolve_infix=False
-            )
-            checked_program = self._entry_pipeline.resolve_and_check_program(
-                program, next_start_id, host_env
-            )
-        except (
-            AglSyntaxError,
-            AglScopeError,
-            AglTypeError,
-            ModuleNotFound,
-            AmbiguousModule,
-            ModulePrefixNotFound,
-            ImportEntryError,
-        ):
-            return None
-        return checked_program.modules[checked_program.entry_id].type_env
+        with spaced_qualifier_collector() as spaced_sink:
+            type_expr, next_node_id = parse_type_expr_seeded(text, start_id=self._next_node_id)
+        return type_expr, next_node_id, tuple(spaced_sink)
 
-    def _eval_entry_pipeline(self, text: str) -> EntryResult:
+    @staticmethod
+    def _type_probe_program(type_expr: "TypeExpr", start_id: int) -> tuple["Program", str, int]:
+        """Wrap *type_expr* as the target of a fresh ``type <name> = ...`` program.
+
+        A bare type has no program-level syntax of its own, so it is probed as
+        a fresh alias's target -- the same position ``type X = <type-expr>``
+        resolves through. Returns the program, the fresh alias name, and the
+        next free node id.
+        """
+        from agm.agl.syntax.nodes import Block, Program, TypeAlias
+
+        fresh_name = f"ReplTypeEntry{uuid.uuid4().hex}"
+        span = type_expr.span
+        alias = TypeAlias(name=fresh_name, type_expr=type_expr, span=span, node_id=start_id)
+        block = Block(items=(alias,), span=span, node_id=start_id + 1)
+        return Program(body=block, span=span, node_id=start_id + 2), fresh_name, start_id + 3
+
+    def _eval_entry_pipeline(self, text: str, *, check_only: bool) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
 
         Completed runtime initializers are promoted even when a later initializer
@@ -865,11 +882,9 @@ class ReplSession:
         # [1] Parse (seeded so node ids stay globally unique across entries).
         with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
             try:
-                program, next_start_id = parse_program_seeded(
-                    text, start_id=self._next_node_id, resolve_infix=False
-                )
+                program, next_start_id = parse_program_seeded(text, start_id=self._next_node_id)
             except AglSyntaxError as exc:
-                return self._fail([exc.to_diagnostic()], list(tab_sink))
+                return self._fail_static(exc, list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
         spaced_qualifiers = tuple(spaced_sink)
 
@@ -884,11 +899,48 @@ class ReplSession:
             host_env=host_env,
             tab_warnings=tab_warnings,
             next_start_id=next_start_id,
+            check_only=check_only,
             spaced_qualifiers=spaced_qualifiers,
         )
 
-    def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
-        """Build a clean pre-execution failure result (no promotion)."""
+    def _build_check_only_result(
+        self,
+        program: "Program",
+        checked: "CheckedModule",
+        warnings: list[Diagnostic],
+    ) -> EntryResult:
+        """Build the EntryResult for a ``check_only`` (type-only) run.
+
+        No value, no evaluation, no promotion, no trace.  The value_type for an
+        expression entry is the checked node type of the expression; for a binding
+        it is the declared binding type.
+        """
+        kind, name = self._classify(checked.resolved.program)
+        return EntryResult(
+            kind=kind,
+            name=name,
+            value=None,
+            value_type=self._value_type_of_last(checked),
+            diagnostics=[],
+            warnings=warnings,
+            error=None,
+            ok=True,
+            quote_strings=self._quote_strings_for_entry(program),
+            type_table=checked.type_env.type_table,
+        )
+
+    def _fail(
+        self,
+        diagnostics: list[Diagnostic],
+        warnings: list[Diagnostic],
+        *,
+        failure: AglError | None = None,
+    ) -> EntryResult:
+        """Build a clean pre-execution failure result (no promotion).
+
+        *failure* is the static ``AglError`` that produced *diagnostics*, when
+        one exists (see ``EntryResult.failure``).
+        """
         return EntryResult(
             kind="statement",
             name=None,
@@ -898,7 +950,17 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=False,
+            failure=failure,
         )
+
+    def _fail_static(self, exc: AglError, warnings: list[Diagnostic]) -> EntryResult:
+        """Build a failure result whose single diagnostic is derived from *exc* itself.
+
+        The common case at every static-rejection site that raises one
+        ``AglError`` and reports exactly its own diagnostic: see
+        ``EntryResult.failure``.
+        """
+        return self._fail([exc.to_diagnostic()], warnings, failure=exc)
 
     @property
     def _default_strict_json(self) -> bool:
@@ -914,10 +976,7 @@ class ReplSession:
         seed = self._current.get("strict-json")
         if seed is None:
             return self._strict_json_floor
-        from agm.agl.semantics.values import BoolValue
-
-        assert isinstance(seed, BoolValue)
-        return seed.value
+        return cast("BoolValue", seed).value
 
     @staticmethod
     def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:
@@ -946,11 +1005,9 @@ class ReplSession:
         the field with the interpreter's own already-parsed value
         (:meth:`_update_engine_settings`).
         """
-        from agm.agl.semantics.values import RecordValue
-
-        seed = self._engine_seed.get("timeout")
-        assert seed is None or isinstance(seed, RecordValue)
-        return self._resolve_timeout_seconds(seed)
+        return self._resolve_timeout_seconds(
+            cast("RecordValue | None", self._engine_seed.get("timeout"))
+        )
 
     @staticmethod
     def _engine_snapshot(interp: "IrInterpreter") -> "dict[str, Value]":
@@ -1044,13 +1101,12 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
         promoted_scope_region_paths: frozenset[tuple[str, ...]],
         promoted_use_declaration_ids: frozenset[int],
-        infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
+        retired_scopes: frozenset[tuple[str, ...]],
+        entry_module_id: ModuleId,
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
-        from dataclasses import replace
-
-        from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
+        from agm.agl.scope.type_owners import beneath
         from agm.agl.syntax.nodes import (
             EnumDef,
             ExceptionDef,
@@ -1063,12 +1119,15 @@ class ReplSession:
             VariantDef,
             static_items,
         )
-        from agm.agl.syntax.types import render_type_expr
-        from agm.agl.typecheck.env import TypeEnvironment
+        from agm.agl.typecheck.declaration_validation import (
+            bare_declaration_scoped_name,
+            is_builtin_bare_declaration,
+        )
+        from agm.agl.typecheck.env import TypeEnvironment, assert_checked_module_closed
 
         entry_declarations = tuple(static_items(program.body.items))
         if self_validation_enabled():
-            self._assert_checked_state_closed(checked)
+            assert_checked_module_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
             EnumDef,
@@ -1117,15 +1176,19 @@ class ReplSession:
             if item.node_id in promoted_declaration_ids
         )
         replaced_type_name_paths = promoted_type_name_paths if partial else entry_type_name_paths
+        replaced_type_paths = frozenset((*path, name) for path, name in replaced_type_name_paths)
+        # ``retired_scopes`` (from the checked program's resolution) reflects
+        # every type path this entry's own module redeclares, not only the
+        # ones this promotion actually promotes: a partial entry must retire
+        # only the member scopes of a type path it actually replaced, or it
+        # wrongly retires a redeclaration's scopes it never promoted.
+        retired_scopes = frozenset(
+            scope for scope in retired_scopes if scope[:-1] in replaced_type_paths
+        )
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
         unpromoted_type_scope_paths = frozenset(
             (*path, name) for path, name in unpromoted_type_name_paths
         )
-
-        def is_unpromoted_type_scope(path: tuple[str, ...]) -> bool:
-            return any(
-                path[: len(type_path)] == type_path for type_path in unpromoted_type_scope_paths
-            )
 
         unpromoted_type_names = {
             "::".join((*path, name)) for path, name in unpromoted_type_name_paths
@@ -1145,88 +1208,36 @@ class ReplSession:
         unpromoted_type_names.update(
             name
             for name in self._type_env.all_declared_type_names()
-            if is_unpromoted_type_scope(tuple(name.split("::")))
+            if beneath(tuple(name.split("::")), unpromoted_type_scope_paths)
         )
-        replaced_type_scopes = frozenset(
-            (*path, name)
-            for path, name in replaced_type_name_paths
-            if (*path, name) in self._session_scope_nodes
-        )
-        declared_enum_type_scopes = frozenset(
-            (*tuple(segment.name for segment in item.scope_path), item.name)
-            for item in entry_type_items
-            if isinstance(item, EnumDef) and type_name_path(item) in promoted_type_name_paths
-        )
-        superseded_member_scopes = frozenset(
-            (*type_scope, member.name)
-            for type_scope in replaced_type_scopes
-            if (
-                prior_definition := self._type_env.type_table.get_by_id(
-                    self._session_scope_nodes[type_scope].node_id
+        # Every replacement of an enum owner, including replacement by a
+        # record or alias, retires its prior inline member scopes. Nested
+        # standalone declarations remain and are copied back below.
+        for scope_path in tuple(self._session_scope_nodes):
+            if beneath(scope_path, retired_scopes):
+                del self._session_scope_nodes[scope_path]
+        for type_path in tuple(self._session_type_paths):
+            if beneath(type_path, retired_scopes):
+                del self._session_type_paths[type_path]
+        for scoped_name in tuple(self._session_builtin_declarations):
+            if beneath(scoped_name, retired_scopes):
+                del self._session_builtin_declarations[scoped_name]
+        # A promoted declaration at a scoped name always supersedes whatever
+        # this session recorded there, builtin or not: drop the old entry
+        # first, then re-record it only when the fresh declaration is itself
+        # a ``builtin`` one.
+        for item in entry_declarations:
+            if item.node_id not in promoted_declaration_ids:
+                continue
+            declared_name = bare_declaration_scoped_name(item)
+            if declared_name is None:
+                continue
+            self._session_builtin_declarations.pop(declared_name, None)
+            if is_builtin_bare_declaration(item):
+                self._session_builtin_declarations[declared_name] = (
+                    entry_module_id,
+                    declared_name[:-1],
                 )
-            )
-            is not None
-            and prior_definition.kind == "enum"
-            for member in prior_definition.members
-        )
-        fresh_member_scopes = frozenset(
-            (*tuple(segment.name for segment in item.scope_path), item.name, member.name)
-            for item in entry_type_items
-            if isinstance(item, EnumDef) and type_name_path(item) in replaced_type_name_paths
-            for member in item.members
-            if isinstance(member, VariantDef)
-        )
-        retired_member_scopes = superseded_member_scopes - fresh_member_scopes
-
-        def is_retired_member_scope(path: tuple[str, ...]) -> bool:
-            return any(
-                path[: len(member_scope)] == member_scope for member_scope in retired_member_scopes
-            )
-
-        if retired_member_scopes:
-            # Every replacement of an enum owner, including replacement by a
-            # record or alias, retires its prior inline member scopes. Nested
-            # standalone declarations remain and are copied back below.
-            for scope_path in tuple(self._session_scope_nodes):
-                if any(
-                    scope_path[: len(member_scope)] == member_scope
-                    for member_scope in retired_member_scopes
-                ):
-                    del self._session_scope_nodes[scope_path]
-            for type_path in tuple(self._session_type_paths):
-                if any(
-                    type_path[: len(member_scope)] == member_scope
-                    for member_scope in retired_member_scopes
-                ):
-                    del self._session_type_paths[type_path]
-
-        def _drop_replaced(
-            table: dict[str, tuple[ConstructorRef, ...]],
-        ) -> dict[str, tuple[ConstructorRef, ...]]:
-            filtered = {
-                cname: tuple(
-                    ref
-                    for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
-                    and not is_retired_member_scope((*ref.owner_path, ref.owner_name))
-                )
-                for cname, crefs in table.items()
-            }
-            return {cname: crefs for cname, crefs in filtered.items() if crefs}
-
-        if replaced_type_name_paths:
-            # A replacement type declaration supersedes any earlier ambient
-            # constructor candidate sharing its name path: retained bindings
-            # and scope members keep resolving through their own (possibly
-            # superseded) declaration identity, so only the ambient bare-name
-            # candidate table -- which drives how a FRESH constructor
-            # reference resolves -- needs to move onto the newest owner here.
-            self._ambient_constructor_candidates = _drop_replaced(
-                self._ambient_constructor_candidates
-            )
-            self._ambient_bare_constructor_candidates = _drop_replaced(
-                self._ambient_bare_constructor_candidates
-            )
 
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
@@ -1270,29 +1281,25 @@ class ReplSession:
                 required_scope_paths.update(
                     member_path[:length] for length in range(1, len(member_path) + 1)
                 )
+        # ``required_scope_paths`` is prefix-closed: its seed,
+        # ``promoted_scope_region_paths``, is prefix-closed by construction
+        # (`collect_regions` in ``lower/repl.py`` reaches every path above a
+        # region's scope path where it reaches that), and both loops above
+        # add every ancestor of the paths they contribute, so a retained
+        # path's parent is always retained first.
         for path, node in checked.resolved.scope_nodes.items():
-            session_node = self._session_scope_nodes.get(path)
-            promoted_region = path in promoted_scope_region_paths or any(
-                declaration_path[: len(path)] == path
-                for declaration_path in required_scope_paths
-                if len(declaration_path) > len(path)
-            )
-            if session_node is not None:
-                if node.is_scope_region and promoted_region:
-                    session_node.is_scope_region = True
-                continue
             if (
-                not path
+                path in self._session_scope_nodes
+                or not path
                 or path not in required_scope_paths
-                or is_unpromoted_type_scope(path)
-                or is_retired_member_scope(path)
+                or beneath(path, unpromoted_type_scope_paths)
+                or beneath(path, retired_scopes)
             ):
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
-                is_scope_region=node.is_scope_region and promoted_region,
             )
 
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
@@ -1302,7 +1309,8 @@ class ReplSession:
                 for nested_path in self._session_scope_nodes
                 if nested_path[:-1] == path
             )
-            self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
+            if path in self._session_scope_nodes:
+                self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
 
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
@@ -1310,100 +1318,30 @@ class ReplSession:
                 continue
             for name, ref in node.members.items():
                 if (
-                    not is_unpromoted_type_scope(ref.scope_path)
-                    and not is_retired_member_scope((*path, name))
+                    not beneath(ref.scope_path, unpromoted_type_scope_paths)
+                    and not beneath((*path, name), retired_scopes)
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.register_member(name, ref)
-            promoted_imported_uses = [
-                contribution
-                for contribution in node.imported_use_contributions
-                if contribution.declaration.node_id in promoted_use_declaration_ids
-            ]
-            current_targets = {contribution.target for contribution in promoted_imported_uses}
-            for contribution in session_node.imported_use_contributions:
-                for atom, refs in contribution.bindings.items():
-                    retained = session_node.bare_contributions.get(atom)
-                    if retained is not None:
-                        retained.difference_update(refs)
-                        if not retained:
-                            del session_node.bare_contributions[atom]
-                for atom, constructor_refs in contribution.constructors.items():
-                    constructor_retained = session_node.bare_constructor_contributions.get(atom)
-                    if constructor_retained is not None:
-                        constructor_retained.difference_update(constructor_refs)
-                        if not constructor_retained:
-                            del session_node.bare_constructor_contributions[atom]
-            session_node.imported_use_contributions = [
-                contribution
-                for contribution in session_node.imported_use_contributions
-                if contribution.target not in current_targets
-            ]
-            session_node.imported_use_contributions.extend(promoted_imported_uses)
-            for contribution in session_node.imported_use_contributions:
-                for atom, refs in contribution.bindings.items():
-                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
-                for atom, constructor_refs in contribution.constructors.items():
-                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
-                        constructor_refs
-                    )
-            promoted_local_uses = [
-                contribution
-                for contribution in node.local_use_contributions
-                if contribution.declaration.node_id in promoted_use_declaration_ids
-            ]
-            current_local_targets = {
-                local_contribution.target for local_contribution in promoted_local_uses
-            }
-            for local_contribution in session_node.local_use_contributions:
-                for atom, refs in local_contribution.bindings.items():
-                    retained_local = session_node.bare_contributions.get(atom)
-                    if retained_local is not None:
-                        retained_local.difference_update(refs)
-                        if not retained_local:
-                            del session_node.bare_contributions[atom]
-                for atom, constructor_refs in local_contribution.constructors.items():
-                    constructor_retained_local = session_node.bare_constructor_contributions.get(
-                        atom
-                    )
-                    if constructor_retained_local is not None:
-                        constructor_retained_local.difference_update(constructor_refs)
-                        if not constructor_retained_local:
-                            del session_node.bare_constructor_contributions[atom]
-            session_node.local_use_contributions = [
-                (
-                    replace(local_contribution, bindings={}, constructors={})
-                    if local_contribution.source.scope_path in replaced_type_scopes
-                    else local_contribution
-                )
-                for local_contribution in session_node.local_use_contributions
-                if local_contribution.target not in current_local_targets
-            ]
-            for local_contribution in promoted_local_uses:
-                source = self._session_scope_nodes.get(local_contribution.source.scope_path)
-                if source is not None:
-                    session_node.contribute_local_use(replace(local_contribution, source=source))
-            for local_contribution in session_node.local_use_contributions:
-                for atom, refs in local_contribution.bindings.items():
-                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
-                for atom, constructor_refs in local_contribution.constructors.items():
-                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
-                        constructor_refs
-                    )
-        alias_targets = {
-            type_name_path(item): render_type_expr(item.type_expr)
-            for item in entry_type_items
-            if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
-        }
+            # A promoted use this entry writes replaces the retained ones scope decided.
+            replaced = checked.resolved.replaced_uses
+            session_node.uses = [
+                use
+                for use in session_node.uses
+                if not replaced.get(use.node_id, frozenset()) & promoted_use_declaration_ids
+            ] + [use for use in node.uses if use.node_id in promoted_use_declaration_ids]
         self._session_type_paths.update(
-            ((*path, name), alias_targets.get((path, name)))
-            for path, name in promoted_type_name_paths
+            (type_path, checked.resolved.type_owners[type_path])
+            for type_path in promoted_type_paths
         )
 
         if not partial:
             # The checked environment already includes the prior sealed session
-            # state and is itself sealed at the checked-output boundary. Reuse it
-            # directly instead of copying the accumulated session a second time.
+            # state and is itself sealed at the checked-output boundary -- it
+            # was seeded with the same ``retired_scopes`` this promotion
+            # received, so a redeclared enum owner's retired inline members are
+            # already gone from its type namespace. Reuse it directly instead
+            # of copying the accumulated session a second time.
             self._type_env = checked.type_env
         else:
             # Build the replacement env in a local so a mid-promotion failure
@@ -1426,49 +1364,13 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        def _select_promoted(crefs: tuple[ConstructorRef, ...]) -> tuple[ConstructorRef, ...]:
-            return tuple(
-                ref
-                for ref in crefs
-                if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
-                or ref.owner_path in declared_enum_type_scopes
-            )
-
-        if replaced_type_name_paths:
-            promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
-            for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
-                if selected := _select_promoted(crefs):
-                    promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
-            for cname, crefs in promoted_candidates.items():
-                self._ambient_constructor_candidates[cname] = dedupe_constructor_candidates(
-                    (*self._ambient_constructor_candidates.get(cname, ()), *crefs)
-                )
-            # The bare table is keyed by name alone -- it already carries only
-            # the candidates that were bare-visible when this entry resolved,
-            # so promotion just replays that same visibility for later entries
-            # (see ``ambient_bare_constructor_keys`` in ``_Resolver.run``).
-            for cname, crefs in checked.resolved.constructor_candidates.items():
-                if selected := _select_promoted(crefs):
-                    self._ambient_bare_constructor_candidates[cname] = (
-                        dedupe_constructor_candidates(
-                            (*self._ambient_bare_constructor_candidates.get(cname, ()), *selected)
-                        )
-                    )
-            self._ambient_type_names |= frozenset(
-                name for path, name in promoted_type_name_paths if not path
-            )
         if not partial:
             self._source_log.append(text)
-        promoted_infix = [
-            item
+        self._accumulated_infix.update(
+            (item.name, checked.resolved.fixities[item.name])
             for item in program.body.items
             if isinstance(item, InfixDecl) and item.node_id in promoted_declaration_ids
-        ]
-        if promoted_infix:
-            resolved_infix = resolve_infix_fixity(promoted_infix, infix_ambient)
-            self._accumulated_infix.update(
-                (item.name, resolved_infix[item.name]) for item in promoted_infix
-            )
+        )
         self._next_node_id = next_start_id
         return tuple(installed)
 
@@ -1530,7 +1432,7 @@ class ReplSession:
         )
 
         last = program.body.items[-1]
-        value_type = self._value_type_of_last(program, checked)
+        value_type = self._value_type_of_last(checked)
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, LetDecl):
@@ -1614,13 +1516,13 @@ class ReplSession:
             return last.callee.name != "ask"
         return True
 
-    def _value_type_of_last(self, program: "Program", checked: "CheckedModule") -> "Type | None":
+    def _value_type_of_last(self, checked: "CheckedModule") -> "Type | None":
         """Static type carried by the entry's final value, or ``None``.
 
         A bare expression retains its checked type. A trailing ``let``/``var``
         reports the declared binding type for the REPL declaration echo. Only
-        called after a completed evaluation, so an always-diverging initializer
-        never reaches this method: it raises before the echo is computed.
+        called after checking; ``check_only`` retains a diverging initializer's
+        bottom type without evaluating it.
         """
         from agm.agl.syntax.nodes import (
             Binder,
@@ -1631,16 +1533,17 @@ class ReplSession:
 
         # An entry echoed here always has at least one item: blank and
         # comment-only entries are filtered by ``has_runnable_statements``.
-        last = program.body.items[-1]
-        # Bare expression → node type from checked side table. Infix chains are
-        # resolved after graph assembly, so use their rewritten entry item.
+        # The resolved program holds the entry with its operator chains grouped.
+        last = checked.resolved.program.body.items[-1]
+        # A statement item (a scope region, an import, ...) has no type.
         if not isinstance(last, (Binder, Declaration)):
-            return checked.node_types.get(
-                checked.resolved.program.body.items[-1].node_id
-                if checked.node_types.get(last.node_id) is None
-                else last.node_id
-            )
+            return checked.node_types.get(last.node_id)
         if isinstance(last, (LetDecl, VarDecl)):
+            from agm.agl.semantics.types import BottomType
+
+            initializer_type = checked.node_types[last.value.node_id]
+            if isinstance(initializer_type, BottomType):
+                return initializer_type
             if last.name == "_":
                 return None
             return checked.type_env.get_binding_type(last.node_id)
@@ -1658,46 +1561,43 @@ class ReplSession:
         lowers, evaluates, promotes, or advances the node-id counter. Raises the
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
+
+        Parses *text* as a throwaway REPL entry, seeded at the session's
+        node-id counter: this never promotes or advances the session
+        counter, so seeding at ``_next_node_id`` is safe -- all promoted ids
+        are strictly below it, making this parse's ids disjoint from the
+        session's.
         """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import Binder, Declaration
 
         host_env = self._runtime.host_environment()
-        # Throwaway ids: type_of never promotes and never advances the session
-        # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
-        # strictly below it, making this parse's ids disjoint from the session's.
         with spaced_qualifier_collector() as spaced_sink:
-            program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, resolve_infix=False
-            )
+            program, next_node_id = parse_program_seeded(text, start_id=self._next_node_id)
+        spaced_qualifiers = tuple(spaced_sink)
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
-        expr_item = items[0]
-        checked_program = self._entry_pipeline.resolve_and_check_program(
-            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
+        resolved_program, checked_program = self._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, host_env, spaced_qualifiers=spaced_qualifiers
         )
         checked = checked_program.modules[checked_program.entry_id]
         from agm.agl.matchcompile import (
             cached_module_sites,
             compile_program_matches,
-            diagnostics_from_match_issues,
+            match_issue_error,
         )
 
         match_result = compile_program_matches(
             checked_program, cached_module_sites(self._last_match_compilation)
         )
         if match_result.compiled is None:
-            diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
-            raise AglError(diagnostic.message, span=match_result.issues[0].span)
-        typ = checked.node_types.get(expr_item.node_id)
-        if typ is None:
-            resolved_expr = checked.resolved.program.body.items[-1]
-            typ = checked.node_types.get(resolved_expr.node_id)
-        assert typ is not None
+            raise match_issue_error(match_result.issues[0], resolved_program.speller)
+        # The resolved program holds the expression with its operator chains grouped.
+        typ = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         from agm.agl.repl.type_display import format_type_for_repl
 
         return format_type_for_repl(typ, checked.type_env.type_table)
@@ -1725,12 +1625,10 @@ class ReplSession:
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
-            typ = self._type_env.get_binding_type(ref.decl_node_id)
-            # Every promoted let/var binding has a recorded type.
-            assert typ is not None
-            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            assert slot is not None
+            # Every promoted let/var binding has a recorded type, symbol, and slot.
+            typ = self._type_env.binding_type_of(ref.decl_node_id)
+            symbol = self._link_image.symbol_of(ref.decl_node_id)
+            slot = self._ir_base_frame[symbol]
             value = slot.value if isinstance(slot, Cell) else slot
             result.append((name, typ, value))
         return result
@@ -1741,46 +1639,42 @@ class ReplSession:
         This is introspection over promoted state only: it never evaluates or
         changes the session.  It resolves names through the same entry pipeline
         as the REPL, so bare and imported qualified names select their actual
-        visible declaration.
+        visible declaration, and a name scope rejects raises scope's rejection.
+        ``None`` when *name* is no identifier.
         """
         from agm.agl.repl.render import _render_value_or_cyclic_message
-        from agm.agl.repl.type_display import (
-            format_generic_type_def_for_repl,
-            format_type_for_repl,
-        )
         from agm.agl.semantics.values import Cell
 
         parts = tuple(name.split("::"))
         if not name or any(not part for part in parts):
             return None
-
-        scope_path, local_name = parts[:-1], parts[-1]
         resolved_reference = self._resolve_info_reference(name)
         ref = None if resolved_reference is None else resolved_reference.binding
-        constructor = None if resolved_reference is None else resolved_reference.constructor
         location = (
             _format_repl_location(ref.decl_span)
             if ref is not None and ref.module_id.is_entry
             else None
         )
         if ref is not None and ref.kind.value != "constructor_binding":
-            type_env = self._info_type_env(ref)
+            declared = _declared_spelling(ref.scope_path, ref.name)
+            type_env = self._info_type_env(ref.module_id)
             signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
                 return "\n".join(
                     (
                         f"{name} is a function.",
                         _format_info_section(
-                            "Signature", f"def {name}{_format_repl_signature(signature)}", location
+                            "Signature",
+                            f"def {declared}{_format_repl_signature(signature)}",
+                            location,
                         ),
                     )
                 )
-            typ = type_env.get_binding_type(ref.decl_node_id)
-            assert typ is not None
+            binding_type = type_env.binding_type_of(ref.decl_node_id)
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             slot = self._ir_base_frame.get(symbol) if symbol is not None else None
             if slot is None:
-                return f"{name} is a value.\n{_format_info_section('Type', repr(typ))}"
+                return f"{name} is a value.\n{_format_info_section('Type', repr(binding_type))}"
             value = slot.value if isinstance(slot, Cell) else slot
             rendered = _render_value_or_cyclic_message(
                 value, self.descriptors(), pretty=True, quote_strings=True
@@ -1789,137 +1683,203 @@ class ReplSession:
             return "\n".join(
                 (
                     f"{name} is a {'mutable ' if ref.mutable else ''}binding.",
-                    _format_info_section("Binding", f"{keyword} {name}"),
-                    _format_info_section("Type", repr(typ)),
+                    _format_info_section("Binding", f"{keyword} {declared}"),
+                    _format_info_section("Type", repr(binding_type)),
                     _format_info_section("Value", rendered, location),
                 )
             )
 
-        type_path = (*scope_path, local_name)
-        alias_target = self._session_type_paths.get(type_path)
-        if type_path in self._session_type_paths and alias_target is not None:
-            definition = f"type {name} = {alias_target}"
-            return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
-        type_name = "::".join(type_path)
-        typ = self._type_env.get_type(type_name)
-        if typ is not None:
-            definition = format_type_for_repl(typ, self._type_env.type_table)
-            display = _format_info_section("Type", definition, location)
-            return f"{name} is a {typ.kind} type.\n{display}"
-        generic = self._type_env.get_generic_type(type_name)
-        if generic is not None:
-            definition = format_generic_type_def_for_repl(name, generic, self._type_env.type_table)
-            return "\n".join(
-                (
-                    f"{name} is a generic {generic.kind} type.",
-                    _format_info_section("Type", definition, location),
-                )
-            )
-        library_generic = self._library_generic_type(local_name)
-        if library_generic is not None:
-            definition = format_generic_type_def_for_repl(
-                name, library_generic, self._type_env.type_table
-            )
-            display = _format_info_section("Type", definition)
-            return f"{name} is a generic {library_generic.kind} type.\n{display}"
-        if constructor is None:
+        if resolved_reference is not None:
+            described = self._describe_type_declaration(name, resolved_reference)
+            if described is not None:
+                return described
+        if resolved_reference is None or resolved_reference.constructor is None:
             return None
-        constructor_signature = self._constructor_signature(constructor)
+        constructor_signature = self._constructor_signature(
+            resolved_reference, resolved_reference.constructor
+        )
         return "\n".join(
             (
                 f"{name} is a constructor.",
                 _format_info_section(
-                    "Signature", _format_constructor_signature(name, constructor_signature)
+                    "Signature", _format_constructor_signature(constructor_signature)
                 ),
             )
         )
 
     def _resolve_info_reference(self, name: str) -> _InfoReference | None:
-        """Resolve NAME with the REPL entry resolver, without type-checking it."""
+        """Resolve NAME as a value and as a type with the REPL entry resolver, unchecked.
+
+        ``None`` when NAME is not a name reference. A name neither reading
+        selects raises the value reading's rejection: a value lookup that
+        finds nothing already answers with the type lookup's verdict for the
+        same spelling (a type name, an ambiguity, a hidden path), so it is
+        scope's one decision for the name, exactly as an entry spelling it
+        reports.
+        """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import VarRef
+        from agm.agl.syntax.types import NameT
 
-        reference: VarRef | None = None
-        try:
-            with spaced_qualifier_collector() as spaced_sink:
-                program, next_node_id = parse_program_seeded(
-                    name, start_id=self._next_node_id, resolve_infix=False
-                )
-            if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
-                return None
-            reference = program.body.items[0]
-            resolved = self._entry_pipeline.resolve_program(
-                program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(name, start_id=self._next_node_id)
+        if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
+            return None
+        reference = program.body.items[0]
+        spaced_qualifiers = tuple(spaced_sink)
+        # The same name as a type: scope selects its declaration in the one
+        # type position a bare type entry probes too.
+        type_name = NameT(
+            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
+        )
+        type_program, _fresh_name, type_next_id = self._type_probe_program(type_name, next_node_id)
+        resolved = _static_verdict(
+            lambda: self._entry_pipeline.resolve_program(
+                program, next_node_id, spaced_qualifiers=spaced_qualifiers
             )
-        except AglError:
-            return None if reference is None else self._canonical_library_reference(reference)
-        entry = resolved.modules[resolved.entry_id].resolved
-        binding = entry.resolution.get(reference.node_id)
-        constructor = entry.constructor_refs.get(reference.node_id)
-        return (
-            _InfoReference(binding=binding, constructor=constructor)
-            if binding is not None or constructor is not None
-            else self._canonical_library_reference(reference)
+        )
+        type_resolved = _static_verdict(
+            lambda: self._entry_pipeline.resolve_program(
+                type_program, type_next_id, spaced_qualifiers=spaced_qualifiers
+            )
+        )
+        type_key = (
+            None
+            if isinstance(type_resolved, AglError)
+            else self._type_env.with_owner_declarations(
+                type_resolved.modules[type_resolved.entry_id].resolved.owner_declarations
+            ).type_name_declaration(type_name)
+        )
+        type_env = self._type_env
+        if isinstance(resolved, AglError):
+            if type_key is None:
+                raise resolved
+            binding, constructor = None, None
+        else:
+            entry = resolved.modules[resolved.entry_id].resolved
+            binding = entry.resolution.get(reference.node_id)
+            constructor = entry.constructor_refs.get(reference.node_id)
+            # This ad-hoc parse's own qualifiers resolved against this fresh
+            # scope pass, not the retained entry the session's type env was
+            # built from, and its node ids are not reserved (this parse never
+            # advances ``_next_node_id``) -- a query-scoped view carries their
+            # identities (read only by ``_constructor_signature``, via
+            # ``_InfoReference.type_env``) without risking a later entry's
+            # colliding node ids reading them back.
+            type_env = type_env.with_owner_declarations(entry.owner_declarations)
+        return _InfoReference(
+            binding=binding,
+            constructor=constructor,
+            type_key=type_key,
+            reference=reference,
+            type_env=type_env,
         )
 
-    def _canonical_library_reference(self, reference: "VarRef") -> _InfoReference | None:
-        """Return retained identities named by REFERENCE's canonical module path."""
-        from agm.agl.modules.ids import ModuleId
+    def _describe_type_declaration(self, name: str, reference: _InfoReference) -> str | None:
+        """Describe the type declaration NAME selects as a type, if it reads as one.
 
-        qualifier = reference.qualifier
-        if qualifier is None or not qualifier.segments or "/" not in qualifier.segments[0].name:
-            return None
-        module_id = ModuleId.from_path(qualifier.segments[0].name)
-        module = self._retained_resolved_modules.get(module_id)
-        if module is None:
-            return None
-        scope_path = tuple(segment.name for segment in qualifier.segments[1:])
-        binding = module.resolved.declarations.get((module_id, scope_path, reference.name))
-        candidates = module.resolved.constructor_candidates_by_path.get(
-            (scope_path, reference.name), ()
+        An alias reads as its declaration wherever it is declared; a type this
+        session declares, a generic type from anywhere, and an imported plain
+        type without a constructor (an enum), as its definition. Any other
+        selection -- an imported plain type with a constructor -- reads as its
+        value instead. An owner's inline member selects no type declaration here, so
+        one reached through an applied owner reads as its instantiated
+        constructor; type arguments never instantiate a declaration nested
+        beneath that member, which reads as its definition.
+        """
+        from agm.agl.repl.type_display import (
+            format_generic_type_def_for_repl,
+            format_type_def_for_repl,
         )
-        constructor = candidates[0] if len(candidates) == 1 else None
-        if binding is None and constructor is None:
-            return None
-        return _InfoReference(binding=binding, constructor=constructor)
+        from agm.agl.syntax.types import render_type_expr
 
-    def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
-        """Return the retained type environment that owns REF."""
-        checked = self._retained_checked_modules.get(ref.module_id)
+        key = reference.type_key
+        if key is None:
+            return None
+        module_id, scope_path, decl_name = key
+        declared = _declared_spelling(scope_path, decl_name)
+        alias = self._alias_declaration(key)
+        if alias is not None:
+            params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
+            definition = f"type {declared}{params} = {render_type_expr(alias.type_expr)}"
+            return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
+        # A type this session declares is located at its declaration.
+        location = (
+            _format_repl_location(
+                self._session_scope_nodes[scope_path].members[decl_name].decl_span
+            )
+            if module_id.is_entry
+            else None
+        )
+        type_env = self._info_type_env(module_id)
+        described = module_id.is_entry or reference.constructor is None
+        typ = type_env.get_type(declared) if described else None
+        if typ is not None:
+            definition = format_type_def_for_repl(declared, typ, self._type_env.type_table)
+            display = _format_info_section("Type", definition, location)
+            return f"{name} is {_indefinite(typ.kind)} type.\n{display}"
+        generic = type_env.get_generic_type(declared)
+        if generic is None:
+            return None
+        definition = format_generic_type_def_for_repl(declared, generic, self._type_env.type_table)
+        return "\n".join(
+            (
+                f"{name} is a generic {generic.kind} type.",
+                _format_info_section("Type", definition, location),
+            )
+        )
+
+    def _alias_declaration(self, key: "DeclarationKey") -> "TypeAlias | None":
+        """Return the alias declaration *key* identifies, if it is an alias."""
+        from agm.agl.syntax.nodes import TypeAlias, static_type_items
+
+        module_id, scope_path, name = key
+        if module_id.is_entry:
+            owner = self._session_type_paths.get((*scope_path, name))
+            return None if owner is None else owner.alias
+        items = self._retained_resolved_modules[module_id].resolved.program.body.items
+        return next(
+            (
+                item
+                for item in static_type_items(items)
+                if isinstance(item, TypeAlias)
+                and item.name == name
+                and tuple(segment.name for segment in item.scope_path) == scope_path
+            ),
+            None,
+        )
+
+    def _info_type_env(self, module_id: "ModuleId") -> "TypeEnvironment":
+        """Return the retained type environment of *module_id*'s declarations."""
+        checked = self._retained_checked_modules.get(module_id)
         return self._type_env if checked is None else checked.type_env
 
-    def _library_generic_type(self, name: str) -> "GenericTypeDef | None":
-        """Return the sole retained generic type named *name*, if any."""
-        matches = [
-            generic
-            for checked in self._retained_checked_modules.values()
-            if (generic := checked.type_env.get_generic_type(name)) is not None
-        ]
-        return matches[0] if len(matches) == 1 else None
+    def _constructor_signature(
+        self, reference: _InfoReference, constructor: "ConstructorRef"
+    ) -> "ConstructorSignature":
+        """Return the signature *constructor* spelled as *reference* has, as the checker selects."""
+        from agm.agl.typecheck.constructors import selected_constructor_signature
 
-    def _constructor_signature(self, constructor: "ConstructorRef") -> "ConstructorSignature":
-        """Return the signature for the constructor identity selected by scope."""
-        from agm.agl.semantics.types import TypeVarType
-        from agm.agl.typecheck.env import ConstructorSignature
+        return selected_constructor_signature(
+            reference.type_env,
+            reference.reference,
+            constructor,
+            reference.reference.span,
+            type_vars=frozenset(),
+        )[1]
 
-        checked = self._retained_checked_modules.get(constructor.owner_module_id)
-        type_env = self._type_env if checked is None else checked.type_env
-        signature = type_env.get_constructor_signature(
-            constructor.owner_name, scope_path=constructor.owner_path
-        )
-        if signature is not None:
-            return signature
-        typedef = type_env.type_table.get_by_id(constructor.owner_decl_node_id)
-        assert typedef is not None and typedef.kind == "record"
-        type_args = tuple(TypeVarType(name) for name in constructor.type_params)
-        return ConstructorSignature(
-            owner_name=constructor.owner_name,
-            field_names=tuple(name for name, _typ in typedef.fields),
-            field_templates=tuple(typ for _name, typ in typedef.fields),
-            result_template=typedef.handle(type_args),
-            type_params=constructor.type_params,
-        )
+    @property
+    def _ambient_type_names(self) -> frozenset[str]:
+        """Root-declared type names from prior promoted entries.
+
+        Derived from :attr:`_session_type_paths` rather than accumulated
+        separately, for qualified constructor access (``Owner::variant``)
+        across REPL entries and for :meth:`type_names`.
+        """
+        from agm.agl.scope.type_owners import root_type_names
+
+        return root_type_names(self._session_type_paths)
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.
@@ -1936,7 +1896,12 @@ class ReplSession:
         Drives the REPL highlighter's constructor colouring (enum variants and
         record constructors).  Like :meth:`type_names`, populated on promotion.
         """
-        return frozenset(self._ambient_constructor_candidates)
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.scope.type_owners import owned_constructors
+
+        return frozenset(
+            name for name, _, _, _ in owned_constructors(ENTRY_ID, self._session_type_paths)
+        )
 
     def close(self) -> None:
         """Close the session's companion state, honoring the current ``debug`` setting."""
@@ -1961,15 +1926,13 @@ class ReplSession:
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
+        self._session_builtin_declarations = {}
         self._type_env = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0
         self._source_log = []
-        self._ambient_constructor_candidates = {}
-        self._ambient_bare_constructor_candidates = {}
-        self._ambient_type_names = frozenset()
         # Restore the current-value map to the seed, so a prior
         # ``std/config::KEY := VALUE`` write does not bleed past :reset.
         # ``_engine_seed`` is now populated with any declared default learned
@@ -2048,7 +2011,7 @@ class ReplSession:
         try:
             program = parse_repl_transcript(normalized)
         except AglSyntaxError as exc:
-            return [self._fail([exc.to_diagnostic()], [])]
+            return [self._fail_static(exc, [])]
 
         results: list[EntryResult] = []
         for item in program.body.items:

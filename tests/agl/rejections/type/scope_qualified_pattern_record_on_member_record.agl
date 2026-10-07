@@ -1,0 +1,14 @@
+scope Paint
+  enum Col
+    | Red
+
+  record Pixel
+    x: int
+
+  type Px = Pixel
+end Paint
+
+program def main() -> unit =
+  let red = Paint::Col::Red
+  case red of
+    | Paint::Px(x) => print x

@@ -20,7 +20,7 @@ from collections.abc import Callable
 import pytest
 
 from agm.agl import artifact_serialization
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     EnumType,
@@ -35,7 +35,6 @@ from agm.agl.typecheck import env as env_module
 from agm.agl.typecheck.env import (
     AliasFact,
     BindingTypeFact,
-    ConstructorSignature,
     EnvironmentFact,
     EnvironmentFacts,
     FunctionSignature,
@@ -43,7 +42,6 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
     TypeFact,
 )
-from agm.agl.zones import ParamZone
 from tests._agl_helpers import dummy_span
 from tests.agl.module_graph import check_resolved, resolve_inline_entry
 
@@ -57,22 +55,13 @@ _WIDGET_GENERIC_DEF = GenericTypeDef(
     kind="record", type_params=("T",), template=RecordType(name="Widget")
 )
 _ALIAS_TARGET = IntT(span=dummy_span(), node_id=1)
-_BOX2_RECORD_TYPE = RecordType(name="Box2")
-_BOX2_CTOR_SIG = ConstructorSignature(
-    owner_name="Box2",
-    field_names=("value",),
-    field_templates=(IntType(),),
-    result_template=_BOX2_RECORD_TYPE,
-    type_params=(),
-)
-_FIELD_KINDS = (("value", ParamZone.STANDARD),)
 _METHOD_OWNER = RecordType(name="Box3", decl_id=909)
 _OWNED_METHOD = MethodDef(
     module_id=ENTRY_ID,
     scope_path=(),
     name="doubled",
     decl_node_id=910,
-    signature=FunctionType(params=(), result=IntType()),
+    signature=FunctionType(params=(_METHOD_OWNER,), result=IntType()),
     receiver_type_param_arity=0,
     type_params=(),
 )
@@ -81,7 +70,7 @@ _BUILTIN_METHOD = MethodDef(
     scope_path=(),
     name="tripled",
     decl_node_id=911,
-    signature=FunctionType(params=(), result=IntType()),
+    signature=FunctionType(params=(IntType(),), result=IntType()),
     receiver_type_param_arity=0,
     type_params=(),
 )
@@ -124,11 +113,8 @@ def _record_register_type(env: TypeEnvironment) -> None:
 
 
 def _query_register_type(env: TypeEnvironment) -> object:
-    with env.type_scope(("Shapes",)):
-        resolved = env.resolve_named_type("Color")
-    # blocked_enum_variants() needs module routes only a program-context env has,
-    # so it is trivially equal here; program-level parity covers it.
-    return (resolved, env.enum_owner_forms())
+    resolved = env.get_type("Shapes::Color")
+    return resolved
 
 
 def _record_register_generic_type(env: TypeEnvironment) -> None:
@@ -136,39 +122,19 @@ def _record_register_generic_type(env: TypeEnvironment) -> None:
 
 
 def _query_register_generic_type(env: TypeEnvironment) -> object:
-    return (env.all_generic_types(), env.resolve_named_type("Widget"))
+    return (env.all_generic_types(), env.get_generic_type("Widget"))
 
 
 def _record_register_alias(env: TypeEnvironment) -> None:
-    env.register_alias("Alias", _ALIAS_TARGET, type_params=())
+    env.register_alias("Alias", _ALIAS_TARGET, type_params=(), declaration_span=dummy_span())
 
 
 def _query_register_alias(env: TypeEnvironment) -> object:
-    return (
-        env.source_type_template_qname(ENTRY_ID, "Alias"),
-        env.resolve_named_type("Alias"),
-    )
-
-
-def _record_register_constructor_signature(env: TypeEnvironment) -> None:
-    env.register_constructor_signature(_BOX2_CTOR_SIG)
-
-
-def _query_register_constructor_signature(env: TypeEnvironment) -> object:
-    return env.get_constructor_signature("Box2")
-
-
-def _record_register_constructor_field_kinds(env: TypeEnvironment) -> None:
-    env.register_constructor_field_kinds(
-        "Widget", _FIELD_KINDS, scope_path=("Scoped",), module_id=ENTRY_ID, decl_id=707
-    )
-
-
-def _query_register_constructor_field_kinds(env: TypeEnvironment) -> object:
-    return (
-        env.get_constructor_field_kinds("Widget", scope_path=("Scoped",)),
-        env.get_constructor_field_kinds_for_type(RecordType(name="Widget", decl_id=707), "Widget"),
-    )
+    registered = env.has_alias_registration("Alias", _ALIAS_TARGET, ())
+    # ``declared_type_template`` assumes the caller already knows the type is
+    # declared; a never-mutated comparison environment has no "Alias" at all.
+    template = env.declared_type_template(ENTRY_ID, "Alias") if registered else None
+    return (template, registered)
 
 
 def _setup_unregister_name(env: TypeEnvironment) -> None:
@@ -184,7 +150,7 @@ def _query_unregister_name(env: TypeEnvironment) -> object:
 
 
 def _setup_freeze_alias(env: TypeEnvironment) -> None:
-    env.register_alias("Frozen", _ALIAS_TARGET, type_params=())
+    env.register_alias("Frozen", _ALIAS_TARGET, type_params=(), declaration_span=dummy_span())
 
 
 def _record_freeze_alias(env: TypeEnvironment) -> None:
@@ -192,7 +158,7 @@ def _record_freeze_alias(env: TypeEnvironment) -> None:
 
 
 def _query_freeze_alias(env: TypeEnvironment) -> object:
-    return env.source_type_template_qname(ENTRY_ID, "Frozen")
+    return env.declared_type_template(ENTRY_ID, "Frozen")
 
 
 def _record_register_method_def(env: TypeEnvironment) -> None:
@@ -249,16 +215,6 @@ _SCENARIOS: tuple[_Scenario, ...] = (
     _Scenario("register_generic_type", _record_register_generic_type, _query_register_generic_type),
     _Scenario("register_alias", _record_register_alias, _query_register_alias),
     _Scenario(
-        "register_constructor_signature",
-        _record_register_constructor_signature,
-        _query_register_constructor_signature,
-    ),
-    _Scenario(
-        "register_constructor_field_kinds",
-        _record_register_constructor_field_kinds,
-        _query_register_constructor_field_kinds,
-    ),
-    _Scenario(
         "unregister_name",
         _record_unregister_name,
         _query_unregister_name,
@@ -299,8 +255,7 @@ class TestFactScenarios:
         facts = source.own_facts()
 
         target = _prepared(scenario)
-        with target.type_scope(("Elsewhere",)):
-            target.replay(facts)
+        target.replay(facts)
 
         fresh = _prepared(scenario)
 
@@ -372,29 +327,6 @@ class TestFactForwarding:
 
 
 # ---------------------------------------------------------------------------
-# Constructor field kinds: module-id keying
-# ---------------------------------------------------------------------------
-
-
-class TestConstructorFieldKindsModuleId:
-    def test_replay_records_the_resolved_module_id_for_cross_module_lookup(self) -> None:
-        lib_id = ModuleId(("lib",))
-        source = TypeEnvironment(module_id=lib_id)
-        source.begin_facts()
-        source.register_constructor_field_kinds("Widget", _FIELD_KINDS, scope_path=("Scoped",))
-        facts = source.own_facts()
-
-        target = TypeEnvironment()
-        target.replay(facts)
-
-        assert (
-            target.get_constructor_field_kinds("Widget", scope_path=("Scoped",), module_id=lib_id)
-            == _FIELD_KINDS
-        )
-        assert target.get_constructor_field_kinds("Widget", scope_path=("Scoped",)) is None
-
-
-# ---------------------------------------------------------------------------
 # Journal lifecycle
 # ---------------------------------------------------------------------------
 
@@ -429,28 +361,6 @@ class TestJournalLifecycle:
         assert header_facts.entries == (TypeFact(name="Header", typ=RecordType(name="Header")),)
         assert env.own_facts().entries == (BindingTypeFact(node_id=804, typ=IntType()),)
 
-    def test_end_facts_before_begin_facts_raises(self) -> None:
-        env = TypeEnvironment()
-        with pytest.raises(AssertionError):
-            env.end_facts()
-
-    def test_own_facts_before_begin_facts_raises(self) -> None:
-        env = TypeEnvironment()
-        with pytest.raises(AssertionError):
-            env.own_facts()
-
-    def test_begin_facts_twice_raises(self) -> None:
-        env = TypeEnvironment()
-        env.begin_facts()
-        with pytest.raises(AssertionError):
-            env.begin_facts()
-
-    def test_begin_facts_on_a_sealed_environment_raises(self) -> None:
-        env = TypeEnvironment()
-        env.seal()
-        with pytest.raises(AssertionError):
-            env.begin_facts()
-
     def test_own_facts_is_stable_after_seal(self) -> None:
         env = TypeEnvironment()
         env.begin_facts()
@@ -462,12 +372,14 @@ class TestJournalLifecycle:
     def test_begin_replay_seal_reproduces_facts_exactly(self) -> None:
         target_expr = NameT(name="A", span=dummy_span(), node_id=901)
         env = TypeEnvironment()
-        env.register_alias("A", target_expr)
+        env.register_alias("A", target_expr, declaration_span=dummy_span())
         env.freeze_alias("A", TextType())
         facts = EnvironmentFacts(
             entries=(
                 BindingTypeFact(node_id=902, typ=IntType()),
-                AliasFact(name="A", target_expr=target_expr, type_params=()),
+                AliasFact(
+                    name="A", target_expr=target_expr, type_params=(), declaration_span=dummy_span()
+                ),
             )
         )
 
@@ -476,12 +388,6 @@ class TestJournalLifecycle:
         env.seal()
 
         assert env.own_facts() == facts
-
-    def test_replay_of_empty_facts_onto_a_sealed_environment_raises(self) -> None:
-        target = TypeEnvironment()
-        target.seal()
-        with pytest.raises(AssertionError):
-            target.replay(EnvironmentFacts())
 
 
 # ---------------------------------------------------------------------------
@@ -497,15 +403,19 @@ class TestAliasReplaySkip:
         template must survive an identical replayed registration."""
         target_expr = NameT(name="A", span=dummy_span(), node_id=1001)
         target = TypeEnvironment()
-        target.register_alias("A", target_expr)
+        target.register_alias("A", target_expr, declaration_span=dummy_span())
         target.freeze_alias("A", IntType())
         facts = EnvironmentFacts(
-            entries=(AliasFact(name="A", target_expr=target_expr, type_params=()),)
+            entries=(
+                AliasFact(
+                    name="A", target_expr=target_expr, type_params=(), declaration_span=dummy_span()
+                ),
+            )
         )
 
         target.replay(facts)
 
-        assert target.source_type_template_qname(ENTRY_ID, "A") == TypeTemplate(IntType())
+        assert target.declared_type_template(ENTRY_ID, "A") == TypeTemplate(IntType())
 
     @pytest.mark.parametrize(
         "differing_target_expr,differing_type_params",
@@ -522,7 +432,9 @@ class TestAliasReplaySkip:
         self, differing_target_expr: object, differing_type_params: tuple[str, ...]
     ) -> None:
         target = TypeEnvironment()
-        target.register_alias("A", NameT(name="A", span=dummy_span(), node_id=1101))
+        target.register_alias(
+            "A", NameT(name="A", span=dummy_span(), node_id=1101), declaration_span=dummy_span()
+        )
         target.freeze_alias("A", TextType())
         facts = EnvironmentFacts(
             entries=(
@@ -530,6 +442,7 @@ class TestAliasReplaySkip:
                     name="A",
                     target_expr=differing_target_expr,
                     type_params=differing_type_params,
+                    declaration_span=dummy_span(),
                 ),
             )
         )
@@ -573,5 +486,4 @@ class TestModulePathNeverJournals:
     def test_module_path_checking_never_starts_a_journal(self) -> None:
         """A real single-module check never opens the journal window."""
         checked = check_resolved(resolve_inline_entry("def value() -> int = 1"))
-        with pytest.raises(AssertionError):
-            checked.type_env.own_facts()
+        assert checked.type_env.own_facts() == EnvironmentFacts()

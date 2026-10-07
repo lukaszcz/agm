@@ -50,14 +50,44 @@ contribution:
 
 - `import m` contributes qualified routes only.
 - `import m::*` makes every public member bare.
-- `import m::{f, Config::timeout}` makes those members bare.
+- `import m::{f, Config::timeout}` makes those paths bare: `f` and
+  `Config::timeout`, not `timeout`.
 
 A selected scope path includes its complete public subtree. An item rename adds
 a corresponding bare path while leaving the selected source path available.
-`hiding` removes a path and its subtree from both qualified and bare access.
-It may accompany a plain import or a `::*` tail, but not a positive selection.
-Selected and hidden paths must be public declarations of every module matched
-by a wildcard.
+`hiding` removes declarations, not spellings: each hidden item names a
+declaration, and the import then brings in that declaration and everything
+beneath it under no spelling at all — qualified or bare, through its owner, or
+through any type alias, the imported module's own aliases included. After
+`import m::* hiding Color::Red` and `type C = Color`, none of `m::Color::Red`,
+`Color::Red`, or `C::Red` reaches that member, in any position; hiding an
+enum member also removes its injected bare spelling (`hiding Option::Some`
+leaves no bare `Some`). Only that import is affected: another import of the
+same declaration, or the module's own declarations, still reach it. `hiding`
+may accompany a plain import or a `::*` tail, but not a positive selection.
+
+Selected and hidden items must name public declarations of every module
+matched by a wildcard; an item naming nothing is an error. An item may be
+written through a type alias the module exports, and then names what the
+module exports at the same path beneath the alias's target: when `al` declares
+`type Geo = Base` and also exports `Base` with its `Base::Inner`,
+`import al::* hiding Geo::Inner` hides `Base::Inner`, and
+`import al::{Geo::Inner}` makes `Geo::Inner` bare. Hiding a scope path
+removes it and every path beneath it, whether or not a type is declared
+there. Hiding an alias removes the
+type it denotes and everything a read beneath the alias reaches through that
+import, under every spelling: with `type HGeo = Base` and a `def Base::j()`
+in `hid`, `import hid::* hiding HGeo` leaves neither `Base` nor `Base::j`. An
+alias of a different type survives (`hiding Box` leaves
+`type IntBox = Box[int]`). An item naming an enum, or an alias of an enum, also
+injects that enum's member names, as does the importing module's own alias of
+an imported enum; through any alias a bare member is the generic member
+declaration ([Type aliases](types.md#type-aliases)). Such a member stays an
+imported declaration, so it does not claim its spelling over another import:
+where `a` declares `enum Color = Red | Green` and `b` declares
+`enum Light = Red | Amber`, a module with `import a`, `import b::*`, and
+`type C = a::Color` finds bare `Red` ambiguous; `C::Red` and `Light::Red`
+select each.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -83,9 +113,11 @@ settings::timeout
 ```
 
 Repeated imports of a module combine their qualified routes and bare
-contributions. A bare-name collision is reported at the use site. Qualified
-routes may also be ambiguous; a longer suffix, an anchored path, or an alias
-selects one route.
+contributions. Every name is looked up by its whole path: a declaration of the
+importing module at that path wins over any import, several routes to one
+declaration are that one declaration, and two distinct imported declarations
+are a collision reported at the use site. Qualified routes may also be
+ambiguous; a longer suffix, an anchored path, or an alias selects one route.
 
 ## `use` declarations
 
@@ -94,8 +126,7 @@ or module root. Its target can be a local scope, a scope or module root reached
 through an import route, or a scope anchored at the current module root.
 
 ```ebnf
-use_decl      ::= "use" use_target ("::" tail | "as" ref_name)
-                  [hiding_clause]
+use_decl      ::= "use" use_target ("::" tail [hiding_clause] | "as" ref_name)
 use_target    ::= ["/"] module_path ["::" scope_path] | "::" scope_path
 scope_path    ::= NAME ("::" NAME)*
 ```
@@ -114,9 +145,21 @@ use library as Alias
 single-atom tail selects members, and item renames add renamed bare paths.
 When `use Scope::member as Alias` ends at an ordinary member, it is the
 single-item rename; when the complete path names a scope, it is a whole-target
-alias. `use Scope as Alias` and `use library as Alias` contribute every selected
+alias. A path naming a type is the single-item rename too, written with or
+without a qualifier: `use e::Color as C` and `use Point as P` (`Point` a type
+the module declares or makes bare) name the type, its constructor where it has
+one, and every path beneath it, exactly like `use e::{Color as C}` — `C` is a
+type, `C::Red` its member — while the original spelling stays available.
+`use Scope as Alias` and `use library as Alias` contribute every selected
 member beneath `Alias`; a whole-target alias must be an identifier because it
-becomes a qualifier segment. `hiding` is valid only with a `::*` tail. A `use` declaration contributes names
+becomes a qualifier segment. A renamed spelling is another name for the same
+declaration, never a declaration of its own, so reaching a declaration through
+a rename and directly is no ambiguity. A rename of a type is a type alias of
+the module's own: nothing may be declared beneath its new name
+([Type aliases](types.md#type-aliases)). `hiding` is valid only with a `::*`
+tail, and removes from every spelling what a read beneath each hidden item
+reaches through that use, exactly as an import's `hiding` does. A `use`
+declaration contributes names
 only to its enclosing module or named scope region; it does not make a module
 available. Import the module first when its target is not local.
 
@@ -132,9 +175,17 @@ program def main() -> unit =
 ```
 
 An explicit `/` anchors a module route, and a leading `::` anchors a local
-scope path. Without an anchor, a target can be resolved through a local scope
-or an already-bare imported scope; ambiguity is a static error. A named scope exposed by one
-`use` is already bare and can therefore be the target of a later `use`. Selection, renaming, and
+scope path. Without an anchor, a target is looked up by its whole path like
+any qualified spelling, so all scopes of that path combine: `use X::*`, where
+the module declares `scope X` and an import also provides a scope `X`, exposes
+every member either declares. Per member path the module's own declaration
+wins, else the one imported declaration is exposed, and two distinct imported
+declarations make that bare name ambiguous where it is used. A target written
+through a type alias reaches what the same path through its target reaches
+where the alias is declared (`use Geo::Sub::*` wherever `Geo::Sub::t()`
+reads). A named scope exposed by an
+earlier `use` is already bare and can therefore be the target of a later
+`use`; a `use` reads only the uses written before it. Selection, renaming, and
 hiding determine which nested scope paths the later declaration can target.
 
 <!-- agl-check: fragment -->
@@ -154,7 +205,9 @@ use Selected::*
 They precede the region's other items. A scoped import's qualified route remains
 available throughout its module, while a tail's bare names belong only to that
 region and its nested regions. A scoped `use` likewise contributes only to its
-enclosing region and nested regions.
+enclosing region and nested regions; neither joins the region's qualified
+surface, so a name a region's `use` or import tail provides is not reachable as
+a member of that region from outside it.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -205,9 +258,54 @@ plain module path. Anchored qualifiers never
 match aliases. Aliases are single-segment routes only.
 
 `::name` refers to a declaration in the current module root and bypasses a
-lexical shadow. The same form works for `::Type` and `::Type::Variant`.
+lexical shadow, every enclosing scope, and every import and `use` — the
+prelude included, so `::print` names nothing unless the module declares
+`print`. The same form works for `::Type` and `::Type::Variant`.
 Qualified type references follow the same routing rules and preserve
 module-and-scope nominal identity.
+
+A module route reads only that module's exports. The importing module's own
+declarations never join it: after `import base::*` and an own
+`def Base::mine()` written beneath `base`'s type `Base`, `Base::mine` reaches
+the method, while `base::Base::mine` names nothing. A leading segment naming
+both an own scope or type and an import route follows the ordinary whole-path
+rule: the module's own declaration at the full path wins, and `/route::name`
+reaches the module.
+
+### Module-qualified enum members
+
+A module qualifier followed by a terminal name, as in `mylib::Red` or `::Red`,
+selects a constructor from that module's surface: the record or exception
+(or an alias of one) it declares at its root under that name, else the one
+inline member with that name of the enums reached at its root under any name —
+those it declares, those its own aliases name, or, for an import route, those
+it re-exports. After `export base::{Color}` in `mid`, `mid::Red` selects
+`base`'s `Color::Red`; when `mylib` declares `type C = other::Color` after
+`import other`, `mylib::Red` selects `other::Color::Red`. Only a declaration
+with a constructor claims the name:
+next to `enum Color = Red | Green`, a root `enum Red`, `enum Red[T]`, or `type
+Red = int` leaves `mylib::Red` selecting `Color::Red`. `::` reaches an
+imported or prelude constructor only through an alias the current module
+declares; a builtin enum's member is its fallback when the module's root
+injects none, so `::Some` selects `Option::Some` unless the current module
+declares `Some`. The spelling denotes the same constructor in a
+value, a pattern, and an `is` test, except that a same-named `def` or `let` of
+the module claims the value spelling while pattern and `is` lookup stay
+independent (see [claiming a constructor's
+spelling](bindings-and-scope.md#overload-sets-shadowing-and-ambiguity)). Two
+such inline members, whether declared, aliased, or re-exported, make it ambiguous in
+every position; qualify it with the owning enum (`mylib::Color::Red`), as
+the diagnostic suggests through the same qualifier. A scope or type the module
+itself declares under the route's name is read first: an own `scope mylib`
+declaring `Red` makes `mylib::Red` that declaration, and `/mylib::Red` reaches
+the module ([Qualifier chains](lexical-structure.md#qualifier-chains)). A
+referenced member keeps its own
+declaration path: when `mylib`'s `Color` references `Shared` from `other`,
+write `other::Shared` or the bare `Shared`, never `mylib::Shared` (or `::Shared`
+inside `mylib`). Only an import route or `::` is a module qualifier: after
+`import mylib as L`, `L::Red` selects `mylib`'s member, while `use mylib as L`
+contributes `mylib`'s declarations under `L` (`L::Color::Red`) but no
+module qualifier, so `L::Red` is rejected.
 
 ## Re-exports and visibility
 
@@ -244,6 +342,14 @@ export math/basic::{add, multiply as mul}
 export math/advanced hiding internal-helper
 export math/*
 ```
+
+Export items and export `hiding` follow the import rules: an item may be
+written through a type alias and names what the exported module exports at
+that path beneath the alias's target, and `export al hiding Base::Inner`
+withholds that declaration under every spelling the re-export would bring in,
+`al`'s aliases included (`Geo::Inner` with `type Geo = Base`); a path a
+`hiding` removes reads as hidden under every spelling, as do the paths beneath
+it. Every declaration is exported at its written path.
 
 Re-exports preserve the original defining-module identity. Conflicting exposed
 names with different origins are static errors; duplicate paths to the same
@@ -357,17 +463,36 @@ every named scope region. A region is one declaration for its enclosing root's
 ordering; its own headers are ordered within the region.
 
 Import cycles are valid. Functions and nominal types may refer to public
-declarations across an import cycle.
+declarations across an import cycle, and every module in a cycle sees the same
+exports, re-exports included, as it would outside the cycle.
 
 ## REPL
 
+An entry resolves like a module in source order, except that its imports are
+hoisted: an import may follow a declaration of the same entry, and the whole
+entry sees it. How a session is split into entries never changes what a
+spelling selects.
+
 REPL imports and `use` declarations persist after a successful entry, retained
 as written: a retained wildcard expands again on every later entry, so it picks
-up modules added since. A later successful entry replaces the earlier import
-declaration for every module it names at the same scope path and the earlier
-`use` declaration for the same resolved target at that path. A failed entry
-changes neither imports nor uses, and `:reset` clears both with the session
-bindings. An
+up modules added since, and a retained `use` reads its target afresh in every
+later entry, seeing only the uses written before it. A retained `use` whose
+target no longer names anything contributes nothing; a name it used to provide
+fails where it is read.
+
+A later successful entry replaces the earlier import declaration for every
+module it names at the same scope path, whatever its form (`import lib` after
+`import lib::*` drops the bare names). A later `use` replaces an earlier `use`
+at the same scope path when both have the same form:
+
+- a renaming `use … as N` replaces an earlier renaming use with the same new
+  name `N`;
+- a wildcard or tail use replaces an earlier wildcard or tail use of the same
+  target, as that target resolves now;
+- a rename never replaces a wildcard or tail use, nor the reverse.
+
+A failed entry changes neither imports nor uses, and `:reset` clears both with
+the session bindings. An
 explicit `import std/prelude` retained from a successful entry
 suppresses the synthetic prelude in later entries; `--no-stdlib` disables it
 for the whole session.
@@ -376,8 +501,17 @@ for the whole session.
 
 Imports report a missing or ambiguous module path, a selected or hidden name
 the module does not declare, or a header placed after a non-header item. A
-`use` target must name a local or already imported scope. A qualified use
-reports an unknown qualifier, a hidden or absent member, or an ambiguous route.
-A bare use reports an ambiguous name at its use site. These diagnostics identify
-a direct repair: import the required module, use a longer suffix or an anchored
-path, add an alias, or adjust a tail or hiding clause.
+`use` target must name a local or already imported scope. A qualified spelling
+that selects nothing reports, in this order of precedence: a hidden member,
+when a `hiding` removed the full path or a prefix of it from a contribution
+that otherwise reaches it; else an unknown member, when a prefix of the chain
+names something that qualifies (a scope path, type, type alias, or module
+route — own or provided); else an unknown qualifier, which includes a chain
+through a function, binding, or injected enum member. A `use` target, tail
+item, or hidden item is read the same way, whether written through an alias
+or not. A bare spelling that selects nothing is an unknown name, hidden or
+not. A spelling is ambiguous only when two or more distinct declarations
+compete at the step that decides it, never when the module itself declares
+the path. These diagnostics identify a direct repair: import the required
+module, use a longer suffix or an anchored path, add an alias, or adjust a
+tail or hiding clause.

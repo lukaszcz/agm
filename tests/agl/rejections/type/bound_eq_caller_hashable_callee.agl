@@ -1,0 +1,5 @@
+def needs-hashable[K]{Hashable K}(a: K, b: K) -> bool = a == b
+def wrapper[T]{Eq T}(a: T, b: T) -> bool = needs-hashable(a, b)
+
+program def main() -> unit =
+  print(wrapper(1, 2))

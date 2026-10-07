@@ -1,0 +1,2 @@
+record Rec
+  x: int

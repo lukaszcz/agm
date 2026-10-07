@@ -97,7 +97,7 @@ program def main() -> unit =
 With named arguments, parentheses are required.
 
 A `$` literal
-([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+([Strings and interpolation](strings-and-interpolation.md#the-literal)) may
 supply the same single argument, inline or as a block:
 
 ```agl

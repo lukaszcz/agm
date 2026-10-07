@@ -1,0 +1,10 @@
+enum Light = Red | Green
+enum Paint = Red | Blue
+
+program def main() -> unit =
+  let light: Light = Light::Green
+  let label =
+    case light of
+      | ::Red => 0
+      | Light::Green => 1
+  print(label)

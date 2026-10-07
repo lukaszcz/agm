@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import decimal
 import enum
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, RecordType, Type
+from agm.agl.semantics.types import RecordType, Type
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -26,10 +25,6 @@ class OccurrenceId:
     """Stable, match-site-local identity of a value occurrence."""
 
     value: int
-
-    def __post_init__(self) -> None:
-        if self.value < 0:
-            raise ValueError("occurrence ids must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,18 +99,6 @@ class LiteralConstructor:
     kind: LiteralKind
     value: LiteralValue
 
-    def __post_init__(self) -> None:
-        valid = (
-            self.kind is LiteralKind.NUMERIC
-            and isinstance(self.value, decimal.Decimal)
-            or self.kind is LiteralKind.TEXT
-            and isinstance(self.value, str)
-            or self.kind is LiteralKind.NULL
-            and self.value is None
-        )
-        if not valid:
-            raise ValueError(f"invalid value {self.value!r} for literal kind {self.kind.value}")
-
     @property
     def arity(self) -> int:
         return 0
@@ -137,8 +120,8 @@ class ClosedSignature:
         hash=False,
     )
 
-    def index_of(self, constructor: Constructor) -> int | None:
-        """Return the declaration index of *constructor*, or ``None`` when absent.
+    def index_of(self, constructor: Constructor) -> int:
+        """Return the declaration index of *constructor*, one of this signature's.
 
         The index is built once per signature so declaration-order lookups and
         completeness tests never rescan the constructor tuple.
@@ -149,7 +132,7 @@ class ClosedSignature:
             for index, candidate in enumerate(self.constructors):
                 indices.setdefault(candidate, index)
             object.__setattr__(self, "_indices", indices)
-        return indices.get(constructor)
+        return indices[constructor]
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,10 +193,6 @@ class Occurrence:
     type: Type
     provenance: OccurrenceProvenance
 
-    def __post_init__(self) -> None:
-        if self.creation_order < 0:
-            raise ValueError("occurrence creation order must be non-negative")
-
 
 @dataclass(frozen=True, slots=True)
 class PathDecomposition:
@@ -272,7 +251,6 @@ class SourceAction:
 
     action_id: int
     source_index: int
-    body_node_id: int
     pattern_span: SourceSpan
 
 
@@ -284,9 +262,6 @@ class CaseSite:
 
 
 MatchSiteSource: TypeAlias = CaseSite
-
-
-EnumConstructorSpelling: TypeAlias = EnumOwnerForm
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,18 +277,9 @@ class MatrixRow:
 
 @dataclass(frozen=True, slots=True)
 class MatchCaseContext:
-    """Per-match-site frontend context used only for diagnostics and allocation identity."""
+    """Per-match-site frontend context used only for allocation identity."""
 
     module_id: ModuleId
-    enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
-    # Variants a same-named module route makes ambiguous under one owner
-    # form's short ``(owner_name,)`` qualifier; see
-    # ``TypeEnvironment.blocked_enum_variants``. Plain data, not compared: the
-    # forms it corresponds to are already excluded from case-context equality.
-    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] = field(
-        default_factory=dict, repr=False, compare=False, hash=False
-    )
-    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] = frozenset()
     owner_program: Program | None = field(default=None, repr=False, compare=False, hash=False)
 
 
@@ -459,7 +425,6 @@ __all__ = [
     "DecisionFail",
     "DecisionLeaf",
     "DecisionSwitch",
-    "EnumConstructorSpelling",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",

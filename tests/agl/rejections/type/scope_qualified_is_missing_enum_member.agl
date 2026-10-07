@@ -1,0 +1,8 @@
+scope Paint
+  enum Col
+    | Red
+end Paint
+
+program def main() -> unit =
+  let c: Paint::Col = Paint::Col::Red
+  print(c is Paint::Col::Nope)

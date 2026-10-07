@@ -1,0 +1,4 @@
+# Library module: a missing-key failure here must be attributed to this
+# file's own line, never the importing entry file's.
+def lookup(d: dict[text, int], k: text) -> int =
+  d[k]

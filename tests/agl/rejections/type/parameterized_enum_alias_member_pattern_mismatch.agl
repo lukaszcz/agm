@@ -1,0 +1,11 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Rows[A] = Slot[array[A]]
+
+program def main() -> unit =
+  let slot: Slot[int] = Slot::Filled(value = 3)
+  case slot of
+    | Rows::Filled(value) => print value
+    | _ => print "none"

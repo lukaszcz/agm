@@ -3,7 +3,10 @@
 This package is the *firewall* between the Lark-aware front-end (lexer +
 parser) and all downstream passes (scope, typecheck, match compilation,
 lowering, and evaluation). Nothing in this package imports Lark or any other
-AgL-internal module except ``spans``.
+AgL-internal module except dependency-free leaves: ``modules.ids``,
+``value_syntax``, and ``constraints`` (the ``Eq``/``Hashable`` constraint
+kinds, shared with ``semantics``) — see ``tests/test_agl_dependencies.py``
+for the enforced allowlist.
 
 Usage::
 
@@ -28,10 +31,14 @@ from agm.agl.syntax.nodes import (
     Break,
     BuiltinVarDecl,
     Call,
+    CallArg,
+    CallFields,
     Case,
     CaseBranch,
     Cast,
     CatchClause,
+    CompleteCall,
+    Constraint,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -105,6 +112,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    is_complete_call,
     pattern_binder_candidates,
     pattern_binding_node_ids,
 )
@@ -159,6 +167,7 @@ __all__ = [
     # declarations
     "Attribute",
     "AttributeKeyedArg",
+    "Constraint",
     "FuncDef",
     "RecordDef",
     "RecordUpdate",
@@ -182,6 +191,7 @@ __all__ = [
     "PatternBinderCandidate",
     "pattern_binder_candidates",
     "pattern_binding_node_ids",
+    "is_complete_call",
     # expressions
     "Block",
     "VarRef",
@@ -198,6 +208,9 @@ __all__ = [
     "IsTest",
     "TypeApply",
     "Call",
+    "CallArg",
+    "CallFields",
+    "CompleteCall",
     "Param",
     "Lambda",
     "If",

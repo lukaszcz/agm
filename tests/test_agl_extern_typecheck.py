@@ -16,7 +16,6 @@ externs are not executable yet.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -25,6 +24,7 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.parser import parse_program
+from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import CastSpec
 from agm.agl.syntax.nodes import Block, FuncDef
@@ -40,6 +40,8 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
     PartialCallSpec,
 )
+from agm.agl.typecheck.program import CheckedProgram, check_program
+from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.module_graph import (
     resolve_and_check_inline_program_ast,
     resolve_inline_entry,
@@ -103,6 +105,19 @@ def reject_extern(source: str, capabilities: HostCapabilities | None = None) -> 
     with pytest.raises(AglTypeError) as exc_info:
         check_extern(source, capabilities)
     return exc_info.value
+
+
+def _span_text(source: str, err: AglTypeError) -> str:
+    """The exact source substring *err*'s span covers, to name its culprit structurally
+    (never the error message, which is presentation only)."""
+    return source[err.span.start_offset : err.span.end_offset]
+
+
+def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
+    """Build and typecheck a multi-module graph; returns the ``CheckedProgram``."""
+    graph = make_graph_from_files(tmp_path, modules)
+    resolved = resolve_program(graph)
+    return check_program(resolved, _CAPS)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +258,123 @@ class TestExternCallableSignatures:
 
 
 # ---------------------------------------------------------------------------
+# Every dict in an extern signature (parameters, results, callback parameters)
+# needs a Hashable key, assuming its type variables are
+# (semantics.type_table.is_extern_keyable).
+# ---------------------------------------------------------------------------
+
+
+_OPTION = "enum Option[T]\n  | none\n  | some(value: T)\n"
+
+
+class TestExternDictKeyability:
+    def test_text_keyed_dict_param_permitted(self) -> None:
+        check_extern("extern def f(d: dict[text, int]) -> int\n0")
+
+    def test_non_text_hashable_keyed_dict_param_and_return_permitted(self) -> None:
+        check_extern("extern def f(d: dict[int, text]) -> dict[decimal, bool]\n0")
+
+    def test_non_hashable_keyed_dict_param_rejected(self) -> None:
+        source = "extern def f(d: dict[array[int], text]) -> int\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "d: dict[array[int], text]"
+
+    def test_hashable_keyed_dict_in_callback_param_permitted(self) -> None:
+        check_extern("extern def f(cb: (dict[int, text]) -> unit) -> int\n0")
+
+    def test_non_hashable_keyed_dict_in_callback_param_rejected(self) -> None:
+        source = "extern def f(cb: (dict[array[int], text]) -> unit) -> int\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "cb: (dict[array[int], text]) -> unit"
+
+    def test_bad_key_nested_in_record_field_param_rejected(self) -> None:
+        reject_extern("record Box\n  d: dict[array[int], text]\nextern def f(b: Box) -> int\n0")
+
+    def test_non_hashable_keyed_dict_return_rejected(self) -> None:
+        source = "extern def f(x: int) -> dict[array[int], int]\n0"
+        err = reject_extern(source)
+        assert _span_text(source, err) == "extern def f(x: int) -> dict[array[int], int]"
+
+    def test_var_field_record_key_return_rejected(self) -> None:
+        source = "record Cell\n  var n: int\nextern def f(x: int) -> dict[Cell, int]\n0"
+        reject_extern(source)
+
+    def test_record_key_return_permitted(self) -> None:
+        check_extern("record Id\n  n: int\nextern def f(x: int) -> dict[Id, int]\n0")
+
+    def test_enum_key_return_permitted(self) -> None:
+        check_extern("enum Color\n  | red\n  | blue\nextern def f(x: int) -> dict[Color, int]\n0")
+
+    def test_type_variable_key_param_and_return_permitted(self) -> None:
+        check_extern("extern def f[K, V](d: dict[K, V]) -> dict[K, V]\n0")
+
+    def test_compound_key_over_a_bounded_type_variable_permitted(self) -> None:
+        check_extern(_OPTION + "extern def f[T]{Hashable T}(x: T) -> dict[Option[T], int]\n0")
+
+    def test_compound_key_over_an_unbounded_type_variable_permitted(self) -> None:
+        check_extern(_OPTION + "extern def f[T](x: T) -> dict[Option[T], int]\n0")
+
+    def test_generic_record_over_a_compound_type_variable_key_permitted(self) -> None:
+        source = (
+            _OPTION + "record Box[K]\n  d: dict[K, int]\nextern def f[T](x: T) -> Box[Option[T]]\n0"
+        )
+        check_extern(source)
+
+    def test_compound_key_over_a_non_hashable_type_rejected(self) -> None:
+        reject_extern(_OPTION + "extern def f(x: int) -> dict[Option[array[int]], int]\n0")
+
+    def test_bad_key_nested_in_record_field_return_rejected(self) -> None:
+        source = "record Box\n  d: dict[array[int], text]\nextern def f(x: int) -> Box\n0"
+        reject_extern(source)
+
+    def test_bad_key_nested_in_array_return_rejected(self) -> None:
+        reject_extern("extern def f(x: int) -> array[dict[array[int], text]]\n0")
+
+    def test_host_minted_opaque_type_param_permitted(self) -> None:
+        check_extern("extern def f(s: Session) -> int\n0")
+
+    def test_host_minted_opaque_type_nested_in_record_field_permitted(self) -> None:
+        source = "record Box\n  session: Session\nextern def f(b: Box) -> int\n0"
+        check_extern(source)
+
+    def test_generic_key_param_instantiated_hashable_permitted(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(x: int) -> Box[int]\n0"
+        check_extern(source)
+
+    def test_generic_key_param_instantiated_non_hashable_rejected(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(x: int) -> Box[array[int]]\n0"
+        reject_extern(source)
+
+    def test_generic_key_param_transitive_through_nominal_argument_rejected(self) -> None:
+        """Outer[T] holds Box[T] in a field, so T is a key parameter of Outer too."""
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[T]\n"
+            "extern def f(x: int) -> Outer[array[int]]\n"
+            "0"
+        )
+        reject_extern(source)
+
+    def test_compound_key_argument_with_bad_part_rejected(self) -> None:
+        source = (
+            "record Wrap[T]\n"
+            "  x: T\n"
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[Wrap[T]]\n"
+            "extern def f(x: int) -> Outer[array[int]]\n"
+            "0"
+        )
+        reject_extern(source)
+
+    def test_wildcard_receiver_key_slot_permitted(self) -> None:
+        check_extern("extern def dict[_, V]::sz(self) -> int\n0")
+
+
+# ---------------------------------------------------------------------------
 # Calls type exactly like ordinary declared-function calls
 # ---------------------------------------------------------------------------
 
@@ -375,7 +507,10 @@ class TestExternProvenanceFinalization:
             origin_path=_PATH,
         )
         env = TypeEnvironment()
-        _TypeBuilder(env, attributes=resolved.attributes).collect(resolved.program)
+        _TypeBuilder(
+            env,
+            attributes=resolved.attributes,
+        ).collect(resolved.program)
         checker = _Checker(env, resolved, _CAPS)
         definitions = [item for item in resolved.program.body.items if isinstance(item, FuncDef)]
         for definition in definitions:
@@ -471,29 +606,4 @@ class TestExternProvenanceFinalization:
                     target_type=unresolved,
                     span=SourceSpan(1, 1, 1, 1, 0, 0),
                 )
-            )
-
-
-class TestExternDefensiveGuards:
-    """Cover the extern return-type guard the grammar makes unreachable.
-
-    ``extern_func_def`` always requires a return type, so an ``extern def``
-    without one is a syntax error long before the checker sees it. The guard
-    still stands because ``check_program`` accepts a caller-supplied AST, and
-    this is the only way to hand it one. It mirrors
-    ``TestDefensiveGuards.test_builtin_funcdef_without_return_type_rejected_defensively``
-    in ``test_agl_typecheck.py``, which covers the ``builtin def`` half of the
-    same rule.
-    """
-
-    def test_extern_funcdef_without_return_type_rejected_defensively(self) -> None:
-        program = parse_program("extern def f() -> int\nf()")
-        declaration = program.body.items[0]
-        assert isinstance(declaration, FuncDef)
-        stripped = replace(declaration, return_type=None)
-        body = replace(program.body, items=(stripped, *program.body.items[1:]))
-
-        with pytest.raises(AglTypeError, match="return type"):
-            resolve_and_check_inline_program_ast(
-                replace(program, body=body), _CAPS, origin_path=_PATH
             )

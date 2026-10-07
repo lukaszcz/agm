@@ -1,0 +1,5 @@
+# Two identical constant builtin calls, each with the same literal argument,
+# are the same constant key.
+program def main() -> unit =
+  let m = {resource("a"): 1, resource("a"): 2}
+  print m

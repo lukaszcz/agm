@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "member_pick",
+      "module_roots": ["program_modules/modules/injection_step_yielding"],
+      "params": {"pick": 0},
+      "expect": {"stdout": "record 0\nregion 1\nred\nmember red\n"}
+    },
+    {
+      "name": "other_member_pick",
+      "module_roots": ["program_modules/modules/injection_step_yielding"],
+      "params": {"pick": 3},
+      "expect": {"stdout": "record 3\nregion 4\ngreen\nnot red\n"}
+    }
+  ]
+}

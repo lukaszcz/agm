@@ -1,0 +1,37 @@
+enum Reply[T]
+  | @doc("""
+      An answer whose payload is ready for use.
+
+      The note describes the payload.
+    """)
+    @json-name("ready")
+    @arg-named
+    Ready
+      @doc("The answer's payload.")
+      value: T
+      note: text = "fine"
+  | @doc("An answer that is not ready yet.")
+    Waiting
+
+enum State =
+  @doc("An active state.")
+  On
+  | @doc("An inactive state.")
+    Off
+
+scope Nested
+  enum Flag
+    | @doc("An enabled flag.")
+      Enabled
+    | Disabled
+end Nested
+
+program def main() -> unit =
+  let reply: Reply[int] = AgentCommand("reader").ask "Read the reply."
+  case reply of
+    | Ready(value, note) => print("ready %{value} %{note}")
+    | Waiting => print("waiting")
+  let ready = Ready(value = 3)
+  print(ready.note)
+  print(State::Off == State::Off)
+  print(Nested::Flag::Enabled == Nested::Flag::Enabled)

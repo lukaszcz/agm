@@ -1,5 +1,6 @@
 # Scalar methods are ambient; free functions require this explicit import.
 import std/array
+import std/json
 import std/math
 
 program def main(mode: int) -> unit =
@@ -72,6 +73,14 @@ program def main(mode: int) -> unit =
         print(0.0.pow(3))
     | 7 =>
         let _ = (-1.0).sqrt()
+        ()
+    | 9 =>
+        let x: decimal = json::parse("9.9e999998") as decimal
+        let _ = x.pow(2)
+        ()
+    | 10 =>
+        let x: decimal = json::parse("9.9e999998") as decimal
+        let _ = x.round(-500000)
         ()
     | _ =>
         let _ = 0.0.pow(-1)

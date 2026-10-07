@@ -72,6 +72,7 @@ def _path_companion() -> _PathCompanion:
                 declared_name="EncodingError",
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "raw"),
+                field_json_names=("message", "raw"),
             ),
         },
     )

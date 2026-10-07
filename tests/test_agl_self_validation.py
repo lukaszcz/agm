@@ -226,20 +226,6 @@ def test_lowering_validates_ir_when_enabled() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_disabled_validation_still_seals_the_checked_type_env(
-    self_validation_disabled: None,
-) -> None:
-    """Sealing is functional state, not a self-check, so it survives being disabled.
-
-    ``TypeEnvironment.seal`` freezes the environment (gating further mutation and
-    enabling memoization/seeding) independently of whether it also re-verifies
-    itself; a checked module's ``type_env`` must come out sealed either way.
-    """
-    checked = resolve_and_check_inline_entry(_SOURCE, base_caps())
-
-    assert checked.type_env.is_sealed is True
-
-
 def test_disabled_validation_skips_the_inference_region_leak_check(
     self_validation_disabled: None,
 ) -> None:
@@ -338,6 +324,7 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             )
         },
     )
@@ -351,6 +338,7 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("other",),
+                field_json_names=("other",),
             )
         },
     )
@@ -371,6 +359,7 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_json_names=("value",),
             )
         },
     )
@@ -385,6 +374,7 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                     declared_name="Box",
                     kind=NominalKind.RECORD,
                     fields=("other",),
+                    field_json_names=("other",),
                 )
             },
         )
@@ -453,6 +443,7 @@ def test_enabled_validation_rejects_a_re_registration_that_loses_a_field_default
                 kind=NominalKind.RECORD,
                 fields=("x", "y"),
                 field_defaults=(None, IrConstInt(loc, 0)),
+                field_json_names=("x", "y"),
             )
         },
     )
@@ -468,6 +459,7 @@ def test_enabled_validation_rejects_a_re_registration_that_loses_a_field_default
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
                     field_defaults=(None, None),
+                    field_json_names=("x", "y"),
                 )
             },
         )

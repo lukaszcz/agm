@@ -1,0 +1,33 @@
+# Injected members of every kind: a referenced member, a member through an
+# applied alias, a module qualifier (`tones::Cool`, `/tones::Cool`, `::Large`)
+# and a same-named record that claims the bare spelling over a member.
+import items::Item
+import opt::IntOpt
+import tones
+import tones::Tone
+import heat::Warm
+
+enum Size
+  | Large
+  | Tiny
+
+def item-name(i: Item) -> text =
+  case i of
+    | Rec(x) => "rec %{x}"
+    | Plain => "plain"
+
+def opt-name(o: IntOpt) -> text =
+  case o of
+    | Nothing => "nothing"
+    | Just(value) => "just %{value}"
+
+program def main(pick: int) -> unit =
+  let i: Item = if pick == 0 => Rec(x = 4) else => Plain
+  let o: IntOpt = if pick == 0 => IntOpt::Just(value = 7) else => Nothing
+  print(item-name(i))
+  print(opt-name(o))
+  let t: tones::Tone = if pick == 0 => tones::Cool else => /tones::Warm
+  print(if t is tones::Cool => "cool" else => "warm")
+  print("%{Warm(heat = pick).heat}")
+  let z: Size = if pick == 0 => ::Large else => ::Tiny
+  print(if z is Large => "large" else => "tiny")

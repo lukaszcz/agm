@@ -50,7 +50,7 @@ from tests.agl.ir_harness import (
 #: An empty descriptor view for tests that build or encode a boundary value
 #: without a real compiled program behind it -- rendering shows no display
 #: spellings, which none of these tests check.
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class TestValueDirectedBoundary:
@@ -105,14 +105,50 @@ class TestValueDirectedBoundary:
         )
         assert exc.fields["python-type"] == ""
 
-    def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
-        exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> dict[text, int]\nlet _ = f()\n()\n",
-            "from agl import dict as agl_dict\ndef f(): return agl_dict({1: 1})\n",
-            tmp_path,
+    @pytest.mark.parametrize(
+        ("key", "rendered"),
+        (
+            ('"a \\"b\\""', '"a \\"b\\""'),
+            ("-42", "-42"),
+            ("True", "true"),
+            ("Point(x=1, y=-2)", "Point(x = 1, y = -2)"),
+        ),
+    )
+    def test_raised_key_error_carries_the_key_in_value_syntax(
+        self, tmp_path: Path, key: str, rendered: str
+    ) -> None:
+        source = (
+            "record Point\n  x: int\n  y: int\n"
+            "exception Missing extends Exception\n  key: text\n"
+            "extern def lookup() -> int\n"
+            "let _ = lookup()\n()\n"
+        )
+        companion = (
+            "from agl import Missing, Point\n"
+            "from agm.agl.runtime.boundary import raise_key_error\n"
+            f"def lookup(): raise_key_error(Missing, 'no such key', {key})\n"
         )
 
-        assert exc.fields["python-type"] == "TypeError"
+        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+
+        assert exc.type_name == "Missing"
+        assert exc.fields["key"] == rendered
+
+    def test_agl_dict_rejects_keys_without_an_agl_form(self, tmp_path: Path) -> None:
+        companion = (
+            "from agl import dict as agl_dict\n"
+            "def f():\n"
+            "    try:\n"
+            "        agl_dict({(1, 2): 1})\n"
+            "    except TypeError:\n"
+            "        return 'rejected'\n"
+            "    return 'accepted'\n"
+        )
+        result, _ = evaluate_ir_with_externs(
+            "extern def f() -> text\nlet r = f()\nr\n", companion, tmp_path
+        )
+
+        assert result["r"] == TextValue("rejected")
 
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
@@ -339,6 +375,49 @@ def test_array_view_index_getitem_returns_the_encoded_element() -> None:
     assert view[0] == 3
 
 
+def test_array_view_index_with_an_out_of_range_int_probe_never_equals_a_decimal() -> None:
+    """A companion can call ``.index()`` with a Python int of arbitrary
+    magnitude, uncoerced by the lowerer's own range check: an out-of-range
+    int can never equal any in-range decimal, so the search reports "not
+    found" rather than constructing a huge ``Decimal`` to compare against."""
+    huge = 10**1_000_000
+    view = AglArrayView(ArrayValue([DecimalValue(Decimal("1.5"))]), _NO_DESCRIPTORS)
+
+    with pytest.raises(ValueError):
+        view.index(huge)
+
+
+def test_array_view_index_with_an_out_of_range_int_element_never_equals_a_decimal_probe() -> None:
+    """Symmetric to the int-probe case: a live view can also hold an
+    out-of-range int element (written through by a companion), which an
+    in-range decimal probe can never equal."""
+    huge = 10**1_000_000
+    view = AglArrayView(ArrayValue([IntValue(huge)]), _NO_DESCRIPTORS)
+
+    with pytest.raises(ValueError):
+        view.index(Decimal("1.5"))
+
+
+def test_array_view_index_compares_int_and_decimal_exactly() -> None:
+    """The live-view search agrees with AgL ``==``: mixed int/decimal equality
+    is exact, including an in-range int past 28 significant digits."""
+    near = 10**30 + 1
+    view = AglArrayView(
+        ArrayValue(
+            [
+                DecimalValue(Decimal("1000000000000000000000000000000")),
+                DecimalValue(Decimal("1000000000000000000000000000001.0")),
+                IntValue(2),
+            ]
+        ),
+        _NO_DESCRIPTORS,
+    )
+
+    assert view.index(near) == 1
+    assert view.index(Decimal("2.0")) == 2
+    assert near in view
+
+
 def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
     view = AglArrayView(array_value, _NO_DESCRIPTORS)
@@ -481,17 +560,43 @@ def test_dict_view_getitem_returns_the_encoded_value() -> None:
     assert view["one"] == 1
 
 
+def test_dict_view_getitem_of_a_missing_key_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        view["missing"]
+
+
 def test_dict_view_contains_checks_key_membership() -> None:
     view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert "two" in view
 
 
-def test_dict_view_setitem_with_a_non_string_key_raises_type_error() -> None:
+def test_dict_view_contains_a_key_of_another_type_returns_false() -> None:
+    view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
+
+    assert 2 not in view
+
+
+@pytest.mark.parametrize("key", [[1], {"a": 1}, None, object(), AglDictView])
+def test_dict_view_setitem_with_a_key_that_has_no_agl_form_raises_type_error(key: object) -> None:
     view = AglDictView(DictValue(), _NO_DESCRIPTORS)
 
     with pytest.raises(TypeError):
-        view[1] = 1
+        view[key] = 1
+
+
+@pytest.mark.parametrize("key", [[1], None, AglArrayView(ArrayValue([]), _NO_DESCRIPTORS)])
+def test_dict_view_lookup_with_a_key_that_has_no_agl_form_raises_type_error(key: object) -> None:
+    view = AglDictView(DictValue({"one": IntValue(1)}), _NO_DESCRIPTORS)
+
+    with pytest.raises(TypeError):
+        key in view
+    with pytest.raises(TypeError):
+        view[key]
+    with pytest.raises(TypeError):
+        del view[key]
 
 
 def test_dict_view_setitem_with_an_undecodable_value_raises() -> None:
@@ -507,13 +612,27 @@ def test_dict_view_popitem_removes_and_returns_the_last_entry() -> None:
     assert view.popitem() == ("two", 2)
 
 
+def test_dict_view_popitem_on_an_empty_dict_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        view.popitem()
+
+
 def test_dict_view_delitem_removes_an_entry() -> None:
     dict_value = DictValue({"one": IntValue(1), "two": IntValue(2)})
     view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     del view["one"]
 
-    assert dict_value.entries == {"two": IntValue(2)}
+    assert dict_value == DictValue({"two": IntValue(2)})
+
+
+def test_dict_view_delitem_of_a_missing_key_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        del view["missing"]
 
 
 def test_dict_view_clear_empties_the_mapping() -> None:
@@ -609,11 +728,6 @@ def test_array_contains_returns_false_for_an_undecodable_probe() -> None:
 #: silently inherit (or clobber) another's synthesized class.
 _next_test_nominal = itertools.count(9_000_000)
 
-#: An identity nothing ever registers a class for, at the top of this module's
-#: range. Kept out of ``_next_test_nominal``'s reach so "unregistered" stays
-#: true however many nominals the tests below synthesize, in any order.
-_UNREGISTERED_NOMINAL = NominalId(9_999_999)
-
 
 def _fresh_nominal() -> NominalId:
     """Return an identity no other test in this module uses."""
@@ -630,6 +744,7 @@ def _synthesize_box_class() -> tuple[NominalId, type[object]]:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
@@ -645,12 +760,17 @@ def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("None", (), none)),
+        variants=(
+            VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+            VariantDescriptor("None", (), none, "None", ()),
+        ),
     )
     return nominal, synthesize_nominal_classes(
         (
             descriptor,
-            NominalDescriptor(some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",)),
+            NominalDescriptor(
+                some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",), ("value",)
+            ),
             NominalDescriptor(none, ENTRY_ID, ("Choice",), "None", NominalKind.RECORD),
         )
     )[nominal]
@@ -666,6 +786,7 @@ def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
         declared_name="Problem",
         kind=NominalKind.EXCEPTION,
         fields=("detail",),
+        field_json_names=("detail",),
     )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
@@ -688,6 +809,17 @@ def test_int_value_round_trips_through_the_boundary() -> None:
 def test_decimal_value_round_trips_through_the_boundary() -> None:
     assert encode_boundary_value(DecimalValue(Decimal("1.5")), _NO_DESCRIPTORS) == Decimal("1.5")
     assert decode_boundary_value(Decimal("1.5")) == DecimalValue(Decimal("1.5"))
+
+
+def test_decode_boundary_value_rejects_a_decimal_out_of_the_pinned_context_range() -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(Decimal("1e1000000"))
+
+
+@pytest.mark.parametrize("obj", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")])
+def test_decode_boundary_value_rejects_a_non_finite_decimal(obj: Decimal) -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(obj)
 
 
 def test_text_value_round_trips_through_the_boundary() -> None:
@@ -723,41 +855,6 @@ def test_decode_boundary_value_returns_the_dict_views_wrapped_value() -> None:
     view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     assert decode_boundary_value(view) is dict_value
-
-
-def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
-    """An identity with no synthesized class cannot cross, whatever else was synthesized.
-
-    Regression test: the synthesized class registry is process-global and
-    keyed by the now-opaque ``NominalId``, so a nominal that reuses another
-    test's identity silently inherits its class and encodes instead of being
-    rejected. Synthesizing the module's other shapes first pins that this
-    identity stays unregistered regardless of test order.
-    """
-    _synthesize_box_class()
-    _synthesize_choice_classes()
-    _synthesize_problem_class()
-    with pytest.raises(BoundaryViolation):
-        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), _NO_DESCRIPTORS)
-
-
-def test_encode_boundary_value_names_a_known_but_unsynthesized_nominal_in_its_message() -> None:
-    """A descriptor view can name the nominal even when no class was ever synthesized for it."""
-    known_descriptors = ValueDescriptors(
-        nominals={
-            _UNREGISTERED_NOMINAL: NominalDescriptor(
-                nominal=_UNREGISTERED_NOMINAL,
-                module_id=ENTRY_ID,
-                scope_path=(),
-                declared_name="Ghost",
-                kind=NominalKind.RECORD,
-                fields=(),
-            )
-        },
-        functions={},
-    )
-    with pytest.raises(BoundaryViolation, match="Ghost"):
-        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), known_descriptors)
 
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:
@@ -913,6 +1010,7 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
         declared_name="Prompt",
         kind=NominalKind.RECORD,
         fields=("ask-prompt", "count"),
+        field_json_names=("ask-prompt", "count"),
     )
     classes = synthesize_nominal_classes((descriptor,))
     prompt = classes[nominal](**{"ask-prompt": "continue", "count": 3})
@@ -940,6 +1038,7 @@ def test_deep_recursive_nominal_construction_terminates() -> None:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value", "inner"),
+        field_json_names=("value", "inner"),
     )
     classes = synthesize_nominal_classes((descriptor,))
     box_cls = classes[nominal]
@@ -970,6 +1069,7 @@ def test_shared_immutable_record_graph_stays_shared_across_the_boundary() -> Non
             "Branch",
             NominalKind.RECORD,
             ("left", "right"),
+            field_json_names=("left", "right"),
         ),
     )
     synthesize_nominal_classes(descriptors)
@@ -1022,7 +1122,10 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("Gone", (), gone)),
+        variants=(
+            VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+            VariantDescriptor("Gone", (), gone, "Gone", ()),
+        ),
     )
     classes = synthesize_nominal_classes((first,))
     enum_cls = classes[nominal]
@@ -1034,7 +1137,7 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value", "extra"), some),),
+        variants=(VariantDescriptor("Some", ("value", "extra"), some, "Some", ("value", "extra")),),
     )
     reused = synthesize_nominal_classes((second,), classes)
 
@@ -1049,14 +1152,22 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
     left = _fresh_nominal()
     right = _fresh_nominal()
     descriptors = (
-        NominalDescriptor(record, ENTRY_ID, (), "Shared", NominalKind.RECORD, ("value",)),
+        NominalDescriptor(
+            record,
+            ENTRY_ID,
+            (),
+            "Shared",
+            NominalKind.RECORD,
+            ("value",),
+            field_json_names=("value",),
+        ),
         NominalDescriptor(
             left,
             ENTRY_ID,
             (),
             "Left",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Shared", ("value",), record),),
+            variants=(VariantDescriptor("Shared", ("value",), record, "Shared", ("value",)),),
         ),
         NominalDescriptor(
             right,
@@ -1064,7 +1175,7 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
             (),
             "Right",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Shared", ("value",), record),),
+            variants=(VariantDescriptor("Shared", ("value",), record, "Shared", ("value",)),),
         ),
     )
 
@@ -1083,14 +1194,22 @@ def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None
     record = _fresh_nominal()
     enum = _fresh_nominal()
     descriptors = (
-        NominalDescriptor(record, ENTRY_ID, ("M",), "Go", NominalKind.RECORD, ("amount",)),
+        NominalDescriptor(
+            record,
+            ENTRY_ID,
+            ("M",),
+            "Go",
+            NominalKind.RECORD,
+            ("amount",),
+            field_json_names=("amount",),
+        ),
         NominalDescriptor(
             enum,
             ENTRY_ID,
             (),
             "Step",
             NominalKind.ENUM,
-            variants=(VariantDescriptor("Go", ("amount",), record),),
+            variants=(VariantDescriptor("Go", ("amount",), record, "Go", ("amount",)),),
         ),
     )
     classes = synthesize_nominal_classes(descriptors)
@@ -1117,13 +1236,15 @@ def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_nam
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",), some),),
+        variants=(VariantDescriptor("Some", ("value",), some, "Some", ("val",)),),
     )
     classes = synthesize_nominal_classes((descriptor,))
     instance = classes[nominal].Some(value=1)
 
     assert decode_boundary_value(instance) == RecordValue(some, {"value": IntValue(1)})
-    assert getattr(classes[nominal].Some, "_agl_descriptor").display_name == "Choice::Some"
+    member_descriptor = getattr(classes[nominal].Some, "_agl_descriptor")
+    assert member_descriptor.display_name == "Choice::Some"
+    assert member_descriptor.field_json_names == ("val",)
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
@@ -1139,6 +1260,7 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("left",),
+                field_json_names=("left",),
             ),
             right: NominalDescriptor(
                 nominal=right,
@@ -1147,6 +1269,7 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("right",),
+                field_json_names=("right",),
             ),
         },
     )
@@ -1174,6 +1297,7 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
+        field_json_names=("new",),
     )
     registry = ExternRegistry()
     registry.set_nominals({current: bearer})
@@ -1188,6 +1312,7 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
                 kind=NominalKind.RECORD,
                 fields=("old",),
                 bears_name_path=False,
+                field_json_names=("old",),
             ),
         },
     )
@@ -1207,6 +1332,7 @@ def test_re_registering_the_same_identity_reuses_its_synthesized_class() -> None
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
@@ -1236,6 +1362,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("old",),
+        field_json_names=("old",),
     )
     new = NominalDescriptor(
         nominal=new_nominal,
@@ -1244,6 +1371,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
+        field_json_names=("new",),
     )
     companion = tmp_path / "companion.py"
     companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(old=2)\n")
@@ -1263,6 +1391,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         kind=NominalKind.RECORD,
         fields=("old",),
         bears_name_path=False,
+        field_json_names=("old",),
     )
     registry.set_nominals({old_nominal: old_superseded, new_nominal: new})
 
@@ -1289,6 +1418,7 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
         declared_name="Inner",
         kind=NominalKind.RECORD,
         fields=("x",),
+        field_json_names=("x",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
@@ -1326,6 +1456,7 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
+        field_json_names=("value",),
     )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})

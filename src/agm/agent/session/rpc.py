@@ -12,21 +12,21 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
-from typing import IO, Literal, Protocol, TypeVar, cast
+from typing import IO, Literal, Protocol, Self, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent.session.protocol import (
+    BackendSettings,
     SandboxFixture,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
-    SessionCapabilities,
     SessionHostError,
-    SessionOpenRequest,
     SessionOperation,
+    SessionOperations,
     SessionStats,
 )
 from agm.agent.spec import AgentPi
@@ -38,10 +38,11 @@ from agm.agent.transport import (
 )
 from agm.core.process import CapturedOutput, stop_process
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
-from agm.sandbox.prepare import SandboxContext, sandbox_run_for
+from agm.sandbox.prepare import sandbox_run_for
 from agm.sandbox.profile import profile_name
 from agm.sandbox.request import PreparedSandboxCommand
-from agm.util.unicode import loads_json
+from agm.util.decimal import decimal_in_range, parse_json_decimal
+from agm.util.unicode import loads_exact_json
 
 _RpcOperation = Literal[
     "prompt",
@@ -115,32 +116,52 @@ class _RpcChild:
     readers: list[threading.Thread] = field(default_factory=list)
     stopped: threading.Event = field(default_factory=threading.Event)
 
+    @property
+    def stdin(self) -> IO[bytes]:
+        """The command pipe, which :func:`_spawn` always opens."""
+        return cast(IO[bytes], self.process.stdin)
+
 
 class PiRpcSessionBackend(SandboxFixture):
-    """Keep one Pi RPC process alive for the lifetime of a session backend."""
+    """Keep one Pi RPC process alive for the lifetime of a session backend.
 
-    capabilities = SessionCapabilities.all()
-    continues_conversation = True
+    ``_child`` is ``None`` once the process was terminated: by ``close`` or
+    after a transport failure.
+    """
 
     def __init__(
         self,
-        *,
-        idle_timeout: float | None = None,
-        get_sandbox_context: Callable[[], SandboxContext],
+        child: _RpcChild,
+        settings: BackendSettings,
     ) -> None:
-        super().__init__()
-        self._idle_timeout = idle_timeout
-        self._get_sandbox_context = get_sandbox_context
-        self._child: _RpcChild | None = None
+        super().__init__(settings)
+        self._child: _RpcChild | None = child
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Start Pi in RPC mode using the supplied Pi agent settings."""
-        if not isinstance(request.agent, AgentPi):
-            raise SessionHostError("Pi RPC session requires an AgentPi", "open")
-        if self._child is not None:
-            raise SessionHostError("Pi RPC session is already open", "open")
-        self._fix_sandbox(request)
-        self._start(request.agent, "open", name=request.name)
+    @classmethod
+    def open(
+        cls,
+        agent: AgentPi,
+        settings: BackendSettings,
+        *,
+        name: str = "",
+    ) -> Self:
+        """Start Pi in RPC mode using *agent*'s settings."""
+        child = _spawn(
+            agent,
+            agent.rpc_argv(name=name, permission_mode=settings.permission_mode),
+            "open",
+            settings,
+        )
+        return cls(child, settings)
+
+    continues_conversation = True
+
+    @property
+    def operations(self) -> SessionOperations:
+        """Pi RPC implements every optional operation natively."""
+        return SessionOperations(
+            compact=self.compact, fork=self.fork, set_name=self.set_name, stats=self.stats
+        )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and collect its text deltas through the settled event."""
@@ -168,7 +189,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
                 sandboxed=child.prepared is not None,
-                permission_mode=self._permission_mode.value,
+                permission_mode=self._settings.permission_mode.value,
             ),
         )
 
@@ -195,14 +216,15 @@ class PiRpcSessionBackend(SandboxFixture):
         parent_id = self._parse_operation_response(parent_state, "get_state", _required_session_id)
         source = self._live_child("clone")
         parent_command = source.agent.rpc_argv(
-            session_id=parent_id, permission_mode=self._permission_mode
+            session_id=parent_id, permission_mode=self._settings.permission_mode
         )
-        replacement = self._spawn(source.agent, parent_command, SessionOperation.FORK.value)
-        replacement_backend = PiRpcSessionBackend(
-            idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
+        replacement = _spawn(
+            source.agent,
+            parent_command,
+            SessionOperation.FORK.value,
+            self._settings,
         )
-        replacement_backend._adopt_sandbox_from(self)
-        replacement_backend._child = replacement
+        replacement_backend = PiRpcSessionBackend(replacement, self._settings)
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
             replacement_backend._parse_operation_response(
@@ -235,13 +257,8 @@ class PiRpcSessionBackend(SandboxFixture):
                 replacement_backend.close()
             raise
 
-        child = PiRpcSessionBackend(
-            idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
-        )
-        child._adopt_sandbox_from(self)
-        child._child = source
         self._child = replacement
-        return child
+        return PiRpcSessionBackend(source, self._settings)
 
     def set_name(self, name: str) -> None:
         """Set Pi's display name for the active session."""
@@ -261,56 +278,6 @@ class PiRpcSessionBackend(SandboxFixture):
         if child is not None:
             _terminate(child)
 
-    def _start(self, agent: AgentPi, operation: str, *, name: str = "") -> None:
-        self._child = self._spawn(
-            agent, agent.rpc_argv(name=name, permission_mode=self._permission_mode), operation
-        )
-
-    def _spawn(self, agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
-        env = self._env
-        sandbox_run = sandbox_run_for(self._sandbox, self._get_sandbox_context)
-        prepared: PreparedSandboxCommand | None = None
-        argv = command
-        if sandbox_run is not None:
-            spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
-            try:
-                prepared = sandbox_run.context.prepare(command, spec, env=env, cwd=Path.cwd())
-            except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
-                raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
-            argv = prepared.argv
-        try:
-            process: subprocess.Popen[bytes] = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,
-                bufsize=0,
-                start_new_session=True,
-                env=(prepared.env if prepared is not None else env),
-                cwd=prepared.cwd if prepared is not None else None,
-            )
-        except (OSError, ValueError) as exc:
-            if prepared is not None:
-                prepared.close()
-            raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
-        if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate(_RpcChild(process, agent, argv, prepared=prepared))
-            raise SessionHostError("could not create Pi RPC pipes", operation)
-        child = _RpcChild(process, agent, argv, prepared=prepared)
-        child.readers.extend(
-            (
-                _start_reader(
-                    process.stdout,
-                    lambda chunk: _queue_stdout(child, chunk),
-                    lambda: _queue_stdout(child, None),
-                    child.stopped,
-                ),
-                _start_stderr_reader(child, process.stderr),
-            )
-        )
-        return child
-
     def _write(
         self,
         child: _RpcChild,
@@ -320,17 +287,17 @@ class PiRpcSessionBackend(SandboxFixture):
     ) -> None:
         """Write one command, mapping every stdin failure to the session model."""
         try:
-            _write_command(child, command, self._idle_timeout)
+            _write_command(child, command, self._settings.idle_timeout)
         except KeyboardInterrupt:
-            self._kill_dead_child(child)
+            self.close()
             raise
         except _RpcIdleTimeout as exc:
-            self._kill_dead_child(child)
+            self.close()
             self._raise_transport_or_host(
                 operation, "Pi RPC stdin write timed out", started, exc, child
             )
         except (BrokenPipeError, OSError) as exc:
-            self._kill_dead_child(child)
+            self.close()
             self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
 
     def _send(
@@ -366,7 +333,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 event = self._next_event(child)
                 ui_cancellation = _extension_ui_cancellation(event)
                 if ui_cancellation is not None:
-                    _write_command(child, ui_cancellation, self._idle_timeout)
+                    _write_command(child, ui_cancellation, self._settings.idle_timeout)
                 delta = _event_text_delta(event)
                 authoritative_text = _event_assistant_text(event)
                 if output_callback is not None:
@@ -384,21 +351,21 @@ class PiRpcSessionBackend(SandboxFixture):
                         streaming_state = _response_streaming_state(event)
                 failure = _terminal_prompt_failure(event) if wait_for_settled else None
             except KeyboardInterrupt:
-                self._kill_dead_child(child)
+                self.close()
                 raise
             except (BrokenPipeError, OSError) as exc:
-                self._kill_dead_child(child)
+                self.close()
                 self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
             except _RpcIdleTimeout as exc:
-                self._kill_dead_child(child)
+                self.close()
                 self._raise_transport_or_host(operation, "Pi RPC idle timeout", started, exc, child)
             except _RpcProcessExited as exc:
-                self._kill_dead_child(child)
+                self.close()
                 self._raise_transport_or_host(
                     operation, "Pi RPC process exited", started, exc, child
                 )
             except _RpcProtocolError as exc:
-                self._kill_dead_child(child)
+                self.close()
                 self._raise_transport_or_host(operation, str(exc), started, exc, child)
 
             event_type = event["type"]
@@ -423,7 +390,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 elif event_id == state_request_id and event_command == "get_state":
                     streaming = cast(bool, streaming_state)
                 else:
-                    self._kill_dead_child(child)
+                    self.close()
                     self._raise_transport_or_host(
                         operation,
                         "Pi RPC returned an unexpected response",
@@ -447,7 +414,7 @@ class PiRpcSessionBackend(SandboxFixture):
                         text.append(delta)
                         text_length += len(delta)
                     if text_length > _MAX_PROMPT_CHARS:
-                        self._kill_dead_child(child)
+                        self.close()
                         self._raise_transport_or_host(
                             operation,
                             "Pi RPC prompt output exceeded the protocol limit",
@@ -473,33 +440,27 @@ class PiRpcSessionBackend(SandboxFixture):
         try:
             return parser(response, _operation_name(operation))
         except _RpcProtocolError as exc:
-            # The child is only needed as a handle to tear down here: a process that
-            # has already exited must not mask the violation that was diagnosed.
-            child = self._child
-            if child is not None:
-                self._kill_dead_child(child)
+            # A process that has already exited must not mask the violation that
+            # was diagnosed.
+            self.close()
             raise SessionHostError(str(exc), _operation_name(operation)) from exc
 
     def _live_child(self, operation: _RpcOperation) -> _RpcChild:
         child = self._child
         if child is None:
-            raise SessionHostError("Pi RPC session is not open", _operation_name(operation))
+            raise SessionHostError(
+                "Pi RPC session process was terminated", _operation_name(operation)
+            )
         if child.process.poll() is not None:
-            self._kill_dead_child(child)
+            self.close()
             raise SessionHostError("Pi RPC session process has exited", _operation_name(operation))
         return child
 
     def _next_event(self, child: _RpcChild) -> dict[str, object]:
         line = self._next_line(child)
         try:
-            # object_pairs_hook rejects a duplicate key.
-            decoded: object = loads_json(
-                line,
-                parse_constant=_reject_nonfinite_json,
-                parse_float=_parse_json_float,
-                object_pairs_hook=_json_object,
-            )
-        except (json.JSONDecodeError, ValueError, InvalidOperation) as exc:
+            decoded: object = loads_exact_json(line)
+        except ValueError as exc:
             raise _RpcProtocolError("Pi RPC returned malformed JSONL") from exc
         if not isinstance(decoded, dict):
             raise _RpcProtocolError("Pi RPC JSONL event was not an object")
@@ -510,7 +471,11 @@ class PiRpcSessionBackend(SandboxFixture):
         return event
 
     def _next_line(self, child: _RpcChild) -> str:
-        deadline = None if self._idle_timeout is None else time.monotonic() + self._idle_timeout
+        deadline = (
+            None
+            if self._settings.idle_timeout is None
+            else time.monotonic() + self._settings.idle_timeout
+        )
         while True:
             buffer = child.stdout_buffer
             newline = buffer.find(b"\n")
@@ -542,11 +507,6 @@ class PiRpcSessionBackend(SandboxFixture):
             child.stdout_buffer.extend(chunk)
             if len(child.stdout_buffer) > _MAX_JSONL_RECORD_BYTES:
                 raise _RpcProtocolError("Pi RPC JSONL record exceeded the protocol limit")
-
-    def _kill_dead_child(self, child: _RpcChild) -> None:
-        if self._child is child:
-            self._child = None
-            _terminate(child)
 
     def _raise_transport_or_host(
         self,
@@ -587,7 +547,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
                 sandboxed=child.prepared is not None,
-                permission_mode=self._permission_mode.value,
+                permission_mode=self._settings.permission_mode.value,
             ),
         )
 
@@ -677,9 +637,7 @@ def _queue_stdout(child: _RpcChild, chunk: bytes | None) -> None:
 def _write_command(
     child: _RpcChild, command: dict[str, object], idle_timeout: float | None = None
 ) -> None:
-    stdin = child.process.stdin
-    if stdin is None:
-        raise BrokenPipeError("Pi RPC stdin is unavailable")
+    stdin = child.stdin
     data = (
         json.dumps(command, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
             "utf-8"
@@ -705,19 +663,64 @@ def _write_command(
         os.set_blocking(descriptor, True)
 
 
+def _spawn(
+    agent: AgentPi,
+    command: list[str],
+    operation: str,
+    settings: BackendSettings,
+) -> _RpcChild:
+    env = settings.env
+    sandbox_run = sandbox_run_for(settings.sandbox, settings.get_sandbox_context)
+    prepared: PreparedSandboxCommand | None = None
+    argv = command
+    if sandbox_run is not None:
+        spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
+        try:
+            prepared = sandbox_run.context.prepare(command, spec, env=env, cwd=Path.cwd())
+        except (SandboxUnavailableError, SandboxSettingsError, FileNotFoundError) as exc:
+            raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
+        argv = prepared.argv
+    try:
+        process: subprocess.Popen[bytes] = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            bufsize=0,
+            start_new_session=True,
+            env=prepared.env if prepared is not None else env,
+            cwd=prepared.cwd if prepared is not None else None,
+        )
+    except (OSError, ValueError) as exc:
+        if prepared is not None:
+            prepared.close()
+        raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
+    child = _RpcChild(process, agent, argv, prepared=prepared)
+    child.readers.extend(
+        (
+            _start_reader(
+                cast(IO[bytes], process.stdout),
+                lambda chunk: _queue_stdout(child, chunk),
+                lambda: _queue_stdout(child, None),
+                child.stopped,
+            ),
+            _start_stderr_reader(child, cast(IO[bytes], process.stderr)),
+        )
+    )
+    return child
+
+
 def _terminate(child: _RpcChild) -> None:
     child.stopped.set()
-    process = child.process
-    stdin = process.stdin
-    if stdin is not None:
-        try:
-            stdin.close()
-        except OSError:
-            pass
+    try:
+        child.stdin.close()
+    except OSError:
+        pass
     prepared = child.prepared
     try:
         stop_process(
-            process,
+            child.process,
             isolate_process_group=True,
             interrupt_cleanup_cmd=prepared.interrupt_cleanup_cmd if prepared is not None else None,
             cwd=prepared.cwd if prepared is not None else None,
@@ -734,26 +737,6 @@ def _terminate(child: _RpcChild) -> None:
         # The reader callbacks close over ``child``; dropping them breaks that
         # cycle so the process, queued stdout, and stderr tail are freed at once.
         child.readers.clear()
-
-
-def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
-def _parse_json_float(value: str) -> Decimal:
-    decimal = Decimal(value)
-    if not decimal.is_finite():
-        raise ValueError("non-finite JSON number")
-    return decimal
-
-
-def _reject_nonfinite_json(value: str) -> object:
-    raise ValueError(f"non-finite JSON number {value}")
 
 
 def _validate_response(event: dict[str, object]) -> None:
@@ -1038,7 +1021,7 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
         or output_tokens < 0
     ):
         raise _malformed_stats()
-    cost = _finite_decimal(data.get("cost"))
+    cost = _bounded_decimal(data.get("cost"))
     if cost is None or cost < 0:
         raise _malformed_stats()
     context_usage = data.get("contextUsage")
@@ -1050,7 +1033,7 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
         if percent is None:
             context_percent = _CONTEXT_PERCENT_UNAVAILABLE
         else:
-            parsed_percent = _finite_decimal(percent)
+            parsed_percent = _bounded_decimal(percent)
             if parsed_percent is None or parsed_percent < 0 or parsed_percent > 100:
                 raise _malformed_stats()
             context_percent = parsed_percent
@@ -1059,14 +1042,20 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
     return SessionStats(input_tokens, output_tokens, cost, context_percent)
 
 
-def _finite_decimal(value: object) -> Decimal | None:
+def _bounded_decimal(value: object) -> Decimal | None:
+    """Parse *value* into a decimal within the pinned AgL range, or ``None``.
+
+    Malformed, non-finite, and out-of-range values are all treated alike by
+    the caller: as malformed session stats, since a runtime ``DecimalValue``
+    built from them must stay within the same range as any other.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
         return None
     try:
-        decimal = Decimal(str(value))
-    except (InvalidOperation, ValueError):
+        decimal = parse_json_decimal(str(value))
+    except ValueError:
         return None
-    return decimal if decimal.is_finite() else None
+    return decimal if decimal_in_range(decimal) else None
 
 
 def _malformed_stats() -> _RpcProtocolError:

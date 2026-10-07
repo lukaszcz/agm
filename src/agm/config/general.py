@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Generic, TypeVar
 
 from agm.config.engine_keys import ENGINE_KEY_KINDS, PATH_ENGINE_KEYS
-from agm.core.env import agm_installation_prefix, resolve_env
+from agm.config.home import agm_home_dir, agm_path_candidates
 from agm.core.fs import mkdir, write_text
 from agm.core.parse import parse_timeout as parse_timeout
 from agm.core.toml import (
@@ -21,7 +22,6 @@ from agm.core.toml import (
     set_toml_table_value,
     toml_dict,
 )
-from agm.packages.layout import activation_index_path
 from agm.project.layout import project_config_dir
 from agm.util.interp import interp_preserving
 
@@ -115,64 +115,6 @@ def _merge_config(base: TomlDict, override: TomlDict) -> TomlDict:
             continue
         merged[key] = value
     return merged
-
-
-def _unique_paths(paths: list[Path]) -> list[Path]:
-    unique_paths: list[Path] = []
-    seen: set[Path] = set()
-    for path in paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        unique_paths.append(path)
-    return unique_paths
-
-
-def expand_env_root(override: str) -> Path:
-    """Expand ``~`` in an environment root override and force it absolute.
-
-    ``AGM_HOME`` / ``AGM_STDLIB`` relocate the whole AGM tree, so a relative
-    value must be anchored to the current directory once (via ``abspath``)
-    rather than silently re-resolving against wherever ``agm`` happens to be
-    invoked from.  A leading ``~`` / ``~user`` is expanded first.
-    """
-    return Path(os.path.abspath(os.path.expanduser(override)))
-
-
-def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
-    """Return the AGM home directory (the ``.agm`` data/config root).
-
-    ``AGM_HOME`` selects the directory explicitly. Otherwise, an installed
-    package activation index beneath the executable's installation prefix
-    identifies a complete prefix-local runtime tree. The fallback is
-    ``home/.agm``.
-
-    A leading ``~`` in ``AGM_HOME`` is expanded and a relative override is
-    anchored to the current directory, so the resolved home is always
-    absolute.
-    """
-    override = resolve_env(env).get("AGM_HOME")
-    if override is not None and override.strip():
-        return expand_env_root(override)
-
-    install_prefix = agm_installation_prefix()
-    if install_prefix is not None:
-        installation_home = install_prefix / ".agm"
-        if activation_index_path(installation_home).is_file():
-            return installation_home
-
-    return home / ".agm"
-
-
-def agm_path_candidates(
-    *, home: Path, relative_path: Path, env: Mapping[str, str] | None = None
-) -> list[Path]:
-    candidates: list[Path] = []
-    install_prefix = agm_installation_prefix()
-    if install_prefix is not None:
-        candidates.append(install_prefix / ".agm" / relative_path)
-    candidates.append(agm_home_dir(home=home, env=env) / relative_path)
-    return _unique_paths(candidates)
 
 
 def resolve_agm_path(*, home: Path, relative_path: Path) -> Path:
@@ -610,7 +552,7 @@ def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
 
 def _optional_timeout(table: TomlDict, key: str) -> float | None:
     value = table.get(key)
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and value > 0:
         return float(value)
     if isinstance(value, str) and value.strip():
         return parse_timeout(value)

@@ -16,14 +16,19 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.artifact_cache import (
     retain_match_sites,
     retained_match_sites,
     retained_module_sources,
 )
-from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import (
+    AglError,
+    Diagnostic,
+    diagnostic_from_span,
+    format_diagnostic_location,
+)
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
@@ -51,8 +56,13 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-    from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
-    from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, NominalDescriptor
+    from agm.agl.ir.ids import NominalId, SourceId, SymbolId
+    from agm.agl.ir.program import (
+        ExecutableProgram,
+        NominalDescriptor,
+        SourceFile,
+        ValueDescriptors,
+    )
     from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -93,8 +103,7 @@ class ArtifactProvenanceError(Exception):
     The artifact seam is internal — a caller passes back an artifact this
     pipeline produced for a specific prepared source — so a mismatch is a
     host-wiring bug with no user-facing remedy, not a diagnostic about the
-    program. Frontend artifacts are re-verified by optional self-validation;
-    lowered executables are validated by the pipeline that issued them.
+    program. Only optional self-validation re-verifies artifact provenance.
     """
 
 
@@ -140,20 +149,18 @@ class ProgramDiscovery:
 
 @dataclass(frozen=True, slots=True)
 class ArgumentPreflight:
-    """Result of ``PipelineDriver.preflight_arguments``.
+    """Successful result of ``PipelineDriver.preflight_arguments``.
 
     ``result``
-        The check-only run result: ``ok`` iff the static pipeline succeeded
-        and every argument bound and decoded against the program's signature.
+        The check-only run result of the static pipeline.
     ``executable``
-        The lowered program *arguments* were checked against, or ``None``
-        when a pass before lowering failed. Hand it back to
+        The lowered program *arguments* were checked against. Hand it back to
         ``PipelineDriver.run_prepared`` as ``executable`` (with this same
         ``arguments``) to execute it without lowering it a second time.
     ``arguments``
         The bound, decoded arguments, ready for ``run_prepared``'s own
         ``arguments`` — one entry per declared parameter, in declaration
-        order — or ``()`` when the static pipeline or binding failed.
+        order.
     ``argument_diagnostics``
         Program argument failures, separate from static and module parameter
         diagnostics so CLI hosts can present them as usage errors.
@@ -174,11 +181,19 @@ class ArgumentPreflight:
     """
 
     result: "RunResult"
-    executable: "ExecutableProgram | None"
-    arguments: "tuple[Value | UseDefault, ...]" = ()
+    executable: "ExecutableProgram"
+    arguments: "tuple[Value | UseDefault, ...]"
+    param_seeds: "Mapping[StaticBindingKey, Value]"
+    program_config: "Mapping[StaticBindingKey, Value]"
     argument_diagnostics: "tuple[Diagnostic, ...]" = ()
-    param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
-    program_config: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ArgumentPreflightFailure:
+    """Failed result of ``PipelineDriver.preflight_arguments``; ``result`` holds the diagnostics."""
+
+    result: "RunResult"
+    argument_diagnostics: "tuple[Diagnostic, ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,27 +297,49 @@ class RunError:
 
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
-    ``line`` is the 1-based source line of the raise site when known; ``None`` when
-    the span was not threaded through (e.g. arithmetic errors inside expressions).
-    ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
+    ``source`` is the raise site's source file display name (e.g. a canonical
+    module path, or ``"<repl>"``/``"<command>"``) when the span is known;
+    ``None`` in the same rare case as ``line``.
+    ``line`` is the 1-based source line of the raise site when known; ``None``
+    only for the raw Python-recursion-limit backstop that can escape module
+    initialization before any call site is recorded (see
+    ``IrInterpreter.run``'s outer ``except RecursionError``) -- every other
+    raise, including one with no span of its own, is attributed to the
+    innermost node it unwound through.
+    ``col`` is the 1-based source column of the raise site; ``None`` in that
+    same case.
     ``notes`` are cleanup-failure notes attached to the raise (e.g. a companion
     state closer failing while this exception was already propagating).
     """
 
     type_name: str
     fields: dict[str, object]
+    source: str | None = None
     line: int | None = None
     col: int | None = None
     notes: tuple[str, ...] = ()
 
     def to_message(self) -> str:
-        """Render the ``AgL exception: ...`` report, then each note on its own line."""
+        """Render the ``AgL exception: ...`` report, then each note on its own line.
+
+        The location, when known, is rendered the same ``path:line:col`` way
+        static diagnostics are (:func:`format_diagnostic_location`) when its
+        source file is known, falling back to the bare ``at line N[, col C]``
+        form otherwise.
+        """
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
         if isinstance(message, str) and message:
             parts.append(message)
         if self.line is not None:
-            if self.col is not None:
+            if self.source is not None:
+                location = format_diagnostic_location(
+                    Diagnostic(
+                        message="", line=self.line, column=self.col, source_label=self.source
+                    )
+                )
+                parts.append(f"at {location}")
+            elif self.col is not None:
                 parts.append(f"at line {self.line}, col {self.col}")
             else:
                 parts.append(f"at line {self.line}")
@@ -509,20 +546,21 @@ class PipelineDriver:
         )
         return self._host_env_cache
 
-    def _validate_cached_executable(
+    def _reuse_cached_executable(
         self,
         executable: "ExecutableProgram",
         resolved: "ResolvedProgram",
         capabilities: "HostCapabilities",
     ) -> "tuple[ExecutableProgram | None, ModuleId]":
-        """Validate a preflight executable and retain its selected module."""
-        provenance = self._executable_provenance.get(id(executable))
-        if provenance is None:
-            raise ArtifactProvenanceError("Cached executable was not produced by this pipeline.")
-        if provenance.prepared.resolved is not resolved:
+        """Return a preflight executable (``None`` once capabilities change) and its module."""
+        if self_validation_enabled() and (
+            id(executable) not in self._executable_provenance
+            or self._executable_provenance[id(executable)].prepared.resolved is not resolved
+        ):
             raise ArtifactProvenanceError(
-                "Cached executable does not belong to the prepared source."
+                "Cached executable was not issued by this pipeline for the prepared source."
             )
+        provenance = self._executable_provenance[id(executable)]
         if provenance.capabilities != capabilities:
             return None, provenance.selected_module
         return executable, provenance.selected_module
@@ -556,14 +594,7 @@ class PipelineDriver:
         check_only = options.check_only
         program_symbol = options.program_symbol
         arguments = options.arguments
-        host_contracts, contract_errors = materialize_ir_contracts(executable, host_env.codecs)
-        if contract_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
-            )
+        host_contracts = materialize_ir_contracts(executable, host_env.codecs)
 
         if options.select_default_program and program_symbol is None:
             entry_programs = tuple(
@@ -759,6 +790,7 @@ class PipelineDriver:
                 exc.exc,
                 nominals=executable.nominals,
                 span=exc.span,
+                sources=executable.sources,
                 exception_field_encodes=executable.exception_field_encodes,
                 notes=notes_of(exc),
             )
@@ -855,16 +887,6 @@ class PipelineDriver:
                     diagnostics=(exc.to_diagnostic(),),
                     warnings=tuple(tab_sink),
                 )
-            except Exception as exc:
-                return ParsedEntry(
-                    source=entry_source,
-                    entry_path=entry_path,
-                    program=None,
-                    next_id=0,
-                    spaced_qualifiers=(),
-                    diagnostics=(Diagnostic(message=str(exc), line=1),),
-                    warnings=tuple(tab_sink),
-                )
         program = parsed_module.program
         next_id = parsed_module.next_id
 
@@ -897,16 +919,7 @@ class PipelineDriver:
         rather than raised, with ``resolved`` left ``None``.
         """
         from agm.agl.lexer import tab_warning_collector
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            MissingExternCompanion,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
         from agm.agl.modules.loader import build_repl_graph
-        from agm.agl.parser import AglSyntaxError
-        from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
         from agm.util.text import normalize_newlines
 
@@ -968,30 +981,7 @@ class PipelineDriver:
                         default_label="<code>",
                         source_text=normalize_newlines(entry_source),
                     )
-            except AglSyntaxError as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (exc.to_diagnostic(),),
-                    (*parsed.warnings, *tab_sink),
-                )
-            except (
-                ModuleNotFound,
-                AmbiguousModule,
-                ModulePrefixNotFound,
-                ImportEntryError,
-                MissingExternCompanion,
-            ) as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (exc.to_diagnostic(),),
-                    (*parsed.warnings, *tab_sink),
-                )
+                    resolved = resolve_program(graph)
             except AglError as exc:
                 return PreparedProgram(
                     entry_source,
@@ -1001,37 +991,7 @@ class PipelineDriver:
                     (exc.to_diagnostic(),),
                     (*parsed.warnings, *tab_sink),
                 )
-            except Exception as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (Diagnostic(message=str(exc), line=1),),
-                    (*parsed.warnings, *tab_sink),
-                )
         warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
-
-        try:
-            with frontend_recursion_boundary():
-                resolved = resolve_program(graph)
-        except AglScopeError as exc:
-            return PreparedProgram(
-                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
-            )
-        except AglError as exc:
-            return PreparedProgram(
-                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
-            )
-        except Exception as exc:
-            return PreparedProgram(
-                entry_source,
-                entry_path,
-                roots,
-                None,
-                (Diagnostic(message=f"Scope error: {exc}", line=1),),
-                warnings,
-            )
 
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
@@ -1172,7 +1132,7 @@ class PipelineDriver:
 
         if compiled is None:
             compiled, match_diagnostics = _run_matchcompile_program(
-                checked, prepared.resolved.graph, capabilities
+                checked, prepared.resolved, capabilities
             )
             if compiled is None:
                 return ProgramDiscovery(
@@ -1214,11 +1174,12 @@ class PipelineDriver:
         checked = static.checked
         if static.compiled is None or checked is None:
             return static
-        assert prepared.resolved is not None
+        # A checked program implies a resolved one.
+        resolved = cast("ResolvedProgram", prepared.resolved)
         aliases = _TypeAliasIndex(checked)
         return replace(
             static,
-            programs=_program_decl_infos(checked, prepared.resolved.graph, aliases),
+            programs=_program_decl_infos(checked, resolved.graph, aliases),
             module_params=_module_param_infos(checked, aliases),
         )
 
@@ -1230,8 +1191,7 @@ class PipelineDriver:
         host_env: HostEnvironment,
         prepared: PreparedProgram,
         module_ids: "set[ModuleId]",
-        nominals: "Mapping[NominalId, NominalDescriptor]",
-        functions: "Mapping[FunctionId, FunctionDescriptor]",
+        descriptors: "ValueDescriptors",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
@@ -1247,8 +1207,7 @@ class PipelineDriver:
             companion_paths=prepared.companion_paths,
             packages=prepared.roots.packages,
             module_ids=module_ids,
-            nominals=nominals,
-            functions=functions,
+            descriptors=descriptors,
         )
         if extern_diagnostics:
             return on_failure(extern_diagnostics)
@@ -1405,7 +1364,7 @@ class PipelineDriver:
         compiled: "MatchCompiledProgram | None" = None,
         param_values: "Mapping[StaticBindingKey, object] | None" = None,
         param_values_lower: "Mapping[StaticBindingKey, object] | None" = None,
-    ) -> ArgumentPreflight:
+    ) -> "ArgumentPreflight | ArgumentPreflightFailure":
         """Validate program arguments and module parameter values before execution.
 
         Runs the static pipeline exactly as :meth:`run_prepared` does under
@@ -1431,7 +1390,7 @@ class PipelineDriver:
 
         result, executable = self._lower_and_record(prepared, program, compiled=compiled)
         if executable is None or not result.ok:
-            return ArgumentPreflight(result=result, executable=executable)
+            return ArgumentPreflightFailure(result=result)
 
         get_interp = lazy_interpreter(executable)
         default_resolver = resolver_over_interpreter(get_interp)
@@ -1457,14 +1416,13 @@ class PipelineDriver:
         param_seeds = {**decoded_lower, **config_param_values, **decoded_upper}
         diagnostics = (*argument_diagnostics, *lower_diagnostics, *upper_diagnostics)
         if diagnostics:
-            return ArgumentPreflight(
+            return ArgumentPreflightFailure(
                 result=RunResult(
                     ok=False,
                     diagnostics=list(diagnostics),
                     error=None,
                     warnings=result.warnings,
                 ),
-                executable=executable,
                 argument_diagnostics=argument_diagnostics,
             )
         return ArgumentPreflight(
@@ -1532,7 +1490,7 @@ class PipelineDriver:
         capabilities = host_env.capabilities
         selected_module = None if selected_program is None else selected_program.module
         if executable is not None:
-            executable, selected_module = self._validate_cached_executable(
+            executable, selected_module = self._reuse_cached_executable(
                 executable, resolved, capabilities
             )
         if compiled is not None:
@@ -1570,9 +1528,7 @@ class PipelineDriver:
         _append_checker_warnings(warnings, checked)
 
         if compiled is None:
-            compiled, match_diagnostics = _run_matchcompile_program(
-                checked, resolved.graph, capabilities
-            )
+            compiled, match_diagnostics = _run_matchcompile_program(checked, resolved, capabilities)
             if compiled is None:
                 return (
                     RunResult(
@@ -1637,14 +1593,15 @@ class PipelineDriver:
             # instead, with no companion import side effect). The check-only stop
             # happens before this host-side import step to preserve its
             # no-side-effects contract.
+            from agm.agl.ir.program import ValueDescriptors
+
             run_failure = self._wire_externs_or_fail(
                 checked=checked,
                 capabilities=capabilities,
                 host_env=host_env,
                 prepared=prepared,
                 module_ids=set(executable.modules),
-                nominals=executable.nominals,
-                functions=executable.functions,
+                descriptors=ValueDescriptors.from_program(executable),
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
@@ -1811,8 +1768,7 @@ def _module_param_infos(
         params: list[ParamBindingInfo] = []
         for binding in checked_module.resolved.param_bindings():
             name = static_binding_name(binding.item)
-            binding_type = checked_module.type_env.get_binding_type(binding.node_id)
-            assert binding_type is not None
+            binding_type = checked_module.type_env.binding_type_of(binding.node_id)
             params.append(
                 ParamBindingInfo(
                     module=module_id,
@@ -1825,12 +1781,7 @@ def _module_param_infos(
                     cli=binding.cli,
                     doc=attributes.docs.get(binding.item.node_id),
                     is_path=_annotates_path(
-                        checked,
-                        module_id,
-                        binding.scope_path,
-                        binding.item.type_ann,
-                        binding_type,
-                        alias_index,
+                        checked, module_id, binding.item.type_ann, binding_type, alias_index
                     ),
                     enum_values=_enum_completion_values(binding_type, type_table),
                 )
@@ -1854,11 +1805,7 @@ def _program_param_infos(
     """
     checked_module = checked.modules[module_id]
     type_table = checked_module.type_env.type_table
-    signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
-    assert signature is not None, (
-        f"compiler bug: program {funcdef.name!r} has no recorded function signature"
-    )
-    scope_path = tuple(segment.name for segment in funcdef.scope_path)
+    signature = checked_module.type_env.function_signature_of(funcdef.node_id)
     return tuple(
         ProgramParamInfo(
             name=param_spec.name,
@@ -1871,7 +1818,7 @@ def _program_param_infos(
                 param_spec.type,
             ),
             is_path=_annotates_path(
-                checked, module_id, scope_path, ast_param.type_expr, param_spec.type, aliases
+                checked, module_id, ast_param.type_expr, param_spec.type, aliases
             ),
             enum_values=_enum_completion_values(param_spec.type, type_table),
         )
@@ -1955,7 +1902,6 @@ class _TypeAliasIndex:
 def _annotates_path(
     checked: "CheckedProgram",
     module_id: "ModuleId",
-    scope_path: tuple[str, ...],
     type_expr: "TypeExpr | None",
     resolved: "Type",
     aliases: "_TypeAliasIndex",
@@ -1976,9 +1922,7 @@ def _annotates_path(
 
     if not isinstance(type_expr, (NameT, AppliedT)):
         return False
-    env = checked.modules[module_id].type_env
-    with env.type_scope(scope_path):
-        key = env.type_name_declaration(type_expr)
+    key = checked.modules[module_id].type_env.type_name_declaration(type_expr)
     if key is None:
         return isinstance(type_expr, NameT) and type_expr.name == PATH_TYPE_NAME
     decl_module, decl_path, decl_name = key
@@ -1987,15 +1931,13 @@ def _annotates_path(
         if alias.is_builtin:
             return alias.name == PATH_TYPE_NAME
         return not alias.type_params and _annotates_path(
-            checked, decl_module, decl_path, alias.type_expr, resolved, aliases
+            checked, decl_module, alias.type_expr, resolved, aliases
         )
     return (
         isinstance(type_expr, AppliedT)
         and (is_standard_option_enum(resolved) or is_standard_optional_enum(resolved))
         and len(type_expr.args) == len(resolved.type_args) == 1
-        and _annotates_path(
-            checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0], aliases
-        )
+        and _annotates_path(checked, module_id, type_expr.args[0], resolved.type_args[0], aliases)
     )
 
 
@@ -2041,15 +1983,12 @@ def _run_typecheck_program(
             checked = check_program(resolved, capabilities)
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
-    except Exception as exc:
-        diagnostic = Diagnostic(message=f"Type error: {exc}", line=1)
-        return None, (diagnostic,)
     return checked, ()
 
 
 def _run_matchcompile_program(
     checked: "CheckedProgram",
-    graph: "ModuleGraph",
+    resolved: "ResolvedProgram",
     capabilities: "HostCapabilities",
 ) -> "tuple[MatchCompiledProgram | None, tuple[Diagnostic, ...]]":
     """Run program-level match compilation without raising.
@@ -2059,21 +1998,15 @@ def _run_matchcompile_program(
     module this program carries.
     """
     from agm.agl.matchcompile import (
-        MatchCompiledProgram,
         cached_module_sites,
         compile_program_matches,
         diagnostics_from_match_issues,
     )
 
-    retainable = retained_module_sources(graph)
-    try:
-        result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
-        if result.compiled is None:
-            return None, diagnostics_from_match_issues(result.issues)
-        if not isinstance(result.compiled, MatchCompiledProgram):
-            raise TypeError("program match compilation returned a module artifact")
-    except Exception as exc:
-        return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
+    retainable = retained_module_sources(resolved.graph)
+    result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
+    if result.compiled is None:
+        return None, diagnostics_from_match_issues(result.issues, resolved.speller)
     retain_match_sites(retainable, capabilities, cached_module_sites(result.compiled))
     return result.compiled, ()
 
@@ -2176,8 +2109,7 @@ def _wire_extern_registry(
     companion_paths: "Mapping[ModuleId, Path | None]",
     packages: "tuple[PackageInfo, ...]",
     module_ids: "set[ModuleId] | None" = None,
-    nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
-    functions: "Mapping[FunctionId, FunctionDescriptor] | None" = None,
+    descriptors: "ValueDescriptors | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
 
@@ -2214,8 +2146,12 @@ def _wire_extern_registry(
             )
         ]
     declarations = _extern_declarations(checked, module_ids)
-    if nominals is not None:
-        registry.set_nominals(dict(nominals), functions=functions)
+    if descriptors is not None:
+        registry.set_nominals(
+            dict(descriptors.nominals),
+            functions=descriptors.functions,
+            exception_field_encodes=descriptors.exception_field_encodes,
+        )
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()
@@ -2228,11 +2164,8 @@ def _wire_extern_registry(
             # it declares was already reported by that one diagnostic.
             continue
         if mid not in loaded_modules:
-            companion_path = companion_paths.get(mid)
-            assert companion_path is not None, (
-                f"module {mid.display()!r} declares extern {name!r} but has no "
-                "companion path recorded by the loader"
-            )
+            # The loader records a companion path for every extern-declaring module.
+            companion_path = cast("Path", companion_paths[mid])
             if (
                 check_requirements
                 and not registry.holds_current(companion_path)
@@ -2356,76 +2289,60 @@ def exception_value_to_run_error(
     exc: "ExceptionValue",
     *,
     nominals: "Mapping[NominalId, NominalDescriptor]",
-    span: "object" = None,  # SourceSpan | None — avoids import cycle
-    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
+    span: "object" = None,  # Location | SourceSpan | None — avoids import cycle
+    sources: "Mapping[SourceId, SourceFile] | None" = None,
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
     notes: tuple[str, ...] = (),
 ) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
-    Every field is reported under its effective JSON name (``@json-name`` ??
-    ``@name`` ?? declared), from ``exception_field_encodes`` — including a
-    field with no JSON form, so no two fields can collide on a shared
-    fallback declared key. A field with an encode plan is converted through
-    it, matching ``e as json``; one without (not JSON-convertible) goes
-    through the shared value-directed serializer instead. Both preserve
-    ``Decimal`` exactness (never routed through binary ``float``). When
-    ``exception_field_encodes`` has no entry for the exception (e.g. no
-    lowering data), every field falls back to its declared name. This runs
-    while reporting an error already in flight, so a field that is
-    itself cyclic (including one closed through mutable record fields), or
-    a field of a kind with no JSON representation (``unit``, ``agent``,
-    ``constructor``, ``function``, ``iterator`` — legal on an exception field
-    even though a cast to ``json`` of such a type is statically rejected),
-    must not raise and mask the real error — that one field is reported as a
-    marker instead.
+    Fields are encoded by ``runtime.serialize.report_exception_fields`` from
+    *exception_field_encodes*, selected by *exc*'s own nominal like ``e as
+    json``. Unlike the cast, a field with no JSON representation or a cyclic
+    one degrades to a marker rather than raising, since this reports an error
+    already in flight and must never mask it.
 
     ``nominals`` resolves *exc*'s display spelling for ``RunError.type_name``
     from the running program's own descriptor table.
 
-    *span* is the optional raise-site source span threaded from ``AglRaise``;
-    when present, ``RunError.line`` and ``RunError.col`` are populated from it
-    so the CLI can include the source location in its exit-2 error output.
+    *span* is the optional raise-site source span threaded from ``AglRaise``
+    (an IR ``Location``, or a ``SourceSpan`` for a caller that has only a
+    frontend span); when present, ``RunError.line`` and ``RunError.col`` are
+    populated from it so the CLI can include the source location in its
+    exit-2 error output.
+
+    *sources* resolves a ``Location``'s ``source_id`` to its display name for
+    ``RunError.source`` (a ``SourceSpan`` already carries its own label).
+    ``None``, or a span with no matching entry, leaves ``RunError.source``
+    unset -- reporting falls back to the bare line/column form.
 
     *notes* carries the caught ``AglRaise``'s ``__notes__`` (e.g. a companion
     state closer that failed while this exception was already propagating)
     straight onto ``RunError.notes``.
     """
     from agm.agl.ir.ids import Location
-    from agm.agl.runtime.serialize import (
-        AglNonDataValue,
-        degraded_marker,
-        encode_value,
-        value_to_json_obj,
-    )
-    from agm.agl.semantics.cycles import AglCyclicValue
-    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.runtime.serialize import report_exception_fields
+    from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
-    encodes = {
-        encode.field_name: encode
-        for encode in (
-            () if exception_field_encodes is None else exception_field_encodes.get(exc.nominal, ())
-        )
-    }
-    fields: dict[str, object] = {}
-    for k, v in exc.fields.items():
-        encode = encodes.get(k)
-        # No entry (no lowering data for this exception) falls back to the
-        # declared name; an entry always carries its effective JSON name,
-        # whether or not it carries a plan.
-        json_key = encode.json_name if encode is not None else k
-        try:
-            fields[json_key] = (
-                encode_value(encode.plan, v)
-                if encode is not None and encode.plan is not None
-                else value_to_json_obj(v)
-            )
-        except (AglCyclicValue, AglNonDataValue) as field_exc:
-            fields[json_key] = degraded_marker(field_exc)
+    fields = report_exception_fields(exc, exception_field_encodes, nominals)
     line: int | None = None
     col: int | None = None
-    if isinstance(span, (SourceSpan, Location)):
+    source: str | None = None
+    if isinstance(span, Location):
         line = span.start_line
         col = span.start_col
+        if sources is not None and span.source_id in sources:
+            source = sources[span.source_id].display_name
+    elif isinstance(span, SourceSpan):
+        line = span.start_line
+        col = span.start_col
+        if span.source is not UNKNOWN_SOURCE:
+            source = span.source.label
     return RunError(
-        type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col, notes=notes
+        type_name=nominals[exc.nominal].display_name,
+        fields=fields,
+        source=source,
+        line=line,
+        col=col,
+        notes=notes,
     )

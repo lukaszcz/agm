@@ -1,0 +1,24 @@
+# An alias of an applied generic record qualifies its constructor at the
+# alias's own type arguments, in construction, as a value, and in patterns,
+# exactly as the bare alias does.
+
+record Box[T]
+  value: T
+
+type B = Box[int]
+
+type BB[T] = Box[T]
+
+def unbox(box: Box[int]) -> int =
+  case box of
+    | B::B(value) => value
+
+def unbox-text(box: Box[text]) -> text =
+  case box of
+    | BB::Box(value) => value
+
+program def main(start: int) -> unit =
+  let make = B::B
+  let boxes = [B::B(value = start), B::Box(value = start + 1), make(start + 2)]
+  print(boxes.map(unbox))
+  print("%{unbox-text(BB::BB(value = "t%{start}"))} %{BB::BB(value = start).value}")

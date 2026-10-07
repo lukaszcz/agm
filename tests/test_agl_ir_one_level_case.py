@@ -15,7 +15,6 @@ from agm.agl.ir import (
     IrCase,
     IrCaseArm,
     IrConstBool,
-    IrConstDecimal,
     IrConstInt,
     IrConstText,
     IrLiteralCaseKey,
@@ -71,8 +70,8 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
             declared_name="Color",
             kind=NominalKind.ENUM,
             variants=(
-                VariantDescriptor("Plain", (), _PLAIN),
-                VariantDescriptor("With", ("value", "unused"), _WITH),
+                VariantDescriptor("Plain", (), _PLAIN, "Plain", ()),
+                VariantDescriptor("With", ("value", "unused"), _WITH, "With", ("value", "unused")),
             ),
         ),
         _PLAIN: NominalDescriptor(_PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD),
@@ -83,6 +82,7 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
             "With",
             NominalKind.RECORD,
             ("value", "unused"),
+            field_json_names=("value", "unused"),
         ),
     }
 
@@ -112,15 +112,15 @@ def test_validation_requires_enum_member_record() -> None:
         "Plain",
         NominalKind.RECORD,
         ("unexpected",),
+        field_json_names=("unexpected",),
     )
     with pytest.raises(InvalidIrError, match="fields"):
         validate_ir(_program(enum_value, nominals=wrong_shape))
 
 
 def test_numeric_keys_are_runtime_canonical_and_duplicate_semantics_are_rejected() -> None:
-    integer = IrLiteralCaseKey(IrLiteralKind.NUMERIC, 1)
+    integer = IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal(1))
     widened = IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal("1.0"))
-    assert integer.scalar_value == decimal.Decimal(1)
     assert integer == widened
     case = _literal_case(
         IrCaseArm(integer, (), IrConstInt(_LOC, 1)),
@@ -336,18 +336,7 @@ def test_direct_literal_dispatch_uses_numeric_value_equality_and_default() -> No
     }
 
 
-def test_direct_malformed_no_match_raises_invalid_ir_not_match_error() -> None:
-    case = IrCase(
-        _LOC,
-        IrConstText(_LOC, "no"),
-        (IrCaseArm(IrLiteralCaseKey(IrLiteralKind.TEXT, "yes"), (), IrConstInt(_LOC, 1)),),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(case)).run()
-
-
-def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> None:
+def test_direct_enum_dispatch_copies_fields() -> None:
     subject = IrMakeRecord(
         _LOC,
         _WITH,
@@ -374,22 +363,6 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         "result": IntValue(42)
     }
 
-    missing_field_subject = IrMakeRecord(_LOC, _WITH, ())
-    malformed = IrCase(
-        _LOC,
-        missing_field_subject,
-        (
-            IrCaseArm(
-                IrNominalCaseKey(_WITH),
-                (("value", _PAYLOAD),),
-                IrConstInt(_LOC, 1),
-            ),
-        ),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(malformed)).run()
-
 
 def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     """Case dispatch compares direct member identities without enum fallback."""
@@ -401,33 +374,3 @@ def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     )
 
     assert IrInterpreter(_program(malformed, nominals=_color_nominals())).run() == {}
-
-
-def test_direct_malformed_literal_payload_binding_rejects_non_enum_subject() -> None:
-    malformed = IrCase(
-        _LOC,
-        IrConstText(_LOC, "x"),
-        (
-            IrCaseArm(
-                IrLiteralCaseKey(IrLiteralKind.TEXT, "x"),
-                (("value", _PAYLOAD),),
-                IrConstInt(_LOC, 1),
-            ),
-        ),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(malformed)).run()
-
-
-def test_direct_literal_key_rejects_invalid_scalar_kind_pair() -> None:
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.BOOL, 1)
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.NUMERIC, True)
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.NULL, "null")
-    assert IrLiteralCaseKey(IrLiteralKind.TEXT, "x").scalar_value == "x"
-    assert IrLiteralCaseKey(IrLiteralKind.NULL, None).scalar_value is None
-    assert IrLiteralCaseKey(IrLiteralKind.BOOL, False).scalar_value is False
-    assert IrConstDecimal(_LOC, decimal.Decimal(1)).value == decimal.Decimal(1)

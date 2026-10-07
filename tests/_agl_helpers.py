@@ -38,6 +38,9 @@ payload without going through source parsing.
 ``derive_schema``/``build_decode_schema`` return one half of
 ``derive_schema_and_decode``, the derivation production runs.
 
+``plan_less_exception_field_encodes`` builds the exception field-encode table a
+hand-built program needs, marking every exception field as having no JSON form.
+
 ``dummy_span`` returns a fixed placeholder ``SourceSpan`` for tests that must
 supply one but don't assert on its content.
 
@@ -69,7 +72,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
-from agm.agl.ir.contracts import DecodePlan
+from agm.agl.ir.contracts import DecodePlan, ExceptionFieldEncode
 from agm.agl.ir.ids import Location, NominalId
 from agm.agl.ir.nodes import IrBind, IrConstInt, IrExpr, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
@@ -144,6 +147,17 @@ def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
 def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
     """Return *typ*'s decode plan."""
     return derive_schema_and_decode(typ, type_table)[1]
+
+
+def plan_less_exception_field_encodes(
+    nominals: Mapping[NominalId, NominalDescriptor],
+) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
+    """The field-encode table of ``nominals``' exceptions, every field without a plan."""
+    return {
+        nominal: tuple(ExceptionFieldEncode(name, name, None) for name in descriptor.fields)
+        for nominal, descriptor in nominals.items()
+        if descriptor.kind is NominalKind.EXCEPTION
+    }
 
 
 def dummy_span() -> SourceSpan:
@@ -290,7 +304,6 @@ def program_config_engine_seeds(
     folds them into ``param_seeds``.
     """
     executable = argument_preflight.executable
-    assert executable is not None
     return {
         key: restamp_engine_setting(
             key[2],
@@ -618,8 +631,8 @@ def option_nominal_descriptors(
             declared_name="Option",
             kind=NominalKind.ENUM,
             variants=(
-                VariantDescriptor("Some", ("value",), some),
-                VariantDescriptor("None", (), none),
+                VariantDescriptor("Some", ("value",), some, "Some", ("value",)),
+                VariantDescriptor("None", (), none, "None", ()),
             ),
         ),
         none: NominalDescriptor(
@@ -636,8 +649,50 @@ def option_nominal_descriptors(
             declared_name="Some",
             kind=NominalKind.RECORD,
             fields=("value",),
+            field_json_names=("value",),
         ),
     }
+
+
+def fieldless_enum_descriptors(
+    enum: NominalId, module_id: ModuleId, name: str, members: dict[str, NominalId]
+) -> dict[NominalId, NominalDescriptor]:
+    """Build an enum of fieldless members and its member-record descriptors for test FFI images."""
+    descriptors = {
+        enum: NominalDescriptor(
+            nominal=enum,
+            module_id=module_id,
+            scope_path=(),
+            declared_name=name,
+            kind=NominalKind.ENUM,
+            variants=tuple(
+                VariantDescriptor(member, (), nominal, member, ())
+                for member, nominal in members.items()
+            ),
+        )
+    }
+    for member, nominal in members.items():
+        descriptors[nominal] = NominalDescriptor(
+            nominal=nominal,
+            module_id=module_id,
+            scope_path=(name,),
+            declared_name=member,
+            kind=NominalKind.RECORD,
+        )
+    return descriptors
+
+
+def key_exception_descriptor(nominal: NominalId, name: str) -> NominalDescriptor:
+    """Build a ``std/errors`` exception descriptor with ``message`` and ``key`` fields."""
+    return NominalDescriptor(
+        nominal=nominal,
+        module_id=ModuleId(("std", "errors")),
+        scope_path=(),
+        declared_name=name,
+        kind=NominalKind.EXCEPTION,
+        fields=("message", "key"),
+        field_json_names=("message", "key"),
+    )
 
 
 def agent_value(variant: str, **fields: str) -> RecordValue:
@@ -836,6 +891,29 @@ def agl_std_package_roots(*paths: Path) -> RootSet:
     from tests._package_helpers import package_info
 
     return package_roots(package_info(REPO_STDLIB_ROOT), cwd=REPO_STDLIB_ROOT, paths=paths)
+
+
+def discover_program_declarations_from_source(
+    source: str,
+    *,
+    inline_source: bool = False,
+    entry_path: Path | None = None,
+    roots: RootSet | None = None,
+    default_stdlib: bool = True,
+) -> tuple[ProgramDeclInfo, ...]:
+    """Discover the ``program def`` declarations of *source*; ``()`` when it has errors.
+
+    *inline_source* applies ``agm exec -c``'s synthetic-main wrapper.
+    """
+    runtime = PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None)
+    if inline_source:
+        parsed = runtime.parse_entry(source, inline_code=True)
+        prepared = runtime.prepare_parsed_entry(parsed, roots=roots, default_stdlib=default_stdlib)
+    else:
+        prepared = runtime.prepare_program(
+            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+        )
+    return runtime.discover_programs(prepared).programs
 
 
 def run_program(

@@ -184,6 +184,16 @@ class TestPrintRecord:
         rec = print_recs[0]
         assert "line" in rec or "span" in rec
 
+    def test_print_record_holds_an_integer_literal_of_any_length(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        _run_inline(
+            PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None),
+            f"print({'9' * 5000} + 1)",
+            trace_file=trace_path,
+        )
+        print_recs = [r for r in _load_jsonl(trace_path) if r.get("kind") == "print"]
+        assert [r.get("rendered") for r in print_recs] == ["1" + "0" * 5000]
+
 
 class TestExecCommandRecord:
     def _exec_record(
@@ -1039,10 +1049,13 @@ class TestRunBoundaryRecords:
                     scope_path=(),
                     declared_name="Shade",
                     kind=NominalKind.ENUM,
-                    variants=(VariantDescriptor("Blue", ("value",), member_id),),
+                    variants=(
+                        VariantDescriptor("Blue", ("value",), member_id, "Blue", ("value",)),
+                    ),
                 )
             },
             functions={},
+            exception_field_encodes={},
         )
 
         def encode(value: object) -> object:
@@ -1058,6 +1071,9 @@ class TestRunBoundaryRecords:
         }
         assert encode(ArrayValue([IntValue(1)])) == [1]
         assert encode(DictValue(entries={"count": IntValue(2)})) == {"count": 2}
+        nontext_dictionary = DictValue()
+        nontext_dictionary.insert(IntValue(7), TextValue("seven"))
+        assert encode(nontext_dictionary) == [{"key": 7, "value": "seven"}]
         assert encode(DecimalValue(Decimal("1.25"))) == "1.25"
         assert encode(BoolValue(True)) is True
 
@@ -1098,7 +1114,7 @@ class TestRunBoundaryRecords:
         array = ArrayValue([])
         array.elements.append(array)
         dictionary = DictValue()
-        dictionary.entries["self"] = dictionary
+        dictionary.insert(TextValue("self"), dictionary)
         record = RecordValue(NominalId(5), {})
         record.fields["self"] = record
         exception = ExceptionValue(NominalId(6), {})
@@ -1793,6 +1809,23 @@ class TestCompanionTraceHook:
         assert rec.get("line") == 2
         assert rec.get("col") == 1
 
+    def test_companion_trace_payload_holds_an_integer_of_any_length(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n    runtime.trace('probe', {'value': 10**5000})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        run_inline_code(
+            PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
+        )
+        probe_recs = [r for r in _load_jsonl(trace_path) if r.get("kind") == "probe"]
+        assert [r.get("value") for r in probe_recs] == [10**5000]
+
     def test_companion_trace_origin_is_the_calling_module_path(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         root = tmp_path / "root"
@@ -1917,9 +1950,13 @@ class TestCompanionTraceHook:
         source = "extern def emit() -> unit\nemit()\n()\n"
         companion = (
             "from agl import runtime\n"
+            "from decimal import Decimal\n"
             "import math\n\n"
             "def emit():\n"
-            "    runtime.trace('probe', {'text': chr(0xD800), 'number': math.nan})\n"
+            "    runtime.trace(\n"
+            "        'probe',\n"
+            "        {'text': chr(0xD800), 'number': math.nan, 'decimal': Decimal('-Infinity')},\n"
+            "    )\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_code(
@@ -1934,6 +1971,34 @@ class TestCompanionTraceHook:
         probe_recs = [record for record in records if record.get("kind") == "probe"]
         assert probe_recs[0]["text"] == "<str has no JSON representation>"
         assert probe_recs[0]["number"] == "<float has no JSON representation>"
+        assert probe_recs[0]["decimal"] == "<Decimal has no JSON representation>"
+
+    def test_companion_trace_nested_non_text_keyed_mapping_uses_entries_form(
+        self, tmp_path: Path
+    ) -> None:
+        """A nested non-str-keyed mapping becomes a ``[{"key": ..., "value": ...}]`` array,
+        not a lossy ``str()``-collapsed object (int ``1`` and text ``"1"`` stay distinct
+        keys); the top-level payload itself stays an ordinary object."""
+        trace_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'nested': {1: 'a', '1': 'b'}})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_code(
+            PipelineDriver(get_sandbox_context=None, resolve_agent_spec=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(trace_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["nested"] == [{"key": 1, "value": "a"}, {"key": "1", "value": "b"}]
 
     def test_companion_trace_direct_call_outside_evaluation_is_a_silent_noop(
         self, tmp_path: Path

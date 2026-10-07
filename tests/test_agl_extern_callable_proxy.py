@@ -24,7 +24,7 @@ from tests.agl.ir_harness import (
     evaluate_ir_with_externs,
 )
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _proxy(window: ExternCallWindow) -> AglCallableProxy:
@@ -34,7 +34,7 @@ def _proxy(window: ExternCallWindow) -> AglCallableProxy:
 
     return AglCallableProxy(
         arity=1,
-        closure=IrClosureValue(FunctionId(1), ()),
+        function=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
     )

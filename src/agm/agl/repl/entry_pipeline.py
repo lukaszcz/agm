@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl.entry import EntryResult
 from agm.core.cleanup import notes_of
@@ -33,9 +33,11 @@ if TYPE_CHECKING:
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.program import ResolvedProgram
+    from agm.agl.scope.symbols import ScopePath
+    from agm.agl.semantics.type_table import TypeDef, TypeTable
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
+    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -44,14 +46,32 @@ if TYPE_CHECKING:
 class LoadedCheckedProgram:
     """Result of :meth:`EntryPipeline.load_and_check_program`."""
 
+    resolved_program: "ResolvedProgram"
     checked_program: "CheckedProgram"
     new_modules: "dict[ModuleId, LoadedModule]"
     module_adjacency: "dict[ModuleId, tuple[ModuleId, ...]]"
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
-    entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
     raw_param_values: "dict[StaticBindingKey, object]"
+    retired_member_scopes: "frozenset[ScopePath]"
+
+
+def _hashability_downgrade(previous: TypeTable, current: TypeTable) -> TypeDef | None:
+    """Find a retained concrete Hashable proof invalidated by a new subtype."""
+    from agm.agl.constraints import ConstraintKind
+    from agm.agl.semantics.type_table import satisfies
+
+    if not any(
+        typedef.kind == "exception" and typedef.decl_node_id not in previous.defs
+        for typedef in current.entries()
+    ):
+        return None
+    for proof in sorted(previous.hashable_proofs, key=repr):
+        typedef = previous.defs[proof.decl_id]
+        if not satisfies(proof, ConstraintKind.HASHABLE, current, {}):
+            return typedef
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -86,11 +106,12 @@ class EntryPipeline:
         retained import/use preamble and cached library modules before
         resolving and type-checking the result.
 
-        Raises the underlying ``AglSyntaxError``/module-loading
-        error/``AglScopeError``/``AglTypeError`` on failure — callers adapt
-        these to their own failure-reporting shape.
+        Raises an ``AglError`` on any source, module-loading, root, or
+        configuration failure — callers adapt it to their own failure-reporting
+        shape.
         """
         from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.recursion import frontend_recursion_boundary
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
@@ -98,35 +119,36 @@ class EntryPipeline:
         entry_program, next_start_id, entry_imports, entry_uses = self._prepare_entry_program(
             pipeline_program, next_start_id, roots
         )
-        graph, new_next_id, new_modules = build_repl_graph(
-            entry_program,
-            next_start_id,
-            path=None,
-            cached=self._ctx._loaded_lib_modules,
-            roots=roots,
-            default_stdlib=self._ctx._default_stdlib,
-            spaced_qualifiers=spaced_qualifiers,
-            session_infix=self._ctx._accumulated_infix,
-        )
-
-        resolved_program = self._resolve_program(graph)
-        checked_program = check_program(
-            resolved_program,
-            host_env.capabilities,
-            entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=self._ctx._retained_checked_modules,
-        )
+        with frontend_recursion_boundary():
+            graph, new_next_id, new_modules = build_repl_graph(
+                entry_program,
+                next_start_id,
+                path=None,
+                cached=self._ctx._loaded_lib_modules,
+                roots=roots,
+                default_stdlib=self._ctx._default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
+            )
+            resolved_program = self._resolve_program(graph)
+            checked_program = check_program(
+                resolved_program,
+                host_env.capabilities,
+                entry_seed_env=self._ctx._type_env,
+                cached_checked_modules=self._ctx._retained_checked_modules,
+                session_builtin_declarations=self._ctx._session_builtin_declarations,
+            )
         self._retain_module_artifacts(resolved_program, checked_program)
         raw_param_values = self._resolve_new_module_params(checked_program, new_modules)
         return LoadedCheckedProgram(
+            resolved_program=resolved_program,
             checked_program=checked_program,
             new_modules=new_modules,
             module_adjacency=graph.adjacency,
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
-            entry_infix_ambient=graph.entry_infix_ambient,
             raw_param_values=raw_param_values,
+            retired_member_scopes=resolved_program.retired_member_scopes,
         )
 
     def _resolve_new_module_params(
@@ -155,6 +177,7 @@ class EntryPipeline:
         host_env: HostEnvironment,
         tab_warnings: list[Diagnostic],
         next_start_id: int,
+        check_only: bool,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> EntryResult:
         """Program pipeline for REPL entries that have imports or cached lib modules.
@@ -163,18 +186,6 @@ class EntryPipeline:
         the full scope/typecheck/match-compilation passes with the session
         context, then lowers and evaluates.
         """
-        from agm.agl.diagnostics import AglError
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            MissingExternCompanion,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
-        from agm.agl.parser import AglSyntaxError
-        from agm.agl.scope import AglScopeError
-        from agm.agl.typecheck import AglTypeError
-
         try:
             loaded = self.load_and_check_program(
                 pipeline_program=pipeline_program,
@@ -182,60 +193,63 @@ class EntryPipeline:
                 next_start_id=next_start_id,
                 spaced_qualifiers=spaced_qualifiers,
             )
-        except AglSyntaxError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except (
-            ModuleNotFound,
-            AmbiguousModule,
-            ModulePrefixNotFound,
-            ImportEntryError,
-            MissingExternCompanion,
-        ) as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except AglScopeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except AglTypeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except AglError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except Exception as exc:
-            return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
+            return self._ctx._fail_static(exc, tab_warnings)
 
+        resolved_program = loaded.resolved_program
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
         module_adjacency = loaded.module_adjacency
         new_next_id = loaded.new_next_id
         entry_imports = loaded.entry_imports
         entry_uses = loaded.entry_uses
-        entry_infix_ambient = loaded.entry_infix_ambient
         raw_param_values = loaded.raw_param_values
+        retired_member_scopes = loaded.retired_member_scopes
         entry_cm = checked_program.modules[checked_program.entry_id]
 
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [*tab_warnings, *checked_program.warnings]
 
+        downgrade = _hashability_downgrade(
+            self._ctx._type_env.type_table, entry_cm.type_env.type_table
+        )
+        if downgrade is not None:
+            message = (
+                f"This entry would make previously Hashable type '{downgrade.name}' non-Hashable."
+            )
+            return self._ctx._fail([Diagnostic(message=message, line=1)], warnings)
+
         from agm.agl.matchcompile import (
             cached_module_sites,
             compile_program_matches,
             diagnostics_from_match_issues,
+            match_issue_error,
         )
 
         match_result = compile_program_matches(
             checked_program, cached_module_sites(self._ctx._last_match_compilation)
         )
         if match_result.compiled is None:
+            # Match compilation reports structured issues, not a raised
+            # ``AglError``; the first (already deterministically ordered)
+            # issue's own real static error stands in for the entry's
+            # failure, while every issue is still reported as a diagnostic.
+            match_diagnostics = list(
+                diagnostics_from_match_issues(match_result.issues, resolved_program.speller)
+            )
             return self._ctx._fail(
-                list(diagnostics_from_match_issues(match_result.issues)), warnings
+                match_diagnostics,
+                warnings,
+                failure=match_issue_error(match_result.issues[0], resolved_program.speller),
             )
         compiled = match_result.compiled
-        from agm.agl.matchcompile import MatchCompiledProgram
-
-        assert isinstance(compiled, MatchCompiledProgram)
         # Retained for the next entry: its library modules are the same checked
         # objects, so their compiled sites carry over on identity alone.
         self._ctx._last_match_compilation = compiled
 
         checked = self._checked_program_from_module(entry_cm)
+        if check_only:
+            return self._ctx._build_check_only_result(orig_program, checked, warnings)
 
         from agm.agl.pipeline import _materialize_program_custom_contract_payloads
 
@@ -244,6 +258,10 @@ class EntryPipeline:
             host_env.codecs,
         )
         if contract_errors:
+            # Contract materialization reports plain diagnostics with no
+            # source span and no originating static error at all: unlike
+            # match compilation, there is no real ``AglError`` to stand in
+            # for ``failure``, which stays ``None``.
             return self._ctx._fail(contract_errors, warnings)
 
         return self._evaluate_ir_program(
@@ -260,9 +278,9 @@ class EntryPipeline:
             module_adjacency=module_adjacency,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
-            entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
             raw_param_values=raw_param_values,
+            retired_member_scopes=retired_member_scopes,
         )
 
     def resolve_and_check_program(
@@ -272,27 +290,29 @@ class EntryPipeline:
         host_env: HostEnvironment,
         *,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
-    ) -> CheckedProgram:
+    ) -> tuple[ResolvedProgram, CheckedProgram]:
         """Prepare, build the module graph, resolve, and typecheck *program*.
 
         Shared by REPL call sites that only need a checked program — no match
         compilation, lowering, or evaluation — such as ``type_of`` and the
-        throwaway std/import type-environment builder. Raises the underlying
+        bare-type-entry fallback. Returns the resolution beside the checked
+        program, which spells a match issue's constructors. Raises the underlying
         ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
-        on failure; callers that need diagnostics instead of a raised exception
-        must catch these themselves.
+        on failure.
         """
         from agm.agl.typecheck.program import check_program
 
         resolved_program = self.resolve_program(
             program, next_start_id, spaced_qualifiers=spaced_qualifiers
         )
-        return check_program(
+        checked_program = check_program(
             resolved_program,
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
             cached_checked_modules=self._ctx._retained_checked_modules,
+            session_builtin_declarations=self._ctx._session_builtin_declarations,
         )
+        return resolved_program, checked_program
 
     def resolve_program(
         self,
@@ -321,7 +341,6 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
-            session_infix=self._ctx._accumulated_infix,
         )
         return self._resolve_program(graph)
 
@@ -351,17 +370,10 @@ class EntryPipeline:
 
         return resolve_program(
             graph,
-            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
-            entry_ambient_type_names=self._ctx._ambient_type_names,
-            entry_ambient_bare_constructor_keys=frozenset(
-                (cname, ref.owner_module_id, ref.owner_decl_node_id)
-                for cname, crefs in self._ctx._ambient_bare_constructor_candidates.items()
-                for ref in crefs
-            ),
-            entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
+            entry_repl_session_fixities=self._ctx._accumulated_infix,
             cached_modules=self._ctx._retained_resolved_modules,
         )
 
@@ -384,7 +396,7 @@ class EntryPipeline:
             partial_calls=entry.partial_calls,
             slot_resolution=entry.slot_resolution,
             slot_constructor_refs=entry.slot_constructor_refs,
-            is_test_constructor_refs=entry.is_test_constructor_refs,
+            selected_constructor_refs=entry.selected_constructor_refs,
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,
             pattern_constructor_owners=entry.pattern_constructor_owners,
@@ -547,9 +559,9 @@ class EntryPipeline:
         module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
         entry_uses: tuple[ImportDecl | ScopeRegion, ...],
-        entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
         raw_param_values: Mapping["StaticBindingKey", object],
+        retired_member_scopes: "frozenset[ScopePath]",
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import (
@@ -596,7 +608,12 @@ class EntryPipeline:
                     source_text=text,
                     contract_payloads=contract_payloads,
                 )
-        except (NestingTooDeepError, ResourceError) as exc:
+        except NestingTooDeepError as exc:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail_static(exc, warnings)
+        except ResourceError as exc:
+            # A plain lowering-time ``ValueError``, not a static ``AglError``:
+            # no ``failure`` to report.
             self._ctx._link_image.restore_state(link_snapshot)
             diagnostic = (
                 diagnostic_from_span(str(exc), exc.span)
@@ -604,6 +621,7 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
+        host_contracts = materialize_ir_contracts(lowered.program, host_env.codecs)
         from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 
         pending_raw_param_values = {
@@ -636,8 +654,7 @@ class EntryPipeline:
             registry=host_env.extern_registry,
             companion_paths=companion_paths,
             packages=self._ctx._ensure_roots().packages,
-            nominals=lowered.program.nominals,
-            functions=lowered.program.functions,
+            descriptors=ValueDescriptors.from_program(lowered.program),
         )
         if extern_diagnostics:
             # A pre-execution rejection: nothing ran and nothing promoted, but
@@ -651,7 +668,6 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        host_contracts, _ = materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path, sources=lowered.program.sources)
         trace.run_start(command="repl", span=orig_program.span)
         if self._ctx._host_settings_policy is not None:
@@ -697,6 +713,7 @@ class EntryPipeline:
                 exc.exc,
                 nominals=lowered.program.nominals,
                 span=exc.span,
+                sources=lowered.program.sources,
                 exception_field_encodes=lowered.program.exception_field_encodes,
                 notes=notes_of(exc),
             )
@@ -712,7 +729,7 @@ class EntryPipeline:
             # entry that reached the interpreter.
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -733,7 +750,7 @@ class EntryPipeline:
             trace.run_end(ok=False)
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -818,14 +835,15 @@ class EntryPipeline:
         ) -> tuple[str, ...]:
             return self._ctx._promote_ir_state(
                 text=text,
-                program=orig_program,
+                program=checked.resolved.program,
                 checked=checked,
                 next_start_id=new_next_id,
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
                 promoted_scope_region_paths=promoted_scope_region_paths,
                 promoted_use_declaration_ids=promoted_use_declaration_ids,
-                infix_ambient=entry_infix_ambient,
+                retired_scopes=retired_member_scopes,
+                entry_module_id=checked_program.entry_id,
             )
 
         def partial_failure(
@@ -866,7 +884,7 @@ class EntryPipeline:
                 ),
             )
             retain_library_state(completed_module_ids)
-            kind, name = self._ctx._classify(orig_program)
+            kind, name = self._ctx._classify(checked.resolved.program)
             return EntryResult(
                 kind=kind,
                 name=name,
@@ -890,6 +908,7 @@ class EntryPipeline:
                 exc.exc,
                 nominals=lowered.program.nominals,
                 span=exc.span,
+                sources=lowered.program.sources,
                 exception_field_encodes=lowered.program.exception_field_encodes,
                 notes=notes_of(exc),
             )
@@ -948,7 +967,7 @@ class EntryPipeline:
             if marker is not None and initializer_values is not None
             else None
         )
-        kind, name = self._ctx._classify(orig_program)
+        kind, name = self._ctx._classify(checked.resolved.program)
         value, value_type = self._ctx._echo_data_ir(orig_program, checked, captured)
         return EntryResult(
             kind=kind,
@@ -1061,14 +1080,12 @@ class EntryPipeline:
             if not decl.wildcard:
                 expanded.append(decl)
                 continue
-            wildcard_origin_node_id = decl.node_id
             for module in expand_wildcard(tuple(decl.module_path), roots, span=decl.span):
                 expanded.append(
                     replace(
                         decl,
                         module_path=module.segments,
                         wildcard=False,
-                        wildcard_origin_node_id=wildcard_origin_node_id,
                         node_id=next_start_id,
                     )
                 )

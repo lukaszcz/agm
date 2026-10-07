@@ -1,0 +1,345 @@
+"""Scope's one selection for a bare or ``::``-anchored type name, in every type position.
+
+A bare type name is the length-zero case of the qualifier decision: the one
+full-path lookup reads it, and scope records the one declaration it selects
+(or rejects it) before typecheck runs.
+Every class here probes one spelling in the type positions -- an annotation,
+an alias target, a type argument, an applied type, a caught exception type and
+an ``extends`` base -- in the file part and every REPL grouping (see
+:mod:`tests.agl.qualifier_support`), asserting the phase, the class and the
+span, or the accepted identity:
+
+- ``::Name`` reads this module's root alone, exactly like the value
+  ``::Name``, and names no member there when the root lacks it;
+- a name several ``use`` declarations at one step contribute is ambiguous in
+  every position (a caught exception and an ``extends`` base in
+  :mod:`tests.test_agl_bare_name_ambiguity`);
+- a scope region spelled like a type never stops its lookup, so a later-step
+  same-spelled type -- imported or this module's own -- is still selected;
+- the type declaration at the first step that finds one is the one every
+  position selects.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
+from agm.agl.typecheck import AglTypeError
+from tests.agl.qualifier_support import (
+    Part,
+    Phase,
+    assert_verdicts,
+    probe_table,
+    verdict_parts,
+)
+
+_ACCEPTED: tuple[Phase, type[BaseException] | type[None]] = ("accepted", type(None))
+
+
+def _rejected(
+    cls: type[BaseException],
+) -> tuple[Phase, type[BaseException] | type[None]]:
+    return ("scope", cls)
+
+
+def _type_probes(spelling: str, applied: str | None = None) -> dict[str, str]:
+    """Probe *spelling* as an annotation, alias target and type argument (and *applied*)."""
+    probes = {
+        "annotation": f"def g(x: {spelling}) -> int = 1",
+        "alias": f"type A = {spelling}",
+        "type-argument": f"def g(x: array[{spelling}]) -> int = 1",
+    }
+    if applied is not None:
+        probes["applied"] = f"def g(x: {applied}) -> int = 1"
+    return probes
+
+
+# ---------------------------------------------------------------------------
+# ``::Name`` reads this module's root alone.
+# ---------------------------------------------------------------------------
+
+_ROOT_HEADER = ("record R\n  x: int",)
+
+
+class TestAnchoredTypeNameReadsTheModuleRoot:
+    """``::Missing`` names no member of this module's root in any position."""
+
+    def test_missing_name_is_unknown_member(self, tmp_path: Path) -> None:
+        probes = {**_type_probes("::Missing", "::Missing[int]"), "value": "::Missing"}
+        assert_verdicts(
+            tmp_path,
+            {},
+            _ROOT_HEADER,
+            probe_table(
+                probes,
+                {key: _rejected(UnknownMemberError) for key in probes},
+                span_texts={key: "::Missing" for key in probes},
+            ),
+        )
+
+    def test_root_type_is_selected(self, tmp_path: Path) -> None:
+        probes = {
+            "annotation": "let v: ::R = R(x = 1)\nv",
+            "alias": "type A = ::R\nlet v: A = R(x = 1)\nv",
+            "type-argument": "let v: array[::R] = [R(x = 1)]\nv[0]",
+            "value": "::R(x = 1)",
+        }
+        assert_verdicts(
+            tmp_path,
+            {},
+            _ROOT_HEADER,
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record R\n  x: int" for key in probes},
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Several ``use`` contributions at one step are ambiguous everywhere.
+# ---------------------------------------------------------------------------
+
+_BOOM_MODULES = {
+    "m/a": "exception Boom extends Exception\n",
+    "m/b": "exception Boom extends Exception\n",
+}
+_BOOM_HEADER = ("import m/a", "import m/b", "use m/a::*", "use m/b::*")
+
+
+class TestAmbiguousBareTypeNameInEveryPosition:
+    """Two ``use`` declarations contributing ``Boom`` leave it ambiguous in every position.
+
+    A caught exception type and an ``extends`` base read the same selection
+    as an annotation (probed in :mod:`tests.test_agl_bare_name_ambiguity`).
+    """
+
+    @pytest.mark.parametrize("part", verdict_parts(5))
+    def test_every_position_is_ambiguous(self, tmp_path: Path, part: Part) -> None:
+        probes = _type_probes("Boom")
+        assert_verdicts(
+            tmp_path,
+            _BOOM_MODULES,
+            _BOOM_HEADER,
+            probe_table(
+                probes,
+                {key: _rejected(AmbiguousQualificationError) for key in probes},
+                span_texts={key: "Boom" for key in probes},
+            ),
+            part=part,
+        )
+
+
+# ---------------------------------------------------------------------------
+# A scope region never stops the lookup.
+# ---------------------------------------------------------------------------
+
+_GEO_MODULES = {
+    "shapes": "scope Geo\n  record Point\n    x: int\nend Geo\n",
+    "tl": "record Geo\n  x: int\n",
+    "tl2": "record Geo\n  z: int\n",
+}
+_GEO_HEADER = ("import tl::*", "import tl2::*", "import shapes")
+
+
+def _in_region(opening: str, item: str) -> str:
+    """Wrap *item* in ``scope r`` after the region's own *opening* lines."""
+    body = "\n".join(f"  {line}" for line in (*opening.split("\n"), *item.split("\n")))
+    return f"scope r\n{body}\nend r"
+
+
+_OWN_POINT_HEADER = ("record Point\n  y: int",)
+_OWN_POINT_REGION = "scope Point\n  record Q\nend Point"
+_BOOM_REGION_MODULES = {
+    "a": "exception Boom extends Exception\n",
+    "b": "scope Boom\n  record Q\nend Boom\n",
+}
+_BOOM_REGION_HEADER = ("import a::*", "import b")
+_LOCAL_REGION_HEADER = ("scope Geo\n  record Q\nend Geo",)
+
+
+class TestScopeRegionNeverStopsABareTypeName:
+    """A scope region spelled like a type never stops the type's lookup, in any position.
+
+    Past a region a ``use`` opens, two root import tails' types stay
+    ambiguous; past an own region, the own root type is selected; past a
+    ``use``-opened region, a root import tail's exception is caught and
+    extended; a region alone names no type, an alias's target rejected where
+    the alias is declared.
+    """
+
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_use_opened_region_beside_import_tails(self, tmp_path: Path, part: Part) -> None:
+        probes = {
+            key: _in_region("use shapes::*", probe) for key, probe in _type_probes("Geo").items()
+        }
+        assert_verdicts(
+            tmp_path,
+            _GEO_MODULES,
+            _GEO_HEADER,
+            probe_table(
+                probes,
+                {key: _rejected(AmbiguousQualificationError) for key in probes},
+                span_texts={key: "Geo" for key in probes},
+            ),
+            part=part,
+        )
+
+    def test_own_region_beside_own_root_type(self, tmp_path: Path) -> None:
+        probes = {
+            "annotation": _in_region(_OWN_POINT_REGION, "let v: Point = Point(y = 1)") + "\nr::v",
+            "alias": _in_region(_OWN_POINT_REGION, "type A = Point\nlet v: A = Point(y = 1)")
+            + "\nr::v",
+            "type-argument": _in_region(_OWN_POINT_REGION, "let v: array[Point] = [Point(y = 1)]")
+            + "\nr::v[0]",
+        }
+        assert_verdicts(
+            tmp_path,
+            {},
+            _OWN_POINT_HEADER,
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record Point\n  y: int" for key in probes},
+            ),
+        )
+
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_use_opened_region_beside_caught_and_base_exception(
+        self, tmp_path: Path, part: Part
+    ) -> None:
+        probes = {
+            "annotation": _in_region("use b::*", "def v() = fn(x: Boom) => 1") + "\nr::v()",
+            "catch": _in_region("use b::*", "def v() = try\n  1\ncatch Boom as e =>\n  2")
+            + "\nr::v()",
+            "extends": _in_region(
+                "use b::*", 'exception Local extends Boom\ndef v() = Local(message = "m") is Boom'
+            )
+            + "\nr::v()",
+        }
+        assert_verdicts(
+            tmp_path,
+            _BOOM_REGION_MODULES,
+            _BOOM_REGION_HEADER,
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"annotation": "a::Boom -> int", "catch": "int", "extends": "bool"},
+            ),
+            part=part,
+        )
+
+    def test_region_alone_is_no_type(self, tmp_path: Path) -> None:
+        probes = _type_probes("Geo", "Geo[int]")
+        assert_verdicts(
+            tmp_path,
+            {},
+            _LOCAL_REGION_HEADER,
+            probe_table(
+                probes,
+                {key: ("scope", AglTypeError) for key in probes},
+                span_texts={
+                    "annotation": "Geo",
+                    "alias": "Geo",
+                    "type-argument": "Geo",
+                    "applied": "Geo[int]",
+                },
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# The first step that finds a type declaration decides.
+# ---------------------------------------------------------------------------
+
+
+class TestFirstStepTypeDeclarationIsSelected:
+    """A type the enclosing region declares wins over same-spelled types at later steps."""
+
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_region_type_over_import_tails(self, tmp_path: Path, part: Part) -> None:
+        region_geo = "record Geo\n  w: int"
+        probes = {
+            "annotation": _in_region(region_geo, "let v: Geo = Geo(w = 1)") + "\nr::v",
+            "alias": _in_region(region_geo, "type A = Geo\nlet v: A = Geo(w = 1)") + "\nr::v",
+            "type-argument": _in_region(region_geo, "let v: array[Geo] = [Geo(w = 1)]")
+            + "\nr::v[0]",
+        }
+        assert_verdicts(
+            tmp_path,
+            _GEO_MODULES,
+            _GEO_HEADER,
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={key: "record r::Geo\n  w: int" for key in probes},
+            ),
+            part=part,
+        )
+
+    @pytest.mark.parametrize("part", verdict_parts(3))
+    def test_imported_exception_is_caught_and_extended(self, tmp_path: Path, part: Part) -> None:
+        probes = {
+            "catch": "try\n  1\ncatch Boom as e =>\n  2",
+            "extends": 'exception Local extends Boom\nLocal(message = "m") is Boom',
+        }
+        assert_verdicts(
+            tmp_path,
+            _BOOM_REGION_MODULES,
+            _BOOM_REGION_HEADER,
+            probe_table(
+                probes,
+                {key: _ACCEPTED for key in probes},
+                identities={"catch": "int", "extends": "bool"},
+            ),
+            part=part,
+        )
+
+
+# ---------------------------------------------------------------------------
+# The selected declaration decides how a type name may be applied.
+# ---------------------------------------------------------------------------
+
+_ARITY_HEADER = (
+    "record Box[T]\n  value: T",
+    "type Wrapper[T] = array[T]",
+    "record Plain\n  x: int",
+)
+
+
+class TestSelectedTypeIsAppliedByItsDeclaration:
+    """A selected type takes exactly its declaration's type arguments, in every position.
+
+    A parameterized alias or generic record needs its arguments, a plain
+    record takes none, and only an exception type can be caught -- whether the
+    declaration is in the same REPL entry or an earlier one.
+    """
+
+    @pytest.mark.parametrize("part", verdict_parts(4))
+    def test_misapplied_selection_is_rejected(self, tmp_path: Path, part: Part) -> None:
+        probes = {
+            "bare-alias": "def g(x: Wrapper) -> int = 1",
+            "alias-arity": "def g(x: Wrapper[int, int]) -> int = 1",
+            "generic-arity": "def g(x: Box[int, int]) -> int = 1",
+            "plain-applied": "def g(x: Plain[int]) -> int = 1",
+            "caught-record": "let _ = try\n  ()\ncatch Plain as e =>\n  ()",
+        }
+        spans = {
+            "bare-alias": "x: Wrapper",
+            "alias-arity": "x: Wrapper[int, int]",
+            "generic-arity": "x: Box[int, int]",
+            "plain-applied": "x: Plain[int]",
+            "caught-record": "catch Plain as e =>\n  ()",
+        }
+        assert_verdicts(
+            tmp_path,
+            {},
+            _ARITY_HEADER,
+            probe_table(
+                probes, {key: ("typecheck", AglTypeError) for key in probes}, span_texts=spans
+            ),
+            part=part,
+        )

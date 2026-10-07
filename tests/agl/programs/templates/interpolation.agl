@@ -15,7 +15,7 @@ program def main(who: text) -> unit =
 
   let a = ask "Hello %{who}, qty %{item.qty}, sum %{1 + 2 * 3}."
   let b = ask "%{who}%{item.qty}"
-  let c = ask "data: %{ {kind: "demo", tags: items as json} }"
+  let c = ask "data: %{ {"kind": "demo", "tags": items as json} }"
   let d = ask """
   Report for %{who}:
   %{item}

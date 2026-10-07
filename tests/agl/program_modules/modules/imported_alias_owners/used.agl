@@ -1,0 +1,4 @@
+import shapes
+use shapes::{Slot as S}
+
+type UX = S[int]

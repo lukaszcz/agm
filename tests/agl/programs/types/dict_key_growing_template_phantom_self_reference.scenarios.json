@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "growing_template_drops_phantom_dict_key_argument_mid_construction",
+      "expect": {"stdout": "{\"$case\": \"Single\", \"value\": {\"p\": {\"y\": 1}}}\n"}
+    }
+  ]
+}

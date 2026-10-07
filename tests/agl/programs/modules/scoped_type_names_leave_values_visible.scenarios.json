@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "first_members_beside_values",
+      "module_roots": [
+        "program_modules/modules/type_names_beside_values"
+      ],
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "1\n101\n10\n3 3\nfalse false false\nlight\n"
+      }
+    },
+    {
+      "name": "second_members_beside_values",
+      "module_roots": [
+        "program_modules/modules/type_names_beside_values"
+      ],
+      "params": {
+        "start": 2
+      },
+      "expect": {
+        "stdout": "2\n102\n20\n4 4\ntrue true true\ndark\n"
+      }
+    }
+  ]
+}

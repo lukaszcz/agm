@@ -1,0 +1,17 @@
+# A dict key self-reference nested inside a PHANTOM type argument never
+# troubles the finite plan builder: canonicalizing `Phantom[dict[K, int]]`'s
+# irrelevant `T` to `unit` before the instantiation graph is built erases the
+# `dict[K, int]` edge entirely, so `K` is never revisited while its own body
+# is mid-construction. Pins that this canonicalization holds for a finite
+# plan (`K` has no polymorphic-recursive wrapper, so it compiles through
+# `_build_finite_encode_plan`) and that the phantom field still encodes.
+
+record Phantom[T]
+  y: int
+
+record K
+  p: Phantom[dict[K, int]]
+
+program def main() -> unit =
+  let k: K = K(p = Phantom(y = 1))
+  print(k as json)

@@ -236,10 +236,9 @@ def _resolve_package_modules(
             path=None,
             cached={},
             roots=roots,
-            preflight_reexport_cycles=True,
         )
         resolved = resolve_program(graph)
-    except (AglError, OSError, UnicodeDecodeError) as exc:
+    except AglError as exc:
         raise DisciplineError(f"cannot resolve package {package.manifest.name!r}: {exc}") from exc
     return PackageResolution(
         package,

@@ -8,8 +8,8 @@ appear in the source.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from agm.agl.syntax.spans import SourceSpan
@@ -95,8 +95,9 @@ class ArrayT:
 
 @dataclass(frozen=True, slots=True)
 class DictT:
-    """A ``dict[text, V]`` type.  Dict keys are always ``text`` in AgL."""
+    """A ``dict[K, V]`` type, well-formed for any key type expression."""
 
+    key: TypeExpr
     value: TypeExpr
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
@@ -142,6 +143,49 @@ TypeExpr = (
 )
 
 
+def named_builtin_type(type_expr: TypeExpr) -> NameT | AppliedT | None:
+    """Return built-in type *type_expr* as the type name it is written with; ``None`` otherwise.
+
+    ``text`` is the name ``text``, ``array[int]`` the name ``array`` applied to
+    ``int``; a function type or a declared type name is no built-in's name.
+    """
+    span, node_id = type_expr.span, type_expr.node_id
+    if isinstance(type_expr, ArrayT):
+        return AppliedT("array", (type_expr.elem,), span, node_id)
+    if isinstance(type_expr, DictT):
+        return AppliedT("dict", (type_expr.key, type_expr.value), span, node_id)
+    if isinstance(type_expr, (TextT, JsonT, BoolT, IntT, DecimalT, UnitT)):
+        return NameT(render_type_expr(type_expr), span, node_id)
+    return None
+
+
+def substitute_type_names(type_expr: TypeExpr, bound: Mapping[str, TypeExpr]) -> TypeExpr:
+    """Return *type_expr* with each unqualified name *bound* maps replaced by its type."""
+    if isinstance(type_expr, NameT):
+        return (
+            type_expr if type_expr.qualifier is not None else bound.get(type_expr.name, type_expr)
+        )
+    if isinstance(type_expr, AppliedT):
+        return replace(
+            type_expr, args=tuple(substitute_type_names(arg, bound) for arg in type_expr.args)
+        )
+    if isinstance(type_expr, ArrayT):
+        return replace(type_expr, elem=substitute_type_names(type_expr.elem, bound))
+    if isinstance(type_expr, DictT):
+        return replace(
+            type_expr,
+            key=substitute_type_names(type_expr.key, bound),
+            value=substitute_type_names(type_expr.value, bound),
+        )
+    if isinstance(type_expr, FuncT):
+        return replace(
+            type_expr,
+            params=tuple(substitute_type_names(param, bound) for param in type_expr.params),
+            result=substitute_type_names(type_expr.result, bound),
+        )
+    return type_expr
+
+
 def member_type_params(
     field_types: Iterable[TypeExpr], enum_params: tuple[str, ...]
 ) -> tuple[str, ...]:
@@ -164,6 +208,7 @@ def member_type_params(
         elif isinstance(expr, ArrayT):
             visit(expr.elem)
         elif isinstance(expr, DictT):
+            visit(expr.key)
             visit(expr.value)
         elif isinstance(expr, FuncT):
             for param in expr.params:
@@ -197,7 +242,8 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
     if isinstance(type_expr, ArrayT):
         return f"array[{render_type_expr(type_expr.elem)}]"
     if isinstance(type_expr, DictT):
-        return f"dict[text, {render_type_expr(type_expr.value)}]"
+        key = render_type_expr(type_expr.key)
+        return f"dict[{key}, {render_type_expr(type_expr.value)}]"
     if isinstance(type_expr, FuncT):
         if not type_expr.params:
             params = "()"
@@ -207,25 +253,31 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
             params = f"({', '.join(render_type_expr(param) for param in type_expr.params)})"
         rendered = f"{params} -> {render_type_expr(type_expr.result)}"
         return f"({rendered})" if parenthesize_function else rendered
-    if isinstance(type_expr, (NameT, AppliedT)):
-        qualifier = type_expr.qualifier
-        prefix = ""
-        if qualifier is not None:
-            anchor = "" if qualifier.anchor is None else qualifier.anchor.value
-            segments = "::".join(
-                segment.name
-                + (
-                    "[" + ", ".join(render_type_expr(arg) for arg in segment.type_args) + "]"
-                    if segment.type_args is not None
-                    else ""
-                )
-                for segment in qualifier.segments
-            )
-            prefix = f"{anchor}{segments}" if not segments else f"{anchor}{segments}::"
-        args = (
-            "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
-            if isinstance(type_expr, AppliedT)
+    args = (
+        "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
+        if isinstance(type_expr, AppliedT)
+        else ""
+    )
+    return render_qualified_name(type_expr.qualifier, type_expr.name) + args
+
+
+def render_qualifier_path(qualifier: QualifierChain) -> str:
+    """Render *qualifier*'s anchor and segments, without its member, as written."""
+    anchor = "" if qualifier.anchor is None else qualifier.anchor.value
+    return anchor + "::".join(
+        segment.name
+        + (
+            "[" + ", ".join(render_type_expr(arg) for arg in segment.type_args) + "]"
+            if segment.type_args is not None
             else ""
         )
-        return f"{prefix}{type_expr.name}{args}"
-    raise AssertionError(f"unexpected type expression: {type_expr!r}")
+        for segment in qualifier.segments
+    )
+
+
+def render_qualified_name(qualifier: QualifierChain | None, name: str) -> str:
+    """Render *name* behind its optional *qualifier* as written."""
+    if qualifier is None:
+        return name
+    path = render_qualifier_path(qualifier)
+    return f"{path}::{name}" if qualifier.segments else f"{path}{name}"

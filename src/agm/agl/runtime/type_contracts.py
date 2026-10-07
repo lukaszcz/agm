@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import NamedTuple, cast
 
-from agm.agl.ir.contracts import ContractRequest, TypeNode, TypeNodeRef, TypeTreeEntry
+from agm.agl.ir.contracts import (
+    TargetContractRequest,
+    TypeNode,
+    TypeNodeRef,
+    TypeTreeEntry,
+)
 from agm.agl.ir.ids import NominalId
 
 
@@ -27,8 +32,8 @@ class TypeContract:
     record, enum, or member (``None`` otherwise); a companion constructs a
     record or member by calling it with declared field names. ``fields`` maps
     JSON names to fields and ``members`` maps JSON tags to member contracts,
-    both in declaration order; ``items``/``values`` are an array's elements and
-    a dict's values. Only the host constructs one.
+    both in declaration order; ``items`` is an array's elements, ``keys``/``values``
+    a dict's keys and values. Only the host constructs one.
     """
 
     __slots__ = (
@@ -39,6 +44,7 @@ class TypeContract:
         "fields",
         "members",
         "items",
+        "keys",
         "values",
         "_fragment",
         "_defs",
@@ -50,6 +56,7 @@ class TypeContract:
     fields: Mapping[str, TypeContractField]
     members: Mapping[str, TypeContract]
     items: TypeContract | None
+    keys: TypeContract | None
     values: TypeContract | None
     _fragment: str
     _defs: str | None
@@ -76,7 +83,7 @@ class TypeContract:
 
 
 def build_type_contract(
-    request: ContractRequest, classes: Mapping[NominalId, type[object]]
+    request: TargetContractRequest, classes: Mapping[NominalId, type[object]]
 ) -> TypeContract:
     """Build *request*'s ``TypeContract`` graph, one object per ``$defs`` key.
 
@@ -86,7 +93,6 @@ def build_type_contract(
     otherwise a distinct object carrying the target's own label.
     """
     tree = request.type_tree
-    assert tree is not None and request.json_schema is not None
     root_defs = _load_object(request.json_schema).get("$defs")
     defs = None if root_defs is None else json.dumps(root_defs)
     bodies = dict(tree.defs)
@@ -117,6 +123,7 @@ def build_type_contract(
             ),
             "members": MappingProxyType({tag: resolve(member) for tag, member in node.members}),
             "items": None if node.items is None else resolve(node.items),
+            "keys": None if node.keys is None else resolve(node.keys),
             "values": None if node.values is None else resolve(node.values),
             "_fragment": node.schema,
             "_defs": defs,

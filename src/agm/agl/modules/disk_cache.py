@@ -31,13 +31,14 @@ def _syntax_classes() -> dict[tuple[str, str], type[object]]:
     global _SYNTAX_CLASSES
     if _SYNTAX_CLASSES is not None:
         return _SYNTAX_CLASSES
+    from agm.agl import constraints
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.syntax import advisories, nodes, spans, types
 
     class_type = cast(type[object], type)
     classes: list[type[object]] = [LoadedModule, ModuleId, type(Path()), Decimal]
-    for module in (advisories, nodes, spans, types):
+    for module in (advisories, nodes, spans, types, constraints):
         for value in cast(dict[str, object], vars(module)).values():
             if isinstance(value, class_type):
                 cls = cast(type[object], value)

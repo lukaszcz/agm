@@ -1,0 +1,1 @@
+def paint(n: int) -> int = n + 100

@@ -1,0 +1,31 @@
+# Every decimal value at runtime is within the pinned context's range. Widening
+# an int too large for that range -- via an explicit `as decimal` cast, `as?`,
+# the implicit widening a `decimal`-typed context applies, or mixed arithmetic
+# -- raises the same catchable ArithmeticError an overflowing operator raises
+# (or, for `as?`, yields `None`), instead of ever producing an out-of-range
+# decimal. `2.pow(3400000)` is real, not a shrunk stand-in: its ~1,023,491
+# digits already exceed the pinned range, and the bit-length range check stays
+# cheap regardless.
+
+program def main() -> unit =
+  let huge = 2.pow(3400000)
+
+  try
+    let d = huge as decimal
+    print "unexpected: %{d}"
+  catch ArithmeticError as e =>
+    print "cast caught: %{e.operation}"
+
+  print "as? result: %{(huge as? decimal).is-none()}"
+
+  try
+    let d: decimal = huge
+    print "unexpected implicit: %{d}"
+  catch ArithmeticError as e =>
+    print "implicit caught: %{e.operation}"
+
+  try
+    let _ = huge + 0.5
+    print "unexpected mixed"
+  catch ArithmeticError as e =>
+    print "mixed caught: %{e.operation}"

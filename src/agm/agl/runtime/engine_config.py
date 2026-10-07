@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
@@ -142,8 +143,8 @@ def restamp_engine_setting(
 def _normalize_option_text_value(value: object) -> str | None:
     """Normalize one raw ``Option[text]`` engine value the way a config-file entry is read.
 
-    A non-blank string passes through verbatim (e.g. ``"30s"``); a positive
-    int/float becomes its string spelling (e.g. ``60`` -> ``"60"``); a blank
+    A non-blank string passes through verbatim (e.g. ``"30s"``); positive
+    numbers become their string spelling (e.g. ``60`` -> ``"60"``); a blank
     string, a non-positive number, or anything else is treated as absent.
     Shared by :func:`raw_option_str` (config-file tables) and
     :func:`validate_manifest_leaf_value` (package manifest ``[config]`` leaves),
@@ -155,7 +156,7 @@ def _normalize_option_text_value(value: object) -> str | None:
         return value if value.strip() else None
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return str(value)
-    if isinstance(value, float) and value > 0:
+    if isinstance(value, (float, Decimal)) and value > 0:
         from agm.core.parse import format_timeout
 
         return format_timeout(value)
@@ -191,17 +192,14 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
     ``builtin var`` initializer supply the latter.  A present value of
     ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
     """
-    from agm.agl.semantics.engine_keys import get_engine_key_type
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
     from agm.agl.semantics.type_table import create_seeded_type_table
 
     type_table = create_seeded_type_table()
-    result: dict[str, Value] = {}
-    for key_name, raw in raw_values.items():
-        key_type = get_engine_key_type(key_name)
-        if key_type is None:
-            raise ValueError(f"unknown engine key: {key_name!r}")
-        result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
-    return result
+    return {
+        key_name: convert_config_value(key_name, raw, ENGINE_KEY_TYPES[key_name], type_table)
+        for key_name, raw in raw_values.items()
+    }
 
 
 def engine_default_settings() -> "dict[str, Value]":
@@ -254,16 +252,15 @@ def convert_host_value(
     string) crosses the canonical JSON boundary, its nested strings read as a
     raw string is. A raw string is read through the shared host-text dispatch
     (:func:`~agm.agl.runtime.value_decode.host_param_text_to_json`): strict
-    JSON first, then one AgL value-syntax literal — no repair of user typos
+    JSON when it decodes into the slot, else one AgL value-syntax literal — no repair of user typos
     either way. *raw* may instead be an
     :class:`~agm.agl.runtime.arguments.OptionSome` box, for an ``Option[T]``
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and
     is wrapped into the enum's ``Some`` shape, exactly as a program's own
-    ``Option[T]`` parameter decodes. Types with no wire schema
-    (unit/function/exception/…) are rejected up front; the builtin ``Agent``
-    enum has an ordinary wire schema, dispatched through its own shorthand
-    and constructor-call reading. *type_table* resolves record/enum
-    field/variant shapes for *type_obj*. An omitted defaulted field (e.g.
+    ``Option[T]`` parameter decodes. *type_obj* is a checked engine-setting
+    type with a wire schema; the builtin ``Agent`` enum's schema is dispatched
+    through its own shorthand and constructor-call reading. *type_table*
+    resolves record/enum field/variant shapes for *type_obj*. An omitted defaulted field (e.g.
     ``Sandbox``'s or an ``Agent`` member's) fills through
     :func:`_reserved_default_resolver`.
     """
@@ -271,10 +268,7 @@ def convert_host_value(
     from agm.agl.runtime.convert import StrictJsonParseError
     from agm.agl.type_schema import build_param_decoder
 
-    try:
-        decoder = build_param_decoder(type_obj, type_table)
-    except TypeError as exc:
-        raise ValueError(f"Setting {name!r} has unsupported type {type_obj!r}.") from exc
+    decoder = build_param_decoder(type_obj, type_table)
     try:
         return decode_param_value(decoder, raw, default_resolver=_reserved_default_resolver)
     except (StrictJsonParseError, ValueError) as exc:
@@ -369,12 +363,12 @@ def validate_manifest_leaf_value(name: str, raw: object, type_table: "TypeTable"
     """:func:`validate_engine_leaf_value` for a manifest ``[config]`` leaf.
 
     An ``Option[text]``-kind key is first normalized by
-    :func:`_normalize_option_text_value`, as a config-file entry is: a positive
-    int/float becomes its string spelling, a blank or non-positive value is absent.
+    :func:`_normalize_option_text_value`, as a config-file entry is: positive
+    numbers become their string spelling, a blank or non-positive value is absent.
     A value of any other type (bool, array, table) is an error, not absence.
     """
     if _ENGINE_KEY_KINDS_BY_NAME.get(name) is EngineKeyKind.OPTION_TEXT:
-        if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        if isinstance(raw, bool) or not isinstance(raw, (str, int, float, Decimal)):
             raise ValueError(f"Setting {name!r}: expected a string or number, got {raw!r}.")
         raw = _normalize_option_text_value(raw)
     return validate_engine_leaf_value(name, raw, type_table)

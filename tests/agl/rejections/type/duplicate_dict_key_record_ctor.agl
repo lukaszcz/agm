@@ -1,0 +1,9 @@
+# Two constructor-application keys are the same constant key when their
+# constructor and field values match, independent of named-argument order.
+record Point
+  x: int
+  y: int
+
+program def main() -> unit =
+  let m = {Point(x = 1, y = 2): "a", Point(y = 2, x = 1): "b"}
+  print m

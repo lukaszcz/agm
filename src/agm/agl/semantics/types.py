@@ -12,7 +12,8 @@ Type hierarchy
 - ``IntType`` — the ``int`` primitive (arbitrary-precision integer).
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ArrayType(elem)`` — ``array[T]``.
-- ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
+- ``DictType(key, value)`` — ``dict[K, V]`` (``K`` must be ``Hashable``, checked
+  where the dict is used, not by the parser).
 - ``RecordType(name, type_args, module_id, decl_id)`` — a ``record`` nominal
   type handle whose identity is ``decl_id``; field shapes live in the shared
   ``TypeTable`` (``semantics.type_table``), keyed by declaration identity.
@@ -51,7 +52,7 @@ import enum as _enum
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from itertools import count
-from typing import TypeGuard, assert_never
+from typing import TypeGuard, assert_never, overload
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
@@ -143,8 +144,9 @@ class ArrayType:
 
 @dataclass(frozen=True, slots=True)
 class DictType:
-    """``dict[text, V]`` — string-keyed dict."""
+    """``dict[K, V]``, well-formed for any key type; hashing operations require ``Hashable K``."""
 
+    key: Type
     value: Type
 
     @property
@@ -152,7 +154,7 @@ class DictType:
         return "dict"
 
     def __repr__(self) -> str:
-        return f"dict[text, {self.value!r}]"
+        return f"dict[{self.key!r}, {self.value!r}]"
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +348,12 @@ class BottomType:
         return "bottom"
 
 
+#: Prefix of the private rigid name a receiver-prefix ``_`` wildcard slot is
+#: renamed to (see ``typecheck.function_inference._method_type_parameter_name``);
+#: :meth:`TypeVarType.__repr__` renders any such name back as ``_``.
+METHOD_TYPE_SLOT_PREFIX = "__method_type_slot_"
+
+
 @dataclass(frozen=True, slots=True)
 class TypeVarType:
     """A rigid type variable bound by an enclosing generic declaration.
@@ -360,8 +368,8 @@ class TypeVarType:
       convertible to ``json``: a cast is compiled once with type arguments
       erased, so the conversion could not know what the variable stands for
       (``semantics.type_table.is_json_convertible``).
-    - Not comparable (``semantics.type_table.comparable_types`` returns
-      ``False`` for either side).
+    - Comparable (``semantics.type_table.comparable_types``) only when the
+      declaration's constraint block bounds this name ``Eq`` or ``Hashable``.
     - Assignable only to an identical ``TypeVarType`` (same name); ``json``
       does NOT absorb it; ``BottomType`` is still assignable to it.
     """
@@ -373,7 +381,7 @@ class TypeVarType:
         return "typevar"
 
     def __repr__(self) -> str:
-        return self.name
+        return "_" if self.name.startswith(METHOD_TYPE_SLOT_PREFIX) else self.name
 
 
 _inference_var_ids = count()
@@ -418,6 +426,24 @@ Type = (
     | InferenceVarType
 )
 
+# A checked program's semantic type: checking solves every inference variable away.
+CheckedType = (
+    TextType
+    | JsonType
+    | BoolType
+    | IntType
+    | DecimalType
+    | ArrayType
+    | DictType
+    | RecordType
+    | EnumType
+    | ExceptionType
+    | UnitType
+    | FunctionType
+    | BottomType
+    | TypeVarType
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TypeTemplate:
@@ -425,10 +451,6 @@ class TypeTemplate:
 
     template: Type
     type_params: tuple[str, ...] = ()
-
-    def match(self, concrete: Type) -> TypeTemplateMatch | None:
-        """Match this template exactly against one concrete semantic type."""
-        return match_type_template(self.template, concrete, self.type_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +464,8 @@ def match_type_template(
     template: Type,
     concrete: Type,
     type_params: tuple[str, ...],
+    *,
+    wildcard_inference_vars: bool = False,
 ) -> TypeTemplateMatch | None:
     """Match ``template`` exactly against ``concrete`` from one side.
 
@@ -450,6 +474,16 @@ def match_type_template(
     and every declared parameter must be inferred. The result is immutable
     and ordered like ``type_params`` so alias argument reordering and fixed
     subterms require no caller-specific logic.
+
+    ``wildcard_inference_vars`` is for SELECTION only (e.g.
+    ``TypeTable.method_candidates``): a still-uninferred position anywhere in
+    ``concrete`` (an ``InferenceVarType``, as an empty ``{}``/``[]`` literal
+    has before its element/key/value types are solved) is then compatible
+    with any template position, so a candidate is not spuriously ruled out
+    before inference has run. The returned bindings are then only a
+    compatibility witness, not final — the caller that goes on to specialize
+    the match must re-derive real bindings through unification instead of
+    trusting them.
     """
     parameters = frozenset(type_params)
     inferred: dict[str, Type] = {}
@@ -473,10 +507,16 @@ def match_type_template(
                 inferred[pattern.name] = actual
                 return True
             return previous == actual
+        if wildcard_inference_vars and isinstance(actual, InferenceVarType):
+            return True
         if isinstance(pattern, ArrayType):
             return isinstance(actual, ArrayType) and visit(pattern.elem, actual.elem)
         if isinstance(pattern, DictType):
-            return isinstance(actual, DictType) and visit(pattern.value, actual.value)
+            return (
+                isinstance(actual, DictType)
+                and visit(pattern.key, actual.key)
+                and visit(pattern.value, actual.value)
+            )
         if isinstance(pattern, FunctionType):
             return (
                 isinstance(actual, FunctionType)
@@ -498,73 +538,6 @@ def match_type_template(
     if not visit(template, concrete) or any(parameter not in inferred for parameter in type_params):
         return None
     return TypeTemplateMatch(tuple((parameter, inferred[parameter]) for parameter in type_params))
-
-
-class EnumOwnerFormKind(_enum.Enum):
-    """Checked source forms capable of owning an enum constructor spelling."""
-
-    LOCAL = "local"
-    SELF = "self"
-    OPEN_IMPORT = "open_import"
-    QUALIFIED_IMPORT = "qualified_import"
-
-
-@dataclass(frozen=True, slots=True)
-class EnumOwnerForm:
-    """One immutable checked enum-owner source form.
-
-    Source identity and template metadata are excluded from display equality;
-    they retain the checked resolution needed to validate a concrete enum
-    without reinterpreting import syntax downstream. This type describes only
-    an owner spelling; which variants a module route makes ambiguous under
-    that spelling is variant-level data carried alongside forms, not on them.
-    """
-
-    owner_name: str | None
-    module_qualifier: tuple[str, ...] | None
-    bare: bool = False
-    qualifier_anchored: bool = False
-    kind: EnumOwnerFormKind | None = field(default=None, compare=False)
-    source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
-    source_name: str | None = field(default=None, compare=False, repr=False)
-    type_template: TypeTemplate | None = field(default=None, compare=False, repr=False)
-
-    def __post_init__(self) -> None:
-        if self.owner_name is None and self.module_qualifier is not None:
-            raise ValueError("a bare constructor spelling cannot have a module qualifier")
-        if self.bare and self.owner_name is not None:
-            raise ValueError("a type-qualified constructor spelling cannot be bare")
-        if self.owner_name is None:
-            return
-        kind = self.kind
-        if kind is None:
-            if self.module_qualifier is None:
-                kind = EnumOwnerFormKind.LOCAL
-            elif self.module_qualifier:
-                kind = EnumOwnerFormKind.QUALIFIED_IMPORT
-            else:
-                kind = EnumOwnerFormKind.SELF
-            object.__setattr__(self, "kind", kind)
-        if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
-            if self.module_qualifier is not None:
-                raise ValueError("an unqualified enum owner form cannot have an import handle")
-        elif kind is EnumOwnerFormKind.SELF:
-            if self.module_qualifier != ():
-                raise ValueError("a self-qualified enum owner form requires an empty qualifier")
-        elif not self.module_qualifier:
-            raise ValueError("a qualified-import enum owner form requires an import handle")
-        if self.qualifier_anchored and not self.module_qualifier:
-            raise ValueError("only a non-empty module qualifier can be anchored")
-
-    def match(self, concrete: Type) -> TypeTemplateMatch | None:
-        """Match this checked owner form against one concrete semantic type.
-
-        Enum-owner aliases may carry phantom parameters, which cannot be
-        inferred from a scrutinee but do not affect the enum they denote.
-        """
-        if self.type_template is None:
-            return None
-        return match_nominal_owner_template(self.type_template, concrete)
 
 
 def match_nominal_owner_template(
@@ -597,8 +570,8 @@ def type_children(t: Type) -> tuple[Type, ...]:
     match t:
         case ArrayType(elem=elem):
             return (elem,)
-        case DictType(value=value):
-            return (value,)
+        case DictType(key=key, value=value):
+            return (key, value)
         case FunctionType(params=params, result=result):
             return (*params, result)
         case RecordType(type_args=type_args) | EnumType(type_args=type_args):
@@ -640,7 +613,7 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
         case ArrayType():
             return ArrayType(children[0])
         case DictType():
-            return DictType(children[0])
+            return DictType(children[0], children[1])
         case FunctionType(params=params):
             return FunctionType(params=children[: len(params)], result=children[-1])
         case RecordType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
@@ -801,8 +774,10 @@ def is_json_shaped(value_type: Type) -> bool:
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``array``/``dict`` whose element/value types are themselves JSON-shaped.
-    Records, enums, and exceptions are **not** JSON-shaped — explicitly cast
-    one with ``as json`` to convert it to its structural JSON representation.
+    A ``dict`` is JSON-shaped only when its key is ``text`` — a native JSON
+    object slot has no other key representation. Records, enums, and
+    exceptions are **not** JSON-shaped — explicitly cast one with ``as json``
+    to convert it to its structural JSON representation.
 
     AgL: ``UnitType`` and ``FunctionType`` are also NOT
     JSON-shaped; function values render only as opaque handles.
@@ -820,7 +795,7 @@ def is_json_shaped(value_type: Type) -> bool:
     if isinstance(value_type, ArrayType):
         return is_json_shaped(value_type.elem)
     if isinstance(value_type, DictType):
-        return is_json_shaped(value_type.value)
+        return isinstance(value_type.key, TextType) and is_json_shaped(value_type.value)
     if isinstance(value_type, InferenceVarType):
         return False
     # RecordType, EnumType, ExceptionType, UnitType, FunctionType,
@@ -875,8 +850,24 @@ def free_type_vars(t: Type) -> frozenset[str]:
     return frozenset(node.name for node in iter_type(t) if isinstance(node, TypeVarType))
 
 
+@overload
+def substitute(t: FunctionType, subst: Mapping[str, Type]) -> FunctionType: ...
+
+
+@overload
+def substitute(t: RecordType, subst: Mapping[str, Type]) -> RecordType: ...
+
+
+@overload
+def substitute(t: Type, subst: Mapping[str, Type]) -> Type: ...
+
+
 def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
-    """Capture-free substitution of rigid ``TypeVarType`` names only."""
+    """Capture-free substitution of rigid ``TypeVarType`` names only.
+
+    Only a type variable is replaced wholesale, so a function stays a function
+    and a record stays a record.
+    """
 
     def replace_rigid(node: Type) -> Type:
         if isinstance(node, TypeVarType):
@@ -937,6 +928,7 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         "MatchError",
         "IndexError",
         "KeyError",
+        "DuplicateKeyError",
         "TypeError",
         "ArithmeticError",
         # Statically prevented by scope/typecheck (assignment to immutable bindings
@@ -1119,7 +1111,7 @@ HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
     _reserved_id(name) for name in HOST_MINTED_PRELUDE_TYPE_NAMES
 )
 
-BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
+BUILTIN_PRELUDE_TYPES: dict[str, RecordType | EnumType | ExceptionType] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "Agent": _AGENT_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
@@ -1142,6 +1134,18 @@ PATH_TYPE_NAME = "path"
 # Every ``builtin type`` alias the host knows, with the target it must declare.
 # A name no declaration reaches still resolves to its target.
 BUILTIN_ALIAS_TARGETS: Mapping[str, Type] = {PATH_TYPE_NAME: TextType()}
+
+#: Every built-in name a module's type namespace carries a reserved fallback
+#: binding for, whether or not any source declares it.
+BUILTIN_FALLBACK_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS) | (
+    BUILTIN_PRELUDE_TYPE_NAMES
+)
+
+
+def is_builtin_type_name(name: str) -> bool:
+    """Whether bare *name* names a built-in type when no declaration is selected for it."""
+    return name in BUILTIN_FALLBACK_TYPE_NAMES or name in BUILTIN_ALIAS_TARGETS
+
 
 # Every bare name the host recognizes as a built-in exception or prelude
 # record/enum — used by ``spells_bare`` to recognize a standard-library

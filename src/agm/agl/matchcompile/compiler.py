@@ -6,23 +6,19 @@ from dataclasses import dataclass, field
 from typing import TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind, EnumType
 
 from .diagnostics import (
     BoolWitness,
-    EnumWitness,
-    EnumWitnessQualification,
+    ConstructorWitness,
     LiteralWitness,
     MatchIssue,
     MatchWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
-    RecordWitness,
     RedundantArmIssue,
     WildcardWitness,
     WitnessField,
     issue_sort_key,
-    qualified_owner_name,
 )
 from .matrix import (
     OccurrenceAllocator,
@@ -49,10 +45,8 @@ from .model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LiteralConstructor,
-    MatchCaseContext,
     MatchSiteSource,
     MatrixRow,
     NominalConstructor,
@@ -105,25 +99,12 @@ _Constraint: TypeAlias = _ConstructorConstraint | _OpenConstraint
 _Constraints: TypeAlias = tuple[tuple[OccurrenceId, _Constraint], ...]
 
 
-def _constructor_index(constructor: Constructor, signature: ClosedSignature) -> int:
-    index = signature.index_of(constructor)
-    if index is None:
-        raise MatchCompileInvariantError(
-            "observed constructor is absent from its occurrence's closed signature"
-        )
-    return index
-
-
 def _ordered_heads(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     observed = head_constructors(matrix, column)
     signature = signature_for_type(matrix.occurrences[column].type, matrix.type_table)
     if isinstance(signature, OpenSignature):
         return observed
-
-    def constructor_index(constructor: Constructor) -> int:
-        return _constructor_index(constructor, signature)
-
-    return tuple(sorted(observed, key=constructor_index))
+    return tuple(sorted(observed, key=signature.index_of))
 
 
 def _signature_is_complete(observed: tuple[Constructor, ...], signature: ClosedSignature) -> bool:
@@ -136,20 +117,10 @@ def _signature_is_complete(observed: tuple[Constructor, ...], signature: ClosedS
 def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssignment, ...]:
     assignments = list(row.binder_assignments)
     for cell, occurrence in zip(row.cells, matrix.occurrences, strict=True):
-        if not isinstance(cell, WildcardCell):
-            raise MatchCompileInvariantError("leaf finalization requires an irrefutable first row")
-        assignments.extend(BinderAssignment(occurrence.id, binder) for binder in cell.binders)
+        binders = cast(WildcardCell, cell).binders
+        assignments.extend(BinderAssignment(occurrence.id, binder) for binder in binders)
 
     available = {occurrence.id: occurrence for occurrence in matrix.available_occurrences}
-    binder_ids: set[int] = set()
-    for assignment in assignments:
-        if assignment.occurrence not in available:
-            raise MatchCompileInvariantError(
-                f"leaf binder refers to unavailable occurrence {assignment.occurrence.value}"
-            )
-        if assignment.binder.node_id in binder_ids:
-            raise MatchCompileInvariantError("leaf assigns the same source binder more than once")
-        binder_ids.add(assignment.binder.node_id)
 
     def assignment_key(item: BinderAssignment) -> tuple[int, int, int]:
         return _binder_assignment_sort_key(item, available)
@@ -167,8 +138,6 @@ def _decompose_free_occurrences(
     required = {occurrence.id}
     required.update(set(child.free_occurrences) - {field.id for field in children})
     by_id = index.by_id
-    if any(identifier not in by_id for identifier in required):
-        raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
 
     def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
         return _occurrence_sort_key(by_id[identifier])
@@ -204,8 +173,6 @@ def _switch_free_occurrences(
     if default is not None:
         required.update(default.free_occurrences)
     by_id = index.by_id
-    if any(identifier not in by_id for identifier in required):
-        raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
 
     def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
         return _occurrence_sort_key(by_id[identifier])
@@ -336,21 +303,13 @@ def _default_constraint(decision: DecisionSwitch, type_table: TypeTable) -> _Con
     signature = signature_for_type(decision.occurrence.type, type_table)
     observed = tuple(branch.constructor for branch in decision.keyed_children)
     if isinstance(signature, ClosedSignature):
+        # A switch over a closed signature has a default only when it is incomplete.
         missing = next(
-            (constructor for constructor in signature.constructors if constructor not in observed),
-            None,
+            constructor for constructor in signature.constructors if constructor not in observed
         )
-        if missing is None:
-            raise MatchCompileInvariantError("complete closed switch unexpectedly has a default")
         return _ConstructorConstraint(missing)
-    excluded: list[LiteralConstructor] = []
-    for constructor in observed:
-        if not isinstance(constructor, LiteralConstructor):
-            raise MatchCompileInvariantError(
-                "an open-domain switch contains a non-literal constructor"
-            )
-        excluded.append(constructor)
-    return _OpenConstraint(tuple(excluded))
+    # An open domain's switch keys are literals.
+    return _OpenConstraint(cast(tuple[LiteralConstructor, ...], observed))
 
 
 def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constraints | None:
@@ -360,12 +319,9 @@ def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constr
     paths are exponential in its node count still costs one visit per node.
     """
     memo: dict[int, _Constraints | None] = {}
-    active: set[int] = set()
 
     def visit(decision: Decision) -> _Constraints | None:
         identifier = id(decision)
-        if identifier in active:
-            raise MatchCompileInvariantError("decision graph contains a cycle")
         if identifier in memo:
             return memo[identifier]
         if isinstance(decision, DecisionFail):
@@ -375,63 +331,47 @@ def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constr
             memo[identifier] = None
             return None
         if isinstance(decision, DecisionDecompose):
-            active.add(identifier)
-            try:
-                suffix = visit(decision.child)
-                if suffix is None:
-                    memo[identifier] = None
-                    return None
-                if any(occurrence_id == decision.occurrence.id for occurrence_id, _ in suffix):
-                    raise MatchCompileInvariantError(
-                        "a failure path processes an occurrence more than once"
-                    )
-                result = (
-                    (decision.occurrence.id, _ConstructorConstraint(decision.constructor)),
-                    *suffix,
-                )
-                memo[identifier] = result
-                return result
-            finally:
-                active.remove(identifier)
-        active.add(identifier)
-        try:
-            signature = signature_for_type(decision.occurrence.type, type_table)
-            edges: list[tuple[int, Decision, _Constraint]] = []
-            for branch_index, branch in enumerate(decision.keyed_children):
-                order = (
-                    _constructor_index(branch.constructor, signature)
-                    if isinstance(signature, ClosedSignature)
-                    else branch_index
-                )
-                edges.append((order, branch.decision, _ConstructorConstraint(branch.constructor)))
-            if decision.default is not None:
-                constraint = _default_constraint(decision, type_table)
-                order = (
-                    _constructor_index(constraint.constructor, signature)
-                    if isinstance(signature, ClosedSignature)
-                    and isinstance(constraint, _ConstructorConstraint)
-                    else len(edges)
-                )
-                edges.append((order, decision.default, constraint))
+            suffix = visit(decision.child)
+            if suffix is None:
+                memo[identifier] = None
+                return None
+            result = (
+                (decision.occurrence.id, _ConstructorConstraint(decision.constructor)),
+                *suffix,
+            )
+            memo[identifier] = result
+            return result
+        signature = signature_for_type(decision.occurrence.type, type_table)
+        edges: list[tuple[int, Decision, _Constraint]] = []
+        for branch_index, branch in enumerate(decision.keyed_children):
+            order = (
+                signature.index_of(branch.constructor)
+                if isinstance(signature, ClosedSignature)
+                else branch_index
+            )
+            edges.append((order, branch.decision, _ConstructorConstraint(branch.constructor)))
+        if decision.default is not None:
+            constraint = _default_constraint(decision, type_table)
+            order = (
+                signature.index_of(constraint.constructor)
+                if isinstance(signature, ClosedSignature)
+                and isinstance(constraint, _ConstructorConstraint)
+                else len(edges)
+            )
+            edges.append((order, decision.default, constraint))
 
-            def edge_order(edge: tuple[int, Decision, _Constraint]) -> int:
-                return edge[0]
+        def edge_order(edge: tuple[int, Decision, _Constraint]) -> int:
+            return edge[0]
 
-            for _, child, constraint in sorted(edges, key=edge_order):
-                suffix = visit(child)
-                if suffix is None:
-                    continue
-                if any(occurrence_id == decision.occurrence.id for occurrence_id, _ in suffix):
-                    raise MatchCompileInvariantError(
-                        "a failure path tests an occurrence more than once"
-                    )
-                result = ((decision.occurrence.id, constraint), *suffix)
-                memo[identifier] = result
-                return result
-            memo[identifier] = None
-            return None
-        finally:
-            active.remove(identifier)
+        for _, child, constraint in sorted(edges, key=edge_order):
+            suffix = visit(child)
+            if suffix is None:
+                continue
+            result = ((decision.occurrence.id, constraint), *suffix)
+            memo[identifier] = result
+            return result
+        memo[identifier] = None
+        return None
 
     return visit(root)
 
@@ -440,7 +380,8 @@ def _witness_for_occurrence(
     occurrence: Occurrence,
     constraints: dict[OccurrenceId, _Constraint],
     occurrences: tuple[Occurrence, ...],
-    case_context: MatchCaseContext,
+    type_table: TypeTable,
+    site_node_id: int,
 ) -> MatchWitness:
     constraint = constraints.get(occurrence.id)
     if constraint is None:
@@ -452,9 +393,6 @@ def _witness_for_occurrence(
         return BoolWitness(constructor.value)
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
-    spelling = _source_spelling(constructor, occurrence.type, case_context)
-    if isinstance(occurrence.type, EnumType) and spelling.owner_name is None and not spelling.bare:
-        return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
         for child in occurrences
@@ -466,84 +404,16 @@ def _witness_for_occurrence(
         WitnessField(
             field.name,
             _witness_for_occurrence(
-                children_by_index[index], constraints, occurrences, case_context
+                children_by_index[index], constraints, occurrences, type_table, site_node_id
             )
             if index in children_by_index
             else WildcardWitness(),
         )
         for index, field in enumerate(constructor.fields)
     )
-    if spelling.bare or spelling.owner_name is None:
-        qualification = None
-    else:
-        qualification = EnumWitnessQualification(
-            owner_name=spelling.owner_name,
-            module_qualifier=spelling.module_qualifier,
-            qualifier_anchored=spelling.qualifier_anchored,
-        )
-    if isinstance(occurrence.type, EnumType):
-        return EnumWitness(
-            occurrence.type,
-            constructor.record_type.name,
-            fields,
-            qualification,
-        )
-    return RecordWitness(constructor.record_type, fields, qualification)
-
-
-def _short_spelling_blocked(
-    form: EnumOwnerForm, variant: str, case_context: MatchCaseContext
-) -> bool:
-    """Return whether a module route makes *form*'s short spelling ambiguous for *variant*.
-
-    Only a ``LOCAL``/``OPEN_IMPORT`` form spells its owner bare as
-    ``owner_name`` -- the same qualifier a same-named module route competes
-    for -- so only those kinds consult ``blocked_enum_variants``.
-    """
-    if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
-        return False
-    return variant in case_context.blocked_enum_variants.get((form.owner_name or "",), frozenset())
-
-
-def _source_spelling(
-    constructor: NominalConstructor, subject_type: object, case_context: MatchCaseContext
-) -> EnumConstructorSpelling:
-    """Select the shortest valid source owner for a concrete nominal constructor."""
-    nominal_type = subject_type if isinstance(subject_type, EnumType) else constructor.record_type
-    variant = constructor.record_type.name
-    if isinstance(subject_type, EnumType):
-        declaration_identity = (subject_type.module_id, subject_type.name, variant)
-        if declaration_identity in case_context.bare_enum_constructors:
-            return EnumConstructorSpelling(None, None, bare=True)
-
-    matches = tuple(
-        form
-        for form in case_context.enum_owner_forms
-        if form.match(nominal_type) is not None
-        and (
-            not isinstance(subject_type, EnumType)
-            or not _short_spelling_blocked(form, variant, case_context)
-        )
-    )
-    if not matches:
-        return EnumConstructorSpelling(None, None)
-
-    def candidate_key(
-        candidate: EnumOwnerForm,
-    ) -> tuple[int, str, bool]:
-        assert candidate.owner_name is not None
-        text = qualified_owner_name(
-            candidate.owner_name,
-            candidate.module_qualifier,
-            anchored=candidate.qualifier_anchored,
-        )
-        return (
-            len(text),
-            text,
-            candidate.kind is not EnumOwnerFormKind.LOCAL,
-        )
-
-    return min(matches, key=candidate_key)
+    record_type = constructor.record_type
+    identity = (record_type.module_id, record_type.scope_path, record_type.name)
+    return ConstructorWitness(identity, site_node_id, fields)
 
 
 def _witness_for_root(
@@ -551,10 +421,10 @@ def _witness_for_root(
     constraints: dict[OccurrenceId, _Constraint],
     occurrences: tuple[Occurrence, ...],
     type_table: TypeTable,
-    case_context: MatchCaseContext,
+    site_node_id: int,
 ) -> MatchWitness:
     if root.id in constraints:
-        return _witness_for_occurrence(root, constraints, occurrences, case_context)
+        return _witness_for_occurrence(root, constraints, occurrences, type_table, site_node_id)
     signature = signature_for_type(root.type, type_table)
     whole_domain: _Constraint
     if isinstance(signature, OpenSignature):
@@ -565,7 +435,8 @@ def _witness_for_root(
         root,
         {**constraints, root.id: whole_domain},
         occurrences,
-        case_context,
+        type_table,
+        site_node_id,
     )
 
 
@@ -617,9 +488,16 @@ def _issues(
             dict(constraints),
             occurrences,
             normalized.type_table,
-            normalized.case_context,
+            normalized.site_node_id,
         )
-        issues.append(NonExhaustiveIssue(normalized.site_node_id, normalized.span, witness))
+        issues.append(
+            NonExhaustiveIssue(
+                normalized.site_node_id,
+                normalized.span,
+                witness,
+                normalized.case_context.module_id,
+            )
+        )
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
 
 
@@ -807,8 +685,7 @@ def _validate_occurrence_ledger(
 
     complete_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]] = {}
     for key, indexed_children in groups.items():
-        constructor = key[1]
-        assert isinstance(constructor, NominalConstructor)
+        constructor = cast(NominalConstructor, key[1])
         expected_indices = set(range(constructor.arity))
         if set(indexed_children) != expected_indices:
             raise MatchCompileInvariantError(
@@ -829,7 +706,6 @@ def _canonical_switch_constructor(
         )
     signature = signature_for_type(occurrence.type, type_table)
     if isinstance(signature, OpenSignature):
-        assert isinstance(constructor, LiteralConstructor)
         return constructor
     canonical = next(
         (candidate for candidate in signature.constructors if candidate == constructor),
@@ -1220,10 +1096,9 @@ def _validate_semantic_replay(compiled: CompiledMatchSite) -> None:
                 specialized.allocator,
             )
         if needs_default:
-            assert decision.default is not None
             current_allocator = replay(
                 default_matrix(matrix, selection.index),
-                decision.default,
+                cast(Decision, decision.default),
                 current_allocator,
             )
         return current_allocator

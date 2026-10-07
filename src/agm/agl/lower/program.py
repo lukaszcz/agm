@@ -23,7 +23,6 @@ from agm.agl.ir.program import (
     NominalKind,
     SourceFile,
     SymbolDescriptor,
-    VariantDescriptor,
 )
 from agm.agl.ir.static_keys import StaticBindingKey, static_binding_key
 from agm.agl.ir.validate import validate_ir
@@ -36,13 +35,11 @@ from agm.agl.lower.lowerer import (
     reserved_fallback_superseded,
     reserved_field_defaults,
 )
-from agm.agl.lower.nominal_descriptors import exception_descriptor
+from agm.agl.lower.nominal_descriptors import nominal_descriptor
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.arguments import positional_field_names
-from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     FuncDef,
@@ -50,7 +47,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.type_schema import build_exception_field_encodes, build_param_decoder
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.agl.typecheck.program import program_funcdefs
 from agm.util.text import normalize_newlines
@@ -70,36 +67,6 @@ def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
     return reserved_fallback_superseded(owner_name, type_table)
 
 
-def _record_descriptor(
-    typedef: TypeDef,
-    handle: RecordType,
-    type_table: TypeTable,
-    *,
-    bears_name_path: bool,
-    field_defaults: Mapping[NominalId, tuple[IrExpr | None, ...]],
-) -> NominalDescriptor:
-    """Build one record descriptor from its authoritative declaration.
-
-    *field_defaults* maps a declaration's own identity to its lowered
-    per-field defaults (see ``_LinkState.field_defaults``); a declaration
-    absent from it declares no defaulted field.
-    """
-    nominal = NominalId(typedef.decl_node_id)
-    return NominalDescriptor(
-        nominal=nominal,
-        module_id=typedef.module_id,
-        scope_path=typedef.scope_path,
-        declared_name=typedef.name,
-        kind=NominalKind.RECORD,
-        fields=tuple(name for name, _ in typedef.fields),
-        mutable_fields=typedef.mutable_fields,
-        variants=(),
-        positional_fields=positional_field_names(type_table.field_kinds(handle)),
-        field_defaults=field_defaults.get(nominal, ()),
-        bears_name_path=bears_name_path,
-    )
-
-
 def _descriptor_for_skipped_identity(
     nominal: NominalId,
     type_table: TypeTable,
@@ -112,16 +79,13 @@ def _descriptor_for_skipped_identity(
     from the main declaration pass, but still needed for IR identity and
     validation, so it is added here with ``bears_name_path=False``.
     """
-    typedef = type_table.get_by_id(nominal.value)
-    assert typedef is not None
-    handle = typedef.handle()
-    if isinstance(handle, RecordType):
-        return _record_descriptor(
-            typedef, handle, type_table, bears_name_path=False, field_defaults=field_defaults
-        )
-    assert isinstance(handle, ExceptionType)
-    return exception_descriptor(
-        typedef, handle, type_table, bears_name_path=False, field_defaults=field_defaults
+    typedef = type_table.typedef_of(nominal.value)
+    return nominal_descriptor(
+        typedef,
+        typedef.handle(),
+        type_table,
+        bears_name_path=False,
+        field_defaults=field_defaults,
     )
 
 
@@ -173,36 +137,21 @@ def _add_missing_exception_base_descriptors(
         pending.append(descriptor.base)
 
 
-def _exception_field_encodes(
+def _add_exception_field_encodes(
+    encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]],
+    nominals: Mapping[NominalId, NominalDescriptor],
     type_table: TypeTable,
-) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
-    """Compile reporting provenance for every exception field, JSON-convertible or not.
+) -> None:
+    """Compile every registered exception's field encodes not yet in *encodes*.
 
-    Each field's JSON name is its effective external name (``@json-name`` ??
-    ``@name`` ?? declared) — the uncaught-exception report is keyed by it,
-    covering every field so no two fields can collide on a fallback declared
-    key. A field with no JSON form carries no encode plan and is reported via
-    the value-directed serializer instead (see ``pipeline.exception_value_to_run_error``).
+    An exception's fields are fixed by its declaration identity, so a REPL
+    link state keeps earlier entries' encodes.
     """
-    result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
-    for typedef in type_table.entries():
-        if typedef.kind != "exception":
+    for nominal, descriptor in nominals.items():
+        if descriptor.kind is not NominalKind.EXCEPTION or nominal in encodes:
             continue
-        if _superseded_reserved(typedef, type_table):
-            continue
-        handle = typedef.handle()
-        assert isinstance(handle, ExceptionType)
-        result[NominalId(typedef.decl_node_id)] = tuple(
-            ExceptionFieldEncode(
-                field_name,
-                json_name,
-                build_encode_plan(field_type, type_table)
-                if is_json_convertible(field_type, type_table)
-                else None,
-            )
-            for field_name, json_name, field_type in type_table.json_fields(handle)
-        )
-    return result
+        typedef = type_table.typedef_of(nominal.value)
+        encodes[nominal] = build_exception_field_encodes(typedef.exception_handle(), type_table)
 
 
 def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[IrProgramParam, ...]:
@@ -226,8 +175,7 @@ def _program_signatures(
     """Build every linked ``program def``'s host-facing parameter signature."""
     result: dict[SymbolId, tuple[IrProgramParam, ...]] = {}
     for _mid, cm, item in program_funcdefs(modules):
-        sig = cm.type_env.get_function_signature_by_node_id(item.node_id)
-        assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
+        sig = cm.type_env.function_signature_of(item.node_id)
         result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
     return result
 
@@ -250,10 +198,7 @@ def _param_tables(
             name = static_binding_name(binding.item)
             key = static_binding_key(module_id, binding.scope_path, name)
             bindings[key] = decl_to_sym[binding.node_id]
-            binding_type = checked_module.type_env.get_binding_type(binding.node_id)
-            assert binding_type is not None, (
-                f"compiler bug: parameter binding {name!r} has no checked type"
-            )
+            binding_type = checked_module.type_env.binding_type_of(binding.node_id)
             decoders[key] = build_param_decoder(binding_type, type_table)
             spans[key] = binding.item.span
     return bindings, decoders, spans
@@ -334,7 +279,12 @@ def lower_program(
             continue
         source_id = SourceId(cm.resolved.program.node_id if _link is None else link.next_source)
         link.next_source += 1
-        display_name = mid.display()
+        # The module's own frontend span already carries the exact label
+        # static diagnostics use for it (canonical file path, "<repl>",
+        # "<command>", ...; see ``modules.loader.entry_source_id``) -- reuse
+        # it rather than the module identity's internal display spelling, so
+        # a runtime raise's source (``RunError.source``) matches.
+        display_name = cm.resolved.program.span.source.label
         module_source_text = (
             _entry_source_text
             if mid == checked.entry_id and _entry_source_text is not None
@@ -380,7 +330,7 @@ def lower_program(
             if mid == checked.entry_id and _entry_source_text is not None
             else cm.source_text,
             compiled.sites_by_module[mid],
-            checked.resource_roots.get(mid),
+            checked.resource_roots[mid],
             has_std_env=STD_ENV_ID in checked.modules,
             stable_ids=_link is None,
             contract_payloads=contract_payloads,
@@ -393,10 +343,9 @@ def lower_program(
     # retains the loader's reverse-topological components separately for this
     # execution-sensitive pass. Within an import cycle, the loader's stable
     # member ordering is the only valid tie-break; the entry remains last.
-    import_sccs = checked.import_sccs or (tuple(checked.modules),)
     ordered_mids = [
         mid
-        for component in import_sccs
+        for component in checked.import_sccs
         for mid in component
         if mid != checked.entry_id and mid not in _already_linked
     ]
@@ -415,7 +364,7 @@ def lower_program(
         key = None
         if fingerprint is not None:
             context = (
-                checked.resource_roots.get(mid),
+                checked.resource_roots[mid],
                 STD_ENV_ID in checked.modules,
                 sorted(link.builtin_nominals.declared.items()),
                 sorted(link.builtin_nominals.members.items()),
@@ -471,12 +420,7 @@ def lower_program(
                 ),
             )
 
-    # Step 4: Build nominals from the authoritative TypeTable declarations, now
-    # that every module's own field defaults are lowered (``link.field_defaults``,
-    # filled by ``lower_item``'s RecordDef/EnumDef/ExceptionDef handling above,
-    # persisted across REPL entries and module-cache hits like ``link.functions``).
-    # A descriptor is rebuilt every pass, even for an already-linked module,
-    # because a later entry can flip ``bears_name_path`` for an earlier one.
+    # Step 4: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
     # source spellings without comparing concatenated scope names. ``entries()``
     # yields every declaration the table retains -- including a superseded one
@@ -487,51 +431,23 @@ def lower_program(
     # that the extern boundary later uses to resolve a companion's bare/dotted
     # nominal lookup. A seeded reserved shape a standard-library declaration
     # supersedes is skipped: the source declaration is the identity the host
-    # mints for that name. A reserved fallback's defaults are host constants.
+    # mints for that name.
     for typedef in type_table.entries():
         if _superseded_reserved(typedef, type_table):
             continue
         nominal = NominalId(typedef.decl_node_id)
-        if (reserved_defaults := reserved_field_defaults(typedef)) is not None:
-            link.field_defaults[nominal] = reserved_defaults
         bears_name_path = (
             type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
         )
-        handle = typedef.handle()
-        match handle:
-            case RecordType():
-                link.nominals[nominal] = _record_descriptor(
-                    typedef,
-                    handle,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
-            case EnumType():
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typedef.module_id,
-                    scope_path=typedef.scope_path,
-                    declared_name=typedef.name,
-                    kind=NominalKind.ENUM,
-                    fields=(),
-                    variants=tuple(
-                        VariantDescriptor(
-                            name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
-                        )
-                        for name, member in type_table.enum_member_names(handle).items()
-                    ),
-                    bears_name_path=bears_name_path,
-                )
-            case _:
-                assert isinstance(handle, ExceptionType)
-                link.nominals[nominal] = exception_descriptor(
-                    typedef,
-                    handle,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
+        if (reserved_defaults := reserved_field_defaults(typedef)) is not None:
+            link.field_defaults[nominal] = reserved_defaults
+        link.nominals[nominal] = nominal_descriptor(
+            typedef,
+            typedef.handle(),
+            type_table,
+            bears_name_path=bears_name_path,
+            field_defaults=link.field_defaults,
+        )
 
     _add_builtin_nominals(link.nominals, type_table, link.field_defaults)
 
@@ -545,41 +461,20 @@ def lower_program(
     # declaration above. Inline members remain excluded just as they are in
     # that pass, because a generic member also appears in this template loop.
     for cm in checked.modules.values():
-        for name, generic in cm.type_env.all_generic_types().items():
+        for generic in cm.type_env.all_generic_types().values():
             typ = generic.template
             nominal = NominalId(typ.decl_id)
-            generic_typedef = type_table.get(typ.module_id, typ.name, typ.scope_path)
-            assert generic_typedef is not None, (
-                f"compiler bug: generic type {name!r} has no TypeDef registered"
-            )
+            generic_typedef = type_table.named(typ.module_id, typ.name, typ.scope_path)
             bears_name_path = (
                 generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
             )
-            if isinstance(typ, RecordType):
-                link.nominals[nominal] = _record_descriptor(
-                    generic_typedef,
-                    typ,
-                    type_table,
-                    bears_name_path=bears_name_path,
-                    field_defaults=link.field_defaults,
-                )
-            else:
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.ENUM,
-                    variants=tuple(
-                        VariantDescriptor(
-                            vname,
-                            tuple(type_table.record_fields(member)),
-                            NominalId(member.decl_id),
-                        )
-                        for vname, member in type_table.enum_member_names(typ).items()
-                    ),
-                    bears_name_path=bears_name_path,
-                )
+            link.nominals[nominal] = nominal_descriptor(
+                generic_typedef,
+                typ,
+                type_table,
+                bears_name_path=bears_name_path,
+                field_defaults=link.field_defaults,
+            )
 
     _add_missing_enum_member_descriptors(link.nominals, type_table, link.field_defaults)
     _add_missing_exception_base_descriptors(link.nominals, type_table, link.field_defaults)
@@ -594,7 +489,7 @@ def lower_program(
         if isinstance(item, BuiltinVarDecl)
     )
 
-    exception_field_encodes = _exception_field_encodes(type_table)
+    _add_exception_field_encodes(link.exception_field_encodes, link.nominals, type_table)
     live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
     program_symbols = {
         item.node_id: link.fn_node_to_sym[item.node_id]
@@ -629,9 +524,10 @@ def lower_program(
         param_decoders=param_decoders,
         param_spans=param_spans,
         contracts=dict(link.contracts),
+        target_contracts=dict(link.target_contracts),
         builtin_nominals=link.builtin_nominals,
         builtin_var_declarations=builtin_var_declarations,
-        exception_field_encodes=exception_field_encodes,
+        exception_field_encodes=dict(link.exception_field_encodes),
         builtin_setting_defaults=builtin_setting_defaults,
         program_configs=program_configs,
     )

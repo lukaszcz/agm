@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "enum_key_instantiation",
+      "params": {"use-enum-key": true},
+      "expect": {
+        "stdout": "false\nmissing: Color::Red\n"
+      }
+    },
+    {
+      "name": "int_key_instantiation",
+      "params": {"use-enum-key": false},
+      "expect": {
+        "stdout": "false\nmissing: 42\n"
+      }
+    }
+  ]
+}

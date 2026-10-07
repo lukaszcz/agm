@@ -1,0 +1,83 @@
+# An exception value's JSON encoding follows its RUNTIME type, never the
+# static type of the slot holding it -- a subtype substituted for a
+# less-derived exception-typed slot still encodes with all of ITS OWN
+# fields, each under its effective JSON name, matching a bare `print` and an
+# uncaught-exception report. A cyclic field makes `as json` raise
+# `CyclicValueError` and `as? json` yield `None`.
+
+exception Base
+  code: int
+
+exception Kid extends Base
+  extra: text
+
+exception GrandKid extends Kid
+  grand: text
+
+exception Tagged extends Base
+  @json-name("tag-label") label: text
+
+record Node
+  var next: array[Node]
+
+exception Looped extends Base
+  node: Node
+
+record Holder
+  err: Base
+
+record Twice[T]
+  left: T
+  right: T
+
+enum Nest[T]
+  | Flat(value: T)
+  | Deeper(next: Nest[Twice[T]])
+
+program def main(close-cycle: bool) -> unit =
+  # A Base-typed slot holding a Kid encodes every Kid field.
+  let e: Base = Kid(message = "direct", code = 1, extra = "x")
+  print(e as json)
+
+  # The same, nested inside a record field typed Base.
+  let h = Holder(err = Kid(message = "nested", code = 2, extra = "y"))
+  print(h as json)
+
+  # A growing generic instantiated at an exception type encodes the same way.
+  let pair = Twice(left = e, right = Base(message = "b", code = 0))
+  let nest: Nest[Base] = Nest::Deeper(next = Nest::Flat(value = pair))
+  print(nest as json)
+
+  # An array of Base holding a mix of exact-Base and Kid values.
+  let mixed: array[Base] = [
+    Base(message = "plain", code = 3),
+    Kid(message = "mixed", code = 4, extra = "z"),
+  ]
+  print(mixed as json)
+
+  # A multi-level chain: a Kid of a Kid, still substituted for a Base slot.
+  let g: Base = GrandKid(message = "chain", code = 5, extra = "w", grand = "gg")
+  print(g as json)
+
+  # A caught exception, statically narrowed to Base by the catch clause.
+  try
+    raise Kid(message = "caught", code = 6, extra = "v")
+  catch Base as caught =>
+    print(caught as json)
+
+  # A subtype's own field encodes under its `@json-name`, in any slot.
+  let t: Base = Tagged(message = "tagged", code = 7, label = "l")
+  print(t as json)
+  print(Holder(err = t) as? json)
+
+  # A subtype field closing a cycle fails the cast; `as?` reports None.
+  let n = Node(next = [])
+  if close-cycle =>
+    n.next := [n]
+  let looped: Base = Looped(message = "looped", code = 8, node = n)
+  print(looped as? json)
+  print([looped] as? json)
+  try
+    print(looped as json)
+  catch CyclicValueError =>
+    print("cyclic")

@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import TypeGuard
 
+from agm.agl.constraints import ConstraintKind
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 
@@ -77,6 +78,11 @@ class BinOp(enum.Enum):
     MUL = "*"
     DIV = "/"
 
+    @property
+    def symbol(self) -> str:
+        """This operator's source spelling, typed as ``str`` rather than the enum's raw value."""
+        return self.value
+
 
 class InfixAssoc(enum.Enum):
     """Associativity declared for a user-defined infix operator."""
@@ -107,9 +113,7 @@ class ImportDecl:
 
     ``tail`` is ``None`` for no tail, empty for ``::*``, or contains the
     selected atoms. ``scope_path`` is non-empty when the declaration is a
-    region item. ``wildcard_origin_node_id`` preserves the source wildcard's
-    declaration identity when an incremental host expands it into exact
-    module declarations.
+    region item.
     """
 
     module_path: tuple[str, ...]
@@ -120,7 +124,6 @@ class ImportDecl:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
-    wildcard_origin_node_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,18 +247,19 @@ class QualifierChain:
     node_id: int = dc_field(compare=False)
 
     @property
-    def route_segments(self) -> tuple[str, ...]:
-        """Return the slash-expanded route represented by the chain segments."""
-        return tuple(part for segment in self.segments for part in segment.name.split("/"))
+    def leading_route(self) -> tuple[str, ...]:
+        """Return the leading segment as a module route, split on '/'."""
+        return tuple(self.segments[0].name.split("/"))
 
     @property
     def anchored(self) -> bool:
         """Whether the chain uses an absolute module anchor."""
         return self.anchor is QualifierAnchor.MODULE
 
-    def render(self) -> str:
-        """Render the chain's qualifier prefix without its selected member."""
-        return ("/" if self.anchored else "") + "/".join(self.route_segments)
+    @property
+    def routed(self) -> bool:
+        """Whether the chain leads with a module route alone: anchored, or a slash route."""
+        return self.anchored or (bool(self.segments) and "/" in self.segments[0].name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,11 +302,15 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
-class NamedArg:
-    """A named argument in a constructor or call expression: ``name = value``."""
+class NamedArg[V: CallArg]:
+    """A named ``name = value`` pair: a call argument or a record-update field.
+
+    ``V`` is :data:`CallArg` for a call argument, which may be a placeholder,
+    and :data:`Expr` for a record-update field, which may not.
+    """
 
     name: str
-    value: Expr
+    value: V
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -316,7 +324,7 @@ class RecordUpdate:
     """
 
     target: Expr
-    updates: tuple[NamedArg, ...]
+    updates: tuple[NamedArg[Expr], ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -409,7 +417,23 @@ class TypeApply:
 
 
 @dataclass(frozen=True, slots=True)
-class Call:
+class CallFields[A: CallArg]:
+    """The fields of a call whose arguments have type ``A``.
+
+    :class:`Call` is the call node; :data:`CompleteCall` types a call none of
+    whose arguments is a placeholder.
+    """
+
+    callee: Expr
+    args: tuple[A, ...]
+    named_args: tuple[NamedArg[A], ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+    type_args: tuple[TypeExpr, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Call(CallFields["CallArg"]):
     """A uniform function/built-in call: ``callee(args, name: v)``.
 
     Also produced by the single-arg juxtaposition sugar ``f x``
@@ -420,13 +444,6 @@ class Call:
     The type arguments are static ``TypeExpr`` values resolved by the type checker —
     they are never evaluated at runtime.
     """
-
-    callee: Expr
-    args: tuple[Expr, ...]
-    named_args: tuple[NamedArg, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-    type_args: tuple[TypeExpr, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,7 +492,23 @@ class GenericDeclaration:
     @property
     def type_params(self) -> tuple[str, ...]:
         """The slots that introduce readable type variables."""
-        return tuple(slot for slot in self.type_param_slots if slot != TYPE_PARAMETER_WILDCARD)
+        slots = self.type_param_slots
+        return slots and tuple(slot for slot in slots if slot != TYPE_PARAMETER_WILDCARD)
+
+
+@dataclass(frozen=True, slots=True)
+class Constraint:
+    """``Hashable K`` or ``Eq T`` inside a function declaration's ``{…}`` block.
+
+    ``kind`` and ``param`` name the structural bound and the constrained type
+    parameter. Well-formedness (``param`` names a type parameter in scope, no
+    duplicate or redundant pairing) is a scope concern, not a parser one.
+    """
+
+    kind: ConstraintKind
+    param: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +518,9 @@ class FuncDef(GenericDeclaration):
     ``return_type`` is ``None`` when omitted and inferred from the body.
     ``body`` is an expression (which may be a ``Block`` for multi-step bodies).
     ``is_method`` records the leading ``self`` parameter that makes the
-    declaration a method.
+    declaration a method. ``constraints`` holds the declaration's optional
+    ``{Hashable K, Eq T}`` block, naming bounds on its own or receiver type
+    parameters.
     """
 
     name: str
@@ -503,6 +538,7 @@ class FuncDef(GenericDeclaration):
     scope_path: tuple[ScopeSegment, ...] = ()
     receiver_type: TypeExpr | None = None
     attributes: tuple[Attribute, ...] = ()
+    constraints: tuple[Constraint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -836,9 +872,9 @@ class ArrayLit:
 
 @dataclass(frozen=True, slots=True)
 class DictEntry:
-    """A single key/value entry in a dict literal."""
+    """A single key/value entry in a dict literal: ``key: value``, both ordinary expressions."""
 
-    key: StringLit
+    key: Expr
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
@@ -883,7 +919,7 @@ class RawInfixOperand:
 
 @dataclass(frozen=True, slots=True)
 class RawInfixChain:
-    """A flat infix chain awaiting parser-layer fixity resolution."""
+    """A flat infix chain with a user operator, grouped by scope once its operators resolve."""
 
     operands: tuple[RawInfixOperand, ...]
     operators: tuple[RawInfixOperator, ...]
@@ -901,7 +937,6 @@ Expr = (
     | FieldAccess
     | IndexAccess
     | Template
-    | Placeholder
     | BinaryOp
     | OperatorRef
     | UnaryNot
@@ -930,6 +965,20 @@ Expr = (
     | ArrayLit
     | DictLit
 )
+
+# A call argument: an expression or, only there, a partial-application placeholder.
+CallArg = Expr | Placeholder
+
+# A call none of whose arguments is a placeholder: a complete, not a partial, call.
+type CompleteCall = CallFields[Expr]
+
+
+def is_complete_call(call: Call) -> TypeGuard[CompleteCall]:
+    """Whether no argument of *call* is a placeholder."""
+    return not any(
+        isinstance(argument, Placeholder)
+        for argument in (*call.args, *(named.value for named in call.named_args))
+    )
 
 
 # ---------------------------------------------------------------------------

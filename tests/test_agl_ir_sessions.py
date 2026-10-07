@@ -7,7 +7,13 @@ from typing import cast
 import pytest
 
 from agm.agl.ir.builtin_vars import builtin_var_key
-from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    JsonContractRequest,
+    ScalarDecode,
+    ScalarKind,
+    TextContractRequest,
+)
 from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
@@ -38,7 +44,6 @@ from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     FunctionType,
-    IntType,
     RecordType,
     UnitType,
 )
@@ -49,15 +54,12 @@ _LOC = Location(source_id=_SRC_ID, start_offset=0, end_offset=1, start_line=1, s
 
 
 def _contract() -> ContractRequest:
-    return ContractRequest(
+    return TextContractRequest(
         codec_name="text",
         strict_json=None,
-        json_schema=None,
-        decode=None,
         target_type_label="text",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
 
 
@@ -237,7 +239,7 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
     assert isinstance(retries, IrConstInt)
     assert retries.value == 2
     assert program.contracts == {
-        answer.contract_id: ContractRequest(
+        answer.contract_id: JsonContractRequest(
             codec_name="json",
             strict_json=True,
             json_schema='{"type": "integer"}',
@@ -249,8 +251,6 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
                 "Do not include Markdown, prose, or code fences.\n\n"
                 '```json\n{\n  "type": "integer"\n}\n```'
             ),
-            target_type_kind="int",
-            target_type=IntType(),
         )
     }
 

@@ -4,29 +4,35 @@ from __future__ import annotations
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
+    ImportEnv,
+    ImportTarget,
     NameAtom,
     QName,
-    QualResolutionFound,
-    QualResolutionUnknownQualifier,
     SingleTarget,
     WildcardTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_candidates,
+    qualifier_member_ways,
 )
 from agm.agl.scope.symbols import (
     BinderKind,
     BindingRef,
+    ContributionLayer,
     ScopeNode,
-    resolve_bare_contribution_layer,
 )
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, ScopeSegment
 from tests._agl_helpers import dummy_span
 
 
 def resolve_bare_contribution(scope: ScopeNode, name: NameAtom) -> set[BindingRef] | None:
-    """Return just the candidates the nearest contributing layer holds for *name*."""
-    resolved = resolve_bare_contribution_layer(scope, name)
-    return None if resolved is None else resolved[1]
+    """Return the candidates of the first layer, from *scope* outward, contributing *name*."""
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        stored = layer.bare_contributions.get(name)
+        if stored:
+            return set(stored)
+        layer = layer.parent
+    return None
 
 
 _next_node_id = 0
@@ -76,70 +82,75 @@ def _exports(path: str, *names: str) -> dict[NameAtom, QName]:
     return {name: (module, name) for name in names}
 
 
+def _build(
+    decls: tuple[ImportDecl, ...],
+    targets: dict[int, ImportTarget],
+    exports: dict[ModuleId, dict[NameAtom, QName]],
+) -> ImportEnv:
+    return build_import_env(decls, targets, exports, {module: {} for module in exports})
+
+
 def test_region_tailed_import_keeps_its_bare_contribution_regional() -> None:
     decl = _decl("lib/api", tail=(_item("one"),), scope_path=_region("A"))
     module = _module("lib/api")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("lib/api", "one", "two")},
     )
 
     assert env.unqualified == {}
-    assert dict(env.decl_bare[decl.node_id]) == {"one": frozenset({(module, "one")})}
+    assert {atom: set(origins) for atom, origins in env.decl_bare_ways[decl.node_id].items()} == {
+        "one": {(module, "one")}
+    }
     assert set(env.contributions[module].members) == {"one", "two"}
 
 
-def test_alias_route_retains_full_surface_except_its_own_hiding() -> None:
+def test_alias_route_retains_full_surface_and_records_its_own_hiding() -> None:
     decl = _decl("std/config", alias="settings", hidden=(_item("debug"),))
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert resolve_qualified(env, ("settings",), "timeout") == QualResolutionFound(
-        module, (module, "timeout")
-    )
-    assert "debug" not in env.contributions[module].members
+    assert set(qualifier_member_ways(env, ("settings",), "timeout")) == {(module, "timeout")}
+    assert "debug" in env.contributions[module].members
+    assert {item.declaration for item in env.decl_hiding[decl.node_id]} == {(module, "debug")}
 
 
 def test_alias_route_does_not_also_contribute_the_module_suffix() -> None:
     decl = _decl("std/config", alias="settings")
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout")},
     )
 
-    assert resolve_qualified(env, ("settings",), "timeout") == QualResolutionFound(
-        module, (module, "timeout")
-    )
-    assert isinstance(
-        resolve_qualified(env, ("config",), "timeout"), QualResolutionUnknownQualifier
-    )
+    assert set(qualifier_member_ways(env, ("settings",), "timeout")) == {(module, "timeout")}
+    assert qualifier_candidates(env, ("config",), anchored=False) == ()
 
 
-def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
+def test_alias_hiding_is_recorded_on_the_alias_declaration_only() -> None:
     alias = _decl("std/config", alias="settings", hidden=(_item("debug"),))
     plain = _decl("std/config")
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (alias, plain),
         {alias.node_id: SingleTarget(module), plain.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout", "debug")},
     )
 
-    assert resolve_qualified(env, ("config",), "debug") == QualResolutionFound(
-        module, (module, "debug")
-    )
-    assert "debug" not in env.contributions[module].alias_members["settings"]
+    assert set(qualifier_member_ways(env, ("config",), "debug")) == {(module, "debug")}
+    assert plain.node_id not in env.decl_hiding
+    ways = env.contributions[module].routes["settings"].member_ways["debug"]
+    assert {way.node_id for way in ways} == {alias.node_id}
 
 
 def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
@@ -147,7 +158,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
     right_decl = _decl("right/api", tail=(_item("selected"),), scope_path=_region("Right"))
     left_module = _module("left/api")
     right_module = _module("right/api")
-    env = build_import_env(
+    env = _build(
         (left_decl, right_decl),
         {
             left_decl.node_id: SingleTarget(left_module),
@@ -163,7 +174,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
     right_scope = ScopeNode(node_id=2, parent=root, scope_path=("Right",))
 
     for scope, decl in ((left_scope, left_decl), (right_scope, right_decl)):
-        for name, qnames in env.decl_bare[decl.node_id].items():
+        for name, qnames in env.decl_bare_ways[decl.node_id].items():
             for module, _source in qnames:
                 binding_name = name if isinstance(name, str) else name[-1]
                 scope.contribute_bare(
@@ -176,6 +187,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
                         BinderKind.function_binding,
                         module,
                     ),
+                    ContributionLayer.IMPORTED,
                 )
 
     assert resolve_bare_contribution(root, "selected") is None
@@ -201,6 +213,7 @@ def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> Non
             BinderKind.function_binding,
             module,
         ),
+        ContributionLayer.IMPORTED,
     )
 
     candidates = resolve_bare_contribution(root, "selected")
@@ -214,7 +227,7 @@ def test_wildcard_tails_apply_bare_contributions_per_module() -> None:
     left = _module("pkg/left")
     right = _module("pkg/right")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: WildcardTarget(frozenset({left, right}))},
         {

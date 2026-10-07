@@ -1,0 +1,6 @@
+# A dict is never Hashable outright, regardless of its own key/value types,
+# so a dict cannot itself be a dict key at a hashing site.
+program def main() -> unit =
+  let d: dict[dict[text, int], text] = {}
+  let key: dict[text, int] = {}
+  print(key in d)

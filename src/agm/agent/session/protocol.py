@@ -2,44 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from agm.agent.spec import PermissionMode
+from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
 from agm.agent.transport import AgentCallInfo, AgentOutputCallback, AgentTransportError
+from agm.sandbox.prepare import SandboxContext
 from agm.sandbox.request import SandboxLimits
 
 
 class SessionOperation(StrEnum):
-    """Operations a session backend can advertise as supported."""
+    """Session operations, as named in lifecycle errors."""
 
     ASK = "ask"
     COMPACT = "compact"
     FORK = "fork"
     SET_NAME = "set-name"
     STATS = "stats"
-
-
-@dataclass(frozen=True, slots=True)
-class SessionCapabilities:
-    """The optional operations implemented natively by a session backend."""
-
-    operations: frozenset[SessionOperation]
-
-    @classmethod
-    def all(cls) -> SessionCapabilities:
-        """Return capabilities for a backend implementing every optional operation."""
-        return cls(frozenset(SessionOperation))
-
-    def supports(self, operation: SessionOperation) -> bool:
-        """Whether this backend supports *operation*."""
-        return operation in self.operations
-
-    def __sub__(self, operations: set[SessionOperation]) -> SessionCapabilities:
-        """Return these capabilities without *operations*."""
-        return SessionCapabilities(self.operations - operations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,8 +43,8 @@ class SessionOpenRequest:
     explicit empty environment, not "unspecified".
     """
 
-    agent: object
-    transport: str
+    agent: AgentSpec
+    transport: SessionTransport
     name: str = ""
     single_prompt: bool = False
     ephemeral: bool = False
@@ -125,61 +107,54 @@ class SessionAskError(AgentTransportError):
     """
 
 
-class SessionBackend(Protocol):
-    """One native session implementation selected for an agent transport."""
+@dataclass(frozen=True, slots=True)
+class SessionOperations:
+    """The optional operations a backend implements natively; ``None`` is unsupported."""
 
-    capabilities: SessionCapabilities
+    compact: Callable[[str], None] | None = None
+    fork: Callable[[], SessionBackend] | None = None
+    set_name: Callable[[str], None] | None = None
+    stats: Callable[[], SessionStats] | None = None
+
+
+class SessionBackend(Protocol):
+    """One open native session implementation selected for an agent transport."""
+
     continues_conversation: bool
     """Whether a later prompt continues the earlier ones; fixed by ``open``."""
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Open the backend's underlying session."""
+    @property
+    def operations(self) -> SessionOperations:
+        """The optional operations this session supports."""
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and return the backend response."""
 
-    def compact(self, instructions: str) -> None:
-        """Compact the conversation using optional instructions."""
-
     def reset(self) -> None:
         """Discard conversation history while retaining this backend object."""
-
-    def fork(self) -> SessionBackend:
-        """Return a new backend whose history starts from this session."""
-
-    def set_name(self, name: str) -> None:
-        """Assign a backend-visible session name."""
-
-    def stats(self) -> SessionStats:
-        """Return the backend's current usage statistics."""
 
     def close(self) -> None:
         """Release the backend's resources."""
 
 
-class SandboxFixture:
-    """Sandboxing and environment fixed once, at ``open``, for a backend's whole lifetime.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendSettings:
+    """Settings fixed once, at ``open``, for a backend's whole lifetime.
 
     Every process a session spawns -- its first prompt and every later native
-    call (fork's replacement, compaction, ...) -- reuses the same
-    ``permission_mode``/``sandbox``/``env``; there is no per-call override.
-    Shared by every session backend family (CLI, RPC) so "fix at open" and
-    "carry into a freshly spawned sibling" are each written once.
+    call (fork's replacement, compaction, ...) -- reuses the same settings;
+    there is no per-call override.
     """
 
-    def __init__(self) -> None:
-        self._permission_mode: PermissionMode = PermissionMode.NONE
-        self._sandbox: SandboxLimits | None = None
-        self._env: dict[str, str] = {}
+    get_sandbox_context: Callable[[], SandboxContext]
+    env: dict[str, str]
+    idle_timeout: float | None = None
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: SandboxLimits | None = None
 
-    def _fix_sandbox(self, request: SessionOpenRequest) -> None:
-        """Fix this backend's sandboxing and environment for its whole session lifetime."""
-        self._permission_mode = request.permission_mode
-        self._sandbox = request.sandbox
-        self._env = request.env
 
-    def _adopt_sandbox_from(self, other: "SandboxFixture") -> None:
-        """Carry an already-fixed sandboxing/environment into a freshly spawned sibling."""
-        self._permission_mode = other._permission_mode
-        self._sandbox = other._sandbox
-        self._env = other._env
+class SandboxFixture:
+    """Holds the :class:`BackendSettings` shared by every session backend family (CLI, RPC)."""
+
+    def __init__(self, settings: BackendSettings) -> None:
+        self._settings = settings

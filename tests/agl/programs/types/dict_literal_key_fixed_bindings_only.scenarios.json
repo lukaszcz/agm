@@ -1,0 +1,35 @@
+{
+  "scenarios": [
+    {
+      "name": "var_key_collides_at_runtime",
+      "params": { "mode": 1 },
+      "expect": { "stdout": "dup: 2\n" }
+    },
+    {
+      "name": "chain_through_var_collides_at_runtime",
+      "params": { "mode": 2 },
+      "expect": { "stdout": "dup: 1\n" }
+    },
+    {
+      "name": "template_hole_over_var_no_collision",
+      "params": { "mode": 3 },
+      "expect": { "stdout": "{\"b\": 1, \"a\": 2}\n" }
+    },
+    {
+      "name": "param_key_default_collides_at_runtime",
+      "params": { "mode": 4 },
+      "expect": { "stdout": "dup: 1\n" }
+    },
+    {
+      "name": "param_key_overridden_no_collision",
+      "params": { "mode": 4 },
+      "module_params": { "<entry>::p": 2 },
+      "expect": { "stdout": "{2: \"a\", 1: \"b\"}\n" }
+    },
+    {
+      "name": "call_through_var_constructor_no_collision",
+      "params": { "mode": 5 },
+      "expect": { "stdout": "{Point(x = 1, y = 2): \"a\", Point(x = 1, y = 3): \"b\"}\n" }
+    }
+  ]
+}

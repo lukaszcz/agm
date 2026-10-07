@@ -1,0 +1,4 @@
+def find[T](xs: array[T], v: T) -> bool = xs.contains(v)
+
+program def main() -> unit =
+  print(find([1, 2, 3], 2))

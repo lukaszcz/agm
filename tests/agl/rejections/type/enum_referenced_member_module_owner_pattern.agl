@@ -1,0 +1,8 @@
+import library
+
+def describe(status: library::Status) -> int =
+  case status of
+    | library::Status::Saved(id) => id
+    | library::Status::Fresh(n) => n
+
+program def main() -> unit = print(describe(library::Saved(id = 1)))

@@ -9,7 +9,13 @@ import pytest
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import ArgumentPreflight, PipelineDriver, PreparedProgram, ProgramDiscovery
+from agm.agl.pipeline import (
+    ArgumentPreflight,
+    ArgumentPreflightFailure,
+    PipelineDriver,
+    PreparedProgram,
+    ProgramDiscovery,
+)
 from agm.agl.runtime.arguments import ProgramArguments
 from tests._agl_helpers import agl_roots
 
@@ -233,10 +239,7 @@ program def main() -> unit = ()
             param_values={number.key: "not-an-int", enabled.key: "not-a-bool", unknown: 1},
         )
 
-        assert not preflight.result.ok
-        assert preflight.executable is not None
-        assert preflight.arguments == ()
-        assert preflight.param_seeds == {}
+        assert isinstance(preflight, ArgumentPreflightFailure)
         assert len(preflight.result.diagnostics) == 3
 
     def test_imported_param_decode_failure_points_to_its_declaration(self, tmp_path: Path) -> None:

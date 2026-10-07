@@ -1,0 +1,22 @@
+# A template hole reading a `json`-typed constant renders through
+# `json`'s own (quoting, exact-literal) rules at run time, not through
+# scalar text rendering, so it cannot be folded to a comparable key at
+# compile time: the two entries below are never a statically provable
+# duplicate, even though a naive text fold of the hole would wrongly see
+# one. mode 1: a `json` text constant renders quoted, so it never matches
+# the same text written bare. mode 2: a `json` decimal constant preserves
+# its exact literal digits, so it never matches a different-looking but
+# numerically equal literal.
+let j-text: json = "a"
+let j-decimal: json = 1.50
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let d: dict[text, int] = {"%{j-text}": 1, "a": 2}
+        print d
+    | 2 =>
+        let d: dict[text, int] = {"%{j-decimal}": 1, "1.5": 2}
+        print d
+    | _ =>
+        ()

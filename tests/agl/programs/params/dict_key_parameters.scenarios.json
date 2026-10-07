@@ -1,0 +1,260 @@
+{
+  "scenarios": [
+    {
+      "name": "text_keys_from_json_object",
+      "params": {
+        "limits": "{\"cpu\": 2}"
+      },
+      "expect": {
+        "stdout": "{\"cpu\": 2}\n{}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "text_keys_from_value_syntax",
+      "params": {
+        "limits": "{\"cpu\": 2,}"
+      },
+      "expect": {
+        "stdout": "{\"cpu\": 2}\n{}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "bare_name_text_key_is_rejected",
+      "params": {
+        "limits": "{cpu: 2}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "limits"
+          ]
+        }
+      }
+    },
+    {
+      "name": "int_keys_from_value_syntax",
+      "params": {
+        "by-int": "{1: \"one\", -2: \"minus\"}"
+      },
+      "expect": {
+        "stdout": "{}\n{1: \"one\", -2: \"minus\"}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "int_keys_from_json_object",
+      "params": {
+        "by-int": "{\"1\": \"one\"}"
+      },
+      "expect": {
+        "stdout": "{}\n{1: \"one\"}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "int_keys_from_empty_json_object",
+      "params": {
+        "by-int": "{}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "plain_enum_keys_from_value_syntax",
+      "params": {
+        "by-plain": "{A: 1, Plain::B: 2}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{Plain::A: 1, Plain::B: 2}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "plain_enum_keys_from_json_object",
+      "params": {
+        "by-plain": "{\"B\": 2}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{Plain::B: 2}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "enum_keys_from_value_syntax",
+      "params": {
+        "by-color": "{Red: 1, Tint(level = 2): 2}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{Color::Red: 1, Color::Tint(level = 2): 2}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "enum_keys_from_json_entries",
+      "params": {
+        "by-color": "[{\"key\": {\"$case\": \"Red\"}, \"value\": 1}]"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{Color::Red: 1}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "record_keys_from_value_syntax",
+      "params": {
+        "by-point": "{Point(x = 1, y = 2): \"a\"}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{Point(x = 1, y = 2): \"a\"}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "record_keys_from_json_entries",
+      "params": {
+        "by-point": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"a\"}]"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{Point(x = 1, y = 2): \"a\"}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "empty_object_is_an_empty_entries_dict",
+      "params": {
+        "by-point": "{}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{}\n{}\n{}\n"
+      }
+    },
+    {
+      "name": "json_object_is_a_text_keyed_json_dict",
+      "params": {
+        "by-json": "{\"s\": 1}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{}\n{}\n{\"s\": 1}\n"
+      }
+    },
+    {
+      "name": "json_keys_from_value_syntax",
+      "params": {
+        "by-json": "{null: 0, \"s\": 1}"
+      },
+      "expect": {
+        "stdout": "{}\n{}\n{}\n{}\n{}\n{}\n{null: 0, \"s\": 1}\n"
+      }
+    },
+    {
+      "name": "repeated_int_key_in_value_syntax",
+      "params": {
+        "by-int": "{1: \"a\", 1: \"b\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-int"
+          ]
+        }
+      }
+    },
+    {
+      "name": "repeated_int_key_in_json_entries",
+      "params": {
+        "by-int": "[{\"key\": 1, \"value\": \"a\"}, {\"key\": 1, \"value\": \"b\"}]"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-int"
+          ]
+        }
+      }
+    },
+    {
+      "name": "repeated_int_member_name_in_json",
+      "params": {
+        "by-int": "{\"1\": \"a\", \"1\": \"b\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-int"
+          ]
+        }
+      }
+    },
+    {
+      "name": "non_number_int_key",
+      "params": {
+        "by-int": "{\"a\": \"x\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-int"
+          ]
+        }
+      }
+    },
+    {
+      "name": "enum_key_for_int_dict",
+      "params": {
+        "by-int": "{Red: \"x\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-int"
+          ]
+        }
+      }
+    },
+    {
+      "name": "equal_record_keys_in_value_syntax",
+      "params": {
+        "by-point": "{Point(x = 1, y = 2): \"a\", Point(1, 2): \"b\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-point"
+          ]
+        }
+      }
+    },
+    {
+      "name": "repeated_record_key_in_json_entries",
+      "params": {
+        "by-point": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"a\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"b\"}]"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-point"
+          ]
+        }
+      }
+    },
+    {
+      "name": "bare_name_record_key",
+      "params": {
+        "by-point": "{x: \"a\"}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-point"
+          ]
+        }
+      }
+    },
+    {
+      "name": "equal_decimal_keys_distinct_on_the_wire",
+      "params": {
+        "by-dec": "{1.0: 1, 1.00: 2}"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "by-dec"
+          ]
+        }
+      }
+    }
+  ]
+}

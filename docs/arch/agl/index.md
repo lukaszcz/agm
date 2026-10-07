@@ -11,7 +11,7 @@ source (.agl)
   → lexer        (INDENT/DEDENT, string and environment interpolation, one NAME token class)
   → parser       (Lark LALR grammar)
   → AST          (frozen dataclasses — the firewall)
-  → scope        (whole-program name resolution)
+  → scope        (whole-program name resolution, user-operator grouping)
   → typecheck    (whole-program checking; selects concrete operations)
   → match compile (exhaustiveness, redundancy, decision DAGs)
   → lower + link (closed, typeless executable program)
@@ -48,7 +48,7 @@ A **program** is the entry module plus its transitive import and re-export depen
 | Lexer | `src/agm/agl/lexer/` |
 | Parser / grammar | `src/agm/agl/parser/`, `src/agm/agl/grammar/` |
 | AST | `src/agm/agl/syntax/` |
-| Scope / name resolution | `src/agm/agl/scope/` |
+| Scope / name resolution | `src/agm/agl/scope/`, `src/agm/agl/infix.py` |
 | Type checking | `src/agm/agl/typecheck/` |
 | Match compilation | `src/agm/agl/matchcompile/` |
 | Semantic foundation (values, types, type table, analyses, exceptions) | `src/agm/agl/semantics/` |
@@ -61,7 +61,7 @@ A **program** is the entry module plus its transitive import and re-export depen
 | REPL | `src/agm/agl/repl/` |
 | Pipeline orchestrator and host leaves | `src/agm/agl/pipeline.py`, `capabilities.py`, `diagnostics.py`, `type_schema.py`, `artifact_cache.py`, `artifact_storage.py`, `self_validation.py` |
 
-Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/value_syntax/` is a leaf below the lexer, match compiler, and runtime, holding the literal scanning rules (text escapes, numbers, identifiers, environment holes) and a reader for AgL's data-only value syntax; it imports only `agm.util` and `agl/keywords.py`. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and carries the host-facing shapes the `@opt-*` and `@command` attributes describe; it is the one place the language reaches out to an AGM leaf, holding a `@command` path to the CLI's own reserved-name rule) and `agl/modules/ids.py` are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other. `artifact_storage.py` is a further leaf: the disk-cache envelope shared by the module cache, artifact serialization, and the runtime's companion bytecode cache, importing nothing under `agm`.
+Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data, the engine-key catalog, and the constraint-kind leaf, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/value_syntax/` is a leaf below the lexer, match compiler, and runtime, holding the literal scanning rules (text escapes, numbers, identifiers, environment holes) and a reader for AgL's data-only value syntax; it imports only `agm.util` and `agl/keywords.py`. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and carries the host-facing shapes the `@opt-*` and `@command` attributes describe; it is the one place the language reaches out to an AGM leaf, holding a `@command` path to the CLI's own reserved-name rule), `agl/modules/ids.py`, and `agl/constraints.py` (the `Eq`/`Hashable` structural constraint kinds) are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other, and `syntax`/`semantics`/`ir` can each name a constraint kind — carried on a function signature or descriptor's `bounds` — without importing each other. `artifact_storage.py` is a further leaf: the disk-cache envelope shared by the module cache, artifact serialization, and the runtime's companion bytecode cache, importing nothing under `agm`.
 
 ## What To Read Next
 

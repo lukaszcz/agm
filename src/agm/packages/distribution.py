@@ -14,6 +14,7 @@ import hashlib
 import json
 import shutil
 import stat
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 
 import tomlkit
@@ -28,6 +29,7 @@ from agm.packages.record import (
     record_path_key,
     walk_package_tree,
 )
+from agm.util.decimal import strip_trailing_zeros
 
 MANIFEST_NAME = "package.toml"
 
@@ -195,14 +197,23 @@ def manifests_equivalent(a: PackageManifest, b: PackageManifest) -> bool:
 
 
 def _normalized_config_toml(config: TomlDict) -> str:
-    """Render ``[config]`` deterministically: recursively sorted keys, tomlkit values."""
+    """Render ``[config]`` deterministically with sorted keys and exact decimals."""
     doc = tomlkit.document()
     doc["config"] = _sorted_toml_value(config)
     return tomlkit.dumps(doc).rstrip("\n")
 
 
 def _sorted_toml_value(value: object) -> object:
-    """Recursively sort dict keys so equal manifest data always renders identically."""
+    """Sort dict keys and encode decimal leaves without losing precision or range."""
+    if isinstance(value, Decimal):
+        # Preserve older archives' float spelling whenever it remains exact.
+        text = str(float(value))
+        if Decimal(text) != value:
+            text = str(strip_trailing_zeros(value))
+            if "." not in text and "E" not in text:
+                text += ".0"
+        # Parsing preserves the literal; tomlkit.float_ would round it through float.
+        return tomlkit.value(text)
     if isinstance(value, dict):
         items: dict[str, object] = value
         return {key: _sorted_toml_value(items[key]) for key in sorted(items)}

@@ -3,7 +3,7 @@
 
 program def main(needle: text, numbers: array[int], k: int) -> unit =
   let words = ["alpha", "beta", "gamma"]
-  let scores = {alpha: 1, beta: 2}
+  let scores = {"alpha": 1, "beta": 2}
 
   print(needle in words)
   print(k in numbers)

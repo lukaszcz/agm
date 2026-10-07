@@ -3,32 +3,51 @@
 from __future__ import annotations
 
 import contextvars
+import decimal
 import operator
-from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
+from collections.abc import (
+    Callable,
+    ItemsView,
+    Iterable,
+    Iterator,
+    MutableMapping,
+    MutableSequence,
+    ValuesView,
+)
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import Location, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
-from agm.agl.runtime.render import render_value
+from agm.agl.runtime.render import render_key_value_syntax, render_value
+from agm.agl.semantics.arithmetic import (
+    arithmetic_message,
+    checked_decimal,
+    signal_kind_for,
+)
 from agm.agl.semantics.exceptions import exception_message
 from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
     BoolValue,
+    ConstructorValue,
     ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
+    FunctionValue,
     IntValue,
     IrClosureValue,
     JsonValue,
+    ObservableValue,
     RecordValue,
     TextValue,
     UnitValue,
     Value,
+    json_eq,
+    json_hash,
     value_equal,
 )
 from agm.util.scoping import ScopedVar
@@ -59,11 +78,24 @@ class BoundaryTypeError(TypeError):
     """A value written through an AgL live view is unsupported."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class AglJson:
-    """The distinct Python representation of an AgL ``json`` value."""
+    """The distinct Python representation of an AgL ``json`` value.
+
+    Equality and hashing follow AgL ``json`` equality, not Python's: ``True``
+    differs from ``1``, ``1.5`` equals ``1.50``, and containers compare
+    structurally -- so a container-valued ``AglJson`` can be a Python dict key.
+    """
 
     value: object
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, AglJson):
+            return json_eq(self.value, other.value)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return json_hash(self.value)
 
 
 class AglException(Exception):
@@ -73,9 +105,15 @@ class AglException(Exception):
     class. Callbacks construct it from their already-materialized
     :class:`ExceptionValue`. In either case, it carries the resulting AgL
     exception value rather than turning it into a Python exception.
+
+    ``span`` carries a callback raise's own ``AglRaise.span`` across the
+    companion boundary (``None`` for a companion-declared raise, which has no
+    AgL source site of its own), so the extern invocation that re-raises it
+    as ``AglRaise`` on the way back out preserves the innermost location
+    instead of defaulting to the extern call site.
     """
 
-    def __init__(self, value: ExceptionValue | object) -> None:
+    def __init__(self, value: ExceptionValue | object, *, span: Location | None = None) -> None:
         try:
             decoded = value if isinstance(value, ExceptionValue) else decode_boundary_value(value)
         except BoundaryViolation as exc:
@@ -84,6 +122,7 @@ class AglException(Exception):
             raise TypeError("AglException requires an AgL exception value")
         super().__init__(exception_message(decoded))
         self.value = decoded
+        self.span = span
 
 
 class AglExceptionClass(Protocol):
@@ -104,9 +143,14 @@ def raise_index_error(
     raise AglException(exc_cls(message=message, index=index, length=length))
 
 
-def raise_key_error(exc_cls: AglExceptionClass, message: str, key: str) -> NoReturn:
-    """Raise an AgL ``KeyError``-shaped exception for the missing *key*."""
-    raise AglException(exc_cls(message=message, key=key))
+def raise_key_error(exc_cls: AglExceptionClass, message: str, key: object) -> NoReturn:
+    """Raise the key-carrying AgL exception *exc_cls* (``KeyError``, ``DuplicateKeyError``).
+
+    The exception's ``key`` field is the host *key* rendered in AgL value syntax
+    (text quoted), exactly as a missing-key index failure renders it.
+    """
+    rendered = render_key_value_syntax(decode_boundary_value(key), current_descriptors())
+    raise AglException(exc_cls(message=message, key=rendered))
 
 
 def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoReturn:
@@ -114,16 +158,32 @@ def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoR
     raise AglException(exc_cls(message=message, raw=raw))
 
 
-_FunctionEncoder = Callable[[IrClosureValue], object] | None
+def raise_arithmetic_error(
+    exc_cls: AglExceptionClass, operation: str, exc: decimal.DecimalException
+) -> NoReturn:
+    """Raise an AgL ``ArithmeticError``-shaped exception for a companion's own decimal signal.
+
+    *operation* names the companion function (e.g. ``"pow"``, ``"round"``);
+    the message is chosen from *exc*'s signal kind, matching the message a
+    native AgL arithmetic failure with the same kind produces.
+    """
+    kind = signal_kind_for(exc)
+    raise AglException(
+        exc_cls(message=arithmetic_message(operation, kind), operation=operation)
+    ) from exc
+
+
+_FunctionEncoder = Callable[[FunctionValue], object] | None
 
 _IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
 
-# The closure encoder for the extent of one companion call. Encoding a closure
-# needs an interpreter, which this evaluator-independent module never holds, so
-# the extern-call chokepoint publishes one here rather than every crossing
-# value carrying a copy: whatever a companion reaches -- an argument, a view it
-# built itself, a closure nested in an array or dict -- encodes through the
-# call it is running inside. Scoped to that call rather than captured, so
+# The function encoder for the extent of one companion call. Encoding a
+# closure or constructor value needs an interpreter, which this
+# evaluator-independent module never holds, so the extern-call chokepoint
+# publishes one here rather than every crossing value carrying a copy:
+# whatever a companion reaches -- an argument, a view it built itself, a
+# function nested in an array or dict -- encodes through the call it is
+# running inside. Scoped to that call rather than captured, so
 # nothing here outlives the interpreter that published it.
 _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextvars.ContextVar(
     "agl_active_function_encoder", default=None
@@ -131,7 +191,7 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 
 
 def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
-    """Publish *encoder* as the ambient closure encoder for a call's extent."""
+    """Publish *encoder* as the ambient function encoder for a call's extent."""
     return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
 
 
@@ -160,7 +220,7 @@ def active_contract_encoder(encoder: "_ContractEncoder") -> ScopedVar["_Contract
 #: its nominal to render it raises ``KeyError`` -- matching
 #: :class:`agm.agl.runtime.ExternRuntimeState`'s own detached fallback, which
 #: is likewise for direct companion use outside evaluation.
-_DETACHED_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_DETACHED_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 #: The descriptor view for the extern call currently running on this thread,
 #: published by :meth:`ExternRegistry.invoke` for the call's extent. A freshly
@@ -494,6 +554,7 @@ def _create_enum(
                 declared_name=variant.name,
                 kind=NominalKind.RECORD,
                 fields=variant.fields,
+                field_json_names=variant.field_json_names,
             )
             variant_cls = _create_nominal(member_descriptor, variant.name)
             variant_classes[variant.member] = variant_cls
@@ -701,8 +762,81 @@ class AglArrayView(MutableSequence[object]):
         return render_value(self._value, self._descriptors)
 
 
-class AglDictView(MutableMapping[str, object]):
-    """A mutable, lazy Python view over one AgL dict value."""
+_KEY_VALUE_KINDS = (
+    TextValue,
+    IntValue,
+    DecimalValue,
+    BoolValue,
+    JsonValue,
+    RecordValue,
+    ExceptionValue,
+)
+
+
+def decode_dict_key(key: object) -> Value:
+    """Decode a Python dict key to the AgL value it stands for.
+
+    Keys cross as values of their type do (``str``, ``int``, ``Decimal``,
+    ``bool``, :class:`AglJson`, nominal snapshots). An unhashable object (a
+    live record view, a list) raises Python's own ``TypeError``, as does any
+    other object with no key form.
+    """
+    if type(key) is str:
+        return TextValue(key)
+    hash(key)
+    decoded = _decode_written_value(key)
+    if not isinstance(decoded, _KEY_VALUE_KINDS):
+        raise BoundaryTypeError(f"{type(key).__name__} cannot be an AgL dict key")
+    return decoded
+
+
+def store_dict_entry(target: DictValue, key: object, value: object) -> None:
+    """Insert a companion's *key*/*value* into *target*, deciding key identity by AgL equality."""
+    target.insert(decode_dict_key(key), _decode_written_value(value))
+
+
+_ABSENT = object()
+
+
+class _DictItemsView(ItemsView[object, object]):
+    """``items()`` of an :class:`AglDictView`: encodes each entry once, without re-lookup."""
+
+    __slots__ = ("_view",)
+
+    def __init__(self, view: "AglDictView") -> None:
+        super().__init__(view)
+        self._view = view
+
+    def __iter__(self) -> Iterator[tuple[object, object]]:
+        view = self._view
+        for key, value in view._value.items():
+            yield (
+                encode_boundary_value(key, view._descriptors),
+                encode_boundary_value(value, view._descriptors),
+            )
+
+
+class _DictValuesView(ValuesView[object]):
+    """``values()`` of an :class:`AglDictView`: encodes each value once, without re-lookup."""
+
+    __slots__ = ("_view",)
+
+    def __init__(self, view: "AglDictView") -> None:
+        super().__init__(view)
+        self._view = view
+
+    def __iter__(self) -> Iterator[object]:
+        view = self._view
+        for value in view._value.values():
+            yield encode_boundary_value(value, view._descriptors)
+
+
+class AglDictView(MutableMapping[object, object]):
+    """A mutable, lazy Python view over one AgL dict value of any key type.
+
+    Keys are decoded to AgL values (:func:`decode_dict_key`) and matched by AgL
+    equality; iteration yields the originally inserted keys in insertion order.
+    """
 
     __slots__ = ("_value", "_descriptors")
 
@@ -710,32 +844,56 @@ class AglDictView(MutableMapping[str, object]):
         self._value = value
         self._descriptors = descriptors
 
-    def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key], self._descriptors)
+    def __getitem__(self, key: object) -> object:
+        found = self._value.lookup(decode_dict_key(key))
+        if found is None:
+            raise KeyError(key)
+        return encode_boundary_value(found, self._descriptors)
 
-    def __setitem__(self, key: str, value: object) -> None:
-        if not isinstance(key, str):
-            raise TypeError("AgL dict keys must be str")
-        self._value.entries[key] = _decode_written_value(value)
+    def __setitem__(self, key: object, value: object) -> None:
+        store_dict_entry(self._value, key, value)
 
-    def __delitem__(self, key: str) -> None:
-        del self._value.entries[key]
+    def __delitem__(self, key: object) -> None:
+        if self._value.remove(decode_dict_key(key)) is None:
+            raise KeyError(key)
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._value.entries)
+    def __iter__(self) -> Iterator[object]:
+        for key in self._value.keys():
+            yield encode_boundary_value(key, self._descriptors)
+
+    def items(self) -> ItemsView[object, object]:
+        return _DictItemsView(self)
+
+    def values(self) -> ValuesView[object]:
+        return _DictValuesView(self)
+
+    def pop(self, key: object, default: object = _ABSENT, /) -> object:
+        """Remove *key* in one step; return *default* if given, else raise ``KeyError``."""
+        found = self._value.remove(decode_dict_key(key))
+        if found is None:
+            if default is _ABSENT:
+                raise KeyError(key)
+            return default
+        return encode_boundary_value(found, self._descriptors)
 
     def __len__(self) -> int:
-        return len(self._value.entries)
+        return len(self._value)
 
     def clear(self) -> None:
-        self._value.entries.clear()
+        self._value.clear()
 
-    def popitem(self) -> tuple[str, object]:
-        key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value, self._descriptors)
+    def popitem(self) -> tuple[object, object]:
+        pair = self._value.pop_last()
+        if pair is None:
+            raise KeyError("popitem(): dict is empty")
+        key, value = pair
+        return (
+            encode_boundary_value(key, self._descriptors),
+            encode_boundary_value(value, self._descriptors),
+        )
 
     def __contains__(self, key: object) -> bool:
-        return key in self._value.entries
+        return self._value.lookup(decode_dict_key(key)) is not None
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglDictView) and self._value is other._value
@@ -747,29 +905,22 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value, self._descriptors)
 
 
-def _unknown_nominal_message(nominal: NominalId, descriptors: ValueDescriptors) -> str:
-    """Report an unregistered nominal identity without printing its raw id."""
-    known = descriptors.nominals.get(nominal)
-    if known is not None:
-        return f"unknown AgL nominal {known.display_name!r}"
-    return "unknown AgL nominal: no companion class was synthesized for this identity"
-
-
 def encode_boundary_value(value: Value, descriptors: ValueDescriptors) -> object:
     """Encode an AgL value by its runtime subclass.
 
     *descriptors* resolves nominal/function spellings for anything this
-    crossing renders (an unknown-nominal message, a view's own ``repr``) and
+    crossing renders (a view's own ``repr``) and
     is stored on any array/dict/mutable-record view this mints, so the view
     keeps rendering correctly after the call that built it returns. An
     ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
-    value). A closure needs an interpreter to become a callable proxy, which
-    the active extern call supplies through :func:`active_function_encoder`;
-    the runtime boundary itself remains evaluator-independent. A closure
-    therefore crosses only inside a call, matching the window a proxy may be
-    invoked in: reading one through a view that outlived its call -- or from
-    a thread that did not inherit the call's context -- reports rather than
-    minting a proxy nothing could invoke. A ``json`` payload crosses uncopied
+    value). A function value -- a closure or a constructor -- needs an
+    interpreter to become a callable proxy, which the active extern call
+    supplies through :func:`active_function_encoder`; the runtime boundary
+    itself remains evaluator-independent. A function therefore crosses only
+    inside a call, matching the window a proxy may be invoked in: reading one
+    through a view that outlived its call -- or from a thread that did not
+    inherit the call's context -- reports rather than minting a proxy nothing
+    could invoke. A ``json`` payload crosses uncopied
     and unchecked: the companion is trusted to treat what it receives as
     read-only.
     """
@@ -780,6 +931,8 @@ def _encode_boundary_value(
     value: Value, descriptors: ValueDescriptors, memo: dict[int, object]
 ) -> object:
     """Encode *value*, retaining shared nominal nodes within one crossing."""
+    # An iterator is internal to loop lowering and never crosses.
+    value = cast(ObservableValue, value)
     if isinstance(value, UnitValue):
         return None
     if isinstance(value, BoolValue):
@@ -796,7 +949,7 @@ def _encode_boundary_value(
         return AglArrayView(value, descriptors)
     if isinstance(value, DictValue):
         return AglDictView(value, descriptors)
-    if isinstance(value, IrClosureValue):
+    if isinstance(value, (IrClosureValue, ConstructorValue)):
         encoder = _ACTIVE_FUNCTION_ENCODER.get()
         if encoder is None:
             raise BoundaryViolation(
@@ -809,18 +962,13 @@ def _encode_boundary_value(
         if contract_encoder is None:
             raise BoundaryViolation("a target contract crosses only into its extern call")
         return contract_encoder(value)
-    if isinstance(value, (RecordValue, ExceptionValue)):
-        encoded = memo.get(id(value))
-        if encoded is not None:
-            return encoded
-        try:
-            cls = _NOMINAL_CLASSES[value.nominal]
-        except KeyError as exc:
-            raise BoundaryViolation(_unknown_nominal_message(value.nominal, descriptors)) from exc
-        encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
-        memo[id(value)] = encoded
+    encoded = memo.get(id(value))
+    if encoded is not None:
         return encoded
-    raise BoundaryViolation(f"cannot encode {type(value).__name__}")
+    cls = _NOMINAL_CLASSES[value.nominal]
+    encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
+    memo[id(value)] = encoded
+    return encoded
 
 
 def decode_boundary_value(obj: object) -> Value:
@@ -830,7 +978,10 @@ def decode_boundary_value(obj: object) -> Value:
     (``_agl_descriptor``), so decoding needs no registry lookup: it resolves
     a nominal purely from ``type(obj)``, which is why a value built at
     companion import time, on a worker thread, or retained past the call
-    that produced it all decode the same way.
+    that produced it all decode the same way. A ``Decimal`` outside the
+    pinned context's range is rejected here as a :class:`BoundaryViolation`,
+    like any other unrepresentable extern return value. A ``json`` payload is
+    not walked: its shape and finite numbers are the companion's obligation.
     """
     return _decode_boundary_value(obj, {})
 
@@ -844,7 +995,10 @@ def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
     if isinstance(obj, int):
         return IntValue(obj)
     if isinstance(obj, Decimal):
-        return DecimalValue(obj)
+        try:
+            return DecimalValue(checked_decimal(obj))
+        except ValueError as exc:
+            raise BoundaryViolation(str(exc)) from exc
     if isinstance(obj, str):
         return TextValue(obj)
     if isinstance(obj, AglJson):
@@ -855,11 +1009,11 @@ def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
         return obj._value
     # Imported lazily because externs depends on this module for normal
     # boundary conversion. Only proxies minted by the evaluator carry an AgL
-    # closure; arbitrary Python callables remain unsupported.
+    # function value; arbitrary Python callables remain unsupported.
     from agm.agl.runtime.externs import AglCallableProxy
 
     if isinstance(obj, AglCallableProxy):
-        return obj._closure
+        return obj._function
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         decoded = memo.get(id(obj))

@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "computed_key_no_collision",
+      "params": {"k": "a"},
+      "expect": {
+        "stdout": "{\"outer\": {\"a\": 1, \"b\": 2}}\n"
+      }
+    },
+    {
+      "name": "computed_key_collides_at_runtime",
+      "params": {"k": "b"},
+      "expect": {
+        "stdout": "dup: \"b\"\n"
+      }
+    }
+  ]
+}

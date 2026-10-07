@@ -1,0 +1,13 @@
+scope shapes
+  record Saved
+    id: int
+
+  enum Status = ::shapes::Saved | Fresh(n: int)
+end shapes
+
+def describe(status: shapes::Status) -> int =
+  case status of
+    | shapes::Status::Saved(id) => id
+    | shapes::Status::Fresh(n) => n
+
+program def main() -> unit = print(describe(shapes::Saved(id = 1)))

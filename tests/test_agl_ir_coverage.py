@@ -6,7 +6,7 @@ import decimal
 
 import pytest
 
-from agm.agl.eval.arith import contains, div, order, value_eq
+from agm.agl.eval.arith import contains, order, value_eq
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
@@ -14,7 +14,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, WalkTags, value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -23,30 +23,28 @@ from agm.agl.semantics.values import (
     DictValue,
     ExceptionValue,
     IntValue,
-    IteratorValue,
     JsonValue,
     RecordValue,
     TextValue,
-    _json_eq,
-    _json_hash,
+    json_eq,
+    json_hash,
 )
 from agm.agl.typecheck.env import OutputContractSpec
 from tests._agl_helpers import type_table_for
 from tests.agl.ir_harness import evaluate_ir
 
 
-def test_arithmetic_mixed_and_defensive_edges() -> None:
+def test_arithmetic_mixed_edges() -> None:
     one = IntValue(1)
     decimal_one = DecimalValue(decimal.Decimal(1))
+    # value_eq (structural equality) still widens int<->decimal directly; a
+    # binary operator's own operands are pre-coerced same-typed by the
+    # lowerer before reaching order()/div(), so those two no longer widen.
     assert value_eq(one, decimal_one)
     assert value_eq(decimal_one, one)
-    assert order(CmpOp.LE, one, decimal_one)
-    assert order(CmpOp.GE, decimal_one, one)
+    assert order(CmpOp.LE, decimal_one, decimal_one)
+    assert order(CmpOp.GE, decimal_one, decimal_one)
     assert not contains(ContainsKind.DICT, one, DictValue({"1": one}))
-    with pytest.raises(AssertionError, match="cannot compare"):
-        order(CmpOp.LT, TextValue("x"), one)
-    with pytest.raises(AssertionError, match="expected numeric"):
-        div(TextValue("x"), one)
 
 
 def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
@@ -64,9 +62,9 @@ def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
 
 
 def test_json_value_helper_edges() -> None:
-    assert not _json_eq([1], [1, 2])
-    assert _json_hash(True) != _json_hash(1)
-    assert isinstance(_json_hash([1, {"x": decimal.Decimal(2)}]), int)
+    assert not json_eq([1], [1, 2])
+    assert json_hash(True) != json_hash(1)
+    assert isinstance(json_hash([1, {"x": decimal.Decimal(2)}]), int)
     assert JsonValue(1).__eq__(object()) is NotImplemented
 
 
@@ -93,13 +91,12 @@ def test_constructor_render_and_serialization_edges() -> None:
             ),
         },
         functions={},
+        exception_field_encodes={},
     )
     assert render_value(record, descriptors) == "<constructor Thing>"
     assert render_value(variant, descriptors) == "<constructor Thing::Case>"
     with pytest.raises(AglNonDataValue, match="constructor"):
-        value_to_json_obj(record)
-    with pytest.raises(AglNonDataValue, match="iterator"):
-        value_to_json_obj(IteratorValue(elements=[]))
+        value_to_json_obj(record, tags=WalkTags(member_tags={}, field_names={}))
 
 
 def test_param_conversion_direct_success_edges() -> None:
@@ -108,8 +105,6 @@ def test_param_conversion_direct_success_edges() -> None:
     assert convert_host_value("decimal", decimal.Decimal("1.5"), DecimalType(), table) == (
         DecimalValue(decimal.Decimal("1.5"))
     )
-    with pytest.raises(ValueError, match="unsupported type"):
-        convert_host_value("unit", None, UnitType(), table)
 
 
 def test_deeply_nested_singleton_decompositions_execute() -> None:
@@ -130,6 +125,6 @@ result
 
 def test_structured_exec_contract_uses_passthrough_codec() -> None:
     contract = materialize_contract(
-        OutputContractSpec(UnitType(), "unused", None, structured_exec=True), {}
+        OutputContractSpec(UnitType(), "unused", None, structured_exec=True), {}, type_table_for()
     )
     assert contract.structured_exec

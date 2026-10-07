@@ -1,0 +1,9 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Holder[T] = Slot[T]
+
+program def main() -> unit =
+  let held: Holder::Filled = Slot::Filled(value = 1)
+  print(held)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import decimal
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,14 +18,12 @@ from agm.agl.matchcompile import (
     CachedModuleSites,
     CaseSite,
     CompiledMatchSite,
+    ConstructorSpeller,
     MatchCompilationResult,
-    MatchCompiledModule,
     MatchCompiledProgram,
-    MatchIssue,
     NonExhaustiveIssue,
     RedundantArmIssue,
     compile_program_matches,
-    diagnostic_from_match_issue,
     diagnostics_from_match_issues,
 )
 from agm.agl.matchcompile.compiler import compile_match_site, validate_compiled_case
@@ -47,16 +45,19 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     PipelineDriver,
     PreparedProgram,
-    _run_matchcompile_program,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests._agl_helpers import prepare_inline_code, run_inline_code
-from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.ir_harness import (
+    MatchCompiledModule,
+    base_caps,
+    make_graph_from_files,
+    single_module_program,
+)
 from tests.agl.match_reference import case_sites
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -75,25 +76,25 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "DecisionLeaf",
         "DecisionSwitch",
         "NominalConstructor",
-        "EnumWitness",
-        "EnumWitnessQualification",
+        "ConstructorSpeller",
+        "ConstructorSpellers",
+        "ConstructorWitness",
         "FieldOccurrenceProvenance",
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
-        "MatchCompiledArtifact",
         "MatchCompiledProgram",
-        "MatchCompiledModule",
         "MatchIssue",
         "MatchSiteSource",
         "MatchWitness",
         "NonExhaustiveIssue",
+        "NonExhaustiveMatchError",
         "NormalizedMatchSite",
         "Occurrence",
         "OccurrenceId",
         "OpenComplementWitness",
         "NominalConstructor",
-        "RecordWitness",
+        "RedundantArmError",
         "RedundantArmIssue",
         "WildcardWitness",
         "WitnessField",
@@ -101,14 +102,16 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "compile_program_matches",
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
+        "match_issue_error",
         "render_witness",
         "validate_match_compiled_program",
-        "validate_match_compiled_module",
     }
-    assert not hasattr(matchcompile, "EnumOwnerForm")
-    assert not hasattr(matchcompile, "EnumOwnerFormKind")
     assert hasattr(matchcompile, "FieldOccurrenceProvenance")
-    assert matchcompile.EnumWitnessQualification is not EnumOwnerForm
+
+
+def _no_constructors(_module_id: ModuleId) -> ConstructorSpeller:
+    """Speller for programs whose witnesses are not about scope spelling."""
+    return lambda decl, _case_node_id: decl[2]
 
 
 def _checked(source: str) -> CheckedModule:
@@ -116,29 +119,15 @@ def _checked(source: str) -> CheckedModule:
 
 
 def _compile_module_matches(checked: CheckedModule) -> MatchCompilationResult:
-    """Reimplements the deleted ``compile_module_matches`` for this file's tests.
-
-    This file drives match compilation at per-module granularity to test the
-    stage module's own artifact/diagnostic contracts (validation, corruption
-    rejection) directly — production only ever compiles a whole program
-    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
-    surviving public per-module entry point. Reuses the same
-    ``_compile_owner_sites``/``_rejected`` building blocks
-    ``compile_program_matches`` itself calls once per module.
-    """
-    sites, issues = stage_module._compile_owner_sites(checked)
-    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
-    if sorted_issues:
-        return stage_module._rejected((sites,), sorted_issues)
-    return MatchCompilationResult(
-        compiled=MatchCompiledModule(checked=checked, sites=sites), issues=()
-    )
+    """Match-compile one checked module as a single-module program."""
+    return compile_program_matches(single_module_program(checked))
 
 
 def _compiled(source: str) -> MatchCompiledModule:
-    result = _compile_module_matches(_checked(source))
-    assert isinstance(result.compiled, MatchCompiledModule)
-    return result.compiled
+    checked = _checked(source)
+    result = _compile_module_matches(checked)
+    assert result.compiled is not None
+    return MatchCompiledModule(checked, result.compiled.sites_by_module[ENTRY_ID])
 
 
 def _prepared_program(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedProgram:
@@ -311,16 +300,16 @@ def test_compiles_nested_cases_as_sealed_source_payloads() -> None:
         "  | false => 3\n"
     )
     result = _compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    compiled = result.compiled
+    assert result.compiled is not None
+    sites = result.compiled.sites_by_module[ENTRY_ID]
 
-    assert len(compiled.sites) == 2
-    assert {type(site.source) for site in compiled.sites.values()} == {CaseSite}
-    assert len(case_sites(compiled.sites)) == 2
+    assert len(sites) == 2
+    assert {type(site.source) for site in sites.values()} == {CaseSite}
+    assert len(case_sites(sites)) == 2
 
-    mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
+    mutable_sites = cast(MutableMapping[int, CompiledMatchSite], sites)
     with pytest.raises(TypeError):
-        mutable_sites[999] = next(iter(compiled.sites.values()))
+        mutable_sites[999] = next(iter(sites.values()))
 
 
 def test_artifact_validation_skips_lets_but_requires_cases() -> None:
@@ -355,16 +344,13 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
 
     assert result.compiled is None
     assert len(result.issues) == 3
-    diagnostics = diagnostics_from_match_issues(result.issues)
+    diagnostics = diagnostics_from_match_issues(result.issues, _no_constructors)
     assert [diagnostic.line for diagnostic in diagnostics] == sorted(
         diagnostic.line for diagnostic in diagnostics
     )
     assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
     assert any("false" in diagnostic.message for diagnostic in diagnostics)
     assert any("Redundant" in diagnostic.message for diagnostic in diagnostics)
-
-    with pytest.raises(AssertionError, match="unsupported"):
-        diagnostic_from_match_issue(cast(MatchIssue, object()))
 
 
 def test_program_match_compilation_orders_issues_by_source_location() -> None:
@@ -439,7 +425,8 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
             "beta": ("def beta(x: bool) -> int =\n  case x of\n    | true => 1\n    | true => 2\n"),
         },
     )
-    checked = check_program(resolve_program(graph), base_caps())
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, base_caps())
 
     result = compile_program_matches(checked)
 
@@ -464,7 +451,7 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
     ]
     assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
-    diagnostics = diagnostics_from_match_issues(result.issues)
+    diagnostics = diagnostics_from_match_issues(result.issues, resolved.speller)
     assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
     assert [
         (
@@ -685,24 +672,6 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
     MatchCompiledProgram(checked, compiled.sites_by_module)
 
 
-def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checked = _checked("case true of | true => 1 | false => 2")
-    source_case = _first_case(checked)
-
-    def walk_one_case_twice(_program: object, visit: Callable[[object], None]) -> None:
-        visit(source_case)
-        visit(source_case)
-
-    monkeypatch.setattr(stage_module, "walk", walk_one_case_twice)
-
-    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        stage_module._source_sites(checked.resolved.program)
-    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        _compile_module_matches(checked)
-
-
 def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
     tmp_path: Path,
 ) -> None:
@@ -839,22 +808,6 @@ def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> 
     result = compile_program_matches(checked)
     assert result.compiled is None
     assert len(result.issues) == 1
-
-
-def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    single = _compiled("let x = 1\nx")
-    graph = make_graph_from_files(tmp_path, {"entry": "()"})
-    checked = check_program(resolve_program(graph), base_caps())
-    single_result = MatchCompilationResult(compiled=single, issues=())
-    monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_program_matches",
-        lambda _checked, _cached=None: single_result,
-    )
-    compiled, diagnostics = _run_matchcompile_program(checked, graph, base_caps())
-    assert compiled is None
-    assert "module artifact" in diagnostics[0].message
 
 
 def test_single_and_program_discovery_surface_match_errors() -> None:

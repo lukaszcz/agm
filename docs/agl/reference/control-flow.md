@@ -198,23 +198,25 @@ program def main() -> unit =
 ### Clause semantics
 
 **`for` — collection iteration.** `for x in COLLECTION` iterates `array[T]`
-(elements, in order), `dict[text, V]` (keys, in dict order), or `text`
+(elements, in order), `dict[K, V]` (keys, in insertion order), or `text`
 (each character as a length-1 `text`). The loop variable `x` takes the
-element/key/char type respectively. `COLLECTION` is evaluated once, at loop
-entry. For an `array`, the loop observes that same mutable value for its
-whole run and captures its length as an upper bound at entry. Each iteration
-reads the element at the cursor's current index from the live array. An
-indexed assignment to an element the cursor has not yet reached (through any
-alias of the array, including the loop body itself) therefore changes what
-`x` is bound to when the cursor gets there. Appending or inserting elements
-cannot increase the entry-time upper bound. Removing elements or clearing the
-array ends iteration when the cursor reaches the live end, so the loop may run
-fewer times than that bound. Insertions and removals before the cursor shift
-live indices in the usual way and can therefore cause an element to be visited
-again or skipped. For a `dict`, `x` ranges over the key sequence fixed at loop
-entry — an indexed assignment cannot change the key set, so it can never change
-what `x` is bound to; a `d[k]` read inside the body, however, reflects any
-mutation performed to that key's value during the loop.
+element/key/char type respectively; a dict key is bound as originally inserted
+(see [Destructive assignment](bindings-and-scope.md#destructive-assignment)).
+`COLLECTION` is evaluated once, at loop entry. For an `array`, the loop
+observes that same mutable value for its whole run and captures its length as
+an upper bound at entry. Each iteration reads the element at the cursor's
+current index from the live array. An indexed assignment to an element the
+cursor has not yet reached (through any alias of the array, including the loop
+body itself) therefore changes what `x` is bound to when the cursor gets there.
+Appending or inserting elements cannot increase the entry-time upper bound.
+Removing elements or clearing the array ends iteration when the cursor reaches
+the live end, so the loop may run fewer times than that bound. Insertions and
+removals before the cursor shift live indices in the usual way and can
+therefore cause an element to be visited again or skipped. For a `dict`, `x`
+ranges over the key sequence fixed at loop entry — an indexed assignment cannot
+change the key set, so it can never change what `x` is bound to; a `d[k]` read
+inside the body, however, reflects any mutation performed to that key's value
+during the loop.
 
 **`for` — integer range.** `for i in a to b` runs `i = a, a+1, …, b`
 (inclusive); `for i in a downto b` runs `i = a, a-1, …, b` (inclusive).

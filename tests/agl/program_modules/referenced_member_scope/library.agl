@@ -1,0 +1,4 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)

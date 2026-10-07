@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "first_members",
+      "module_roots": [
+        "program_modules/modules/injection_current_module_qualifier"
+      ],
+      "params": {
+        "flag": true
+      },
+      "expect": {
+        "stdout": "red\nlocal some\nbuiltin some 1\n"
+      }
+    },
+    {
+      "name": "second_members",
+      "module_roots": [
+        "program_modules/modules/injection_current_module_qualifier"
+      ],
+      "params": {
+        "flag": false
+      },
+      "expect": {
+        "stdout": "blue\nlocal other\nbuiltin some 2\n"
+      }
+    }
+  ]
+}

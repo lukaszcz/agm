@@ -330,6 +330,7 @@ _HELP_TEXTS: dict[str, str] = {
                 [--dry-run] COMMAND [ARGS...]
 
         Run COMMAND in an Anthropic Sandbox Runtime (srt) sandbox.
+        Sandboxed Codex launches include --no-daemon to keep execution inside srt.
 
         Options:
           --no-sandbox         Run COMMAND directly, without srt or settings.

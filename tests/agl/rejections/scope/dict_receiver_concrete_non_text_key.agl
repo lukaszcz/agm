@@ -1,0 +1,4 @@
+def dict[int, V]::sz(self) -> int = 0
+
+program def main() -> unit =
+  ()

@@ -2,13 +2,15 @@
 
 Single source of truth for the top-level command names and their one-line
 overview descriptions, consumed by the CLI help layer (:mod:`agm.parser`), and
-for the top-level names AGM reserves in its command tree and config namespace.
+for the shape of registered command paths and top-level reserved names.
 
 This is a pure data leaf: it imports nothing from ``agm`` and pulls in no CLI
 machinery.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 # Ordered (name, one-line description) for every top-level AGM command, as shown
 # by ``agm help``.
@@ -77,3 +79,13 @@ def invalid_command_path(
     if any(word.startswith("-") for word in words):
         return "contains an option"
     return None
+
+
+def is_subcommand_path(path: str, group_path: str) -> bool:
+    """Whether command *path* lies below group *group_path*."""
+    return path.startswith(group_path + " ")
+
+
+def has_subcommands(group_path: str, paths: Iterable[str]) -> bool:
+    """Whether any of *paths* lies below group *group_path*."""
+    return any(is_subcommand_path(path, group_path) for path in paths)

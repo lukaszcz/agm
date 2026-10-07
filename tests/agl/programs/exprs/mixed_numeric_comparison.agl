@@ -1,0 +1,27 @@
+import std/array
+import std/math
+
+# Comparing an `int` with a `decimal` -- `==`, `!=`, `<`, `<=`, `>`, `>=`,
+# array and dict-key membership (`in`), and a literal pattern -- is exact and
+# never raises, even for an `int` far outside the decimal range: the `int` is
+# never widened. An index key and a call argument do widen it, raising
+# `ArithmeticError` when it falls outside the range.
+program def main(exponent: int) -> unit =
+  let n = 2.pow(exponent)
+  let near = 10.pow(30) + 1
+  print([n == 1.5, n != 1.5, n < 1.5, n <= 1.5, n > 1.5, n >= 1.5])
+  print([-n < 1.5, 1.5 > -n, 1.5 < n, 1.5 == n, n == 2.0, 2.0 <= n])
+  print([n in [1.5, 2.0], near == 1000000000000000000000000000001.0])
+  print([near > 1000000000000000000000000000000.5, near < 1000000000000000000000000000001.5])
+  let match-label = case n of
+    | 2.0 => "two"
+    | _ => "other"
+  print(match-label)
+  let names = {1.0: "one", 1.5: "a", 2.0: "two"}
+  print([n in names, near in names, 2 in names])
+  try
+    print(names[n])
+  catch ArithmeticError as e => print("index: %{e.operation}")
+  try
+    print([1.5, 2.0].contains(n))
+  catch ArithmeticError as e => print("argument: %{e.operation}")

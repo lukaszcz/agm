@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_selects_every_aliased_declaration",
+      "params": {
+        "n": 1
+      },
+      "expect": {
+        "stdout": "true false true false true\ntrue false false\n"
+      }
+    },
+    {
+      "name": "descendant_exception_is_the_aliased_ancestor",
+      "params": {
+        "n": 2
+      },
+      "expect": {
+        "stdout": "true false true false true\ntrue false true\n"
+      }
+    },
+    {
+      "name": "other_members_are_not_the_aliased_declarations",
+      "params": {
+        "n": 0
+      },
+      "expect": {
+        "stdout": "false true false true false\nfalse true false\n"
+      }
+    }
+  ]
+}

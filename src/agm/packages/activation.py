@@ -11,13 +11,13 @@ import semver
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
-from agm.command_catalog import invalid_command_path
+from agm.command_catalog import has_subcommands, invalid_command_path
 from agm.config.context import content_stamp, context_cached, invalidate_context_cache
 from agm.config.general import (
-    agm_home_dir,
     config_file_candidates,
     load_merged_config,
 )
+from agm.config.home import agm_home_dir
 from agm.core.fs import mkdir, write_text_atomic
 from agm.core.toml import TomlDict, dumps_toml, empty_toml_doc, load_toml_file, toml_dict
 from agm.packages.layout import MODULE_TREE_DIRNAME
@@ -839,9 +839,7 @@ def _validate_active_package(name: str, active: ActivePackage) -> None:
 
 def _validate_commands(index: ActivationIndex) -> None:
     for path_name, command in index.commands.items():
-        if command.program is None and not any(
-            path.startswith(path_name + " ") for path in index.commands
-        ):
+        if command.program is None and not has_subcommands(path_name, index.commands):
             raise PackageActivationError(f"command group {path_name!r} requires subcommands")
         _validate_command_registration(path_name, command, index.packages)
 

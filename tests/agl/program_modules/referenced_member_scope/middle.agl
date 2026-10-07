@@ -1,0 +1,3 @@
+import other
+
+enum Mixed = other::Shared | Own(n: int)

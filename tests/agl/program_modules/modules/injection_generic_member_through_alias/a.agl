@@ -1,0 +1,6 @@
+enum Opt[T]
+  | Nothing
+  | Som(value: T)
+
+type IntOpt = Opt[int]
+type DecOpt = Opt[decimal]

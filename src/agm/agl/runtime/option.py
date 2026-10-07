@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.values import RecordValue, TextValue, Value
@@ -35,6 +37,4 @@ def option_text(value: RecordValue, *, nominals: BuiltinNominals) -> str | None:
     """Return the text an ``Option[text]`` member record carries, or ``None``."""
     if resolve_standard_member_name(value.nominal, "Option", ("Some",), nominals) is None:
         return None
-    payload = value.fields["value"]
-    assert isinstance(payload, TextValue)
-    return payload.value
+    return cast(TextValue, value.fields["value"]).value

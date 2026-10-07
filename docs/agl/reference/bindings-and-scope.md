@@ -65,8 +65,11 @@ fails, previously completed bindings and function closures remain available.
 binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
 binding at that path rather than in the module root namespace. The prefix is
 an ordinary declaration path, not a module route or a type-argument-applied
-segment. See [Named scopes](scopes.md#binder-paths) for declaring a binder
-inside a `scope` region.
+segment. A binding is declared at its written path; a prefix naming a type
+alias the same module declares is an error ([Type
+aliases](types.md#type-aliases)). See
+[Named scopes](scopes.md#binder-paths) for declaring a binder inside a `scope`
+region.
 
 A module-root or scope-region single-name binding may be marked `@param` to
 admit a host-supplied initial value. It remains an ordinary `let` or `var` in
@@ -141,8 +144,22 @@ refers to, so mutating an array or dict through one is not a rebinding and is
 not restricted. A bare `name := value` — an actual rebinding, with no index —
 remains a static error unless `name` is a mutable `var` binding. Array
 assignment uses the same negative-index and `IndexError` rules as array
-access. Dictionary assignment updates existing keys only; assigning to a
-missing key raises `KeyError`.
+access. A dictionary index follows [Indexing](expressions.md#indexing): it
+has, or coerces to, the key type, which must be `Hashable`. Dictionary
+assignment updates existing keys only; assigning to a missing key raises
+`KeyError`. It replaces only the value: the stored key, as originally
+inserted, is kept even when the index is an equal but differently written
+value:
+
+```agl
+program def main() -> unit =
+  let price: json = 1.50
+  let labels: dict[json, text] = {price: "x"}
+  labels[1.5] := "y"
+  print(labels)   # {1.50: "y"}
+  let counts: dict[decimal, int] = {1.5: 0, 2.0: 0}
+  counts[2] := 1  # the int index coerces to the decimal key
+```
 
 `:=` can also update a field declared with `var` on a record or enum-member
 record. The receiver may be any record-typed postfix expression, including a
@@ -207,9 +224,9 @@ program def main(threshold: int) -> unit =
   print budget
 ```
 
-A `:=` that ends its line is otherwise a
-[line continuation](lexical-structure.md#layout-rules); the suite form wins when
-the next line is indented further.
+A `:=` that ends its line is otherwise a [line
+continuation](lexical-structure.md#layout-indentation-newlines-continuation);
+the suite form wins when the next line is indented further.
 
 ## `def` — function declarations
 
@@ -368,7 +385,7 @@ determines whether it denotes a type, a value, or a constructor
 how it is declared and the position it appears in.
 
 AgL keeps **two namespaces**: a *type* namespace and a *value* namespace. A
-name may exist in both at once without collision. A `record` or `enum`
+name may exist in both at once without collision. A `record` or `exception`
 declaration introduces a type name *and* a same-spelled value binding for its
 constructor:
 
@@ -379,6 +396,30 @@ record Box[T]
 # 'Box' the constructor lives in the value namespace.
 let b: Box[int] = Box(value = 1)
 ```
+
+An enum, an alias of an enum, and an alias of a structural type have no
+constructor of their own (an enum's members are its constructors); neither
+does an alias whose target is one of its own type parameters, since a type
+parameter shadows any type of the same name (in `type G[Col] = Col`, `Col`
+is the parameter). Such a name lives only in the type namespace, at the
+module root or in a named scope, so a value of the same spelling — a builtin,
+an imported function, an enclosing declaration — stays visible beside it:
+
+```agl
+enum render
+  | Plain
+  | Fancy
+def show(style: render) -> text =
+  render(1)   # the builtin 'render'
+```
+
+Where no value of that spelling is visible, using the name as a value,
+qualifying a constructor with it, or calling it is a static type error,
+whether the name is declared locally or imported.
+
+A named scope region occupies neither namespace: it only prefixes the names of
+the declarations inside it. Beside an own `scope Geo`, an imported type `Geo`
+stays visible in type position, and an imported value `Geo` in value position.
 
 ### Constructors in the value namespace
 
@@ -405,6 +446,17 @@ and [Generics](generics.md) for constructor typing and inference.
 
 ### Overload sets, shadowing, and ambiguity
 
+A spelling is decided at the first [lookup
+step](scopes.md#names-and-visibility) that finds anything for it: a
+declaration of the module itself at that path wins; otherwise exactly one
+distinct declaration provided by the imports and `use` declarations there is
+selected, however many routes reach it; two or more distinct provided
+declarations are a **static scope ambiguity error**, reported at the
+reference. A spelling reached through a rename — a type alias, `import … as`,
+`use … as` — is its target, so reaching one declaration both directly and
+through a rename, or through two renames, is never an ambiguity ([Type
+aliases](types.md#type-aliases) covers aliases of applied types).
+
 Several visible constructors may share an unqualified member name. In ordinary
 value position, a bare reference must resolve to exactly one constructor
 candidate in its lexical scope. If it does not, it is a **static scope
@@ -412,8 +464,11 @@ ambiguity error**, even when an expected enum type contains one of the
 candidates: scope resolves the name before that type is used to check the
 expression. **Qualify** the reference with the member's owning enum or record
 to disambiguate. Enum-member patterns and `is` tests are different: their
-scrutinee's static enum type selects the member rather than using ordinary
-value-position scope selection.
+scrutinee's static enum type selects a bare member rather than using ordinary
+value-position scope selection. A module-qualified member spelling
+(`mylib::Tagged`, `::Tagged`) selects the same member in every position, unless
+a same-named declaration claims its value spelling as described below
+([Modules](modules.md#module-qualified-enum-members)).
 
 ```agl
 enum Holder[T]
@@ -426,10 +481,18 @@ enum Other
 let h: Holder[int] = Holder::Tagged(by = 7)   # qualified — unambiguous
 ```
 
-An enum member's bare spelling is an injected convenience, so among the names
-one import surface exposes it yields to a record or exception constructor
-declaring that very name, whichever module declares each; the member stays
-reachable qualified.
+A declaration of the module itself claims the spelling over any member an
+import injects, and a member of an enum the module declares claims it over an
+imported declaration. Otherwise an enum member's bare spelling, an injected
+convenience, yields at a lookup step to a record or exception constructor of
+that very name that an import or `use` declaration reaches at that step,
+whichever module declares each and whichever contributions reach them; the
+member stays reachable qualified. Where `a` declares `enum Color = Red | Green`
+and `b` declares `record Red`, after `import a`, `import b`, `use a::Color`,
+and `use b::Red`, bare `Red` is `b`'s record and `Color::Red` the member.
+Yielding applies in value position only: an enum-member pattern or `is` test
+selects among the bare candidates by its scrutinee's type
+([Constructor patterns](pattern-matching.md#constructor-patterns)).
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `Tagged` hides the outer
@@ -475,7 +538,8 @@ end Collision
 ```
 
 Use [`::name`](modules.md) to reach the module's own top-level declaration past
-any shadowing:
+any shadowing: it skips every nearer binding and lookup step and reads none of
+the module's imports or uses:
 
 <!-- agl-check: fragment -->
 ```agl

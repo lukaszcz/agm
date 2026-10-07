@@ -28,13 +28,18 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping, Sequence
+from functools import partial
 
 from agm.agent.session import create_agl_session_host
-from agm.agl.diagnostics import format_diagnostic
+from agm.agl.diagnostics import AglError, format_diagnostic
+from agm.agl.ir.static_keys import StaticBindingKey
+from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.repl.plain_console import plain_mode_engaged
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
+from agm.agl.runtime.types import ParamBindingInfo
 from agm.cli_support.args import ReplArgs
 from agm.cli_support.engine_seeds import (
     build_host_engine_seeds,
@@ -46,18 +51,20 @@ from agm.cli_support.engine_seeds import (
 from agm.cli_support.param_config import resolve_module_param_values
 from agm.config.context import current_config_context
 from agm.config.general import (
-    agm_home_dir,
+    GeneralConfig,
     exec_config_from_merged,
     load_general_config,
     load_repl_config,
     save_repl_setting,
 )
+from agm.config.home import agm_home_dir
 from agm.config.module_roots import (
     StdlibResolutionError,
     load_module_roots,
     resolve_lib_root,
     resolve_stdlib_root,
 )
+from agm.config.qualified_keys import QualifiedConfigLookupError
 from agm.core.cleanup import preserve_primary_error
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.process import terminating_signals_exit
@@ -65,6 +72,16 @@ from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
 from agm.sandbox.prepare import lazy_sandbox_context
+
+
+def _resolve_param_seeds(
+    config: GeneralConfig, _module: ModuleId, params: Sequence[ParamBindingInfo]
+) -> Mapping[StaticBindingKey, object]:
+    """Resolve module-parameter seeds, reporting an ambiguous config key as an ``AglError``."""
+    try:
+        return resolve_module_param_values(config, params)
+    except QualifiedConfigLookupError as exc:
+        raise AglError(str(exc)) from exc
 
 
 def run(args: ReplArgs) -> None:
@@ -166,9 +183,7 @@ def run(args: ReplArgs) -> None:
             configured_roots=mod_roots_cfg.extra,
             package_roots=package_roots,
             default_stdlib=not args.no_stdlib,
-            param_seed_resolver=lambda _module, params: resolve_module_param_values(
-                general_config, params
-            ),
+            param_seed_resolver=partial(_resolve_param_seeds, general_config),
         )
 
         with preserve_primary_error(session.close, label="companion state cleanup"):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -21,6 +22,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
+    AglJson,
     BoundaryTypeError,
     BoundaryViolation,
     active_function_encoder,
@@ -31,11 +33,16 @@ from agm.agl.runtime.boundary import (
 from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow
 from agm.agl.semantics.values import (
     ArrayValue,
+    BoolValue,
+    DecimalValue,
     DictValue,
+    ExceptionValue,
     IntValue,
     IrClosureValue,
+    JsonValue,
     RecordValue,
     TextValue,
+    Value,
 )
 from tests.agl.ir_harness import evaluate_ir_with_externs
 
@@ -54,7 +61,7 @@ class _EventCompanion(Protocol):
 _next_nominal = itertools.count(80_000_000)
 
 #: An empty descriptor view for tests that never check a rendered spelling.
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _next_id() -> NominalId:
@@ -62,7 +69,10 @@ def _next_id() -> NominalId:
 
 
 def _record_class(
-    *, mutable: bool, fields: tuple[str, ...] = ("value", "fixed")
+    *,
+    mutable: bool,
+    fields: tuple[str, ...] = ("value", "fixed"),
+    kind: NominalKind = NominalKind.RECORD,
 ) -> tuple[NominalId, type[_RecordCompanion], ValueDescriptors]:
     nominal = _next_id()
     descriptor = NominalDescriptor(
@@ -70,12 +80,15 @@ def _record_class(
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Mutable" if mutable else "Snapshot",
-        kind=NominalKind.RECORD,
+        kind=kind,
         fields=fields,
         mutable_fields=frozenset({fields[0]}) if mutable else frozenset(),
+        field_json_names=fields,
     )
     record_cls = cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
-    descriptors = ValueDescriptors(nominals={nominal: descriptor}, functions={})
+    descriptors = ValueDescriptors(
+        nominals={nominal: descriptor}, functions={}, exception_field_encodes={}
+    )
     return nominal, record_cls, descriptors
 
 
@@ -93,7 +106,7 @@ def test_dict_views_remain_live_without_a_call_scope() -> None:
     view = AglDictView(value, _NO_DESCRIPTORS)
     view["two"] = 2
 
-    assert value.entries == {"one": IntValue(1), "two": IntValue(2)}
+    assert value == DictValue({"one": IntValue(1), "two": IntValue(2)})
 
 
 def test_mutable_record_view_reads_current_values_and_writes_through() -> None:
@@ -161,6 +174,7 @@ def _callback_box_class() -> tuple[NominalId, type[_RecordCompanion]]:
         kind=NominalKind.RECORD,
         fields=("value", "callback"),
         mutable_fields=frozenset({"callback"}),
+        field_json_names=("value", "callback"),
     )
     return nominal, cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
 
@@ -180,7 +194,7 @@ def test_companion_constructed_view_encodes_any_closure_through_the_active_encod
     def encode(closure: IrClosureValue) -> object:
         return AglCallableProxy(
             arity=1,
-            closure=closure,
+            function=closure,
             require_active_window=window.require_active,
             invoke=lambda _args: results[closure.function_id],
         )
@@ -252,7 +266,11 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
             scope_path=(),
             declared_name="Event",
             kind=NominalKind.ENUM,
-            variants=(VariantDescriptor("Changed", ("value", "fixed"), member_nominal),),
+            variants=(
+                VariantDescriptor(
+                    "Changed", ("value", "fixed"), member_nominal, "Changed", ("value", "fixed")
+                ),
+            ),
         ),
         NominalDescriptor(
             nominal=member_nominal,
@@ -261,6 +279,7 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
             declared_name="Changed",
             kind=NominalKind.RECORD,
             fields=("value", "fixed"),
+            field_json_names=("value", "fixed"),
             mutable_fields=frozenset({"value"}),
         ),
     )
@@ -289,7 +308,7 @@ def test_view_retained_past_a_call_reads_plain_fields_but_not_a_function_field()
     def encode(closure: IrClosureValue) -> object:
         return AglCallableProxy(
             arity=0,
-            closure=closure,
+            function=closure,
             require_active_window=window.require_active,
             invoke=lambda _args: IntValue(7),
         )
@@ -410,6 +429,7 @@ def test_two_programs_reusing_a_function_id_render_each_views_own_spelling() -> 
         kind=NominalKind.RECORD,
         fields=("fn",),
         mutable_fields=frozenset({"fn"}),
+        field_json_names=("fn",),
     )
     synthesize_nominal_classes((descriptor,))
     function_id = FunctionId(1)
@@ -428,10 +448,12 @@ def test_two_programs_reusing_a_function_id_render_each_views_own_spelling() -> 
     first_descriptors = ValueDescriptors(
         nominals={nominal: descriptor},
         functions={function_id: function_descriptor(("int",), "int")},
+        exception_field_encodes={},
     )
     second_descriptors = ValueDescriptors(
         nominals={nominal: descriptor},
         functions={function_id: function_descriptor(("text",), "bool")},
+        exception_field_encodes={},
     )
     value = RecordValue(nominal, {"fn": IrClosureValue(function_id, ())})
 
@@ -442,3 +464,182 @@ def test_two_programs_reusing_a_function_id_render_each_views_own_spelling() -> 
     assert repr(second_view) == "Box(fn = <function: text -> bool>)"
     # The first view still reads through its own stored descriptors.
     assert repr(first_view) == "Box(fn = <function: int -> int>)"
+
+
+# ---------------------------------------------------------------------------
+# Dict views over every hashable key type
+# ---------------------------------------------------------------------------
+
+
+def _token_dict(*pairs: tuple[Value, Value]) -> DictValue:
+    value = DictValue()
+    for key, entry in pairs:
+        value.insert(key, entry)
+    return value
+
+
+@pytest.mark.parametrize(
+    ("key", "other"),
+    [
+        (IntValue(1), 2),
+        (DecimalValue(Decimal("1.5")), Decimal("2.5")),
+        (BoolValue(True), False),
+    ],
+)
+def test_dict_view_reads_writes_iterates_and_deletes_scalar_keys(key: Value, other: object) -> None:
+    value = _token_dict((key, TextValue("a")))
+    view = AglDictView(value, _NO_DESCRIPTORS)
+    original = next(iter(view))
+
+    assert (len(view), view[original], original in view, other in view) == (1, "a", True, False)
+    view[other] = "b"
+    assert list(view) == [original, other]
+    assert dict(view.items()) == {original: "a", other: "b"}
+    del view[original]
+    assert list(view) == [other]
+    with pytest.raises(KeyError):
+        view[original]
+
+
+def test_dict_view_matches_keys_by_agl_equality_and_keeps_the_first_key() -> None:
+    value = _token_dict((DecimalValue(Decimal("1.50")), IntValue(1)))
+    view = AglDictView(value, _NO_DESCRIPTORS)
+
+    assert Decimal("1.5") in view
+    view[Decimal("1.5")] = 2
+
+    assert len(view) == 1
+    (key,) = view
+    assert str(key) == "1.50"
+    assert view[Decimal("1.500")] == 2
+
+
+def test_dict_view_distinguishes_int_and_decimal_keys() -> None:
+    view = AglDictView(_token_dict((IntValue(1), IntValue(1))), _NO_DESCRIPTORS)
+
+    assert 1 in view
+    assert Decimal("1") not in view
+    assert True not in view
+
+
+def test_dict_view_over_json_keys_keeps_true_and_one_distinct() -> None:
+    value = _token_dict((JsonValue(True), IntValue(1)), (JsonValue(1), IntValue(2)))
+    view = AglDictView(value, _NO_DESCRIPTORS)
+
+    assert (view[AglJson(True)], view[AglJson(1)]) == (1, 2)
+    assert list(view) == [AglJson(True), AglJson(1)]
+    assert True not in view
+    assert 1 not in view
+    view[AglJson(True)] = 10
+    view[AglJson(Decimal("1.0"))] = 20
+    assert (view[AglJson(True)], view[AglJson(1)], len(view)) == (10, 20, 2)
+
+
+def test_dict_view_over_json_keys_finds_only_json_keys() -> None:
+    value = _token_dict((JsonValue("a"), IntValue(1)))
+    view = AglDictView(value, _NO_DESCRIPTORS)
+
+    assert "a" not in view
+    assert AglJson("a") in view
+    view[AglJson("b")] = 2
+    assert value.lookup(JsonValue("b")) == IntValue(2)
+    view[AglJson([1, {"x": True}])] = 3
+    assert view[AglJson([1, {"x": True}])] == 3
+    assert AglJson([1, {"x": 1}]) not in view
+
+
+def test_dict_view_over_record_keys_matches_structurally() -> None:
+    nominal, record_cls, descriptors = _record_class(mutable=False)
+    key = RecordValue(nominal, {"value": IntValue(1), "fixed": TextValue("a")})
+    view = AglDictView(_token_dict((key, IntValue(7))), descriptors)
+
+    probe = record_cls(value=1, fixed="a")
+    assert (probe in view, view[probe]) == (True, 7)
+    assert record_cls(value=2, fixed="a") not in view
+    view[record_cls(value=2, fixed="b")] = 8
+    assert [(k.value, k.fixed) for k in view] == [(1, "a"), (2, "b")]
+    del view[probe]
+    assert len(view) == 1
+
+
+def test_dict_view_over_exception_keys_matches_structurally() -> None:
+    nominal, exc_cls, descriptors = _record_class(mutable=False, kind=NominalKind.EXCEPTION)
+    key = ExceptionValue(nominal, {"value": IntValue(1), "fixed": TextValue("a")})
+    view = AglDictView(_token_dict((key, IntValue(7))), descriptors)
+
+    probe = exc_cls(value=1, fixed="a")
+    assert (probe in view, view[probe]) == (True, 7)
+    assert exc_cls(value=2, fixed="a") not in view
+    view[exc_cls(value=2, fixed="b")] = 8
+    assert len(view) == 2
+    assert [k.value for k in view] == [1, 2]
+
+
+def test_dict_view_rejects_a_live_record_view_key() -> None:
+    nominal, _record_cls, descriptors = _record_class(mutable=True)
+    live = encode_boundary_value(
+        RecordValue(nominal, {"value": IntValue(1), "fixed": IntValue(2)}), descriptors
+    )
+    view = AglDictView(DictValue(), descriptors)
+
+    with pytest.raises(TypeError):
+        view[live] = 1
+
+
+def test_dict_view_writing_a_non_text_key_over_text_entries_keeps_them() -> None:
+    view = AglDictView(DictValue({"a": IntValue(1), "b": IntValue(2)}), _NO_DESCRIPTORS)
+    view[3] = 3
+
+    assert list(view) == ["a", "b", 3]
+    assert (view["a"], view["b"], view[3]) == (1, 2, 3)
+
+
+def test_dict_view_popitem_encodes_a_non_text_key() -> None:
+    view = AglDictView(_token_dict((JsonValue(1), IntValue(1))), _NO_DESCRIPTORS)
+
+    assert view.popitem() == (AglJson(1), 1)
+
+
+def test_agl_json_follows_agl_equality_and_hashing() -> None:
+    assert AglJson(True) != AglJson(1)
+    assert hash(AglJson(True)) != hash(AglJson(1))
+    assert AglJson(Decimal("1.5")) == AglJson(Decimal("1.50"))
+    assert hash(AglJson(Decimal("1.5"))) == hash(AglJson(Decimal("1.50")))
+    assert AglJson([1, {"a": [True]}]) == AglJson([Decimal("1.0"), {"a": [True]}])
+    assert AglJson([True]) != AglJson([1])
+    assert AglJson(1) != 1
+    keys = {AglJson([1, 2]): "x", AglJson({"a": None}): "y"}
+    assert keys[AglJson([1, 2])] == "x"
+    assert keys[AglJson({"a": None})] == "y"
+
+
+def test_dict_view_writes_decide_key_identity_by_agl_equality() -> None:
+    value = DictValue()
+    view = AglDictView(value, _NO_DESCRIPTORS)
+    view[1] = "a"
+    view[1] = "b"
+
+    assert len(value) == 1
+    assert value.lookup(IntValue(1)) == TextValue("b")
+
+
+def test_dict_view_items_values_and_pop_use_agl_equality() -> None:
+    view = AglDictView(_token_dict((IntValue(1), TextValue("a"))), _NO_DESCRIPTORS)
+    view[Decimal("2")] = "b"
+
+    assert list(view.items()) == [(1, "a"), (Decimal("2"), "b")]
+    assert list(view.values()) == ["a", "b"]
+    assert view.pop(Decimal("2.0")) == "b"
+    assert view.pop(Decimal("2"), "gone") == "gone"
+    assert view.pop(1, None) == "a"
+    with pytest.raises(KeyError):
+        view.pop(1)
+    assert len(view) == 0
+
+
+def test_agl_dict_builds_from_pairs_merging_agl_equal_keys() -> None:
+    from agm.agl.runtime.externs import _dict
+
+    assert dict(_dict({"a": 1}).items()) == {"a": 1}
+    built = _dict([(1, "x"), (Decimal("1"), "y"), (True, "z"), (1, "w")])
+    assert list(built.items()) == [(1, "w"), (Decimal("1"), "y"), (True, "z")]

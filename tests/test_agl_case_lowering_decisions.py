@@ -21,7 +21,6 @@ from agm.agl.ir import (
 from agm.agl.matchcompile import DecisionDecompose
 from agm.agl.matchcompile.model import (
     DecisionBranch,
-    DecisionFail,
     DecisionSwitch,
     Occurrence,
     OccurrenceId,
@@ -87,20 +86,6 @@ def test_record_root_decomposition_projects_only_demanded_fields_without_a_switc
     assert isinstance(projection.value, IrField)
     assert projection.value.field == "first"
     assert not isinstance(decomposition, IrCase)
-
-
-def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: None) -> None:
-    """A failed decision path cannot become executable IR."""
-    source = "let value = 1\ncase value of | _ => 1\n"
-    checked = resolve_and_check_inline_entry(source, HostCapabilities())
-    compiled = compile_checked_module(checked)
-    case_id, compiled_case = next(iter(case_sites(compiled.sites).items()))
-    forged = replace(
-        compiled,
-        sites={**compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
-    )
-    with pytest.raises(AssertionError):
-        lower_compiled_module(forged, source_text=source)
 
 
 def test_lowering_accepts_a_record_nominal_switch(self_validation_disabled: None) -> None:

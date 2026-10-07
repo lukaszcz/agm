@@ -43,7 +43,7 @@ from tests._agl_helpers import agl_std_package_roots
     ("constructor", "receiver"),
     (
         ("array", ArrayType(IntType())),
-        ("dict", DictType(TextType())),
+        ("dict", DictType(TextType(), TextType())),
         ("text", TextType()),
         ("json", JsonType()),
         ("int", IntType()),

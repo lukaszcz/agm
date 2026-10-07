@@ -1,0 +1,60 @@
+# `var` and `@param` bindings are never followed as fixed constants for
+# static duplicate detection, even though their own initializer is
+# otherwise constant-shaped: a reference to one, a chain through one, or a
+# template hole reading one has no comparable static key, so the dict
+# literal below type-checks and any duplicate is left to run time. Only a
+# root (or named-scope) binding is ever a candidate constant reference at
+# all, so every binding here is declared at the module root. mode 1: a
+# `var` key; mode 2: a chain (`let a = k`) through a `var`; mode 3: a
+# template hole over a `var`; mode 4: an `@param let` key, whose collision
+# is decided per run by the parameter; mode 5: a call through a `var`
+# holding a constructor.
+
+@param let p = 1
+
+record Point
+  x: int
+  y: int
+
+var k1 = 1
+var k2 = 1
+let a2 = k2
+var k3 = "a"
+var make = Point
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        k1 := 2
+        try
+          let d: dict[int, text] = {k1: "a", 2: "b"}
+          print d
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | 2 =>
+        try
+          let d: dict[int, text] = {a2: "x", 1: "y"}
+          print d
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | 3 =>
+        k3 := "b"
+        try
+          let d: dict[text, int] = {"%{k3}": 1, "a": 2}
+          print d
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | 4 =>
+        try
+          let d: dict[int, text] = {p: "a", 1: "b"}
+          print d
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | 5 =>
+        try
+          let d: dict[Point, text] = {make(1, 2): "a", Point(1, 3): "b"}
+          print d
+        catch DuplicateKeyError as e =>
+          print "dup: %{e.key}"
+    | _ =>
+        ()

@@ -1,5 +1,5 @@
-# json values, null, literal shorthand vs quoted keys, empty literals with
-# annotations, typed agent targets for every built-in.
+# json values, null, quoted keys, empty literals with annotations, typed
+# agent targets for every built-in.
 
 program def main(payload: json) -> unit =
   let source: Agent = AgentCommand("source")
@@ -10,8 +10,8 @@ program def main(payload: json) -> unit =
 
   let document: json = {
     "quoted": 1,
-    shorthand: [true, false, null],
-    nested: {inner: ["x", 2.5]},
+    "plain": [true, false, null],
+    "nested": {"inner": ["x", 2.5]},
   }
   print document
 

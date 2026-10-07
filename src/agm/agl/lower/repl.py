@@ -33,6 +33,7 @@ from agm.agl.syntax.nodes import (
 )
 
 if TYPE_CHECKING:
+    from agm.agl.semantics.type_table import DeclKey, TypeDef
     from agm.agl.semantics.types import Type
     from agm.agl.typecheck.env import CheckedModule
 
@@ -52,8 +53,12 @@ class LinkImage:
     _linked_modules: set[ModuleId] = field(default_factory=set)
 
     def symbol_for_decl(self, decl_node_id: int) -> SymbolId | None:
-        """Return the persistent symbol allocated for an AST declaration."""
+        """Return the persistent symbol allocated for an AST declaration, if any."""
         return self._state.decl_to_sym.get(decl_node_id)
+
+    def symbol_of(self, decl_node_id: int) -> SymbolId:
+        """Return the persistent symbol of a promoted declaration."""
+        return self._state.decl_to_sym[decl_node_id]
 
     def descriptors(self) -> ValueDescriptors:
         """Return the accumulated nominal/function descriptor view for rendering.
@@ -63,7 +68,11 @@ class LinkImage:
         so a live value read back from a persisted frame (e.g. ``:bindings``)
         renders correctly regardless of which entry produced it.
         """
-        return ValueDescriptors(nominals=self._state.nominals, functions=self._state.functions)
+        return ValueDescriptors(
+            nominals=self._state.nominals,
+            functions=self._state.functions,
+            exception_field_encodes=self._state.exception_field_encodes,
+        )
 
     def mark_linked(self, module_ids: "Iterable[ModuleId]") -> None:
         """Record initialized library modules as persistently linked.
@@ -107,10 +116,8 @@ class ReplPromotionPlan:
     initializers: tuple[InitializerOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
     imported_module_dependencies: Mapping[int, frozenset[ModuleId]]
-    scope_region_source_indices: Mapping[tuple[str, ...], tuple[int, ...]] = field(
-        default_factory=dict
-    )
-    use_declaration_source_indices: Mapping[int, int] = field(default_factory=dict)
+    scope_region_source_indices: Mapping[tuple[str, ...], tuple[int, ...]]
+    use_declaration_source_indices: Mapping[int, int]
 
     def _source_frontier(self, completed_initializer_indices: Collection[int]) -> int:
         completed_indices = set(completed_initializer_indices)
@@ -156,7 +163,6 @@ class ReplPromotionPlan:
         module initialized completely or was already retained by the session.
         """
         completed_indices = set(completed_initializer_indices)
-        assert all(0 <= index < len(self.initializers) for index in completed_indices)
         completed: set[int] = set()
         for index in sorted(completed_indices):
             completed.update(self.source_declaration_ids[self.initializers[index].source_index])
@@ -169,9 +175,8 @@ class ReplPromotionPlan:
         while unsafe := {
             declaration_id
             for declaration_id in completed
-            if dependencies.get(declaration_id, frozenset()) - completed
-            or self.imported_module_dependencies.get(declaration_id, frozenset())
-            - available_modules
+            if dependencies[declaration_id] - completed
+            or self.imported_module_dependencies[declaration_id] - available_modules
         }:
             completed.difference_update(unsafe)
         return frozenset(completed)
@@ -232,12 +237,26 @@ def _nominal_dependencies(
     }
 
 
+def _nominal_typedef(
+    item: EnumDef | ExceptionDef | RecordDef, checked: "CheckedModule"
+) -> "TypeDef":
+    """Return the declaration table entry of one of *checked*'s nominal definitions."""
+    return cast(
+        "TypeDef",
+        checked.type_env.type_table.get(
+            checked.module_id,
+            item.name,
+            tuple(segment.name for segment in item.scope_path),
+        ),
+    )
+
+
 def _declaration_dependencies(
     item: Item,
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
     nominal_dependency_ids: Mapping[int, int],
-    alias_declaration_ids: Mapping[str, frozenset[int]],
+    alias_declaration_ids: Mapping["DeclKey", int],
     library_module_ids: Collection[ModuleId],
 ) -> tuple[frozenset[int], frozenset[ModuleId]]:
     """Return local declaration and imported runtime dependencies of one leaf item.
@@ -246,16 +265,13 @@ def _declaration_dependencies(
     produces, so *item* is never a ``ScopeRegion`` itself. Imported nominal
     types are metadata dependencies rather than module-initialization dependencies;
     imported binding and method references require their module's runtime image.
+    A type name depends on the entry alias scope selected for it
+    (*alias_declaration_ids*, keyed by declaration).
     """
     from agm.agl.syntax.nodes import ElseSentinel, FuncDef
     from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.syntax.visitor import walk
 
-    type_parameters = (
-        frozenset(item.type_params)
-        if isinstance(item, (EnumDef, ExceptionDef, FuncDef, RecordDef, TypeAlias))
-        else frozenset()
-    )
     dependencies: set[int] = set()
     imported_modules: set[ModuleId] = set()
 
@@ -263,12 +279,11 @@ def _declaration_dependencies(
         if isinstance(node, ElseSentinel):
             return
         node_id = cast(Item, node).node_id
-        if (
-            isinstance(node, (AppliedT, NameT))
-            and (node.qualifier is None or not node.qualifier.segments)
-            and node.name not in type_parameters
-        ):
-            dependencies.update(alias_declaration_ids.get(node.name, frozenset()))
+        if isinstance(node, (AppliedT, NameT)):
+            key = checked.type_env.type_name_declaration(node)
+            alias_id = None if key is None else alias_declaration_ids.get(key)
+            if alias_id is not None:
+                dependencies.add(alias_id)
         binding = checked.binding_for(node_id)
         if binding is not None:
             if binding.decl_node_id in entry_declaration_ids:
@@ -292,8 +307,7 @@ def _declaration_dependencies(
 
     walk(item, collect)
     if isinstance(item, FuncDef):
-        signature = checked.type_env.get_function_signature_by_node_id(item.node_id)
-        assert signature is not None, f"compiler bug: no signature for {item.name!r}"
+        signature = checked.type_env.function_signature_of(item.node_id)
         for parameter in signature.params:
             dependencies.update(
                 _nominal_dependencies(parameter.type, nominal_dependency_ids, checked.module_id)
@@ -301,16 +315,8 @@ def _declaration_dependencies(
         dependencies.update(
             _nominal_dependencies(signature.result, nominal_dependency_ids, checked.module_id)
         )
-    typedef = (
-        checked.type_env.type_table.get(
-            checked.module_id,
-            item.name,
-            tuple(segment.name for segment in item.scope_path),
-        )
-        if isinstance(item, (EnumDef, ExceptionDef, RecordDef))
-        else None
-    )
-    if typedef is not None:
+    if isinstance(item, (EnumDef, ExceptionDef, RecordDef)):
+        typedef = _nominal_typedef(item, checked)
         for _, field_type in typedef.fields:
             dependencies.update(
                 _nominal_dependencies(field_type, nominal_dependency_ids, checked.module_id)
@@ -324,20 +330,18 @@ def _declaration_dependencies(
                     _nominal_dependencies(field_type, nominal_dependency_ids, checked.module_id)
                 )
         if typedef.base is not None:
-            base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
+            base_typedef = checked.type_env.type_table.typedef_of(typedef.base)
             if (
-                base_typedef is not None
-                and base_typedef.module_id == checked.module_id
+                base_typedef.module_id == checked.module_id
                 and base_typedef.decl_node_id in nominal_dependency_ids
             ):
                 dependencies.add(nominal_dependency_ids[base_typedef.decl_node_id])
     if isinstance(item, TypeAlias):
-        alias_template = checked.type_env.source_type_template_qname(
+        alias_template = checked.type_env.declared_type_template(
             checked.module_id,
             item.name,
             scope_path=tuple(segment.name for segment in item.scope_path),
         )
-        assert alias_template is not None, f"compiler bug: no type alias for {item.name!r}"
         dependencies.update(
             _nominal_dependencies(
                 alias_template.template, nominal_dependency_ids, checked.module_id
@@ -371,12 +375,7 @@ def _promotion_plan(
     for item in leaf_items:
         if not isinstance(item, (EnumDef, ExceptionDef, RecordDef)):
             continue
-        typedef = checked.type_env.type_table.get(
-            checked.module_id,
-            item.name,
-            tuple(segment.name for segment in item.scope_path),
-        )
-        assert typedef is not None
+        typedef = _nominal_typedef(item, checked)
         nominal_dependency_ids[typedef.decl_node_id] = item.node_id
         if isinstance(item, EnumDef):
             for source_member, member_handle in zip(item.members, typedef.members, strict=True):
@@ -384,12 +383,13 @@ def _promotion_plan(
                     nominal_dependency_ids[member_handle.decl_id] = item.node_id
     # Aliases are transparent in semantic types, so retain their syntactic
     # declaration dependency separately from nominal identity.
-    alias_declaration_ids: dict[str, frozenset[int]] = {}
-    for item in leaf_items:
-        if isinstance(item, TypeAlias):
-            alias_declaration_ids[item.name] = alias_declaration_ids.get(
-                item.name, frozenset()
-            ) | frozenset({item.node_id})
+    alias_declaration_ids: dict[DeclKey, int] = {
+        (checked.module_id, tuple(segment.name for segment in item.scope_path), item.name): (
+            item.node_id
+        )
+        for item in leaf_items
+        if isinstance(item, TypeAlias)
+    }
     region_indices: dict[tuple[str, ...], list[int]] = {}
     source_index = 0
 

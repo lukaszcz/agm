@@ -1,0 +1,13 @@
+enum Held[T]
+  | Filled(value: T)
+  | Empty
+
+scope R
+  type Ints = Held[int]
+end R
+
+scope M
+  use R::*
+
+  let made = Ints::Bogus(value = 3)
+end M

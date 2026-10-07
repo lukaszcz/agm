@@ -1,0 +1,9 @@
+scope checks
+  enum Review = Pass | Fail(reason: text)
+end checks
+
+enum Verdict = ::checks::Review::Pass | Maybe
+
+program def main() -> unit =
+  let verdict: Verdict = ::Pass
+  print(verdict)

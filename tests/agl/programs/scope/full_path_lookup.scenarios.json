@@ -1,0 +1,40 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_selects_the_first_members",
+      "module_roots": [
+        "program_modules/modules/full_path_lookup"
+      ],
+      "params": {
+        "n": 5
+      },
+      "expect": {
+        "stdout": "3\n8\nown only imported\nused root\nred true\n5\n"
+      }
+    },
+    {
+      "name": "zero_selects_the_second_members",
+      "module_roots": [
+        "program_modules/modules/full_path_lookup"
+      ],
+      "params": {
+        "n": 0
+      },
+      "expect": {
+        "stdout": "3\n3\nown only imported\nused root\ngreen false\n0\n"
+      }
+    },
+    {
+      "name": "negative_reads_the_imported_field",
+      "module_roots": [
+        "program_modules/modules/full_path_lookup"
+      ],
+      "params": {
+        "n": -2
+      },
+      "expect": {
+        "stdout": "3\n1\nown only imported\nused root\ngreen false\n0\n"
+      }
+    }
+  ]
+}

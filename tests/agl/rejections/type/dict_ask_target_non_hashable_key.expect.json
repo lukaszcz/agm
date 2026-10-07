@@ -1,0 +1,9 @@
+{
+  "diagnostic": {
+    "line": 2,
+    "message_contains": [
+      "agent output type",
+      "not JSON-serializable"
+    ]
+  }
+}

@@ -15,20 +15,29 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import Diagnostic, RelatedDiagnostic
+from agm.agl.diagnostics import AglError, Diagnostic, HiddenMemberError, RelatedDiagnostic
 from agm.agl.ir.program import ValueDescriptors
+from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    AmbiguousQualificationError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
+from tests._agl_helpers import repl_session_with_root
 
 # A descriptor view with no nominal/function entries: enough for every test
 # value here, none of which is a record/enum/exception or closure.
-_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _open_session(**kwargs: object) -> ReplSession:
@@ -168,9 +177,11 @@ class TestRenderEntryResult:
                     declared_name="Box",
                     kind=NominalKind.RECORD,
                     fields=("items",),
+                    field_json_names=("items",),
                 )
             },
             functions={},
+            exception_field_encodes={},
         )
         result = _result(
             kind="expression",
@@ -399,30 +410,6 @@ class TestDispatchMeta:
         assert outcome.text is not None
         assert ":quit" in outcome.text
 
-    def test_command_index_cold_cache(self) -> None:
-        # _command_index() must rebuild if its cache is None (cold-start path).
-        original = meta_mod._command_index_cache
-        meta_mod._command_index_cache = None
-        try:
-            idx = meta_mod._command_index()
-            assert ":help" in idx or "help" in idx
-        finally:
-            meta_mod._command_index_cache = original
-
-    def test_command_index_lazy_build_on_cold_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Verify the lazy-build branch of _command_index() is reachable: when both
-        # caches are forced to None the functions rebuild them on the next call.
-        monkeypatch.setattr(meta_mod, "_command_index_cache", None)
-        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
-        # dispatch_meta → _command_index() triggers the lazy build of the index.
-        outcome = meta_mod.dispatch_meta(":help", _ctx())
-        assert outcome.text is not None
-        assert ":quit" in outcome.text
-        # meta_command_names() rebuilds the names cache when it is cold.
-        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
-        names = meta_mod.meta_command_names()
-        assert ":help" in names
-
 
 # ---------------------------------------------------------------------------
 # :set only controls REPL options
@@ -609,7 +596,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "fs::read is a function.\nSignature:\n  def fs::read(path: text) -> text"
+            "fs::read is a function.\nSignature:\n  def read(path: text) -> text"
         )
 
     def test_info_resolves_an_unqualified_function_like_a_repl_expression(self) -> None:
@@ -626,29 +613,91 @@ class TestInfo:
 
         assert log.text is not None
         assert log.text.startswith(
-            "log::print is a function.\nSignature:\n  def log::print[T]"
-            "(lvl: std/log::Level, val: T)"
+            "log::print is a function.\nSignature:\n  def print[T](lvl: std/log::Level, val: T)"
         )
 
-    def test_info_resolves_a_canonical_module_function(self) -> None:
-        session = _open_session()
-        assert session.eval_entry("import std/log").ok
+    @pytest.mark.parametrize(
+        ("modules", "setup", "name", "error", "span_text"),
+        [
+            pytest.param(
+                {"x/lib": "def f() -> int = 1\n", "a/x/lib": "def f() -> int = 2\n"},
+                "import x/lib\nimport a/x/lib",
+                "x/lib::f",
+                AmbiguousQualificationError,
+                "x/lib::f",
+                id="two-routes-reach-a-function",
+            ),
+            pytest.param(
+                {"a": "type A = int\n", "b": "type A = bool\n"},
+                "import a::*\nimport b::*",
+                "A",
+                AmbiguousQualificationError,
+                "A",
+                id="two-imported-aliases",
+            ),
+            pytest.param(
+                {"a": "record P\n  x: int\n", "b": "record P\n  y: int\n"},
+                "import a::*\nimport b::*",
+                "P",
+                AmbiguousConstructorError,
+                "P",
+                id="two-imported-records",
+            ),
+            pytest.param(
+                {"pkg/lib": "record Hid\n  x: int\n"},
+                "import pkg/lib hiding Hid",
+                "pkg/lib::Hid",
+                HiddenMemberError,
+                "pkg/lib::Hid",
+                id="hidden-type",
+            ),
+            pytest.param(
+                {"lib": "def f() -> int = 1\n"},
+                "import lib",
+                "lib::missing",
+                UnknownMemberError,
+                "lib::missing",
+                id="unknown-member",
+            ),
+            pytest.param(
+                {"lib": "def f() -> int = 1\n"},
+                "import lib",
+                "std/io::print",
+                UnknownQualifierError,
+                "std/io::print",
+                id="module-not-imported",
+            ),
+            pytest.param({}, "let v = 1", "missing", AglScopeError, "missing", id="unknown-name"),
+        ],
+    )
+    def test_info_reports_the_scope_verdict_when_nothing_is_selected(
+        self,
+        tmp_path: Path,
+        modules: dict[str, str],
+        setup: str,
+        name: str,
+        error: type[AglError],
+        span_text: str,
+    ) -> None:
+        """``:info`` reads a name exactly as an entry does: a rejection is scope's own."""
+        for module, source in modules.items():
+            path = tmp_path / f"{module}.agl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry(setup).ok
 
-        outcome = meta_mod.dispatch_meta(":info std/io::print", _session_ctx(session))
+        with pytest.raises(AglError) as raised:
+            session.info_of(name)
 
-        assert outcome.text is not None
-        assert outcome.text.startswith(
-            "std/io::print is a function.\nSignature:\n  def std/io::print[T](value: T)"
-        )
-
-    def test_info_rejects_an_unknown_qualified_library_function(self) -> None:
-        session = _open_session()
-        assert session.eval_entry("import std/fs").ok
-
-        outcome = meta_mod.dispatch_meta(":info fs::missing", _session_ctx(session))
-
-        assert outcome.text == "Unknown identifier 'fs::missing'."
-        assert session.info_of("std/fs::missing") is None
+        assert type(raised.value) is error
+        span = raised.value.span
+        assert span is not None
+        assert name[span.start_offset : span.end_offset] == span_text
+        info = meta_mod.dispatch_meta(f":info {name}", _session_ctx(session))
+        typed = meta_mod.dispatch_meta(f":type {name}", _session_ctx(session))
+        assert info.text == typed.text
 
     def test_info_reports_an_imported_generic_type_and_constructor(self) -> None:
         session = _open_session()
@@ -661,16 +710,17 @@ class TestInfo:
         assert option.text.startswith("Option is a generic enum type.\nType:\n  enum Option[T]")
         assert some.text is not None
         assert some.text.startswith(
-            "Some is a constructor.\nSignature:\n  Some[T](value: T) -> std/option::Option::Some[T]"
+            "Some is a constructor.\nSignature:\n  "
+            "Option::Some[T](value: T) -> std/option::Option::Some[T]"
         )
 
-    @pytest.mark.parametrize("name", ("None", "Option::None", "std/option::Option::None"))
+    @pytest.mark.parametrize("name", ("None", "Option::None"))
     def test_info_reports_each_visible_spelling_of_a_constructor(self, name: str) -> None:
         outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(_open_session()))
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            f"{name} is a constructor.\nSignature:\n  {name}() -> std/option::Option::None"
+            f"{name} is a constructor.\nSignature:\n  Option::None() -> std/option::Option::None"
         )
 
     def test_info_reports_a_constructor_exposed_by_a_repl_use(self) -> None:
@@ -681,8 +731,226 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "Nothing is a constructor.\nSignature:\n  Nothing() -> std/option::Option::None"
+            "Nothing is a constructor.\nSignature:\n  Option::None() -> std/option::Option::None"
         )
+
+    @pytest.mark.parametrize("name", ("Ready", "Go"))
+    def test_info_reports_the_redeclared_constructor_it_resolves(self, name: str) -> None:
+        """A redeclared member's signature comes from the declaration the name now selects."""
+        redeclaration = "enum State\n  | Ready(y: text)"
+        redeclared = _open_session()
+        assert redeclared.eval_entry("enum State[T]\n  | Ready(x: T)").ok
+        assert redeclared.eval_entry("use State::{Ready as Go}").ok
+        assert redeclared.eval_entry(redeclaration).ok
+        fresh = _open_session()
+        assert fresh.eval_entry(redeclaration).ok
+        assert fresh.eval_entry("use State::{Ready as Go}").ok
+
+        outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(redeclared))
+
+        assert outcome.text is not None
+        assert outcome.text == meta_mod.dispatch_meta(f":info {name}", _session_ctx(fresh)).text
+
+    _ALIAS_DECLARATIONS = (
+        "record Point\n  x: int\n\ntype AliasP = Point\n\n"
+        "record Box[T]\n  v: T\n\ntype AliasB[T] = Box[T]\n\n"
+        "exception Oops\n  code: int\n\ntype AliasE = Oops\n\n"
+        "enum Slot[T]\n  | Filled(value: T)\n  | Empty\n\n"
+        "type AliasO = Slot[int]\n\ntype AliasG[T] = Slot[T]\n"
+    )
+
+    @pytest.mark.parametrize("alias", ("AliasP", "AliasB", "AliasE", "AliasO", "AliasG"))
+    @pytest.mark.parametrize(
+        ("use", "spelling"),
+        (
+            ("use lib::{%s}", "%s"),
+            ("use lib::{%s as Renamed}", "Renamed"),
+            ("()", "lib::%s"),
+        ),
+    )
+    def test_info_describes_an_imported_alias_as_its_declaration(
+        self, tmp_path: Path, alias: str, use: str, spelling: str
+    ) -> None:
+        """Imported, qualified, and renamed aliases read like the same local declaration."""
+        (tmp_path / "lib.agl").write_text(self._ALIAS_DECLARATIONS)
+        imported = repl_session_with_root(tmp_path)
+        imported.open()
+        assert imported.eval_entry("import lib").ok
+        assert imported.eval_entry(use.replace("%s", alias)).ok
+        local = _open_session()
+        assert local.eval_entry(self._ALIAS_DECLARATIONS).ok
+        spelled = spelling.replace("%s", alias)
+
+        described = imported.info_of(spelled)
+        declared = local.info_of(alias)
+
+        assert described is not None
+        assert declared is not None
+        assert described.replace(spelled, "N", 1) == declared.replace(alias, "N", 1)
+
+    @pytest.mark.parametrize("spelling", ("s::D", "DD"))
+    def test_info_describes_a_scoped_alias_as_its_declaration(self, spelling: str) -> None:
+        """A scoped alias, qualified or renamed by ``use``, is described at its declared path."""
+        scoped = _open_session()
+        assert scoped.eval_entry("scope s\n  record P\n    x: int\n\n  type D = P\nend s").ok
+        assert scoped.eval_entry("use s::{D as DD}").ok
+
+        assert scoped.info_of(spelling) == f"{spelling} is a type alias.\nType:\n  type s::D = P"
+
+    def test_info_describes_a_renamed_scoped_exception_by_its_declared_path(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("scope s\n  exception Oops\n    code: int\nend s").ok
+        assert session.eval_entry("use s::{Oops as O}").ok
+
+        renamed = session.info_of("O")
+        declared = session.info_of("s::Oops")
+
+        assert renamed is not None
+        assert declared is not None
+        assert renamed.replace("O", "N", 1) == declared.replace("s::Oops", "N", 1)
+
+    def test_info_of_a_type_name_several_imports_contribute_describes_its_value(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare name two imports contribute as types reads as the one value it names."""
+        (tmp_path / "a.agl").write_text("record T\n  x: int\n")
+        (tmp_path / "b.agl").write_text("type T = int\n")
+        both = repl_session_with_root(tmp_path)
+        both.open()
+        assert both.eval_entry("import a::{T}").ok
+        assert both.eval_entry("import b::{T}").ok
+        one = repl_session_with_root(tmp_path)
+        one.open()
+        assert one.eval_entry("import a::{T}").ok
+
+        described = both.info_of("T")
+
+        assert described is not None
+        assert described == one.info_of("T")
+
+    def test_info_of_a_declaration_beneath_an_applied_owner_member_reads_as_its_type(
+        self,
+    ) -> None:
+        """Type arguments on an owner never instantiate a declaration nested beneath its member."""
+        session = _open_session()
+        for entry in (
+            "enum Slot[T]\n  | Filled(value: T)\n  | Empty",
+            "scope Slot\n\n  scope Filled\n    record X\n      a: int\n  end Filled\nend Slot",
+        ):
+            assert session.eval_entry(entry).ok
+
+        applied = session.info_of("Slot[int]::Filled::X")
+        plain = session.info_of("Slot::Filled::X")
+
+        assert applied is not None
+        assert plain is not None
+        assert plain.startswith("Slot::Filled::X is a record type.")
+        assert applied == plain.replace("Slot::Filled::X", "Slot[int]::Filled::X", 1)
+
+    def test_info_describes_a_generic_alias_with_its_parameters(self) -> None:
+        """A generic alias reads as its declaration, parameters included."""
+        declaration = "type Rows[A] = array[A]"
+        session = _open_session()
+        assert session.eval_entry(declaration).ok
+
+        described = session.info_of("Rows")
+
+        assert described is not None
+        assert declaration in described
+
+    @pytest.mark.parametrize(
+        ("spelling", "owner"),
+        (
+            ("C::Mem", "Src[int]::Mem"),
+            ("Rows[text]::Mem", "Src[array[text]]::Mem"),
+            ("O::Filled", "lib::Slot[int]::Filled"),
+            ("lib::O::Filled", "lib::Slot[int]::Filled"),
+        ),
+    )
+    def test_info_of_an_alias_member_matches_its_applied_owner(
+        self, tmp_path: Path, spelling: str, owner: str
+    ) -> None:
+        """A member selected through an alias has the signature of its applied owner's member."""
+        (tmp_path / "lib.agl").write_text(
+            "enum Slot[T]\n  | Filled(value: T)\n  | Empty\n\ntype O = Slot[int]\n"
+        )
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        for entry in (
+            "import lib",
+            "use lib::{O}",
+            "enum Src[T]\n  | Mem(v: T)\n  | Nil",
+            "type C = Src[int]",
+            "type Rows[A] = Src[array[A]]",
+        ):
+            assert session.eval_entry(entry).ok
+
+        selected = session.info_of(spelling)
+        applied = session.info_of(owner)
+
+        assert selected is not None
+        assert applied is not None
+        assert selected.replace(spelling, "N") == applied.replace(owner, "N")
+
+    def test_info_does_not_retain_state_a_later_query_could_collide_with(
+        self, tmp_path: Path
+    ) -> None:
+        """A later, identically shaped query resolves its own owner.
+
+        Regression test: ``:info`` resolves an ad-hoc parse seeded at the
+        session's current node-id counter without advancing it, so two
+        differently owned, identically-shaped queries land their qualifier
+        chains on the same ad-hoc node ids. A query used to record its own
+        qualifier's resolved identity directly into the retained environment
+        under that id, so a later, differently owned query reading the same
+        id back got the wrong owner. The two queries below are shaped alike
+        (``Owner[T]::Member``) but resolve through different routes -- the
+        first through a module's short route, the second through another
+        module's full path. Each answer is compared against the same query's
+        answer in a fresh session with the same imports, so a stale
+        collision -- the first query's answer leaking into the second's --
+        would show up as a mismatch rather than as an easily-miscounted
+        substring check.
+        """
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "lib.agl").write_text(
+            "enum SlotA[T]\n  | FilledA(value: T)\n  | EmptyA\n"
+        )
+        (tmp_path / "pkg" / "other.agl").write_text(
+            "enum SlotB[T]\n  | FilledB(value: T)\n  | EmptyB\n"
+        )
+
+        def info_in_a_fresh_session(query: str) -> str | None:
+            fresh = repl_session_with_root(tmp_path)
+            fresh.open()
+            assert fresh.eval_entry("import pkg/lib").ok
+            assert fresh.eval_entry("import pkg/other").ok
+            return fresh.info_of(query)
+
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry("import pkg/lib").ok
+        assert session.eval_entry("import pkg/other").ok
+
+        first = session.info_of("lib::SlotA[int]::FilledA")
+        second = session.info_of("pkg/other::SlotB[text]::FilledB")
+
+        assert first == info_in_a_fresh_session("lib::SlotA[int]::FilledA")
+        assert second == info_in_a_fresh_session("pkg/other::SlotB[text]::FilledB")
+
+    @pytest.mark.parametrize("name", ("lib::P", "lib::Point"))
+    def test_info_reports_a_qualified_imported_record_or_alias(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        """A module-qualified name resolves exactly as its unqualified use does."""
+        (tmp_path / "lib.agl").write_text("record Point\n  x: int\n\ntype P = Point\n")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry("import lib").ok
+        assert session.eval_entry("use lib::{P, Point}").ok
+
+        assert session.info_of(name.removeprefix("lib::")) is not None
+        assert session.info_of(name) is not None
 
     def test_info_reports_a_constructor_declared_in_the_repl(self) -> None:
         session = _open_session()
@@ -692,7 +960,7 @@ class TestInfo:
 
         assert outcome.text is not None
         assert outcome.text.startswith(
-            "Ready is a constructor.\nSignature:\n  Ready() -> State::Ready"
+            "Ready is a constructor.\nSignature:\n  State::Ready() -> State::Ready"
         )
 
     def test_info_reports_a_type_definition(self) -> None:
@@ -721,11 +989,12 @@ class TestInfo:
     def test_info_rejects_an_invalid_qualified_name(self) -> None:
         assert _open_session().info_of("Count::") is None
 
-    def test_info_rejects_a_non_identifier_and_an_unknown_module_path(self) -> None:
+    def test_info_rejects_a_non_identifier(self) -> None:
         session = _open_session()
 
         assert session.info_of("()") is None
-        assert session.info_of("std/not-loaded::missing") is None
+        with pytest.raises(AglSyntaxError):
+            session.info_of("(")
 
     def test_info_reports_the_static_type_of_an_imported_value(self) -> None:
         session = _open_session()
@@ -736,12 +1005,30 @@ class TestInfo:
         assert outcome.text is not None
         assert outcome.text == "std/config::strict-json is a value.\nType:\n  bool"
 
-    def test_info_requires_one_known_identifier(self) -> None:
-        assert "usage" in (meta_mod.dispatch_meta(":info", _session_ctx()).text or "").lower()
-        assert (
-            "unknown"
-            in (meta_mod.dispatch_meta(":info missing", _session_ctx()).text or "").lower()
-        )
+    @pytest.mark.parametrize("command", [":info", ":info ()"])
+    def test_info_requires_one_identifier(self, command: str) -> None:
+        outcome = meta_mod.dispatch_meta(command, _session_ctx())
+
+        # A plain notice, never a description of a declaration.
+        assert outcome.text is not None
+        assert not outcome.highlight_as_agl
+
+    @pytest.mark.parametrize(
+        ("declaration", "name"),
+        [
+            pytest.param("record R\n  x: int", "R", id="record"),
+            pytest.param("enum E\n  | A\n  | B", "E", id="enum"),
+            pytest.param("record Box[T]\n  v: T", "Box", id="generic-record"),
+        ],
+    )
+    def test_info_locates_a_type_declared_in_the_repl(self, declaration: str, name: str) -> None:
+        session = _open_session()
+        assert session.eval_entry(f"let pad = 0\n{declaration}").ok
+
+        described = session.info_of(name)
+
+        assert described is not None
+        assert described.endswith("\nLocation: <repl>:2:1")
 
     def test_info_formats_full_function_parameter_metadata(self) -> None:
         from agm.agl.repl.session import _format_repl_signature

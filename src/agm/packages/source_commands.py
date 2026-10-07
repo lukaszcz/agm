@@ -23,6 +23,7 @@ from pathlib import Path
 
 from agm.agl.attributes import ProgramRegistration
 from agm.agl.diagnostics import AglError
+from agm.agl.modules.errors import ModuleReadError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_parsed_module
 from agm.agl.scope import recognize_program_registration
@@ -175,7 +176,7 @@ def _parse_module(module_id: ModuleId, path: Path) -> Program:
     """
     try:
         return load_parsed_module(module_id, path).program
-    except (OSError, UnicodeDecodeError) as exc:
+    except ModuleReadError as exc:
         raise DisciplineError(f"cannot read package module {path}: {exc}") from exc
     except AglError as exc:
         raise DisciplineError(f"cannot parse package module {path}: {exc}") from exc

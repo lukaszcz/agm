@@ -1,0 +1,3 @@
+scope Pal
+  def pick() -> text = "used"
+end Pal

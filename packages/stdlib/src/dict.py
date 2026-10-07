@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import NoReturn
 
 from agl import array, nominals, option_none, option_some
@@ -9,11 +10,13 @@ from agl import dict as agl_dict
 
 from agm.agl.runtime.boundary import raise_key_error
 
+DuplicateKeyError = nominals.std.errors.DuplicateKeyError
+DuplicateKeys = nominals.std.dict.DuplicateKeys
 KeyError = nominals.std.errors.KeyError
 Pair = nominals.std.pair.Pair
 
 
-def _key_error(key: str) -> NoReturn:
+def _key_error(key: object) -> NoReturn:
     raise_key_error(KeyError, "dictionary key not found", key)
 
 
@@ -21,31 +24,38 @@ def size(values: object) -> int:
     return len(values)
 
 
-def get(values: object, key: str) -> object:
-    if key not in values:
+_ABSENT = object()
+
+
+def get(values: object, key: object) -> object:
+    found = values.get(key, _ABSENT)
+    if found is _ABSENT:
         _key_error(key)
-    return values[key]
+    return found
 
 
-def get_option(values: object, key: str) -> object:
-    return option_some(values[key]) if key in values else option_none()
+def get_option(values: object, key: object) -> object:
+    found = values.get(key, _ABSENT)
+    return option_none() if found is _ABSENT else option_some(found)
 
 
-def remove(values: object, key: str) -> object:
-    if key not in values:
+def remove(values: object, key: object) -> object:
+    found = values.pop(key, _ABSENT)
+    if found is _ABSENT:
         _key_error(key)
-    return values.pop(key)
+    return found
 
 
-def remove_option(values: object, key: str) -> object:
-    return option_some(values.pop(key)) if key in values else option_none()
+def remove_option(values: object, key: object) -> object:
+    found = values.pop(key, _ABSENT)
+    return option_none() if found is _ABSENT else option_some(found)
 
 
-def set(values: object, key: str, value: object) -> None:
+def set(values: object, key: object, value: object) -> None:
     values[key] = value
 
 
-def contains(values: object, key: str) -> bool:
+def contains(values: object, key: object) -> bool:
     return key in values
 
 
@@ -66,9 +76,7 @@ def entries(values_: object) -> object:
 
 
 def merge(values: object, other: object) -> object:
-    merged = agl_dict({key: value for key, value in values.items()})
-    merged.update(other)
-    return merged
+    return agl_dict(chain(values.items(), other.items()))
 
 
 def merge_in_place(values: object, other: object) -> None:
@@ -76,11 +84,11 @@ def merge_in_place(values: object, other: object) -> None:
 
 
 def map_values(values: object, function: object) -> object:
-    return agl_dict({key: function(value) for key, value in values.items()})
+    return agl_dict((key, function(value)) for key, value in values.items())
 
 
 def select(values: object, predicate: object) -> object:
-    return agl_dict({key: value for key, value in values.items() if predicate(key, value)})
+    return agl_dict((key, value) for key, value in values.items() if predicate(key, value))
 
 
 def select_in_place(values: object, predicate: object) -> None:
@@ -94,8 +102,16 @@ def each(values: object, function: object) -> None:
         function(key, value)
 
 
-def from_entries(values: object) -> object:
-    return agl_dict({value.first: value.second for value in values})
+def from_entries(values: object, on_duplicate: object) -> object:
+    result = agl_dict({})
+    for pair in values:
+        if pair.first in result:
+            if isinstance(on_duplicate, DuplicateKeys.Raise):
+                raise_key_error(DuplicateKeyError, "duplicate dictionary key", pair.first)
+            if isinstance(on_duplicate, DuplicateKeys.KeepFirst):
+                continue
+        result[pair.first] = pair.second
+    return result
 
 
 __all__ = [

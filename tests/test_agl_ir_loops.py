@@ -56,6 +56,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from tests._agl_helpers import plan_less_exception_field_encodes
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def _make_minimal_program(
 
     max_iter_nominal = NominalId(require_reserved_nominal_id("MaxIterationsExceeded"))
     exc_type = BUILTIN_EXCEPTIONS["MaxIterationsExceeded"]
-    exc_fields = create_seeded_type_table().exception_fields(exc_type)
+    exc_json_fields = create_seeded_type_table().json_fields(exc_type)
     nominals = {
         max_iter_nominal: NominalDescriptor(
             nominal=max_iter_nominal,
@@ -100,7 +101,8 @@ def _make_minimal_program(
             scope_path=(),
             declared_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,
-            fields=tuple(exc_fields.keys()),
+            fields=tuple(name for name, _json_name, _type in exc_json_fields),
+            field_json_names=tuple(json_name for _name, json_name, _type in exc_json_fields),
             variants=(),
         )
     }
@@ -114,6 +116,7 @@ def _make_minimal_program(
         },
         symbols=symbols or {},
         nominals=nominals,
+        exception_field_encodes=plan_less_exception_field_encodes(nominals),
         sources={_SRC_ID: SourceFile(display_name="<test>", normalized_text=source_text)},
     )
 

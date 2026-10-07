@@ -55,4 +55,6 @@ Sandbox settings resolution:
 
 An AgL agent call or sandboxed `exec` resolves settings through this same discovery and merge chain; it never has an alias to fall back to, so an unmatched name goes straight to `default.json`.
 
+Sandboxed Codex launches include `--no-daemon`, keeping execution inside the sandbox instead of connecting to a shared host daemon. This applies after alias resolution and also to AgL agent calls, sessions, and interactive chats. Codex must support `--no-daemon`; a version without it fails to launch rather than using a host daemon.
+
 The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi can create or access.

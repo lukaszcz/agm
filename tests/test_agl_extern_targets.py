@@ -669,13 +669,7 @@ def _leading_contracts(program: ExecutableProgram, call: IrDirectCall) -> list[s
     labels: list[str] = []
     for operand in call.arguments[:count]:
         assert isinstance(operand, IrContract)
-        request = program.contracts[operand.contract_id]
-        assert (request.codec_name, request.strict_json, request.structured_exec) == (
-            "json",
-            True,
-            False,
-        )
-        labels.append(request.target_type_label)
+        labels.append(program.target_contracts[operand.contract_id].target_type_label)
     return labels
 
 
@@ -892,9 +886,7 @@ def _tree(program: ExecutableProgram, name: str = "query") -> TypeTree:
     (call,) = _extern_calls(program, name)
     operand = call.arguments[0]
     assert isinstance(operand, IrContract)
-    tree = program.contracts[operand.contract_id].type_tree
-    assert tree is not None
-    return tree
+    return program.target_contracts[operand.contract_id].type_tree
 
 
 def _body(tree: TypeTree, entry: TypeTreeEntry) -> TypeNode:
@@ -1058,7 +1050,7 @@ class TestContractTypeTree:
         assert [field.node for field in node.fields] == [TypeNodeRef("Tree")] * 2
         assert _schema(root) == {"type": "array", "items": {"$ref": "#/$defs/Tree"}}
 
-    def test_only_type_directed_contracts_carry_a_tree(self, tmp_path: Path) -> None:
+    def test_only_type_directed_contracts_are_target_contracts(self, tmp_path: Path) -> None:
         program = _lower(
             _QUERY + 'let answer: int = query("q")\n'
             'let agent = AgentCommand("worker")\n'
@@ -1068,9 +1060,9 @@ class TestContractTypeTree:
         (call,) = _extern_calls(program, "query")
         operand = call.arguments[0]
         assert isinstance(operand, IrContract)
-        (ask_id,) = set(program.contracts) - {operand.contract_id}
-        assert program.contracts[operand.contract_id].type_tree is not None
-        assert program.contracts[ask_id].type_tree is None
+        assert set(program.target_contracts) == {operand.contract_id}
+        assert len(program.contracts) == 1
+        assert operand.contract_id not in program.contracts
 
     def test_inline_member_fields_carry_docs(self, tmp_path: Path) -> None:
         program = _lower(

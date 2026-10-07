@@ -7,17 +7,24 @@ and REPL display.  Callers choose two display options:
 - ``pretty``: render containers, nominal values, and JSON over multiple indented
   lines when ``True``; keep the output on one line when ``False``.
 - ``quote_strings``: quote a top-level ``text`` value as an AgL string literal
-  when ``True``; leave top-level text verbatim when ``False``.
+  when ``True``; leave top-level text verbatim when ``False``. A top-level
+  ``json`` value is value syntax (``%`` and ``${`` escaped inside its strings)
+  when ``True`` and pure JSON when ``False``.
 
-Nested ``text`` values are always quoted so structured output remains parseable
-as AgL surface syntax.  A record or exception renders its nominal's
+Nested ``text`` values (including ``text`` dict keys) are always quoted so
+structured output remains parseable as AgL surface syntax, and nested ``json``
+strings escape ``%`` and ``${`` the same way; every dict key
+renders in one-line value syntax.  A record or exception renders its nominal's
 ``positional_fields`` bare, then the rest as ``name = value``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import assert_never, cast
+
 from agm.agl.ir.program import ValueDescriptors
-from agm.agl.runtime.serialize import AglNonDataValue, dumps_exact, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, JsonShaped, dumps_exact
 from agm.agl.semantics.cycles import enter_value
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -30,12 +37,13 @@ from agm.agl.semantics.values import (
     IntValue,
     IrClosureValue,
     JsonValue,
+    ObservableValue,
     RecordValue,
     TextValue,
     UnitValue,
     Value,
 )
-from agm.agl.value_syntax.lexical import quote_text, scalar_text
+from agm.agl.value_syntax.lexical import escape_interpolation_triggers, quote_text, scalar_text
 
 
 def _indent(level: int) -> str:
@@ -60,7 +68,7 @@ def _render_child(
     active: "set[int] | None",
 ) -> str:
     return _render(
-        value,
+        cast(ObservableValue, value),
         descriptors,
         pretty=pretty,
         quote_strings=False,
@@ -122,7 +130,7 @@ def _render_function_signature(param_labels: tuple[str, ...], result_label: str)
 
 
 def _render(
-    value: Value,
+    value: ObservableValue,
     descriptors: ValueDescriptors,
     *,
     pretty: bool,
@@ -152,7 +160,11 @@ def _render(
         return f"<function: {signature}>"
 
     if isinstance(value, JsonValue):
-        rendered = dumps_exact(value_to_json_obj(value), indent=2 if pretty else None)
+        rendered = dumps_exact(cast(JsonShaped, value.raw), indent=2 if pretty else None)
+        if not top_level or quote_strings:
+            # Value syntax: escape the interpolation trigger as a text literal
+            # does. JSON syntax holds it only inside strings.
+            rendered = escape_interpolation_triggers(rendered)
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ArrayValue):
@@ -170,11 +182,21 @@ def _render(
         active = enter_value(id(value), active)
         try:
             items = []
-            for key, child in value.entries.items():
+            keyed: Iterable[tuple[str | Value, Value]] = (
+                value.text_items() if value.is_text_keyed() else value.items()
+            )
+            for key, child in keyed:
+                # A key is immutable data, so it needs no cycle guard, and it
+                # stays on one line even in pretty output.
+                rendered_key = (
+                    quote_text(key)
+                    if isinstance(key, str)
+                    else render_key_value_syntax(key, descriptors)
+                )
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )
-                items.append(f"{quote_text(key)}: {rendered}")
+                items.append(f"{rendered_key}: {rendered}")
         finally:
             active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
@@ -209,7 +231,7 @@ def _render(
     if isinstance(value, ContractValue):
         raise AglNonDataValue("contract")
 
-    raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
+    assert_never(value)  # pragma: no cover
 
 
 def render_value(
@@ -223,14 +245,25 @@ def render_value(
 
     ``pretty=False`` keeps output single-line where possible. ``pretty=True``
     expands structured values and JSON over multiple lines with two-space
-    indentation. ``quote_strings`` only controls top-level ``text`` values;
-    nested text is always quoted. ``unit`` always renders ``()``.
+    indentation. ``quote_strings`` only controls top-level ``text`` and ``json``
+    values; nested text is always quoted and nested ``json`` is always value
+    syntax. ``unit`` always renders ``()``.
     """
     return _render(
-        value,
+        cast(ObservableValue, value),
         descriptors,
         pretty=pretty,
         quote_strings=quote_strings,
         top_level=True,
         level=0,
     )
+
+
+def render_key_value_syntax(value: Value, descriptors: ValueDescriptors) -> str:
+    """Render a dict key in one-line AgL value syntax: text quoted, others their own spelling.
+
+    The one key spelling: a rendered dict's keys and a raised exception's
+    ``key`` field (``KeyError``, ``DuplicateKeyError``) both use it, so a key
+    always shows in the syntax it would parse back from.
+    """
+    return render_value(value, descriptors, quote_strings=True)

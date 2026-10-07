@@ -1,0 +1,199 @@
+{
+  "scenarios": [
+    {
+      "name": "int_keyed_object",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"1\": \"a\", \"2.0\": \"b\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\", \"2\": \"b\"}\n",
+        "calls": {
+          "builder": 1
+        }
+      }
+    },
+    {
+      "name": "int_keyed_object_in_fence",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "Here:\n```json\n{\"3\": \"c\"}\n```"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"3\": \"c\"}\n",
+        "calls": {
+          "builder": 1
+        }
+      }
+    },
+    {
+      "name": "equal_int_keys_retry_then_succeed",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"1\": \"a\", \"1.0\": \"b\"}",
+          "{\"1\": \"a\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\"}\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "equal_int_keys_exhaust_retries",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"1\": \"a\", \"1.0\": \"b\"}",
+          "{\"1\": \"a\", \"1.00\": \"b\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "parse-failed\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "non_number_int_key_retries",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"x\": \"a\"}",
+          "{\"1\": \"a\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\"}\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "record_keyed_entries",
+      "params": {
+        "mode": 2
+      },
+      "agents": {
+        "builder": [
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n",
+        "calls": {
+          "builder": 1
+        }
+      }
+    },
+    {
+      "name": "repeated_record_key_retry_then_succeed",
+      "params": {
+        "mode": 2
+      },
+      "agents": {
+        "builder": [
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]",
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "repeated_record_key_exhaust_retries",
+      "params": {
+        "mode": 2
+      },
+      "agents": {
+        "builder": [
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]",
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}, {\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"q\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "parse-failed\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "entries_object_form_retries",
+      "params": {
+        "mode": 2
+      },
+      "agents": {
+        "builder": [
+          "{\"x\": \"p\"}",
+          "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]"
+        ]
+      },
+      "expect": {
+        "stdout": "[{\"key\": {\"x\": 1, \"y\": 2}, \"value\": \"p\"}]\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "unrepresentable_number_key_retry_then_succeed",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"1e99999999999999999999\": \"a\"}",
+          "{\"1\": \"a\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "{\"1\": \"a\"}\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "unrepresentable_number_key_exhausts_retries",
+      "params": {
+        "mode": 1
+      },
+      "agents": {
+        "builder": [
+          "{\"1e99999999999999999999\": \"a\"}",
+          "{\"1e99999999999999999999\": \"b\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "parse-failed\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    }
+  ]
+}

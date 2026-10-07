@@ -4,9 +4,8 @@ Grammar (whitespace, including newlines, is insignificant between tokens)::
 
     value ::= INT | DECIMAL | "-" (INT | DECIMAL) | "true" | "false" | "null" | text
             | "[" [value ("," value)* [","]] "]"
-            | "{" [key ":" value ("," key ":" value)* [","]] "}"
+            | "{" [value ":" value ("," value ":" value)* [","]] "}"
             | ctor ["(" [arg ("," arg)* [","]] ")"]
-    key   ::= text | NAME
     ctor  ::= NAME | NAME "::" NAME
     arg   ::= NAME "=" value | value
 """
@@ -194,24 +193,14 @@ def _parse_dict(source: str, pos: int) -> tuple[ValueNode, int]:
 
 
 def _parse_dict_entry(source: str, pos: int) -> tuple[DictEntry, int]:
-    entry_start = pos
-    if pos < len(source) and source[pos] in "\"'":
-        key, scan_pos = _read_quoted_text(source, pos)
-    else:
-        name_end = lexical.scan_name(source, pos)
-        if name_end is None:
-            raise ValueSyntaxError("expected a dict key", pos, pos + 1)
-        scan_pos = name_end
-        key = source[pos:scan_pos]
-        if not is_plain_name(key):
-            raise ValueSyntaxError(f"{key!r} is not a valid dict key", pos, scan_pos)
+    key, scan_pos = _parse_value(source, pos)
     scan_pos = _skip_ws(source, scan_pos)
     if scan_pos >= len(source) or source[scan_pos] != ":":
         end = min(scan_pos + 1, len(source))
         raise ValueSyntaxError("expected ':' after dict key", scan_pos, end)
     scan_pos = _skip_ws(source, scan_pos + 1)
     value, scan_pos = _parse_value(source, scan_pos)
-    return DictEntry(key, value, entry_start, scan_pos), scan_pos
+    return DictEntry(key, value, pos, scan_pos), scan_pos
 
 
 def _read_ctor_qualifier(

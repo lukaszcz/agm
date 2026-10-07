@@ -21,6 +21,7 @@ from agm.agl.self_validation import self_validation_enabled, set_self_validation
 from agm.core import dry_run, process
 from agm.core import http as core_http
 from agm.core.process import CapturedOutput
+from agm.project import layout as project_layout
 from tests import _command_coverage
 from tests._durations import (
     pytest_runtest_protocol,
@@ -36,8 +37,9 @@ from tests._package_helpers import PythonInstaller
 # does not put the repository root on ``sys.path`` (plain ``uv run pytest``).
 __all__ = ["pytest_runtest_protocol", "pytest_sessionfinish", "pytest_testnodedown"]
 
-# Enable AgL's optional invariant self-checks — match-compilation self-checks and
-# IR structural validation — for the whole test suite.  They are disabled in
+# Enable the optional invariant self-checks — match-compilation self-checks, IR
+# structural validation, and completion's re-raising of the failures it would
+# degrade — for the whole test suite.  They are disabled in
 # normal execution (zero production cost); turning them on here makes every case
 # compiled and every program lowered anywhere in the suite double as an invariant
 # oracle.  Individual tests may disable them to exercise the production path (see
@@ -103,10 +105,11 @@ def isolated_compiler_cache(
 
 @pytest.fixture()
 def self_validation_disabled() -> Generator[None, None, None]:
-    """Run the body with AgL's optional self-checks off, as in normal execution.
+    """Run the body with the optional self-checks off, as in normal execution.
 
     The suite enables them globally; tests that pin the production path — where a
-    compile or lowering is trusted without being re-verified — take this fixture.
+    compile or lowering is trusted without being re-verified, or a completer
+    degrades a failure to no suggestions — take this fixture.
     """
     previous = self_validation_enabled()
     set_self_validation_enabled(False)
@@ -239,6 +242,19 @@ GIT_IDENTITY: Mapping[str, str] = MappingProxyType(
 _HOST_CONTEXT_VARIABLES = ("PROJ_DIR", "REPO_DIR", "TMUX", "TMUX_PANE")
 
 
+def _git_ceiling_directories(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Pytest's shared temp root itself, so git discovery can never climb past it.
+
+    A tmp root nested under, or coinciding with, a git-tracked directory (e.g. a
+    sandboxed ``TMPDIR`` under the invoking user's home) would otherwise let git,
+    walking upward from a test's own repository, discover that outer one instead.
+    The ceiling directory itself is excluded from discovery, so it must be the
+    root a test's tree hangs from, not that root's parent, or a repository at the
+    root itself would still be found.
+    """
+    return str(tmp_path_factory.getbasetemp().resolve())
+
+
 @pytest.fixture(autouse=True)
 def isolate_host_environment(
     clear_workspace_shell_env: None,
@@ -267,11 +283,37 @@ def isolate_host_environment(
     monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
     for name, value in GIT_IDENTITY.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", _git_ceiling_directories(tmp_path_factory))
     for name in _HOST_CONTEXT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     for name in tuple(os.environ):
         if name.lower().endswith("_proxy"):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def fence_project_discovery_at_temp_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop ancestor-walking project discovery at the suite's temporary root.
+
+    Discovery walks every ancestor of its starting directory. ``isolate_host_environment``
+    already keeps ``HOME`` (and so the AGM home) out of the way, but ``TMPDIR`` itself is
+    host-controlled -- an agent sandbox routinely confines writable paths to somewhere
+    under the invoking user's real home -- so a real AGM project sitting above the
+    temporary root would otherwise decide what a test's temporary tree resolves to.
+    Every directory above the base temporary directory belongs to the host, never to a
+    test.
+    """
+    host_dirs = frozenset(tmp_path_factory.getbasetemp().resolve().parents)
+    discover = project_layout._project_dir_from_workspace
+
+    def fenced_discover(
+        workspace_dir: Path, *, env: Mapping[str, str] | None = None
+    ) -> Path | None:
+        return None if workspace_dir in host_dirs else discover(workspace_dir, env=env)
+
+    monkeypatch.setattr(project_layout, "_project_dir_from_workspace", fenced_discover)
 
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
@@ -296,33 +338,18 @@ def pin_agm_stdlib_to_repo(
 def detach_installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hide any AGM installed at the test runner's own prefix from the suite.
 
-    ``agm_home_dir`` falls back to ``<installation prefix>/.agm`` whenever that
-    prefix holds a package activation index, and the prefix is derived from
-    ``sys.argv[0]``.  Launched as ``uv run pytest`` that prefix is the project's
-    ``.venv``, so a developer who had run ``uv run agm pkg install`` would make
-    the suite read — and write — a real installed package store instead of its
-    own temporary one.  ``AGM_HOME`` cannot prevent this, because most tests
-    pass an explicit ``env`` mapping that never sees the process environment.
-
-    Report no installation prefix instead, so an installed tree is invisible
-    regardless of how the suite was launched.  Tests that exercise the fallback
-    take the ``installed_agm_prefix`` fixture.
+    Tests that exercise the installation-prefix fallback take the
+    ``installed_agm_prefix`` fixture instead.
     """
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+    monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: None)
 
 
 @pytest.fixture()
 def installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], None]:
-    """Opt out of ``detach_installed_agm_prefix`` for one test.
-
-    Call the returned function with a staged temporary prefix to restore the
-    installed-prefix fallback for the rest of the test.  This is the documented
-    escape hatch for the tests that assert the fallback itself; it points at a
-    temporary directory, never at a real installation.
-    """
+    """Opt out of ``detach_installed_agm_prefix`` for one test by pinning a staged prefix."""
 
     def pin(prefix: Path) -> None:
-        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+        monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
     return pin
 
@@ -394,7 +421,7 @@ def python_installer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PythonI
 
 
 @pytest.fixture()
-def env(tmp_path: Path) -> dict[str, str]:
+def env(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     """Environment dict with git identity and a home of its own.
 
     A separate home from the one :func:`isolate_host_environment` installs, so a
@@ -403,6 +430,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     """
     e = os.environ.copy()
     e.update(GIT_IDENTITY)
+    e["GIT_CEILING_DIRECTORIES"] = _git_ceiling_directories(tmp_path_factory)
     e["SHELL"] = shutil.which("bash") or "/bin/sh"
     for name in _HOST_CONTEXT_VARIABLES:
         e.pop(name, None)

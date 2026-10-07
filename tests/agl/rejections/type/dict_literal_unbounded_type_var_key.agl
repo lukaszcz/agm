@@ -1,0 +1,6 @@
+# An unbounded type parameter is not known Hashable, so a non-empty
+# literal keyed by it is rejected, just like any other non-hashable key type.
+def f[K](k: K) -> dict[K, int] = {k: 1}
+
+program def main() -> unit =
+  print(f(1)[1])

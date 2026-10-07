@@ -7,17 +7,24 @@ from typing import TypeVar
 
 import pytest
 
+from agm.agl.diagnostics import AglTypeError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.imports import (
-    QualResolutionFound,
     SingleTarget,
     build_import_env,
-    resolve_qualified,
+    qualifier_member_ways,
 )
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import (
+    AmbiguousQualificationError,
+    MissRepair,
+    TypeArgumentsError,
+    UnknownMemberError,
+    UnknownQualifierError,
+)
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -36,6 +43,7 @@ from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.visitor import walk
+from tests.agl.qualifier_support import span_text
 
 
 def _ref(source: str) -> VarRef:
@@ -227,13 +235,27 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
     "source",
     (
         "let value: First::Second::Third::member = null",
-        "let value: Option[int]::Result = null",
         "let value = 1\ncase value of | First::Second::Third::member => 1",
         "let value = 1\nvalue is First::Second::Third::member",
     ),
 )
-def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
-    resolve_inline_entry(source)
+def test_long_qualifier_chain_with_an_unknown_leading_segment_is_an_unknown_qualifier(
+    source: str,
+) -> None:
+    """A chain's length is never itself a rejection reason: ``First`` names
+    nothing, so the whole chain is an unknown qualifier at any depth."""
+    with pytest.raises(UnknownQualifierError) as exc_info:
+        resolve_inline_entry(source)
+
+    assert span_text(source, exc_info.value.span) == "First::Second::Third::member"
+
+
+def test_long_qualifier_chain_with_a_resolved_owner_reports_unknown_member() -> None:
+    """An applied owner that does resolve (stdlib's ``Option``) still validates its
+    member, so a long chain's shape is never itself the reason for rejection --
+    an actually unknown member is."""
+    with pytest.raises(AglScopeError):
+        resolve_inline_entry("let value: Option[int]::Result = null")
 
 
 @pytest.mark.parametrize(
@@ -246,8 +268,11 @@ def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(sourc
     ),
 )
 def test_nonleading_anchor_and_route_segments_report_route_errors(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
+    with pytest.raises(AglScopeError) as exc_info:
         resolve_inline_entry(source)
+
+    assert type(exc_info.value) is AglScopeError
+    assert span_text(source, exc_info.value.span) == source
 
 
 def test_current_module_qualified_assignment_remains_an_assignment_target() -> None:
@@ -262,8 +287,12 @@ def test_current_module_qualified_assignment_remains_an_assignment_target() -> N
 
 
 def test_non_expression_chain_routes_reject_only_invalid_nonleading_routes() -> None:
-    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
-        resolve_inline_entry("let value = 1\ncase value of | module::owner/name::member => 1")
+    source = "let value = 1\ncase value of | module::owner/name::member => 1"
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_inline_entry(source)
+
+    assert type(exc_info.value) is AglScopeError
+    assert span_text(source, exc_info.value.span) == "module::owner/name::member"
 
 
 def test_long_qualified_expression_retains_all_segments() -> None:
@@ -313,18 +342,17 @@ def test_current_module_anchored_type_constructor_uses_the_chain_constructor_ref
 
 
 @pytest.mark.parametrize("source", ("::Unknown::On", "::Unknown[int]::On"))
-def test_current_module_unknown_constructor_owner_reports_its_segment(source: str) -> None:
+def test_current_module_unknown_constructor_owner_reports_its_qualifier(source: str) -> None:
     program = parse_program(source)
     assert isinstance(program.body, Block)
     expr = program.body.items[-1]
     assert isinstance(expr, VarRef)
     assert expr.qualifier is not None
 
-    with pytest.raises(AglScopeError) as exc_info:
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_inline_entry(source)
 
-    assert "Unknown" in exc_info.value.to_diagnostic().message
-    assert exc_info.value.span == expr.qualifier.segments[0].span
+    assert exc_info.value.span == expr.qualifier.span
 
 
 def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeline() -> None:
@@ -354,71 +382,173 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
 
 
 def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() -> None:
-    with pytest.raises(AglScopeError, match="scope path"):
+    with pytest.raises(UnknownQualifierError):
         resolve_inline_entry("::A::B::C")
 
 
-def test_bare_self_qualified_undefined_name_hints_a_dollar_suffixed_spelling() -> None:
-    """``::exec$`` (a zero-segment self-reference) hints the same fix."""
-    with pytest.raises(AglScopeError) as exc_info:
+def test_bare_self_qualified_dollar_suffixed_name_is_an_unknown_member() -> None:
+    """``::exec$`` (a zero-segment self-reference) names no member of the own module."""
+    with pytest.raises(UnknownMemberError) as exc_info:
         resolve_inline_entry("::exec$")
 
-    assert "exec $" in exc_info.value.to_diagnostic().message
+    assert span_text("::exec$", exc_info.value.span) == "::exec$"
 
 
-def test_current_module_unknown_constructor_owner_hints_a_dollar_suffixed_segment() -> None:
-    """``::exec$::bar`` names the '$'-suffixed segment; the message hints the fix."""
-    with pytest.raises(AglScopeError) as exc_info:
+def test_current_module_dollar_suffixed_owner_is_an_unknown_qualifier() -> None:
+    """``::exec$::bar`` names no own scope or type ``exec$``."""
+    with pytest.raises(UnknownQualifierError) as exc_info:
         resolve_inline_entry("::exec$::bar")
 
-    assert "exec $" in exc_info.value.to_diagnostic().message
+    assert span_text("::exec$::bar", exc_info.value.span) == "::exec$::bar"
 
 
 def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
-    with pytest.raises(AglScopeError, match="No module"):
+    with pytest.raises(UnknownQualifierError):
         resolve_inline_entry("enum A | value\n/A::value")
 
 
-def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagnostic() -> None:
-    with pytest.raises(AglScopeError):
-        resolve_inline_entry("type A::Count = int\nA::Count")
+_TYPE_NAMES = (
+    "enum Root\n  | A\n\n"
+    "type Count = int\n\n"
+    "scope S\n"
+    "  enum Col\n    | Red\n\n"
+    "  type C = Col\n\n"
+    "  type T = int\n\n"
+    "  scope N\n"
+    "    enum Dir\n      | Up\n"
+    "  end N\n"
+    "end S\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "spelling"),
+    (
+        (f"{_TYPE_NAMES}print(Root)", "Root"),
+        (f"{_TYPE_NAMES}print(Count)", "Count"),
+        (f"{_TYPE_NAMES}print(::Count)", "::Count"),
+        (f"{_TYPE_NAMES}print(S::Col)", "S::Col"),
+        (f"{_TYPE_NAMES}print(::S::Col)", "::S::Col"),
+        (f"{_TYPE_NAMES}print(S::C)", "S::C"),
+        (f"{_TYPE_NAMES}print(S::N::Dir)", "S::N::Dir"),
+        (f"{_TYPE_NAMES}print(S::T)", "S::T"),
+        (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(Col)\nend S", "Col"),
+        (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(N::Dir)\nend S", "N::Dir"),
+        ("type A::Count = int\nA::Count", "A::Count"),
+    ),
+)
+def test_type_name_without_a_constructor_is_not_a_value_at_any_scope_depth(
+    source: str, spelling: str
+) -> None:
+    """A scoped enum, enum alias, or structural alias is rejected, spelled as written."""
+    with pytest.raises(AglTypeError) as exc_info:
+        resolve_inline_entry(source)
+
+    assert type(exc_info.value) is AglTypeError
+    assert span_text(source, exc_info.value.span) == spelling
+
+
+_TYPE_NAME_LIB = (
+    "enum Col\n  | Red\n\ntype T = int\n\nscope S\n  enum E\n    | X\n\n  type U = int\nend S\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("use", "spelling"),
+    (
+        ("lib::Col", "lib::Col"),
+        ("lib::T", "lib::T"),
+        ("lib::S::E", "lib::S::E"),
+        ("lib::S::U", "lib::S::U"),
+        ("/lib::S::E", "/lib::S::E"),
+    ),
+)
+def test_imported_type_name_without_a_constructor_is_not_a_value(
+    tmp_path: Path, use: str, spelling: str
+) -> None:
+    """An imported enum or structural alias is rejected as a value, spelled as written."""
+    modules = {"entry": f"import lib\nprint({use})\n", "lib": _TYPE_NAME_LIB}
+
+    with pytest.raises(AglTypeError) as exc_info:
+        _entry_resolution(tmp_path, modules)
+
+    assert type(exc_info.value) is AglTypeError
+    assert span_text(modules["entry"], exc_info.value.span) == spelling
+
+
+def test_structural_alias_owner_has_no_member(tmp_path: Path) -> None:
+    """A structural alias owns no member, local or imported, at any scope depth."""
+    with pytest.raises(UnknownMemberError):
+        resolve_inline_entry(f"{_TYPE_NAMES}print(S::T::Red)")
+    with pytest.raises(UnknownMemberError):
+        _entry_resolution(
+            tmp_path, {"entry": "import lib\nprint(lib::S::U::X)\n", "lib": _TYPE_NAME_LIB}
+        )
+
+
+_PALETTE_SCOPE = (
+    "import palette\n\n"
+    "scope palette\n  record Other\nend palette\n\n"
+    "let c: palette::Color = palette::Color::Red\n"
+)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "print(c is palette::Red)",
+        "print(case c of | palette::Red => 1 | _ => 2)",
+        "print(case /palette::Pixel(x = 1) of | palette::Pixel(x) => x | _ => 2)",
+    ),
+)
+def test_same_named_module_route_supplies_what_a_local_scope_lacks(
+    tmp_path: Path, use: str
+) -> None:
+    """A pattern or ``is`` spelling the local scope does not declare is the route's."""
+    modules = {
+        "entry": f"{_PALETTE_SCOPE}{use}\n",
+        "palette": "enum Color\n  | Red\n  | Blue\n\nrecord Pixel\n  x: int\n",
+    }
+
+    _entry_resolution(tmp_path, modules)
 
 
 @pytest.mark.parametrize(
     "source",
     (
         "scope Tools\n  def f() -> int = 0\nend Tools\n\nTools[int]::f()",
-        "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value: Tools[int]::T = null",
         (
             "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value = 1\n"
             "case value of | Tools[int]::f => 1"
         ),
         "scope Tools\n  def f() -> int = 0\nend Tools\n\nvalue is Tools[int]::f",
+        "def Tools::f() -> int = 0\nTools[int]::f()",
     ),
 )
 def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
     source: str,
 ) -> None:
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied to scope"):
+    with pytest.raises(TypeArgumentsError):
         resolve_inline_entry(source)
 
 
-@pytest.mark.parametrize(
-    ("source", "match"),
-    (
-        ("First::Second::Third::member", "not defined|No module"),
-        # Under a real import environment, a first segment carrying type
-        # arguments is classified as an attempted module route before any
-        # name lookup is attempted, so this reports the invalid route shape
-        # rather than an unresolved name.
-        ("Type[int]::Second::member", "Type arguments cannot be applied to module route"),
-    ),
-)
-def test_long_expression_qualifier_chain_reports_the_unresolved_name(
-    source: str, match: str
-) -> None:
-    with pytest.raises(AglScopeError, match=match):
-        resolve_inline_entry(source)
+def test_an_unknown_member_beneath_an_applied_plain_scope_is_unknown() -> None:
+    with pytest.raises(UnknownMemberError):
+        resolve_inline_entry(
+            "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value: Tools[int]::T = null"
+        )
+
+
+def test_long_expression_qualifier_chain_reports_the_unresolved_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError) as exc_info:
+        resolve_inline_entry("First::Second::Third::member")
+
+    assert exc_info.value.qualifier == "First::Second::Third"
+
+
+def test_type_arguments_on_an_unresolved_leading_segment_are_an_unknown_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError):
+        resolve_inline_entry("Type[int]::Second::member")
 
 
 def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
@@ -518,33 +648,38 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
         "pkg/b": "def common() -> int = 2\n",
     }
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _entry_resolution(tmp_path, modules)
 
 
-def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("target", "call", "resolves"),
+    (
+        ("Point", "local()", True),
+        ("Point", "remote()", True),
+        ("::Point", "local()", True),
+        ("::Point", "remote()", False),
+        ("/Point", "remote()", True),
+        ("/Point", "local()", False),
+    ),
+)
+def test_use_target_combines_a_local_scope_with_a_same_named_route(
+    target: str, call: str, *, resolves: bool
+) -> None:
+    """``use Point::*`` opens the own scope and the module; ``::``/``/`` anchor one of them."""
     modules = {
         "Point": "def remote() -> int = 1\n",
         "entry": (
-            "import Point\nuse Point::*\n\nscope Point\n  def local() -> int = 2\nend Point\n"
+            f"import Point\nuse {target}::*\n\nscope Point\n  def local() -> int = 2\nend Point\n"
+            f"let r = {call}\n"
         ),
     }
 
-    del tmp_path
-    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+    if resolves:
         _resolve_without_loader(modules)
-
-    diagnostic = str(raised.value)
-    assert "Point" in diagnostic
-    assert "/Point" in diagnostic
-    assert "::Point" in diagnostic
-
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Point::*", "use /Point::*")}
-    )
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Point::*", "use ::Point::*")}
-    )
+    else:
+        with pytest.raises(AglScopeError):
+            _resolve_without_loader(modules)
 
 
 @pytest.mark.parametrize(
@@ -556,10 +691,22 @@ def test_use_aliases_and_hiding_do_not_leak_enum_variants(tmp_path: Path, use_de
         _entry_resolution(
             tmp_path,
             {
-                "entry": f"import lib\n{use_decl}\ndef selected() -> Flag = Ready",
+                "entry": f"import lib\n{use_decl}\ndef selected() -> lib::Flag = Ready",
                 "lib": "enum Flag\n  | Ready\n  | Waiting",
             },
         )
+
+
+def test_wildcard_use_of_a_facade_reaches_a_referenced_enum_member(tmp_path: Path) -> None:
+    """A bare-exposed enum's referenced (``::Name``) member is as reachable
+    through a facade's wildcard ``use`` as an inline member already is."""
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::*\ndef selected() -> Rec = Rec(x = 1)",
+            "lib": "record Rec\n  x: int\n\nenum E = ::Rec | Other",
+        },
+    )
 
 
 def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) -> None:
@@ -576,7 +723,7 @@ def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) ->
 def test_selective_import_does_not_expose_unselected_nested_scope_to_later_use(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(AglScopeError, match="not nameable"):
+    with pytest.raises(UnknownQualifierError):
         _entry_resolution(
             tmp_path,
             {
@@ -647,7 +794,7 @@ def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: P
 
 
 def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _resolve_without_loader(
             {
                 "entry": (
@@ -663,19 +810,21 @@ def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
         )
 
 
-def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
+def test_use_target_suffix_routes_combine_and_a_module_anchor_selects_one() -> None:
     modules = {
-        "entry": "import one/Target\nimport two/Target\nuse Target::*\n",
+        "entry": (
+            "import one/Target\nimport two/Target\nuse Target::*\nlet r = first() + second()\n"
+        ),
         "one/Target": "def first() -> int = 1\n",
         "two/Target": "def second() -> int = 2\n",
     }
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
-        _resolve_without_loader(modules)
+    _resolve_without_loader(modules)
 
-    _resolve_without_loader(
-        {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
-    )
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
+        )
 
 
 def test_use_bare_contributions_narrow_to_their_scope_region(tmp_path: Path) -> None:
@@ -720,7 +869,7 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
         }
     )
 
-    with pytest.raises(AglScopeError, match="not declared"):
+    with pytest.raises(UnknownMemberError):
         _resolve_without_loader(
             {
                 "entry": (
@@ -735,7 +884,7 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
 
 
 def test_local_use_rename_collision_is_ambiguous_when_used() -> None:
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AmbiguousQualificationError):
         _resolve_without_loader(
             {
                 "entry": (
@@ -811,9 +960,12 @@ def test_use_accepts_nameable_targets_with_no_visible_members(
     _entry_resolution(tmp_path, modules)
 
 
-def test_unnameable_use_target_suggests_importing_its_module() -> None:
-    with pytest.raises(AglScopeError, match="Import"):
+def test_unnameable_use_target_is_an_unknown_qualifier() -> None:
+    with pytest.raises(UnknownQualifierError) as caught:
         _resolve_without_loader({"entry": "use Missing::*\n"})
+
+    assert type(caught.value) is UnknownQualifierError
+    assert caught.value.repair is MissRepair.IMPORT_MODULE
 
 
 def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path) -> None:
@@ -853,7 +1005,7 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
 ) -> None:
     from tests.agl.ir_harness import make_graph_from_files
 
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+    with pytest.raises(TypeArgumentsError):
         resolve_program(
             make_graph_from_files(
                 tmp_path, {"entry": entry_source, "lib": "scope A\n  def f() -> int = 7\nend A\n"}
@@ -862,7 +1014,7 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
 
 
 def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Path) -> None:
-    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+    with pytest.raises(TypeArgumentsError):
         _entry_resolution(
             tmp_path,
             {
@@ -875,22 +1027,25 @@ def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Pat
         )
 
 
-def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path: Path) -> None:
-    """``lib::Box[int]::describe()`` keeps working: ``Box`` is a real generic type."""
-    resolution = _entry_resolution(
-        tmp_path,
-        {
-            "entry": "import lib\nprint(lib::Box[int]::describe())",
-            "lib": 'record Box[T]\n  value: T\n\ndef Box::describe() -> text = "box"\n',
-        },
-    )
-    (describe_call,) = [
-        call
-        for call in _find_nodes(resolution.program, Call)
-        if isinstance(call.callee, VarRef) and call.callee.name == "describe"
-    ]
-    assert isinstance(describe_call.callee, VarRef)
-    assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID
+@pytest.mark.parametrize(
+    "entry_source",
+    ("import lib\nprint(lib::Box[int]::describe())", "import lib::*\nprint(Box[int]::describe())"),
+)
+def test_type_arguments_on_a_generic_type_never_reach_its_scope_functions(
+    tmp_path: Path, entry_source: str
+) -> None:
+    """``Box[int]::describe()`` is rejected: ``describe`` is not an inline member of ``Box``."""
+    with pytest.raises(TypeArgumentsError) as exc_info:
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": entry_source,
+                "lib": 'record Box[T]\n  value: T\n\ndef Box::describe() -> text = "box"\n',
+            },
+        )
+    span = exc_info.value.span
+    assert span is not None
+    assert entry_source[span.start_offset : span.end_offset] == "Box[int]"
 
 
 def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None:
@@ -910,12 +1065,13 @@ def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None
         (declaration,),
         {declaration.node_id: SingleTarget(module)},
         {module: {"Color": (module, "Color"), ("Color", "Red"): (module, ("Color", "Red"))}},
+        {module: {}},
     )
 
     assert env.unqualified["Color"] == frozenset({(module, "Color")})
-    assert resolve_qualified(env, ("lib",), ("Color", "Red")) == QualResolutionFound(
-        module, (module, ("Color", "Red"))
-    )
+    assert set(qualifier_member_ways(env, ("lib",), ("Color", "Red"))) == {
+        (module, ("Color", "Red"))
+    }
 
 
 def test_unanchored_qualifier_searches_enclosing_scopes_innermost_first() -> None:

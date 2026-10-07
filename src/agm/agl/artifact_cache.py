@@ -218,11 +218,10 @@ def retain_checked_modules(
     a restored artifact costs a replay of the module's own facts rather than a
     copy of the whole-program type environment.
     """
-    # `.image()` calls `own_facts()`, which raises if no own-facts journal was
-    # ever started. Unreachable here: every member of `modules` is freshly
-    # checked (Phase 4 opens a journal before its body check), rehydrated
-    # (`rehydrate` replays into a fresh journal), or an in-process journaled
-    # object carried over from an earlier compilation.
+    # `.image()` persists `own_facts()`. Every member of `modules` has them:
+    # it is freshly checked (Phase 4 opens a journal before its body check),
+    # rehydrated (`rehydrate` replays into a fresh journal), or an in-process
+    # journaled object carried over from an earlier compilation.
     _retain(
         _CHECKED,
         retainable,

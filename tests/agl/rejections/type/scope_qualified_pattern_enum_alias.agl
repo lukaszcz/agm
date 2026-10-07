@@ -1,0 +1,12 @@
+scope Paint
+  enum Col
+    | Red
+
+  type Palette = Col
+end Paint
+
+program def main() -> unit =
+  let c: Paint::Col = Paint::Col::Red
+  case c of
+    | Paint::Palette => print "palette"
+    | _ => print "other"

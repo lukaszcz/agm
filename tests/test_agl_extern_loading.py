@@ -458,11 +458,6 @@ class TestExternRegistryLoadAndResolve:
             else:
                 sys.modules["agl"] = previous
 
-    def test_resolve_before_load_companion_is_a_programming_error(self) -> None:
-        registry = ExternRegistry()
-        with pytest.raises(AssertionError):
-            registry.resolve(ModuleId.from_path("lib/mod"), "f")
-
     def test_resolve_caches_the_callable_across_repeated_calls(self, tmp_path: Path) -> None:
         """A second ``resolve`` for the same name returns the first lookup's object.
 

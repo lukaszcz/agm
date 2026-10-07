@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from heapq import merge
 from types import MappingProxyType
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.self_validation import self_validation_enabled
@@ -175,10 +175,7 @@ def _binder_assignment_sort_key(
     assignment: BinderAssignment,
     available_by_id: dict[OccurrenceId, Occurrence],
 ) -> tuple[int, int, int]:
-    occurrence = available_by_id.get(assignment.occurrence)
-    creation_order = (
-        occurrence.creation_order if occurrence is not None else assignment.occurrence.value
-    )
+    creation_order = available_by_id[assignment.occurrence].creation_order
     return creation_order, assignment.occurrence.value, assignment.binder.node_id
 
 
@@ -434,17 +431,11 @@ def specialize(
     if self_validation_enabled():
         _validate_operation(matrix, column=column, allocator=allocator)
     profile = matrix.column_profiles[column]
-    constructor_rows = profile.constructor_rows.get(_constructor_key(constructor))
-    if constructor_rows is None:
-        raise MatchCompileInvariantError(
-            "cannot specialize a constructor head not observed in the selected column"
-        )
+    constructor_rows = profile.constructor_rows[_constructor_key(constructor)]
     selected = matrix.occurrences[column]
-    canonical = _canonical_constructor(constructor, selected.type, matrix.type_table)
-    first_cell = matrix.rows[constructor_rows[0]].cells[column]
-    assert isinstance(first_cell, ConstructorCell)
+    first_cell = cast(ConstructorCell, matrix.rows[constructor_rows[0]].cells[column])
     sources = tuple(argument.provenance for argument in first_cell.arguments)
-    children, next_allocator = _allocate_children(allocator, selected, canonical, sources)
+    children, next_allocator = _allocate_children(allocator, selected, constructor, sources)
 
     rows: list[MatrixRow] = []
     for row_index in merge(constructor_rows, profile.wildcard_rows):
@@ -455,7 +446,7 @@ def specialize(
             replacement = cell.arguments
         else:
             replacement = tuple(
-                WildcardCell(provenance=cell.provenance) for _ in range(canonical.arity)
+                WildcardCell(provenance=cell.provenance) for _ in range(constructor.arity)
             )
         rows.append(
             MatrixRow(
@@ -477,7 +468,7 @@ def specialize(
     if self_validation_enabled():
         path_decompositions = (
             *matrix.path_decompositions,
-            PathDecomposition(selected, canonical, children),
+            PathDecomposition(selected, constructor, children),
         )
     return Specialization(
         PatternMatrix(
@@ -554,8 +545,6 @@ def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
         for index, profile in enumerate(matrix.column_profiles)
         if profile.heads
     ]
-    if not candidates:
-        raise MatchCompileInvariantError("qba selection requires at least one refutable column")
 
     def rank(candidate: tuple[int, QbaScore]) -> tuple[int, int, int, int, int, int]:
         candidate_index, candidate_score = candidate
@@ -642,13 +631,7 @@ def _validate_matrix(matrix: PatternMatrix) -> None:
                 "matrix row width does not match occurrence-vector width"
             )
         binder_ids = [binder_id for cell in row.cells for binder_id in _cell_binder_ids(cell)]
-        for assignment in row.binder_assignments:
-            if assignment.occurrence not in available_by_id:
-                raise MatchCompileInvariantError(
-                    f"binder assignment refers to unavailable occurrence "
-                    f"{assignment.occurrence.value}"
-                )
-            binder_ids.append(assignment.binder.node_id)
+        binder_ids.extend(assignment.binder.node_id for assignment in row.binder_assignments)
         if len(set(binder_ids)) != len(binder_ids):
             raise MatchCompileInvariantError("a row binds the same source binder more than once")
 

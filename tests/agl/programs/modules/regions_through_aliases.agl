@@ -1,0 +1,30 @@
+# A region beneath an imported alias's name is a scope of the module's own at
+# the path written: what it declares, imports, uses and re-exports stands
+# there, read by that name beside what the alias reaches beneath its target.
+# Methods are declared at their type's own path.
+import shapes::*
+import aliases::*
+import forwarded
+
+scope Geo
+  import measures::{pace}
+  use measures::Units
+
+  let origin = 1
+
+  def twice(shape: Geo) -> int = shape.side * 2 * pace()
+
+  def scaled(side: int) -> int = Units::scale(side) + origin
+end Geo
+
+def Shape::doubled(self) -> int = Geo::twice(self)
+
+def Shape::Corner::sharp(self) -> bool = self.angle < 90
+
+def Shape::tripled(self) -> int = self.doubled() + self.side + Geo::origin
+
+program def main(side: int) -> unit =
+  let shape = Shape(side = side)
+  print("%{shape.doubled()} %{shape.tripled()} %{Geo::scaled(side)} %{Geo::twice(shape)}")
+  print("%{Geo::Corner(angle = side * 20).sharp()} %{Geo::origin + Geo::scaled(0)}")
+  print(forwarded::Geo::pace())

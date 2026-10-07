@@ -10,7 +10,6 @@ from agm.agent.runner import prepare_prompt_from_source
 from agm.config.general import (
     ConfigCommandNotFound,
     _optional_bool,
-    _unique_paths,
     load_loop_config,
     load_merged_config,
     load_refine_config,
@@ -134,7 +133,7 @@ def test_load_run_config_prefers_home_over_install_prefix(
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "cat"\n')
 
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+    monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
     config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
 
@@ -148,7 +147,7 @@ def test_load_run_config_falls_back_to_home_when_install_prefix_is_missing(
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
 
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: tmp_path / "prefix")
+    monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: tmp_path / "prefix")
 
     config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
 
@@ -711,20 +710,6 @@ def test_sandbox_settings_candidates_fall_back_to_alias_command(tmp_path: Path) 
         project / "config" / "sandbox" / "default.json",
         work / ".sandbox" / "default.json",
     ]
-
-
-class TestUniquePaths:
-    def test_deduplicates_paths(self, tmp_path: Path) -> None:
-        p1 = tmp_path / "a"
-        p2 = tmp_path / "b"
-        p3 = tmp_path / "a"  # duplicate
-        result = _unique_paths([p1, p2, p3])
-        assert result == [p1, p2]
-
-    def test_preserves_order(self, tmp_path: Path) -> None:
-        paths = [tmp_path / name for name in ["c", "a", "b", "a"]]
-        result = _unique_paths(paths)
-        assert result == [tmp_path / "c", tmp_path / "a", tmp_path / "b"]
 
 
 class TestOptionalBool:

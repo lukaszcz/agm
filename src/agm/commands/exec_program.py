@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, assert_never
 
 from agm.agent.session import create_agl_session_host
-from agm.agl import PipelineDriver
+from agm.agl import ArgumentPreflightFailure, PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
@@ -134,11 +134,11 @@ from agm.packages.model import PackageInfo, owning_package
 from agm.sandbox.prepare import lazy_sandbox_context
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from agm.agl.ir.nodes import UseDefault
     from agm.agl.ir.program import ExecutableProgram
-    from agm.agl.pipeline import ArgumentPreflight
+    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.semantics.values import Value
     from agm.config.general import GeneralConfig
@@ -387,7 +387,12 @@ def registered_program_declaration(
     context: ConfigContext | None = None,
     artifact_sink: list[ProgramDiscoveryArtifacts] | None = None,
 ) -> ProgramDeclInfo | None:
-    """Discover the referenced program's own ``program def`` declaration, degrading on failure.
+    """Discover the referenced program's own ``program def`` declaration.
+
+    Returns ``None`` when the reference resolves to no program of
+    *package_name* (including unreadable or invalid package state) or its
+    source fails discovery, so help and completion describe the command
+    without its program's parameters.
 
     A registered command names exactly one ``program def`` declaration — the
     one selected here by matching the installed reference's own declaration
@@ -396,29 +401,26 @@ def registered_program_declaration(
     matches a requested name against entry-module declarations. An imported
     module's same-named declaration never shadows it.
     """
-    try:
-        if context is None:
-            context = current_config_context()
-        target = _resolve_registered_program_target(program, package_name, context=context)
-        if target is None:
-            return None
-        artifacts = discover_program_artifacts_for_target(
-            file=program,
-            code=None,
-            module_paths=None,
-            no_stdlib=False,
-            context=context,
-            resolved_target=target,
-        )
-        if artifacts is None:
-            return None
-        if artifact_sink is not None:
-            artifact_sink.append(artifacts)
-        return select_entry_program(
-            artifacts.discovery.programs, requested=target.declaration_path
-        ).selected
-    except (Exception, SystemExit):
+    if context is None:
+        context = current_config_context()
+    target = _resolve_registered_program_target(program, package_name, context=context)
+    if target is None:
         return None
+    artifacts = discover_program_artifacts_for_target(
+        file=program,
+        code=None,
+        module_paths=None,
+        no_stdlib=False,
+        context=context,
+        resolved_target=target,
+    )
+    if artifacts is None:
+        return None
+    if artifact_sink is not None:
+        artifact_sink.append(artifacts)
+    return select_entry_program(
+        artifacts.discovery.programs, requested=target.declaration_path
+    ).selected
 
 
 def run(
@@ -668,7 +670,21 @@ def run(
     executable: "ExecutableProgram | None" = None
     program_symbol = None
     arguments_bound: "tuple[Value | UseDefault, ...] | None" = None
-    argument_preflight: "ArgumentPreflight | None" = None
+    param_seeds: "Mapping[StaticBindingKey, Value] | None" = None
+    # The selected program's own ``@config`` entries (evaluated by preflight)
+    # rank between the config tables and the CLI for both a module parameter
+    # (folded into ``param_seeds`` by preflight already, filtered by
+    # ``key in executable.param_bindings``) and an engine setting (folded in
+    # here, filtered by ``is_engine_builtin_var_key`` — the checker admits only
+    # these two target kinds, so every entry lands in exactly one filter).
+    # Resolving these only after a preflight failure has already exited 1 is
+    # what lets ``@config`` reach them without a second lowering pass or a
+    # duplicated precedence rule. A ``@config`` value is decoded against
+    # *executable*'s own nominal identity (see ``preflight_arguments``); an
+    # enum-backed value (``timeout``, ``trace-file``, ``default-agent``) is
+    # restamped onto the standard identity every other engine tier already
+    # uses, so it reads back through the same plain accessors.
+    config_engine_values: dict[str, Value] = {}
     if selected_program is not None:
         argument_preflight = runtime.preflight_arguments(
             prepared,
@@ -683,32 +699,14 @@ def run(
                 "; ".join(diag.message for diag in argument_preflight.result.diagnostics),
                 selected_program,
             )
-        if not argument_preflight.result.ok:
+        if isinstance(argument_preflight, ArgumentPreflightFailure):
             for diag in argument_preflight.result.diagnostics:
                 print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
             raise SystemExit(1)
         executable = argument_preflight.executable
-        assert executable is not None
         program_symbol = executable.program_symbols[selected_program.node_id]
         arguments_bound = argument_preflight.arguments
-
-    # The selected program's own ``@config`` entries (evaluated by preflight
-    # above) rank between the config tables and the CLI for both a module
-    # parameter (folded into ``param_seeds`` by preflight already, filtered by
-    # ``key in executable.param_bindings``) and an engine setting (folded in
-    # here, filtered by ``is_engine_builtin_var_key`` — the checker admits only
-    # these two target kinds, so every entry lands in exactly one filter).
-    # Resolving these only now — after a preflight failure has already exited
-    # 1 — is what lets ``@config`` reach them without a second lowering pass
-    # or a duplicated precedence rule. A ``@config`` value is decoded against
-    # *executable*'s own nominal identity (see ``preflight_arguments``); an
-    # enum-backed value (``timeout``, ``trace-file``, ``default-agent``,
-    # ``default-sandbox``) is
-    # restamped onto the standard identity every other engine tier already
-    # uses, so it reads back through the same plain accessors.
-    config_engine_values: dict[str, Value] = {}
-    if executable is not None:
-        assert argument_preflight is not None
+        param_seeds = argument_preflight.param_seeds
         config_engine_values = {
             key[2]: restamp_engine_setting(
                 key[2],
@@ -802,7 +800,7 @@ def run(
             process_environment=process_environment,
             program_symbol=program_symbol,
             arguments=arguments_bound,
-            param_seeds=None if argument_preflight is None else argument_preflight.param_seeds,
+            param_seeds=param_seeds,
         )
 
         for diag in result.warnings:

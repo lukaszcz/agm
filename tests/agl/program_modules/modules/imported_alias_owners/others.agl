@@ -1,0 +1,3 @@
+enum Plain
+  | Idle
+  | Busy(n: int)

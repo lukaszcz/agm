@@ -145,7 +145,10 @@ def fetch(url: str) -> str:
 Like `runtime.state`, this must be called during an extern invocation; a
 direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
-reference cycle, is replaced by a marker rather than failing the call.
+reference cycle, is replaced by a marker rather than failing the call. A
+mapping nested in the payload whose keys are not all `str` is recorded as an
+array of `{"key": …, "value": …}` objects, so distinct keys never collapse
+into one string.
 
 `runtime.tracing()` reports whether a record would be written, so a companion
 can skip building a payload that tracing, off by default, would discard.
@@ -184,18 +187,28 @@ than an extern signature.
 | `text` | `str` |
 | `json` | `agl.json(value)` / `AglJson` |
 | `array[T]` | a mutable sequence view (`MutableSequence`) over the AgL array |
-| `dict[text, V]` | a mutable mapping view (`MutableMapping[str, object]`) over the AgL dict |
+| `dict[K, V]` | a mutable mapping view (`MutableMapping`) over the AgL dict, keyed by the Python representation of `K` |
 | record | snapshot instance, or a live view when its declaration has a `var` field |
 | enum value | instance of its member record's class, live when that member has a `var` field |
 | exception | instance of its synthesized class |
 | function | a callback proxy, valid only inside the invocation window |
 
 `bool` is considered before `int` on return because Python makes `bool` an
-`int` subclass while AgL does not. A bare Python `list` or `dict` is never an
-AgL boundary value and is rejected. Construct a new AgL container with
-`agl.array([...])` or `agl.dict({...})` instead. Wrap every JSON value,
-including `None` and scalars, with `agl.json(value)`; this keeps JSON `null`
-and JSON `3` distinct from `unit` and `int`.
+`int` subclass while AgL does not. Every `dict` in an
+`extern def` signature, parameters and result alike, at any depth and inside
+callback parameter types, needs a `Hashable` key, assuming each type variable
+in the key `Hashable` (see [Constraint blocks](generics.md#constraint-blocks));
+otherwise it is a static error. A bare
+Python `list` or `dict` is never an AgL boundary value and is rejected.
+Construct a new AgL container with `agl.array([...])` or `agl.dict({...})`
+instead. Wrap every JSON value, including `None` and scalars, with
+`agl.json(value)`; this keeps JSON `null` and JSON `3` distinct from `unit`
+and `int`.
+
+`AglJson` equality and hashing follow AgL `json` equality, not Python's:
+`AglJson(True)` differs from `AglJson(1)`, `AglJson(Decimal("1.5"))` equals
+`AglJson(Decimal("1.50"))`, and containers compare structurally. A
+container-valued `AglJson` is therefore usable as a Python dict key.
 
 Every AgL `text` value is a sequence of Unicode scalar values: a companion
 must return a `str` with no lone surrogate. A companion reading an OS name or
@@ -203,10 +216,12 @@ decoding bytes checks it (for example with `agm.util.unicode`) or decodes
 strictly; this is not checked at the boundary, so a companion that returns an
 invalid `str` produces text that fails wherever the program first encodes it.
 
-A `json` payload crosses without being copied, so the companion carries two
-obligations: the payload must be JSON-shaped — dicts keyed by `str`, lists,
-`str`, `int`, `decimal.Decimal`, `bool`, `None` — and a payload it passed or
-received must not be retained and mutated afterwards.
+A `json` payload crosses without being copied or checked, so the companion
+carries two obligations: a payload it returns or writes must be JSON-shaped —
+dicts keyed by `str`, lists, `str`, `int`, finite `decimal.Decimal`, `bool`,
+`None` — and it never mutates a payload it received, nor retains and mutates
+one it passed. A payload it receives has the same shape: its numbers are
+`int` or finite `decimal.Decimal`, never `float`.
 
 ```python
 from agl import array, dict, json
@@ -297,12 +312,31 @@ detached Python snapshot. A view encodes and decodes elements lazily, so a
 companion may write any supported boundary value. An unsupported write raises
 `TypeError`.
 
+A dict view works over any key type. Keys cross as values of their type do
+(`str`, `int`, `decimal.Decimal`, `bool`, `AglJson`, and record, enum-member
+and exception instances), and iteration yields them in insertion order, as
+originally inserted. A lookup, `in`, write, or `del` converts the Python key
+to an AgL key and matches by AgL equality, so `Decimal("1.5")` finds a stored
+`1.50` (writing through it keeps the stored key), and an `int` key never finds
+a `decimal` or `bool` one. A `json` key crosses as `AglJson`, so
+`AglJson(True)` and `AglJson(1)` are distinct keys; a bare `str`, `int`,
+`Decimal`, or `bool` is a `text`, `int`, `decimal`, or `bool` key. An
+unhashable Python object (a list, dict, live record view) or one with no AgL
+key form raises `TypeError`. A missing key raises `KeyError`.
+
+Keys a companion writes must have the dict's key type; like written values,
+they are not checked. `agl.dict` builds a dict from any such keys, given as
+a Python `dict` or an iterable of `(key, value)` pairs; a later pair replaces
+an earlier key that is AgL-equal.
+
 ## Callbacks
 
-An AgL function passed to an extern is a Python callable. Its Python arguments
-are decoded as ordinary extern return values, and its result is encoded as an
-ordinary extern argument. The companion calls it positionally; its AgL arity
-applies, and Python keyword arguments are not accepted.
+An AgL function passed to an extern is a Python callable. Every function value
+crosses alike, whether a declared function, a lambda, a partial application, or
+a constructor (`Point`, `Slot::Filled`, or one spelled through an alias). Its
+Python arguments are decoded as ordinary extern return values, and its result
+is encoded as an ordinary extern argument. The companion calls it positionally;
+its AgL arity applies, and Python keyword arguments are not accepted.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -405,7 +439,10 @@ is accepted at the boundary, and the program is then free to fail later, at
 an unrelated point, with an error the program cannot catch. An unsupported
 Python value (such as a bare `list`) raises `ExternError`. Ordinary Python
 exceptions also become `ExternError`, whose `python-type` holds the original
-exception class name. A `BaseException` still propagates.
+exception class name. A `BaseException` still propagates. A `decimal.Decimal`
+return value outside the fixed decimal context's range, or non-finite, raises
+`ExternError`
+([Numbers: int and decimal](types.md#numbers-int-and-decimal)).
 
 ## Target type parameters
 
@@ -486,7 +523,8 @@ A `TypeContract` describes the resolved target:
 | `nominal` | a record's or member's synthesized class, an enum's namespace class, else `None` |
 | `fields` | record or member fields keyed by JSON name, in declaration order: `(name, doc, contract)`, with the declared name and the field's `@doc` |
 | `members` | enum member contracts keyed by JSON tag, in declaration order |
-| `items`, `values` | an array's element contract and a dict's value contract, else `None` |
+| `items` | an array's element contract, else `None` |
+| `keys`, `values` | a dict's key and value contracts, else `None` |
 | `schema` | a fresh copy of the target's self-contained [derived JSON Schema](agent-calls.md#derived-json-schema) |
 
 `Option[T]` and every other enum, generic or not, have kind `"enum"`. A

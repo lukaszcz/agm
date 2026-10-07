@@ -1,0 +1,7 @@
+# A function value is never Hashable, so a function type cannot be a dict
+# key at a hashing site.
+def inc(x: int) -> int = x + 1
+
+program def main() -> unit =
+  let d: dict[(int) -> int, text] = {}
+  print(inc in d)

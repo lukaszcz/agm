@@ -593,3 +593,131 @@ class TestConfigStringsReadAlikeAtEveryDepth:
             "Swap::Second",
             "[Swap::Second, Swap::First]",
         ]
+
+
+_DICT_TYPES = (
+    "enum Color\n  | Red\n  | Tint(level: int)\n\n"
+    "enum Plain\n  | A\n  | B\n\n"
+    'enum Tagged\n  | @json-name("bleu") Blue\n  | Green\n\n'
+    "record Point\n  x: int\n  y: int\n\n"
+)
+
+_DICT_PROGRAM = (
+    _DICT_TYPES + "program def main(\n"
+    "  by-int: dict[int, text] = {},\n"
+    "  by-plain: dict[Plain, int] = {},\n"
+    "  by-color: dict[Color, int] = {},\n"
+    "  by-point: dict[Point, text] = {},\n"
+    "  by-json: dict[json, int] = {},\n"
+    "  by-tag: dict[Tagged, int] = {},\n"
+    ") -> unit =\n"
+    "  print by-int\n"
+    "  print by-plain\n"
+    "  print by-color\n"
+    "  print by-point\n"
+    "  print by-json\n"
+    "  print by-tag\n"
+)
+
+_DICT_PARAM_PROGRAM = (
+    _DICT_TYPES + "@param let table: dict[Point, int] = {}\n\n"
+    "program def main() -> unit =\n  print table\n"
+)
+
+
+class TestDictParametersFromHostInputs:
+    """``dict[K, V]`` program and ``@param`` parameters read from TOML config and
+    ``@param`` CLI flags, for every key wire form."""
+
+    @staticmethod
+    def _program(tmp_path: Path, source: str) -> Path:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, source)
+        return agl_file
+
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            ('by-int = { "1" = "one", "-2" = "minus" }', '{1: "one", -2: "minus"}'),
+            ("by-plain = { A = 1 }", "{Plain::A: 1}"),
+            (
+                "by-color = [{ key = \"Red\", value = 1 }, { key = 'Tint(level = 2)', value = 2 }]",
+                "{Color::Red: 1, Color::Tint(level = 2): 2}",
+            ),
+            (
+                'by-point = [{ key = { x = 1, y = 2 }, value = "a" }]',
+                '{Point(x = 1, y = 2): "a"}',
+            ),
+            (
+                "by-point = [{ key = 'Point(x = 1, y = 2)', value = \"a\" }]",
+                '{Point(x = 1, y = 2): "a"}',
+            ),
+            ('by-point = "{}"', "{}"),
+            ("by-point = {}", "{}"),
+            ('by-point = { "Point(x = 1, y = 2)" = "a" }', '{Point(x = 1, y = 2): "a"}'),
+            ("by-point = '{Point(x = 1, y = 2): \"a\"}'", '{Point(x = 1, y = 2): "a"}'),
+            ("by-json = '{\"s\": 1}'", '{"s": 1}'),
+            ('by-json = { "s" = 1 }', '{"s": 1}'),
+            ('by-int = { "2.0" = "a" }', '{2: "a"}'),
+            ("by-tag = { Blue = 1 }", "{Tagged::Blue: 1}"),
+            ("by-tag = { bleu = 1 }", "{Tagged::Blue: 1}"),
+        ],
+    )
+    def test_toml_config_decodes_every_key_form(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        config: str,
+        expected: str,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, f"[prog.main]\n{config}\n")
+        exec_command.run(_exec_args_no_trace(self._program(tmp_path, _DICT_PROGRAM)))
+        assert expected in capsys.readouterr().out.splitlines()
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            'by-point = [{ key = { x = 1, y = 2 }, value = "a" }, '
+            '{ key = { x = 1, y = 2 }, value = "b" }]',
+            'by-int = { "1" = "a", "1.0" = "b" }',
+            'by-int = { "x" = "a" }',
+        ],
+    )
+    def test_bad_toml_config_fails_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, f"[prog.main]\n{config}\n")
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(self._program(tmp_path, _DICT_PROGRAM)))
+        assert exc_info.value.code not in (0, None)
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("{Point(x = 1, y = 2): 3}", "{Point(x = 1, y = 2): 3}"),
+            ("{}", "{}"),
+        ],
+    )
+    def test_param_dict_from_cli_value_syntax(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], token: str, expected: str
+    ) -> None:
+        agl_file = self._program(tmp_path, _DICT_PARAM_PROGRAM)
+        exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--table", token]))
+        assert capsys.readouterr().out == f"{expected}\n"
+
+    def test_param_dict_from_toml_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _config_home(
+            tmp_path, monkeypatch, "[prog.main]\ntable = [{ key = { x = 1, y = 2 }, value = 3 }]\n"
+        )
+        exec_command.run(_exec_args_no_trace(self._program(tmp_path, _DICT_PARAM_PROGRAM)))
+        assert capsys.readouterr().out == "{Point(x = 1, y = 2): 3}\n"
+
+    def test_param_dict_duplicate_keys_fail_cleanly(self, tmp_path: Path) -> None:
+        agl_file = self._program(tmp_path, _DICT_PARAM_PROGRAM)
+        tokens = ["--table", "{Point(x = 1, y = 2): 3, Point(x = 1, y = 2): 4}"]
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=tokens))
+        assert exc_info.value.code not in (0, None)

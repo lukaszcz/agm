@@ -10,6 +10,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
+from agm.agl.scope.symbols import AmbiguousQualificationError, UnknownMemberError
 from agm.agl.syntax.nodes import Call, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedModule, check_program
 from tests.agl.module_graph import resolve_and_check_repl_entry
@@ -87,10 +88,32 @@ def test_session_open_rejects_lookalike_option_some_record() -> None:
     )
 
 
-def test_session_unknown_static_reports_a_static_diagnostic() -> None:
-    message = _reject("Session::bogus()")
-    assert "unknown static" in message.lower()
-    assert "session" in message.lower()
+def test_session_unknown_static_raises_unknown_member() -> None:
+    """A qualified static a prelude type does not declare is an
+    :class:`UnknownMemberError` -- ``Session`` itself resolves as a prelude
+    owner, so an unrecognized static on it is a missing member, not an
+    unresolvable qualifier."""
+    with pytest.raises(UnknownMemberError):
+        _check("Session::bogus()")
+
+
+def test_ambiguous_static_owner_call_raises_ambiguity_not_unknown_static() -> None:
+    """A call whose path two declarations share -- not merely unknown --
+    raises the ambiguity itself rather than being reinterpreted as an
+    unrecognized built-in static."""
+    with pytest.raises(AmbiguousQualificationError) as excinfo:
+        _check(
+            "use A::*\n"
+            "use B::*\n"
+            "\n"
+            "scope A\n\n  scope Session\n    def open() -> int = 1\n  end Session\nend A\n"
+            "\n"
+            "scope B\n\n  scope Session\n    def open() -> int = 2\n  end Session\nend B\n"
+            "\n"
+            "Session::open()"
+        )
+    assert type(excinfo.value) is AmbiguousQualificationError
+    assert excinfo.value.spelling == "Session::open"
 
 
 @pytest.mark.parametrize("call", ["Session::ping()", "::Session::ping()"])
@@ -142,7 +165,7 @@ def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Pa
     """A same-path scope in replacement ``std/prelude`` cannot impersonate Session."""
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "prelude.agl").write_text(
-        "scope Session\n  builtin def default() -> Session\nend Session\n",
+        "scope Session\n  builtin def default() -> int\nend Session\n",
         encoding="utf-8",
     )
 
@@ -177,9 +200,9 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
     )
 
     assert prepared.resolved is None
-    assert any(
-        "unknown static" in diagnostic.message.lower() for diagnostic in prepared.diagnostics
-    )
+    (diagnostic,) = prepared.diagnostics
+    assert diagnostic.source_label == str(tmp_path / "std" / "prelude.agl")
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_column) == (3, 13, 29)
 
 
 def test_builtin_static_cannot_be_partially_applied() -> None:

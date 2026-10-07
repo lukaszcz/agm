@@ -1,0 +1,7 @@
+def lookup[K, V]{Hashable K}(d: dict[K, V], key: K) -> V = d[key]
+
+program def main() -> unit =
+  let d: dict[array[int], text] = {}
+  let key: array[int] = [1, 2]
+  let v = lookup(d, key)
+  print v

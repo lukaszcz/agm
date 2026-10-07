@@ -1,0 +1,2 @@
+record Red
+  n: int

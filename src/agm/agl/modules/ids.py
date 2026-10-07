@@ -155,21 +155,52 @@ def spell_scope_path(path: Sequence[str]) -> str:
     return "::".join(path)
 
 
-def spell_declaration(
-    module_id: ModuleId, path: Sequence[str], *, local_to: ModuleId | None = None
+def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
+    """Render a source qualifier with its slash route and optional anchor."""
+    return ("/" if anchored else "") + "/".join(qualifier)
+
+
+def render_route_member(
+    route: tuple[str, ...], member_path: Sequence[str], *, anchored: bool = False
 ) -> str:
-    """Render a declaration path the way a reader in *local_to* would write it.
+    """Render ``route::member_path`` as written: *route* by :func:`render_qualifier`.
+
+    An empty *member_path* spells the route alone; an empty *route* spells the
+    current-module anchor ``::member_path``.
+    """
+    qualifier = render_qualifier(route, anchored=anchored)
+    return f"{qualifier}::{spell_scope_path(member_path)}" if member_path else qualifier
+
+
+@dataclass(frozen=True, slots=True)
+class Reader:
+    """The module a declaration spelling is written in, and the segments its paths declare."""
+
+    module: ModuleId
+    declared: frozenset[str] = frozenset()
+
+
+def spell_declaration(
+    module_id: ModuleId, path: Sequence[str], *, reader: Reader | None = None
+) -> str:
+    """Render a declaration path the way *reader* would write it.
 
     A declaration in the reading module needs no module qualifier, so it is
     spelled by its path alone, as does a reserved host identity, which has no
     module a reader could name; anything else is prefixed with the owning
-    module's user-facing label.  Diagnostics that suggest a disambiguating
-    spelling use this so the suggestion is one the reader can actually type.
+    module's user-facing label -- ``/``-anchored when the reader declares a
+    path with a segment spelled like the label, whose own path could win the
+    spelling -- and an empty *path* -- the module itself -- is that label
+    alone.  Diagnostics that suggest a disambiguating spelling use this so
+    the suggestion is one the reader can actually type.
     """
     scoped = spell_scope_path(path)
-    if module_id.is_reserved or (local_to is not None and module_id == local_to):
+    if module_id.is_reserved or (reader is not None and module_id == reader.module):
         return scoped
-    return f"{module_id.display()}::{scoped}"
+    label = module_id.display()
+    if reader is not None and label in reader.declared:
+        label = f"/{label}"
+    return f"{label}::{scoped}" if scoped else label
 
 
 def expand_module_wildcard(

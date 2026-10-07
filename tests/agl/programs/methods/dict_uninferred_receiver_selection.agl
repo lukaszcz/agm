@@ -1,0 +1,19 @@
+# A still-uninferred `{}` receiver (its key/value not yet solved) must remain
+# a candidate for a `dict[text, V]` receiver method: selection treats
+# an uninferred position as a wildcard, and specialization then unifies the
+# real receiver against the template to solve it for real.
+
+def dict[text, V]::merge-text(self, other: dict[text, V]) -> dict[text, V] = self.merge(other)
+
+program def main(mode: int) -> unit =
+  if mode == 0 =>
+    let d: dict[text, int] = {}.merge-text({"a": 1})
+    print d
+  else =>
+    if mode == 1 =>
+      let e: dict[text, int] = {"b": 2}
+      let d = {}.merge-text(e)
+      print d
+    else =>
+      let d: dict[text, int] = {}
+      print(d.merge-text(d).size())

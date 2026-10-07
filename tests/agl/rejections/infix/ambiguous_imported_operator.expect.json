@@ -1,0 +1,8 @@
+{
+  "module_roots": [
+    "program_modules/infix/ambiguous_imported_operator"
+  ],
+  "diagnostic": {
+    "line": 5
+  }
+}

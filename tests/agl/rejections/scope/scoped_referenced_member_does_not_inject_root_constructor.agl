@@ -1,7 +1,7 @@
 scope Outer
   record Shared
     value: int
-  enum E = ::Shared
+  enum E = Outer::Shared
 end Outer
 
 program def main() -> unit = Shared

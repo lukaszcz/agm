@@ -14,7 +14,7 @@ The environment module clones the ambient environment, resolves variable referen
 
 ## Filesystem, TOML, and Dotenv I/O
 
-Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file, through the single parse entry every config layer, manifest, and dependency file shares; dotenv helpers parse complete assignments and publish updates atomically; tree copies preserve links instead of dereferencing them. Atomic writes go through one chunked byte-writer (temporary sibling, then replace) shared by text writes and any other streamed destination, such as an HTTP download.
+Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file, through the single parse entry every config layer, manifest, and dependency file shares; loaded data holds floats as exact `Decimal`s (`toml_data`); dotenv helpers parse complete assignments and publish updates atomically; tree copies preserve links instead of dereferencing them. Atomic writes go through one chunked byte-writer (temporary sibling, then replace) shared by text writes and any other streamed destination, such as an HTTP download.
 
 ## HTTP Transport
 
@@ -30,7 +30,7 @@ Commands that support `--dry-run` set an invocation mode consulted by the proces
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; and an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads.
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads; and the pinned AgL decimal context with exact number parsing, conversion, and int/decimal comparison.
 
 ## Code Entry Points
 
@@ -41,4 +41,5 @@ Commands that support `--dry-run` set an invocation mode consulted by the proces
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
 - `src/agm/core/pyenv.py` — requirement satisfaction and installation for AGM's interpreter environment.
 - `src/agm/core/http.py` — the `requests`-backed HTTP transport seam: session, request/response streaming, failure classification, charset decoding.
-- `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.
+- `src/agm/__init__.py` — lifts Python's int/text digit limit for the whole process, tests included, because AgL ints are unbounded.
+- `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py`, `decimal.py` — the pure helpers.

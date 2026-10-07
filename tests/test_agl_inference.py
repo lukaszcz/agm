@@ -86,7 +86,7 @@ class TestInstantiation:
             ("T",),
             (
                 ArrayType(TypeVarType("T")),
-                DictType(TypeVarType("T")),
+                DictType(TextType(), TypeVarType("T")),
                 RecordType("Box", (TypeVarType("T"),)),
                 EnumType("Option", (TypeVarType("T"),)),
                 IntType(),
@@ -96,7 +96,7 @@ class TestInstantiation:
         variable = instantiated.variables["T"]
         assert instantiated.templates == (
             ArrayType(variable),
-            DictType(variable),
+            DictType(TextType(), variable),
             RecordType("Box", (variable,)),
             EnumType("Option", (variable,)),
             IntType(),
@@ -109,7 +109,8 @@ class TestUnification:
         [
             (IntType(), TextType()),
             (ArrayType(IntType()), ArrayType(TextType())),
-            (DictType(IntType()), DictType(TextType())),
+            (DictType(TextType(), IntType()), DictType(TextType(), TextType())),
+            (DictType(IntType(), IntType()), DictType(TextType(), IntType())),
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
             (
@@ -163,7 +164,11 @@ class TestUnification:
         enum_variable = engine.fresh("enum")
 
         engine.unify(ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1))
-        engine.unify(DictType(dict_variable), DictType(TextType()), _origin(engine, 2))
+        engine.unify(
+            DictType(TextType(), dict_variable),
+            DictType(TextType(), TextType()),
+            _origin(engine, 2),
+        )
         engine.unify(
             FunctionType((function_variable,), function_variable),
             FunctionType((IntType(),), IntType()),
@@ -189,6 +194,17 @@ class TestUnification:
             TextType(),
         )
         assert engine.zonk(record_variable) == IntType()
+
+    def test_structural_unification_descends_into_dict_key(self) -> None:
+        # The key is a flexible child too, unified independently of the value.
+        engine = InferenceEngine()
+        key_variable = engine.fresh("key")
+
+        engine.unify(
+            DictType(key_variable, TextType()), DictType(IntType(), TextType()), _origin(engine, 1)
+        )
+
+        assert engine.zonk(key_variable) == IntType()
 
     def test_nominal_arguments_and_function_parts_are_invariant(self) -> None:
         engine = InferenceEngine()
@@ -253,7 +269,7 @@ class TestUnification:
         "wrap",
         [
             lambda variable: ArrayType(variable),
-            lambda variable: DictType(variable),
+            lambda variable: DictType(TextType(), variable),
             lambda variable: FunctionType((variable,), IntType()),
             lambda variable: RecordType("Box", (variable,)),
             lambda variable: EnumType("Option", (variable,)),
@@ -267,13 +283,6 @@ class TestUnification:
 
         with pytest.raises(InferenceError, match="infinite"):
             engine.unify(variable, wrap(variable), _origin(engine, 1))
-
-    def test_solver_rejects_flexible_variables_owned_by_another_engine(self) -> None:
-        owner = InferenceEngine()
-        foreign = owner.fresh("T")
-
-        with pytest.raises(AssertionError, match="owned"):
-            InferenceEngine().zonk(foreign)
 
     def test_occurs_check_never_expands_nominal_definitions(self) -> None:
         engine = InferenceEngine()
@@ -311,8 +320,8 @@ class TestContextCompletion:
         first = engine.fresh("T")
         second = engine.fresh("U")
         engine.complete_from_context(
-            FunctionType((ArrayType(first),), DictType(second)),
-            FunctionType((ArrayType(IntType()),), DictType(TextType())),
+            FunctionType((ArrayType(first),), DictType(TextType(), second)),
+            FunctionType((ArrayType(IntType()),), DictType(TextType(), TextType())),
             _origin(engine, 1, role=ConstraintRole.EXPECTED_RESULT),
         )
 
@@ -353,7 +362,9 @@ class TestContextCompletion:
     def test_context_ignores_mismatched_shapes_and_bottom(self) -> None:
         engine = InferenceEngine()
         variable = engine.fresh("T")
-        engine.complete_from_context(ArrayType(variable), DictType(IntType()), _origin(engine, 1))
+        engine.complete_from_context(
+            ArrayType(variable), DictType(TextType(), IntType()), _origin(engine, 1)
+        )
         engine.complete_from_context(variable, BottomType(), _origin(engine, 2))
 
         assert engine.is_solved(variable) is False
@@ -369,7 +380,9 @@ class TestContextCompletion:
             ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1)
         )
         engine.complete_from_context(
-            DictType(dict_variable), DictType(TextType()), _origin(engine, 2)
+            DictType(TextType(), dict_variable),
+            DictType(TextType(), TextType()),
+            _origin(engine, 2),
         )
         engine.complete_from_context(
             FunctionType((function_variable,), IntType()),
@@ -394,6 +407,16 @@ class TestContextCompletion:
         assert tuple(
             engine.zonk(variable) for variable in (dict_variable, function_variable, enum_variable)
         ) == (TextType(), TextType(), TextType())
+
+    def test_context_recurses_into_dict_key(self) -> None:
+        # The key is completed from context independently of the value.
+        engine = InferenceEngine()
+        key_variable = engine.fresh("key")
+        engine.complete_from_context(
+            DictType(key_variable, TextType()), DictType(IntType(), TextType()), _origin(engine, 1)
+        )
+
+        assert engine.zonk(key_variable) == IntType()
 
     def test_context_ignores_recursive_or_incompatible_matching_shapes(self) -> None:
         engine = InferenceEngine()
@@ -704,3 +727,17 @@ class TestFinalizationAndProvenance:
 
         assert (first.sequence, second.sequence) == (0, 1)
         assert first.role is ConstraintRole.LITERAL_ELEMENT
+
+
+def test_conflicting_constructor_fields_cite_the_fields_they_constrain() -> None:
+    """A generic constructor's conflicting field arguments are attributed to their fields."""
+    with pytest.raises(AglTypeError) as raised:
+        resolve_and_check_inline_entry(
+            'record Dup[T]\n  a: T\n  b: T\n\nlet d = Dup(a = 1, b = "s")', HostCapabilities()
+        )
+
+    cause = raised.value.__cause__
+    assert isinstance(cause, InferenceError)
+    origins = cause.origins
+    assert [origin.subject for origin in origins] == ["a", "b"]
+    assert {origin.role for origin in origins} == {ConstraintRole.CONSTRUCTOR_FIELD}

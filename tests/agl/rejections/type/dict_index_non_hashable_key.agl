@@ -1,0 +1,5 @@
+program def main() -> unit =
+  let d: dict[array[int], text] = {}
+  let key: array[int] = [1, 2]
+  let v = d[key]
+  print v

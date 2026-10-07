@@ -63,7 +63,7 @@ extern def array[E]::remove-at(self, index: int) -> E
 extern def array[E]::clear(self) -> unit
 
 @doc("Check if the array contains the given value.")
-extern def array[E]::contains(self, value: E) -> bool
+extern def array[E]::contains{Eq E}(self, value: E) -> bool
 
 @extern-name("index_of")
 @doc("""
@@ -71,11 +71,11 @@ extern def array[E]::contains(self, value: E) -> bool
 
   Raises `IndexError` when the value is absent.
 """)
-extern def array[E]::index-of(self, value: E) -> int
+extern def array[E]::index-of{Eq E}(self, value: E) -> int
 
 @extern-name("index_of_option")
 @doc("Return the first index of the given value, or `None` when absent.")
-extern def array[E]::index-of?(self, value: E) -> Option[int]
+extern def array[E]::index-of?{Eq E}(self, value: E) -> Option[int]
 
 @doc("Count the elements that satisfy the predicate.")
 extern def array[E]::count(self, predicate: (E) -> bool) -> int

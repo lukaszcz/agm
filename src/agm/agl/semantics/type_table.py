@@ -29,17 +29,32 @@ declaration sharing an owner and name as one flat selection level: an
 exception's own methods plus its ancestors', and a record's own methods plus
 its counted owning enums' (:meth:`TypeTable.owning_enums_for_selection`).
 
-``comparable_types``/``_reaches_non_data`` live here rather than in
-``semantics.types`` because their record/enum/exception arms consult the
-table's declaration-level non-data-reachability flags instead of walking
-embedded fields; ``semantics.types`` cannot import this module without a
-circular import. The flags themselves are a fixpoint over the whole table
-(``semantics.analyses.compute_non_data_reachability``, cycle-safe by
+``comparable_types``/``satisfies`` live here rather than in ``semantics.types``
+because their record/enum/exception arms consult the table's declaration-level
+property flags instead of walking embedded fields; ``semantics.types`` cannot
+import this module without a circular import. Those flags are one fixpoint per
+:class:`~agm.agl.semantics.analyses.DataProperty`
+(``semantics.analyses.compute_declaration_flags``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
-table's declarations change. That one fact answers two separate language
-questions — may ``=``/``!=`` be applied (``comparable_types``)? and is there
-a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
-which is why it is named for the fact rather than for either consumer.
+table's declarations change. ``EQ`` backs ``=``/``!=`` (``comparable_types``);
+``JSON_CONVERTIBLE`` backs :meth:`TypeTable.nominal_is_json_convertible`;
+``HASHABLE`` backs the ``Hashable`` constraint; ``EXTERN_KEYABLE`` backs
+:func:`is_extern_keyable`. :meth:`TypeTable.nominal_satisfies` takes the
+language-level ``ConstraintKind`` (``Eq``/``Hashable``) and maps it onto its
+``DataProperty``; the JSON/extern properties have no language-level
+constraint spelling, so their table methods use the fixpoint directly.
+
+:func:`satisfies` checks a structural constraint (``Eq``/``Hashable``, see
+``agl.constraints``) against a type variable's in-scope bounds, or open-world
+mode (``bounds is None``, what :meth:`TypeTable.nominal_reaches_non_data`
+uses) where a type variable, the bottom type, and an unresolved inference
+variable all count as satisfied. Its nominal case consults the same
+declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
+:func:`comparable_types` instead always takes the checker's real bound
+environment. :func:`is_json_convertible`/:func:`is_extern_keyable` are
+separate structural walks with no bounds concept at all — a bare type
+variable is never convertible; the extern key rule instead assumes every
+type variable in a key ``Hashable``.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -48,7 +63,7 @@ support ``=``?" but "is this type's reachable *instantiation closure* finite
 reference itself at ever-larger arguments (polymorphic recursion), which
 never blocks construction/matching/equality but does mean no finite schema
 exists. Backed by ``semantics.analyses.compute_finite_closure``, cached and
-invalidated the same way as the non-data-reachability fixpoint.
+invalidated the same way as the declaration-flags fixpoints above.
 :meth:`TypeTable.first_infinite_declaration`/:meth:`TypeTable.no_finite_schema_message`
 build on the same query to name the culprit declaration for a use-site
 diagnostic (agent output target, cast target, parameter type).
@@ -56,11 +71,13 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Mapping
+import enum
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
+from agm.agl.constraints import ConstraintBounds, ConstraintKind
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
@@ -78,6 +95,7 @@ from agm.agl.semantics.types import (
     BoolType,
     BottomType,
     CastKind,
+    CheckedType,
     DecimalType,
     DictType,
     EnumType,
@@ -93,11 +111,13 @@ from agm.agl.semantics.types import (
     TypeTemplateMatch,
     TypeVarType,
     UnitType,
+    contains_inference_var,
     contains_type_var,
     free_type_vars,
     is_assignable,
     is_scalar_json_shaped,
     match_nominal_owner_template,
+    match_type_template,
     spells_bare,
     standard_option_type,
     standard_optional_type,
@@ -109,7 +129,7 @@ from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
+    from agm.agl.semantics.analyses import DeclarationFlags, FiniteClosure
 
 TypeDefKind = Literal["record", "enum", "exception"]
 #: A declaration's name path — ``(module_id, scope_path, name)``. Used only
@@ -134,7 +154,10 @@ class MethodDef:
     ``Point`` DECLARATION's own identity (see :meth:`TypeTable.register_method`).
     ``signature`` is the method's ordinary function type, including its
     receiver as the first parameter. ``receiver_type_param_arity`` records how
-    many leading method type parameters belong to the receiver type.
+    many leading method type parameters belong to the receiver type. Its
+    constraint block lives on the method's own ``FunctionSignature``
+    (``TypeEnvironment.get_function_signature_by_node_id(decl_node_id)``), not
+    here.
     """
 
     module_id: ModuleId
@@ -150,6 +173,160 @@ class MethodDef:
     def declaration_key(self) -> DeclKey:
         """Return the method's structured declaration identity."""
         return self.module_id, self.scope_path, self.name
+
+
+def method_receiver_match(method: MethodDef, owner: Type) -> TypeTemplateMatch | None:
+    """Match a built-in method's receiver template against a concrete *owner*, for SELECTION.
+
+    Only the method's own receiver-prefix type parameters
+    (``method.type_params[:method.receiver_type_param_arity]``) are free in
+    the receiver template: a concrete ``dict[text, V]`` receiver (no free key
+    parameter) matches only a text-keyed dict, while a bare ``dict[K, V]``
+    receiver matches any dict, binding both ``K`` and ``V``. Used by
+    :meth:`TypeTable.method_candidates` to decide candidacy; an owner
+    position still uninferred (e.g. an empty ``{}`` literal's key/value) is
+    treated as a wildcard (``wildcard_inference_vars``) so a candidate is not
+    ruled out before inference has run. Specialization
+    (``typecheck.checker._Checker._bound_method_type``) does NOT reuse this
+    match's bindings — it re-derives them through real unification, since a
+    wildcard match carries no real binding.
+    """
+    receiver_type_params = method.type_params[: method.receiver_type_param_arity]
+    return match_type_template(
+        method.signature.params[0], owner, receiver_type_params, wildcard_inference_vars=True
+    )
+
+
+class DataProperty(enum.Enum):
+    """One declaration-level structural property computed by the shared fixpoint.
+
+    ``EQ``/``HASHABLE`` back the language-level ``Eq``/``Hashable``
+    constraints (``agm.agl.constraints.ConstraintKind``); ``JSON_CONVERTIBLE``
+    backs ``as json``/``as text`` and every wire boundary; ``EXTERN_KEYABLE``
+    backs extern signatures. Each has its own :class:`LeafPolicy` in
+    :data:`LEAF_POLICIES`. The shared fixpoint itself
+    (:func:`~agm.agl.semantics.analyses.compute_declaration_flags`) lives in
+    ``semantics.analyses``, which imports this enum and :data:`LEAF_POLICIES`
+    from here.
+    """
+
+    EQ = "eq"
+    HASHABLE = "hashable"
+    JSON_CONVERTIBLE = "json_convertible"
+    EXTERN_KEYABLE = "extern_keyable"
+
+
+@dataclass(frozen=True, slots=True)
+class LeafPolicy:
+    """What counts as "bad" evidence for one declaration-level fixpoint.
+
+    ``recurse_containers`` — ``True`` to recurse into an ``array``/``dict``'s
+    element/value type; ``False`` to flag the container outright.
+    ``var_fields_bad`` — whether a declaration's own ``var`` field (or, for
+    an enum, one of its members' own) is itself bad.
+    ``non_data_bad`` — whether a function or ``unit`` leaf is bad outright;
+    when ``False``, a function leaf is instead evaluated by recursing into
+    its parameter and result types (``unit`` is then never bad).
+    ``dict_key_ok`` — ``None`` when a ``dict``'s key type is never itself bad
+    (its own recursion covers key and value alike); otherwise a per-policy
+    key-form check over a key position (a direct ``dict`` key, or a type
+    argument filling another declaration's own key parameter): the key is bad
+    outright unless the check accepts it (still subject to
+    ``recurse_containers`` for the value type either way). Its third
+    argument is the set of the enclosing declaration's own type parameters
+    to assume satisfy the rule — deferred, like any bare type variable, to
+    whatever concrete argument a later reference supplies for them; empty at
+    a closed, concrete reference site.
+    """
+
+    recurse_containers: bool
+    var_fields_bad: bool
+    non_data_bad: bool
+    dict_key_ok: Callable[[Type, "TypeTable", frozenset[str]], bool] | None
+
+
+#: ``Hashable`` with its implication (``Eq``) already applied.
+_HASHABLE_CLOSED = frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})
+_NO_BOUNDS: ConstraintBounds = MappingProxyType({})
+
+
+def dict_key_is_hashable(
+    key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
+) -> bool:
+    """``JSON_CONVERTIBLE``'s dict-key rule: the key must be ``Hashable``.
+
+    *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`.
+    """
+    bounds = {p: _HASHABLE_CLOSED for p in assume_ok} if assume_ok else _NO_BOUNDS
+    return satisfies(key, ConstraintKind.HASHABLE, table, bounds)
+
+
+def dict_key_is_hashable_assuming_type_vars(
+    key: Type, table: "TypeTable", assume_ok: frozenset[str] = frozenset()
+) -> bool:
+    """``EXTERN_KEYABLE``'s dict-key rule: ``Hashable``, assuming every free type variable is.
+
+    Extern code builds keys of a type variable's instantiation, so a type
+    variable (bounded or not) passes wherever it occurs in the key.
+    *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`.
+    """
+    return dict_key_is_hashable(key, table, assume_ok | free_type_vars(key))
+
+
+#: Property -> the policy computing its declaration-level "does not satisfy"
+#: set (see ``semantics.analyses.compute_declaration_flags``): EQ flags a
+#: declaration that unconditionally reaches ``unit``/a function type,
+#: recursing into ``array``/``dict``; HASHABLE flags one that is not deeply
+#: immutable data — a function/unit/``var`` field, or an ``array``/``dict``
+#: outright (never recursed into); JSON_CONVERTIBLE additionally flags a dict
+#: keyed by a non-``Hashable`` type; EXTERN_KEYABLE instead requires a key
+#: that is ``Hashable`` assuming its type variables are and, unlike
+#: JSON_CONVERTIBLE, a function leaf is not bad (a callback's parameters are
+#: built by the companion), so it recurses into function types instead of
+#: flagging them.
+LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
+    {
+        DataProperty.EQ: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=True,
+            dict_key_ok=None,
+        ),
+        DataProperty.HASHABLE: LeafPolicy(
+            recurse_containers=False,
+            var_fields_bad=True,
+            non_data_bad=True,
+            dict_key_ok=None,
+        ),
+        DataProperty.JSON_CONVERTIBLE: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=True,
+            dict_key_ok=dict_key_is_hashable,
+        ),
+        DataProperty.EXTERN_KEYABLE: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=False,
+            dict_key_ok=dict_key_is_hashable_assuming_type_vars,
+        ),
+    }
+)
+
+
+_KIND_PROPERTIES: Mapping[ConstraintKind, DataProperty] = MappingProxyType(
+    {ConstraintKind.EQ: DataProperty.EQ, ConstraintKind.HASHABLE: DataProperty.HASHABLE}
+)
+
+
+def _constraint_kind_to_data_property(kind: ConstraintKind) -> DataProperty:
+    """Map a language-level constraint kind onto its declaration-flags property.
+
+    The single place ``ConstraintKind`` (``Eq``/``Hashable``) is translated to
+    a :class:`DataProperty`; ``JSON_CONVERTIBLE`` and ``EXTERN_KEYABLE``
+    have no language-level constraint spelling.
+    """
+    return _KIND_PROPERTIES[kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,9 +355,7 @@ class TypeDef:
     ``field_kinds`` — each field's own ``ParamZone``, in ``fields`` order;
                    for an exception, its OWN kinds only (see
                    :meth:`TypeTable.field_kinds` for the flattened base
-                   chain). Mirrors the ``TypeEnvironment`` constructor-kind
-                   registry, computed once at the same declaration site and
-                   fed to both.
+                   chain).
     ``field_has_default`` — whether each field has a declared default,
                    strictly paired with ``fields`` like ``field_kinds``.
                    Construction may leave it ``None``, which
@@ -217,8 +392,8 @@ class TypeDef:
                    against a seeded canonical literal must not fail merely
                    because the two carry different declaration identities.
     ``is_inline_enum_member`` — ``True`` for a synthetic record declaration
-                   created by an inline enum member. Its inhabitation is
-                   determined by its enclosing enum rather than independently.
+                   created by an inline enum member, as opposed to a
+                   separately declared record an enum references.
     ``external_name`` — a record's own ``@name``/``@json-name`` spellings
                    (its value-syntax name and its JSON tag as an enum
                    member); unused for enums and exceptions.
@@ -274,39 +449,112 @@ class TypeDef:
         corresponding handle (e.g. to register a value, or to pass to
         :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_members`/
         :meth:`TypeTable.exception_fields`). *type_args* defaults to ``()``
-        for non-generic defs and must be empty for an exception (exceptions
-        are never generic) — passing a non-empty tuple for one raises
-        ``ValueError``. The returned handle's ``decl_id`` is stamped from
+        for non-generic defs and is empty for an exception (exceptions are
+        never generic). The returned handle's ``decl_id`` is stamped from
         ``self.decl_node_id``.
         """
         match self.kind:
             case "record":
-                return RecordType(
-                    name=self.name,
-                    type_args=type_args,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.record_handle(type_args)
             case "enum":
-                return EnumType(
-                    name=self.name,
-                    type_args=type_args,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.enum_handle(type_args)
             case "exception":
-                if type_args:
-                    raise ValueError("TypeDef.handle() does not accept type_args for an exception")
-                return ExceptionType(
-                    name=self.name,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.exception_handle()
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def record_handle(self, type_args: tuple[Type, ...] = ()) -> RecordType:
+        """Return the ``RecordType`` handle naming this record ``TypeDef``."""
+        return RecordType(
+            name=self.name,
+            type_args=type_args,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
+
+    def enum_handle(self, type_args: tuple[Type, ...] = ()) -> EnumType:
+        """Return the ``EnumType`` handle naming this enum ``TypeDef``."""
+        return EnumType(
+            name=self.name,
+            type_args=type_args,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
+
+    def exception_handle(self) -> ExceptionType:
+        """Return the ``ExceptionType`` handle naming this exception ``TypeDef``."""
+        return ExceptionType(
+            name=self.name,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NonDataLeaf:
+    """A non-data type (``unit`` or function) reached directly in a type's own structure."""
+
+    leaf: Type
+
+
+@dataclass(frozen=True, slots=True)
+class NonDataField:
+    """A declaration field whose own type structurally reaches a non-data leaf."""
+
+    typedef: TypeDef
+    field_name: str
+    field_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadDictKey:
+    """A non-``Hashable`` dict key type reached directly in a type's own structure."""
+
+    key_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadDictKeyField:
+    """A declaration field whose own dict key type is directly not ``Hashable``."""
+
+    typedef: TypeDef
+    field_name: str
+    key_type: Type
+
+
+@dataclass(frozen=True, slots=True)
+class BadKeyArgument:
+    """A reference supplies *argument* for *target*'s own dict-key parameter *param_name*, and
+    *argument* fails the key rule.
+
+    *source*/*field_name* name the field of *source* whose type carries the
+    offending reference, or are both ``None`` when the reference is the
+    examined type's own handle (a generic reference filling its own
+    declaration's key parameter directly, with no enclosing field).
+    """
+
+    source: TypeDef | None
+    field_name: str | None
+    target: TypeDef
+    param_name: str
+    argument: Type
+
+
+@dataclass(frozen=True, slots=True)
+class FreeTypeVar:
+    """A free type variable that may stand for a type with no JSON representation."""
+
+    name: str
+
+
+#: Why a type has no JSON representation, as one tagged structural culprit — see
+#: :meth:`TypeTable.json_representation_culprit`.
+JsonRepresentationCulprit = (
+    NonDataLeaf | NonDataField | BadDictKey | BadDictKeyField | BadKeyArgument | FreeTypeVar
+)
 
 
 class TypeTable:
@@ -371,22 +619,33 @@ class TypeTable:
         # occupies exactly one map and supersession is a lookup rather than a
         # walk of every receiver's methods.
         self._method_sites: dict[DeclKey, dict[DeclKey, MethodDef]] = {}
-        # Whole-table non-data-reachability fixpoint (see
-        # :meth:`nominal_reaches_non_data`), computed lazily on first use and
-        # invalidated (set back to ``None``) whenever a declaration is added,
-        # removed, or overwritten.
-        self._non_data_caps: NonDataReachability | None = None
+        # Whole-table declaration-flags fixpoint (see :meth:`nominal_satisfies`),
+        # one result per DataProperty, computed lazily on first use and
+        # invalidated (cleared) whenever a declaration is added, removed, or
+        # overwritten.
+        self._declaration_flags_cache: dict[DataProperty, DeclarationFlags] = {}
+        # Concrete nominal types whose successful Hashable checks may be used
+        # by retained REPL code. Merged with declaration state across entries.
+        self._hashable_proofs: set[RecordType | EnumType | ExceptionType] = set()
         # Member declaration id -> the enums declaring or referencing it, in
         # registration order. A referenced member belongs to several enums, so
         # this is multi-valued. Whole-table, rebuilt on any registration change.
         self._member_enum_owners: dict[DeclId, tuple[DeclId, ...]] | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
-        # cached and invalidated the same way as ``_non_data_caps``.
+        # cached and invalidated the same way as ``_declaration_flags_cache``.
         self._finite_closure: FiniteClosure | None = None
+        # Whole-table relevant type parameters, shared by both fixpoints.
+        self._relevant_params: Mapping[DeclId, frozenset[str]] | None = None
         # Exception declaration id -> its direct children's ids, built in one
         # pass over ``_defs``. Whole-table, rebuilt on any registration
         # change; feeds :meth:`exception_descendants`.
         self._exception_children: dict[DeclId, tuple[DeclId, ...]] | None = None
+        # Enum identity -> its inline members by terminal name, each as the
+        # enum's type parameters and the member's handle template over
+        # them. Declaration shells declare
+        # them a phase before the enum's body registers (see
+        # :meth:`declare_inline_member`); a superseded enum keeps its own.
+        self._inline_members: dict[DeclId, dict[str, tuple[tuple[str, ...], RecordType]]] = {}
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef* under its own declaration identity.
@@ -443,11 +702,17 @@ class TypeTable:
         self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
             self._defs[decl_id] = typedef
+            if typedef.kind == "enum":
+                member_path = (*typedef.scope_path, typedef.name)
+                for member in typedef.members:
+                    if member.module_id == typedef.module_id and member.scope_path == member_path:
+                        self.declare_inline_member(decl_id, typedef.type_params, member)
             self._standard_builtins = None
             self._host_minted_ids = None
-            self._non_data_caps = None
+            self._declaration_flags_cache = {}
             self._member_enum_owners = None
             self._finite_closure = None
+            self._relevant_params = None
             self._exception_children = None
             return
         if self_validation_enabled() and existing != typedef:
@@ -456,12 +721,41 @@ class TypeTable:
                 f"{existing!r} is already registered, got {typedef!r}"
             )
 
+    def declare_inline_member(
+        self, enum_id: DeclId, type_params: tuple[str, ...], member: RecordType
+    ) -> None:
+        """Record *member*'s handle template as an inline member of enum *enum_id*.
+
+        *member*'s type arguments range over the enum's *type_params*. The
+        builder declares each member from its shell, before the enum's body
+        registers, so :meth:`inline_member` answers while bodies are resolved.
+        """
+        self._inline_members.setdefault(enum_id, {})[member.name] = (type_params, member)
+
+    def inline_member(self, owner: EnumType, name: str) -> RecordType:
+        """Return *owner*'s inline member *name* at *owner*'s type arguments.
+
+        Scope decides owner-member selection for every position and rejects
+        any spelling naming no such member before this is ever called, so
+        *name* always names a declared member of *owner* here.
+        """
+        type_params, member = self._inline_members[owner.decl_id][name]
+        return substitute(member, dict(zip(type_params, owner.type_args, strict=True)))
+
     def get(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
     ) -> TypeDef | None:
         """Return the newest registered ``TypeDef`` for a name path, via the name index."""
         decl_id = self._name_index.get((module_id, scope_path, name))
-        return None if decl_id is None else self._defs.get(decl_id)
+        return None if decl_id is None else self._defs[decl_id]
+
+    def named(self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()) -> TypeDef:
+        """Return the newest ``TypeDef`` registered for a name path a checked program declares."""
+        return self._defs[self._name_index[(module_id, scope_path, name)]]
+
+    def typedef_of(self, decl_id: DeclId) -> TypeDef:
+        """Return the ``TypeDef`` registered for a declaration a checked program declares."""
+        return self._defs[decl_id]
 
     def get_by_id(self, decl_id: DeclId) -> TypeDef | None:
         """Return the registered ``TypeDef`` for *decl_id*, or ``None`` if unregistered.
@@ -627,7 +921,13 @@ class TypeTable:
         """
         constructor = self._builtin_constructor(owner)
         if constructor is not None:
-            return self._method_level(self._builtin_methods.get(constructor, {}).get(name, {}))
+            level = self._builtin_methods.get(constructor, {}).get(name, {})
+            candidates = self._method_level(level)
+            return tuple(
+                candidate
+                for candidate in candidates
+                if method_receiver_match(candidate, owner) is not None
+            )
         if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
             return ()
         owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
@@ -652,21 +952,18 @@ class TypeTable:
             if methods
         }
 
-    def _exception_chain(self, decl_id: DeclId, *, caller: str) -> list[tuple[DeclId, TypeDef]]:
-        """Return *decl_id*'s base chain, base first, rejecting a cyclic base link.
+    def _exception_chain(self, decl_id: DeclId) -> list[tuple[DeclId, TypeDef]]:
+        """Return *decl_id*'s base chain, base first.
 
-        Every flattened exception accessor inherits base-first declaration order
-        from this one walk, so ``caller`` only selects the ``KeyError``/
-        ``AssertionError`` label of the accessor that asked.
+        Every flattened exception accessor inherits base-first declaration
+        order from this one walk. The whole-program inhabitation fixpoint
+        rejects a cyclic ``extends`` chain before any exception's fields are
+        ever flattened, so the walk here is unconditionally finite.
         """
         chain: list[tuple[DeclId, TypeDef]] = []
-        visited: set[DeclId] = set()
         current: DeclId | None = decl_id
         while current is not None:
-            if current in visited:
-                raise AssertionError(f"cyclic exception base chain detected at {current!r}")
-            visited.add(current)
-            typedef = self._require_exception_def(current, caller=caller)
+            typedef = self._defs[current]
             chain.append((current, typedef))
             current = typedef.base
         chain.reverse()
@@ -682,10 +979,7 @@ class TypeTable:
         per-declaration data (e.g. a lowered field default keyed by
         declaration identity) instead of reimplementing the chain walk.
         """
-        return tuple(
-            typedef
-            for _decl_id, typedef in self._exception_chain(decl_id, caller="exception_chain_defs")
-        )
+        return tuple(typedef for _decl_id, typedef in self._exception_chain(decl_id))
 
     def ancestor_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return *decl_id*'s exception ancestors, nearest first.
@@ -693,11 +987,10 @@ class TypeTable:
         Empty for a hierarchy root and for any non-exception declaration, so a
         caller checking inherited members needs no base-chain walk of its own.
         """
-        typedef = self._defs.get(decl_id)
-        assert typedef is not None, f"no TypeDef registered for identity {decl_id!r}"
+        typedef = self._defs[decl_id]
         if typedef.kind != "exception" or typedef.base is None:
             return ()
-        chain = self._exception_chain(typedef.base, caller="ancestor_defs")
+        chain = self._exception_chain(typedef.base)
         return tuple(base_def for _base_id, base_def in reversed(chain))
 
     def is_exception_ancestor(self, ancestor_id: DeclId, decl_id: DeclId) -> bool:
@@ -722,6 +1015,10 @@ class TypeTable:
             index = {parent: tuple(children) for parent, children in built.items()}
             self._exception_children = index
         return index
+
+    def exception_children(self, decl_id: DeclId) -> tuple[DeclId, ...]:
+        """Return the ids of the exceptions directly extending *decl_id*."""
+        return self._exception_children_index().get(decl_id, ())
 
     def exception_descendants(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return every exception descending from *decl_id*, breadth-first.
@@ -762,15 +1059,16 @@ class TypeTable:
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
         self._exception_field_has_default_cache.clear()
-        # The non-data-reachability and finiteness fixpoints are whole-table
-        # (any declaration's flag can in principle depend on any other's), so
-        # a single changed identity invalidates the whole cached result rather
+        # The declaration-flags and finiteness fixpoints are whole-table (any
+        # declaration's flag can in principle depend on any other's), so a
+        # single changed identity invalidates the whole cached result rather
         # than just this one.
         self._standard_builtins = None
         self._host_minted_ids = None
-        self._non_data_caps = None
+        self._declaration_flags_cache = {}
         self._member_enum_owners = None
         self._finite_closure = None
+        self._relevant_params = None
         self._exception_children = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -781,12 +1079,6 @@ class TypeTable:
         substituted mapping object. The memo is bucketed by ``decl_id`` so a single
         identity's invalidation (:meth:`merge_from`) never has to scan entries
         for other identities.
-
-        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``decl_id`` — every valid handle is expected to have one.
-        Raises ``AssertionError`` if the registered def's ``kind`` is not
-        ``"record"`` — an internal-invariant violation, since a ``RecordType``
-        handle only ever names a record declaration.
         """
         decl_id = handle.decl_id
         bucket = self._record_fields_cache.get(decl_id)
@@ -794,7 +1086,7 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._require_record_def(handle, caller="record_fields")
+        typedef = self._defs[decl_id]
         subst = dict(zip(typedef.type_params, handle.type_args))
         result: Mapping[str, Type] = {
             fname: substitute(ftype, subst) for fname, ftype in typedef.fields
@@ -809,30 +1101,14 @@ class TypeTable:
         by a handle's ``type_args``: every handle for one declaration reads
         the same set straight off its ``TypeDef``, and there is nothing per
         handle to memoize (unlike :meth:`record_fields`).
-
-        Raises the same errors as :meth:`record_fields` for an unregistered
-        or non-record handle.
         """
-        return self._require_record_def(handle, caller="record_mutable_fields").mutable_fields
-
-    def _require_record_def(self, handle: RecordType, *, caller: str) -> TypeDef:
-        typedef = self._defs.get(handle.decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for record {handle!r}")
-        if typedef.kind != "record":
-            raise AssertionError(
-                f"{caller} called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'record'"
-            )
-        return typedef
+        return self._defs[handle.decl_id].mutable_fields
 
     def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
         """Return *handle*'s member record types with ``type_args`` substituted in.
 
         Members retain their declaration identities and field ownership. The
-        result is memoized per enum instantiation. Raises ``KeyError`` if no
-        definition is registered, or ``AssertionError`` when the identity is
-        not an enum.
+        result is memoized per enum instantiation.
         """
         decl_id = handle.decl_id
         bucket = self._enum_members_cache.get(decl_id)
@@ -840,16 +1116,9 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for enum {handle!r}")
-        if typedef.kind != "enum":
-            raise AssertionError(
-                f"enum_members called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'enum'"
-            )
+        typedef = self._defs[decl_id]
         subst = dict(zip(typedef.type_params, handle.type_args))
-        result = tuple(cast(RecordType, substitute(member, subst)) for member in typedef.members)
+        result = tuple(substitute(member, subst) for member in typedef.members)
         self._enum_members_cache.setdefault(decl_id, {})[handle] = result
         return result
 
@@ -979,38 +1248,25 @@ class TypeTable:
                 return True
         return False
 
-    def enum_owners_for_member(self, handle: RecordType) -> tuple[EnumType, ...]:
-        """Return every concrete enum containing *handle* with known arguments.
-
-        Referenced records may belong to several enums.  The result therefore
-        preserves the full relation instead of making registration order part
-        of semantic validation.
-        """
-        owners: list[EnumType] = []
-        for typedef, match in self._enum_membership_matches(self._enum_defs_owning(handle), handle):
-            bindings = dict(match.bindings)
-            if len(bindings) != len(typedef.type_params):
-                continue
-            args = tuple(bindings[param] for param in typedef.type_params)
-            result = typedef.handle(args)
-            assert isinstance(result, EnumType)
-            owners.append(result)
-        return tuple(owners)
-
     def record_matches_enum_member(
-        self, enum: EnumType, member_name: str, record: RecordType
+        self, enum: EnumType, type_params: tuple[str, ...], member_name: str, record: RecordType
     ) -> bool:
-        """Return whether *record* matches the named member of *enum* exactly.
+        """Return whether *record* is the inline member *member_name* of *enum* over *type_params*.
 
-        A generic enum's bare template may qualify any of its instantiations,
-        so free variables still present in its member template are inferred
-        while concrete owner arguments must match exactly.
+        This is what the owner-qualified spelling ``Enum::member_name`` selects.
+        The owner's own *type_params* are inferred; every other owner argument
+        must match exactly. A name mismatch is rejected directly, without
+        consulting :meth:`inline_member`: this compares a matched pattern's
+        declared member name against a checked subject's own record type,
+        which may be an unrelated record sharing no member with *enum*.
         """
-        member = self.enum_member_names(enum).get(member_name)
-        if member is None or member.decl_id != record.decl_id:
+        if record.name != member_name:
             return False
-        parameters = tuple(sorted(free_type_vars(member)))
-        return match_nominal_owner_template(TypeTemplate(member, parameters), record) is not None
+        member = self.inline_member(enum, member_name)
+        return (
+            member.decl_id == record.decl_id
+            and match_nominal_owner_template(TypeTemplate(member, type_params), record) is not None
+        )
 
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.
@@ -1082,13 +1338,6 @@ class TypeTable:
         (the root contributes ``message``), followed by the
         exception's own fields, matching declaration order.
 
-        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``decl_id``. Raises ``AssertionError`` if the registered def's
-        ``kind`` is not ``"exception"``, or if the base chain contains a
-        cycle — an internal-invariant violation, since the whole-program
-        inhabitation pre-pass rejects ``extends`` cycles as uninhabitable
-        before this can fire in production; this guard is for internal
-        robustness, not a user diagnostic.
         """
         decl_id = handle.decl_id
         cached = self._exception_fields_cache.get(decl_id)
@@ -1100,7 +1349,7 @@ class TypeTable:
 
     def _flatten_exception_fields(self, decl_id: DeclId) -> Mapping[str, Type]:
         fields: dict[str, Type] = {}
-        for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_fields"):
+        for _chain_id, typedef in self._exception_chain(decl_id):
             fields.update(typedef.fields)
         return fields
 
@@ -1111,19 +1360,14 @@ class TypeTable:
         (:attr:`TypeDef.field_kinds`) — declaration-level, like
         :meth:`record_mutable_fields`, so every instantiation of a generic
         record shares the same zones regardless of ``type_args`` and no
-        memoization is needed. ``field_kinds`` must have one entry per field,
-        in order — a builder that leaves it unset for a non-empty ``fields``
-        is a bug, caught by the strict zip below rather than silently
-        defaulted.
+        memoization is needed. ``field_kinds`` has one entry per field, in
+        order.
 
         For an exception, mirrors :meth:`exception_fields`'s base-chain
         flattening (base fields first, in declaration order, then the
         exception's own), memoized the same way — an exception's OWN fields
         honor their declared ``@arg-*`` attribute exactly like a record's
         fields do; only inheritance is exception-specific.
-
-        Raises ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`record_fields`/:meth:`exception_fields`.
         """
         if isinstance(handle, ExceptionType):
             decl_id = handle.decl_id
@@ -1133,7 +1377,7 @@ class TypeTable:
             result = self._flatten_exception_field_kinds(decl_id)
             self._exception_field_kinds_cache[decl_id] = result
             return result
-        typedef = self._require_record_def(handle, caller="field_kinds")
+        typedef = self._defs[handle.decl_id]
         return tuple(
             zip((fname for fname, _ftype in typedef.fields), typedef.field_kinds, strict=True)
         )
@@ -1141,7 +1385,7 @@ class TypeTable:
     def _flatten_exception_field_kinds(self, decl_id: DeclId) -> tuple[tuple[str, ParamZone], ...]:
         return tuple(
             (fname, kind)
-            for _chain_id, typedef in self._exception_chain(decl_id, caller="field_kinds")
+            for _chain_id, typedef in self._exception_chain(decl_id)
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
         )
 
@@ -1169,8 +1413,7 @@ class TypeTable:
         exception flattens the ``extends`` base chain, base fields first, so
         an inherited field keeps its base's default presence.
 
-        Raises ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`field_kinds`.
+        Consumes declarations already checked for acyclic inheritance.
         """
         if isinstance(handle, ExceptionType):
             decl_id = handle.decl_id
@@ -1180,7 +1423,7 @@ class TypeTable:
             result = self._flatten_exception_field_has_default(decl_id)
             self._exception_field_has_default_cache[decl_id] = result
             return result
-        typedef = self._require_record_def(handle, caller="field_has_default")
+        typedef = self._defs[handle.decl_id]
         return tuple(
             zip(
                 (fname for fname, _ftype in typedef.fields),
@@ -1192,7 +1435,7 @@ class TypeTable:
     def _flatten_exception_field_has_default(self, decl_id: DeclId) -> tuple[tuple[str, bool], ...]:
         return tuple(
             (fname, has_default)
-            for _chain_id, typedef in self._exception_chain(decl_id, caller="field_has_default")
+            for _chain_id, typedef in self._exception_chain(decl_id)
             for (fname, _ftype), has_default in zip(
                 typedef.fields, self._own_field_has_default(typedef), strict=True
             )
@@ -1206,19 +1449,20 @@ class TypeTable:
         A field without ``@name``/``@json-name`` is absent from the mapping.
         """
         if isinstance(handle, RecordType):
-            typedef = self._require_record_def(handle, caller="field_external_names")
-            return dict(typedef.field_external_names)
+            return dict(self._defs[handle.decl_id].field_external_names)
         return {
             field_name: external
-            for _chain_id, typedef in self._exception_chain(
-                handle.decl_id, caller="field_external_names"
-            )
+            for _chain_id, typedef in self._exception_chain(handle.decl_id)
             for field_name, external in typedef.field_external_names
         }
 
     def external_name(self, handle: RecordType) -> ExternalName:
         """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
-        return self._require_record_def(handle, caller="external_name").external_name
+        return self._defs[handle.decl_id].external_name
+
+    def member_json_tag(self, member: RecordType, name: str) -> str:
+        """An enum member's effective JSON ``$case`` tag (``@json-name`` ?? ``@name`` ?? *name*)."""
+        return self.external_name(member).json(name)
 
     def declaration_doc(self, handle: RecordType | EnumType) -> str | None:
         """Return a record, member, or enum declaration's recognized ``@doc`` prose."""
@@ -1226,7 +1470,7 @@ class TypeTable:
 
     def field_docs(self, handle: RecordType) -> Mapping[str, str]:
         """Return the ``@doc`` prose of record *handle*'s documented fields."""
-        return dict(self._require_record_def(handle, caller="field_docs").field_docs)
+        return dict(self._defs[handle.decl_id].field_docs)
 
     def json_fields(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, str, Type], ...]:
         """Return every field of *handle* as ``(declared_name, json_name, field_type)``.
@@ -1251,22 +1495,9 @@ class TypeTable:
         """Return the registered ``TypeDef`` for *handle*.
 
         Used to read exception hierarchy metadata (``abstract``, ``base``),
-        which lives here rather than on the ``ExceptionType`` handle. Raises
-        ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`exception_fields`.
+        which lives here rather than on the ``ExceptionType`` handle.
         """
-        return self._require_exception_def(handle.decl_id, caller="exception_def")
-
-    def _require_exception_def(self, decl_id: DeclId, *, caller: str) -> TypeDef:
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for exception identity {decl_id!r}")
-        if typedef.kind != "exception":
-            raise AssertionError(
-                f"{caller} called for identity {decl_id!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'exception'"
-            )
-        return typedef
+        return self._defs[handle.decl_id]
 
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
@@ -1344,9 +1575,7 @@ class TypeTable:
         if published is not None:
             return published
         standard = self.standard_builtin_declaration("Exception")
-        root = EXCEPTION_BASE if standard is None else standard.handle()
-        assert isinstance(root, ExceptionType)
-        return root
+        return EXCEPTION_BASE if standard is None else standard.exception_handle()
 
     def option_handle(self, argument: Type, *, standard: bool = False) -> EnumType:
         """Return the ``Option[argument]`` handle this program's ``Option`` names.
@@ -1364,9 +1593,7 @@ class TypeTable:
             if standard
             else self.builtin_declaration("Option")
         ) or OPTION_TYPE_DEF
-        handle = declaration.handle((argument,))
-        assert isinstance(handle, EnumType), "Option's declaration must be an enum"
-        return handle
+        return declaration.enum_handle((argument,))
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded standard-library source builtin declarations."""
@@ -1415,51 +1642,134 @@ class TypeTable:
             self._host_minted_ids = cached
         return cached
 
+    def nominal_satisfies(
+        self,
+        handle: RecordType | EnumType | ExceptionType,
+        kind: ConstraintKind,
+        bounds: ConstraintBounds | None,
+    ) -> bool:
+        """Return ``True`` if *handle* satisfies *kind* (cycle-safe; see :func:`satisfies`).
+
+        *kind* maps onto its :class:`~agm.agl.semantics.analyses.DataProperty`
+        (:func:`_constraint_kind_to_data_property`); see
+        :meth:`_nominal_satisfies_property` for the shared declaration-flag walk.
+        """
+        result = self._nominal_satisfies_property(
+            handle,
+            _constraint_kind_to_data_property(kind),
+            lambda arg: satisfies(arg, kind, self, bounds),
+        )
+        # Only registered declarations can acquire later exception descendants.
+        if (
+            result
+            and kind is ConstraintKind.HASHABLE
+            and handle not in self._hashable_proofs
+            and handle.decl_id in self._defs
+            and not contains_type_var(handle)
+            and not contains_inference_var(handle)
+        ):
+            self._hashable_proofs.add(handle)
+        return result
+
+    @property
+    def hashable_proofs(self) -> frozenset[RecordType | EnumType | ExceptionType]:
+        """Concrete nominal Hashable checks already relied on by checked code."""
+        return frozenset(self._hashable_proofs)
+
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
 
-        The non-data types are ``unit``, ``agent``, and function types.
-        Declaration-level: *handle*'s declaration reaches one unconditionally
-        (``NonDataReachability.reaches_non_data``), or one of its concrete
-        ``type_args`` at a relevant parameter position does — see
-        :func:`~agm.agl.semantics.analyses.compute_non_data_reachability` for
-        why this reproduces the substitute-then-walk answer without ever
-        expanding *handle*'s own fields (so it never re-enters a cycle).
-        Exceptions carry no ``type_args``, so only the declaration flag
-        applies to them.
+        The non-data types are ``unit`` and function types. Exactly
+        :meth:`nominal_satisfies` for ``Eq``, in open-world mode, negated —
+        every type variable *handle* mentions is assumed to satisfy ``Eq``
+        since none is in scope here.
         """
-        caps = self._non_data_reachability()
-        decl_id = handle.decl_id
-        if decl_id in caps.reaches_non_data:
-            return True
-        if isinstance(handle, ExceptionType):
-            return False
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            return False
-        relevant = caps.relevant_params.get(decl_id, frozenset())
-        return any(
-            _reaches_non_data(arg, self)
-            for pname, arg in zip(typedef.type_params, handle.type_args)
-            if pname in relevant
-        )
+        return not self.nominal_satisfies(handle, ConstraintKind.EQ, None)
 
     def nominal_is_json_convertible(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if *handle* has a JSON representation.
 
         A record and an exception convert to a JSON object of their fields, an
         enum to its member's tag (with the member's fields, if any has one), so
-        the only obstacle is a non-data leaf somewhere inside — exactly
-        :meth:`nominal_reaches_non_data`, negated.
+        the obstacles are a non-data leaf or a non-``Hashable``-keyed ``dict`` somewhere inside
+        (:attr:`DataProperty.JSON_CONVERTIBLE`), checked structurally via
+        :func:`is_json_convertible` rather than through :func:`satisfies`.
         """
-        return not self.nominal_reaches_non_data(handle)
+        return self._nominal_satisfies_property(
+            handle,
+            DataProperty.JSON_CONVERTIBLE,
+            lambda arg: is_json_convertible(arg, self),
+        )
 
-    def _non_data_reachability(self) -> "NonDataReachability":
-        if self._non_data_caps is None:
-            from agm.agl.semantics.analyses import compute_non_data_reachability
+    def nominal_is_extern_keyable(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if *handle* may cross an extern boundary (cycle-safe).
 
-            self._non_data_caps = compute_non_data_reachability(self)
-        return self._non_data_caps
+        Used by :func:`is_extern_keyable` for its nominal case; see
+        :attr:`DataProperty.EXTERN_KEYABLE`.
+        """
+        return self._nominal_satisfies_property(
+            handle,
+            DataProperty.EXTERN_KEYABLE,
+            lambda arg: is_extern_keyable(arg, self),
+        )
+
+    def _nominal_satisfies_property(
+        self,
+        handle: RecordType | EnumType | ExceptionType,
+        prop: DataProperty,
+        structural: Callable[[Type], bool],
+    ) -> bool:
+        """Shared declaration-flag + relevant-type-argument walk for one *prop*.
+
+        Declaration-level: *handle*'s declaration must not be flagged
+        (:meth:`_declaration_flags`, one fixpoint per *prop*, checked first
+        so a flag applying by declaration identity alone — e.g. host-minted
+        origin — still applies before any ``TypeDef`` is registered), and,
+        when registered, each concrete ``type_args`` entry at a relevant
+        parameter position must itself satisfy *prop*, via *structural*; an
+        exception carries no ``type_args``, so only its declaration flag
+        applies.
+
+        For a policy with ``dict_key_ok`` set (``JSON_CONVERTIBLE``/
+        ``EXTERN_KEYABLE``), the argument at a KEY parameter position
+        (``DeclarationFlags.key_params`` — e.g. ``Box[K]`` with field
+        ``d: dict[K, int]``) must ADDITIONALLY satisfy that policy's own
+        ``dict_key_ok`` check directly: a key parameter's own occurrence in
+        the declaration's template never flags it by itself (deferred, like
+        any bare type variable), so this is the only place that check
+        actually happens, at the concrete reference.
+        """
+        flags = self._declaration_flags(prop)
+        if handle.decl_id in flags.flagged:
+            return False
+        if isinstance(handle, ExceptionType):
+            return True
+        typedef = self._defs[handle.decl_id]
+        relevant = self.relevant_params_by_decl()[handle.decl_id]
+        if not all(
+            structural(arg)
+            for pname, arg in zip(typedef.type_params, handle.type_args)
+            if pname in relevant
+        ):
+            return False
+        dict_key_ok = LEAF_POLICIES[prop].dict_key_ok
+        if dict_key_ok is None:
+            return True
+        key_params = flags.key_params[handle.decl_id]
+        return all(
+            dict_key_ok(arg, self, frozenset())
+            for pname, arg in zip(typedef.type_params, handle.type_args)
+            if pname in key_params
+        )
+
+    def _declaration_flags(self, prop: DataProperty) -> "DeclarationFlags":
+        cached = self._declaration_flags_cache.get(prop)
+        if cached is None:
+            from agm.agl.semantics.analyses import compute_declaration_flags
+
+            cached = compute_declaration_flags(self, LEAF_POLICIES[prop])
+            self._declaration_flags_cache[prop] = cached
+        return cached
 
     def has_finite_schema(self, t: Type) -> bool:
         """Return ``True`` if every declaration reachable from *t* has a finite closure.
@@ -1490,16 +1800,14 @@ class TypeTable:
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
+        relevant_params = self.relevant_params_by_decl()
         result_id = bfs_first(
-            (
-                ref.decl_id
-                for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
-            ),
-            lambda decl_id: caps.successors.get(decl_id, frozenset()),
+            (ref.decl_id for ref in nominal_references_for_schema(t, self._defs, relevant_params)),
+            lambda decl_id: caps.successors[decl_id],
             lambda decl_id: decl_id if decl_id in caps.infinite else None,
             key=self._decl_id_sort_key,
         )
-        return None if result_id is None else self._defs.get(result_id)
+        return None if result_id is None else self._defs[result_id]
 
     def canonical_schema_type(self, t: Type) -> Type:
         """Return *t* with schema-irrelevant nominal type arguments canonicalized.
@@ -1509,7 +1817,18 @@ class TypeTable:
         positions as the same node. Relevant arguments are canonicalized
         recursively so phantom differences nested inside them are erased too.
         """
-        return self._canonical_schema_type(t, self._finite_closure_result().relevant_params)
+        return self._canonical_schema_type(t, self.relevant_params_by_decl())
+
+    def schema_relevant_params(self, decl_id: DeclId) -> frozenset[str]:
+        """Return the subset of *decl_id*'s own type parameters that affect its schema.
+
+        A phantom parameter (absent from this set) never reaches a field or
+        variant position, directly or through another declaration's own
+        relevant parameter, so it cannot affect *decl_id*'s emitted JSON shape;
+        an encode-plan template only takes one parameter per relevant name (see
+        ``type_schema.build_encode_plan``'s growing-template builder).
+        """
+        return self.relevant_params_by_decl()[decl_id]
 
     def _canonical_schema_type(
         self, t: Type, relevant_params: Mapping[DeclId, frozenset[str]]
@@ -1533,8 +1852,11 @@ class TypeTable:
                 )
             case ArrayType(elem=elem):
                 return ArrayType(self._canonical_schema_type(elem, relevant_params))
-            case DictType(value=value):
-                return DictType(self._canonical_schema_type(value, relevant_params))
+            case DictType(key=key, value=value):
+                return DictType(
+                    self._canonical_schema_type(key, relevant_params),
+                    self._canonical_schema_type(value, relevant_params),
+                )
             case FunctionType(params=params, result=result):
                 return FunctionType(
                     params=tuple(self._canonical_schema_type(p, relevant_params) for p in params),
@@ -1561,39 +1883,22 @@ class TypeTable:
         t: RecordType | EnumType,
         relevant_params: Mapping[DeclId, frozenset[str]],
     ) -> tuple[Type, ...]:
-        typedef = self._defs.get(t.decl_id)
-        if typedef is None:
-            return tuple(self._canonical_schema_type(arg, relevant_params) for arg in t.type_args)
-        relevant = relevant_params.get(t.decl_id, frozenset())
-        result: list[Type] = []
-        for pname, arg in zip(typedef.type_params, t.type_args):
-            if pname in relevant:
-                result.append(self._canonical_schema_type(arg, relevant_params))
-            else:
-                result.append(UnitType())
-        if len(t.type_args) > len(typedef.type_params):
-            result.extend(
-                self._canonical_schema_type(arg, relevant_params)
-                for arg in t.type_args[len(typedef.type_params) :]
-            )
-        return tuple(result)
+        typedef = self._defs[t.decl_id]
+        relevant = relevant_params[t.decl_id]
+        return tuple(
+            self._canonical_schema_type(arg, relevant_params) if pname in relevant else UnitType()
+            for pname, arg in zip(typedef.type_params, t.type_args)
+        )
 
     def schema_relevant_type_args(self, t: RecordType | EnumType) -> tuple[Type, ...]:
         """Return the canonical type arguments that should appear in schema identity labels."""
-        caps = self._finite_closure_result()
-        canonical = self._canonical_schema_type(t, caps.relevant_params)
-        if not isinstance(canonical, (RecordType, EnumType)):  # pragma: no cover
-            raise AssertionError(f"canonicalized nominal handle became {canonical!r}")
-        typedef = self._defs.get(t.decl_id)
-        if typedef is None:
-            return canonical.type_args
-        relevant = caps.relevant_params.get(t.decl_id, frozenset())
-        result = [
+        relevant_params = self.relevant_params_by_decl()
+        canonical = cast("RecordType | EnumType", self._canonical_schema_type(t, relevant_params))
+        typedef = self._defs[t.decl_id]
+        relevant = relevant_params[t.decl_id]
+        return tuple(
             arg for pname, arg in zip(typedef.type_params, canonical.type_args) if pname in relevant
-        ]
-        if len(canonical.type_args) > len(typedef.type_params):
-            result.extend(canonical.type_args[len(typedef.type_params) :])
-        return tuple(result)
+        )
 
     def schema_relevant_nominal_references(
         self, t: Type
@@ -1601,10 +1906,10 @@ class TypeTable:
         """Return nominal references that can affect *t*'s finite schema."""
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
-        caps = self._finite_closure_result()
+        relevant_params = self.relevant_params_by_decl()
         result: list[RecordType | EnumType | ExceptionType] = []
-        for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params):
-            canonical = self._canonical_schema_type(ref, caps.relevant_params)
+        for ref in nominal_references_for_schema(t, self._defs, relevant_params):
+            canonical = self._canonical_schema_type(ref, relevant_params)
             result.append(cast(RecordType | EnumType | ExceptionType, canonical))
         return tuple(result)
 
@@ -1642,72 +1947,69 @@ class TypeTable:
     def json_representation_obstacle(self, t: Type) -> str | None:
         """Return why *t* has no JSON representation, as a diagnostic clause.
 
-        ``None`` when *t* converts (:func:`is_json_convertible` is true) or
-        when nothing more specific than "this type does not convert" can be
-        said — an unresolved inference variable, say, whose real problem is
-        inference rather than representation. Otherwise a clause naming the
-        culprit, for a caller to splice into its own sentence: a non-data type
-        reached structurally, the declaration field that carries one, or the
-        type variable that may stand for one. Shaped like
+        Thin formatter over :meth:`json_representation_culprit`: ``None``
+        when *t* converts, otherwise its structural culprit rendered into a
+        clause for a caller to splice into its own sentence. Shaped like
         :meth:`no_finite_schema_message`, whose culprit search this mirrors.
         """
-        if is_json_convertible(t, self):
+        culprit = self.json_representation_culprit(t)
+        if culprit is None:
             return None
-        leaf = _first_non_data_leaf(t)
-        if leaf is not None:
-            return f"'{leaf!r}' has no JSON representation"
-        culprit = self.first_non_data_field(t)
-        if culprit is not None:
-            typedef, field_name, field_type = culprit
-            return (
-                f"field '{field_name}' of '{qualified_decl_name(typedef)}' has type "
-                f"'{field_type!r}', which has no JSON representation"
-            )
-        type_vars = sorted(free_type_vars(t))
-        if type_vars:
-            return (
-                f"type variable '{type_vars[0]}' may stand for a type with no JSON representation"
-            )
-        return None
+        match culprit:
+            case NonDataLeaf(leaf=leaf):
+                return f"'{leaf!r}' has no JSON representation"
+            case NonDataField(typedef=typedef, field_name=field_name, field_type=field_type):
+                return (
+                    f"field '{field_name}' of '{qualified_decl_name(typedef)}' has type "
+                    f"'{field_type!r}', which has no JSON representation"
+                )
+            case BadDictKey(key_type=key_type):
+                return f"'{key_type!r}' is not Hashable, so it cannot be a dict key"
+            case BadDictKeyField(typedef=typedef, field_name=field_name, key_type=key_type):
+                return (
+                    f"field '{field_name}' of '{qualified_decl_name(typedef)}' has a dict key "
+                    f"of type '{key_type!r}', which is not Hashable"
+                )
+            case BadKeyArgument(
+                source=source,
+                field_name=field_name,
+                target=target,
+                param_name=param_name,
+                argument=argument,
+            ):
+                supplier = (
+                    f"field '{field_name}' of '{qualified_decl_name(source)}'"
+                    if source is not None and field_name is not None
+                    else "the type"
+                )
+                return (
+                    f"{supplier} supplies '{argument!r}' for '{qualified_decl_name(target)}'s "
+                    f"key parameter '{param_name}', which is not Hashable"
+                )
+            case FreeTypeVar(name=name):
+                return f"type variable '{name}' may stand for a type with no JSON representation"
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
-    def first_non_data_field(self, t: Type) -> tuple[TypeDef, str, Type] | None:
+    def first_non_data_field(self, t: Type) -> NonDataField | None:
         """Return the declaration field that costs *t* its JSON representation.
 
-        The result is ``(declaration, field name, that field's declared
-        type)``. Breadth-first from *t*'s own nominal references, so the
-        shallowest declaration carrying a non-data field is reported — the
-        most useful culprit for a use-site diagnostic — before one reachable
-        only through further hops. Follows a declaration's affected field
-        references, an exception's ``extends`` base (whose fields are
-        inherited) and its affected descendants (a value statically typed as
-        the ancestor may hold one at runtime). Never expands an instantiation,
-        so it terminates however the declarations recurse. ``None`` when no
+        Breadth-first from *t*'s own nominal references, so the shallowest
+        declaration carrying a non-data field is reported — the most useful
+        culprit for a use-site diagnostic — before one reachable only through
+        further hops. Follows a declaration's affected field references, an
+        exception's ``extends`` base (whose fields are inherited) and its
+        affected descendants (a value statically typed as the ancestor may
+        hold one at runtime). Never expands an instantiation, so it
+        terminates however the declarations recurse. ``None`` when no
         reachable declaration is to blame.
         """
-        from agm.agl.semantics.analyses import nominal_references
 
-        def culprit(decl_id: DeclId) -> tuple[TypeDef, str, Type] | None:
-            typedef = self._defs.get(decl_id)
-            if typedef is None:  # pragma: no cover
-                # Unreachable by construction: every identity enqueued was
-                # first confirmed to reach a non-data type, which a dangling
-                # (never-registered) declaration never does. Kept as a
-                # defensive guard, matching the dangling-reference handling in
-                # the fixpoints themselves, in case that ever stops holding.
-                return None
+        def own_culprit(typedef: TypeDef) -> NonDataField | None:
             direct = self._own_non_data_field(typedef)
-            return None if direct is None else (typedef, *direct)
+            return None if direct is None else NonDataField(typedef, *direct)
 
-        def successors(decl_id: DeclId) -> set[DeclId]:
-            typedef = self._defs.get(decl_id)
-            return set() if typedef is None else self._affected_successors(decl_id, typedef)
-
-        return bfs_first(
-            (ref.decl_id for ref in nominal_references(t) if self.nominal_reaches_non_data(ref)),
-            successors,
-            culprit,
-            key=self._decl_id_sort_key,
-        )
+        return self._field_culprit(t, DataProperty.EQ, self.nominal_reaches_non_data, own_culprit)
 
     def _own_non_data_field(self, typedef: TypeDef) -> tuple[str, Type] | None:
         """Return *typedef*'s first own field whose type structurally reaches non-data."""
@@ -1718,24 +2020,180 @@ class TypeTable:
                 return field_name, template
         return None
 
-    def _affected_successors(self, decl_id: DeclId, typedef: TypeDef) -> set[DeclId]:
-        """Return the declarations *typedef* reaches non-data through.
+    def _own_dict_key_culprit(self, typedef: TypeDef) -> BadDictKeyField | BadKeyArgument | None:
+        """Return *typedef*'s first own field costing it its JSON representation via a bad key.
 
-        A field reference is a HANDLE, so it is tested with
-        :meth:`nominal_reaches_non_data`, which also consults the concrete
-        type arguments — ``Box[agent]`` is affected while ``Box`` itself is
-        not. An exception's ``extends`` base and its descendants are bare
-        declaration identities carrying no arguments, so for them the
-        declaration-level ``flags`` set is the whole answer. The two idioms
-        below are therefore not interchangeable.
+        Two shapes, tried per field in declaration order: a nominal reference
+        in the field supplying a bad argument for ANOTHER declaration's own
+        key parameter (:meth:`_key_argument_culprit`) — the more specific,
+        pinpointed cause when one applies — or, failing that, the field's own
+        type directly holding a non-``Hashable`` dict key
+        (:func:`_first_bad_dict_key`), with *typedef*'s own type parameters
+        assumed ``Hashable`` (deferred, like any bare type variable, to
+        whatever concrete argument a later reference supplies for them) so a
+        phantom or deferred parameter is never wrongly named the culprit.
         """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
-        flags = self._non_data_reachability().reaches_non_data
+        own_params = frozenset(typedef.type_params)
+        for field_name, template in field_templates(typedef, self._defs):
+            for ref in nominal_references(template):
+                argument_culprit = self._key_argument_culprit(ref, typedef, field_name, own_params)
+                if argument_culprit is not None:
+                    return argument_culprit
+            bad_key = _first_bad_dict_key(template, self, own_params)
+            if bad_key is not None:
+                return BadDictKeyField(typedef, field_name, bad_key)
+        return None
+
+    def _key_argument_culprit(
+        self,
+        ref: Type,
+        source: TypeDef | None,
+        field_name: str | None,
+        deferred: frozenset[str],
+    ) -> BadKeyArgument | None:
+        """Return the bad argument *ref* supplies for its own declaration's key parameter, if any.
+
+        *source*/*field_name* name the field of *source* whose type carries
+        *ref* (``None``/``None`` when *ref* is itself the type under
+        examination, filling its own declaration's key parameter directly) —
+        provenance only, no bearing on which arguments are deferred. *ref*'s own
+        type parameters are irrelevant here — only *deferred* (normally
+        *source*'s own declaration parameters, or, at a top-level search with no
+        enclosing field, the examined type's own free type variables) is
+        assumed to satisfy the key rule, exactly as :func:`_key_position_ok`
+        does for any other key position.
+        """
+        if not isinstance(ref, (RecordType, EnumType)):
+            return None
+        target = self._defs[ref.decl_id]
+        key_params = self._declaration_flags(DataProperty.JSON_CONVERTIBLE).key_params[ref.decl_id]
+        for pname, arg in zip(target.type_params, ref.type_args):
+            if pname in key_params and not dict_key_is_hashable(arg, self, deferred):
+                return BadKeyArgument(source, field_name, target, pname, arg)
+        return None
+
+    def _bad_dict_key_field_culprit(self, t: Type) -> BadDictKeyField | BadKeyArgument | None:
+        """Return the declaration field costing *t* its JSON representation via a bad dict key.
+
+        Mirrors :meth:`first_non_data_field`, hunting a bad dict key
+        (:meth:`_own_dict_key_culprit`) instead of a non-data leaf.
+        """
+
+        def reaches_bad(ref: RecordType | EnumType | ExceptionType) -> bool:
+            return not self.nominal_is_json_convertible(ref)
+
+        return self._field_culprit(
+            t, DataProperty.JSON_CONVERTIBLE, reaches_bad, self._own_dict_key_culprit
+        )
+
+    def json_representation_culprit(self, t: Type) -> JsonRepresentationCulprit | None:
+        """Return why *t* has no JSON representation, as a structural culprit.
+
+        ``None`` when *t* converts (:func:`is_json_convertible` is true) or when
+        nothing more specific than "this type does not convert" can be said — an
+        unresolved inference variable, say, whose real problem is inference
+        rather than representation. Otherwise one tagged culprit, tried in this
+        order: (1) a non-data leaf reached structurally; (2) a bad argument
+        supplied for a dict-key parameter by *t* itself or by any nominal
+        handle nested inside it; (3) the declaration field that carries a
+        non-data leaf; (4) a non-``Hashable`` dict key reached directly in
+        *t*'s own structure; (5) the declaration field that carries a bad
+        dict key, or a bad argument it supplies for a nested declaration's key
+        parameter; (6) the free type variable that may stand for one. Shaped
+        like :meth:`no_finite_schema_message`, whose culprit search this
+        mirrors; :meth:`json_representation_obstacle` formats the result.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        if is_json_convertible(t, self):
+            return None
+        leaf = _first_non_data_leaf(t)
+        if leaf is not None:
+            return NonDataLeaf(leaf)
+        # A free type variable at a key-argument or direct-key position is
+        # deferred here too: its real Hashable-ness depends on whatever concrete
+        # type a later reference supplies, so it must fall through to the
+        # FreeTypeVar culprit below rather than being wrongly named a bad
+        # argument or a bad key outright.
+        deferred = free_type_vars(t)
+        for ref in nominal_references(t):
+            own_argument = self._key_argument_culprit(ref, None, None, deferred)
+            if own_argument is not None:
+                return own_argument
+        field_culprit = self.first_non_data_field(t)
+        if field_culprit is not None:
+            return field_culprit
+        bad_key = _first_bad_dict_key(t, self, deferred)
+        if bad_key is not None:
+            return BadDictKey(bad_key)
+        bad_key_field = self._bad_dict_key_field_culprit(t)
+        if bad_key_field is not None:
+            return bad_key_field
+        type_vars = sorted(deferred)
+        if type_vars:
+            return FreeTypeVar(type_vars[0])
+        return None
+
+    def _field_culprit[R](
+        self,
+        t: Type,
+        prop: DataProperty,
+        reaches_bad: Callable[[RecordType | EnumType | ExceptionType], bool],
+        own_culprit: Callable[[TypeDef], R],
+    ) -> R | None:
+        """Breadth-first search from *t*'s own nominal references for the first declaration
+        *own_culprit* names.
+
+        Shared by :meth:`first_non_data_field` and :meth:`_bad_dict_key_field_culprit`:
+        *prop* selects which declaration-level fixpoint successors follow
+        (:meth:`_affected_successors`), *reaches_bad* which references seed
+        and expand the search, and *own_culprit* what a visited declaration's
+        own fields are checked for (already optional in *R* itself). Breadth-
+        first so the shallowest declaration is reported — the most useful
+        culprit for a use-site diagnostic — before one reachable only through
+        further hops.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        def culprit(decl_id: DeclId) -> R:
+            return own_culprit(self._defs[decl_id])
+
+        def successors(decl_id: DeclId) -> set[DeclId]:
+            return self._affected_successors(decl_id, self._defs[decl_id], prop, reaches_bad)
+
+        return bfs_first(
+            (ref.decl_id for ref in nominal_references(t) if reaches_bad(ref)),
+            successors,
+            culprit,
+            key=self._decl_id_sort_key,
+        )
+
+    def _affected_successors(
+        self,
+        decl_id: DeclId,
+        typedef: TypeDef,
+        prop: DataProperty,
+        reaches_bad: Callable[[RecordType | EnumType | ExceptionType], bool],
+    ) -> set[DeclId]:
+        """Return the declarations *typedef* reaches a *prop*-bad declaration through.
+
+        A field reference is a HANDLE, so it is tested with *reaches_bad*,
+        which also consults the concrete type arguments — ``Box[agent]`` is
+        affected while ``Box`` itself is not. An exception's ``extends`` base
+        and its descendants are bare declaration identities carrying no
+        arguments, so for them the declaration-level *prop* ``flagged`` set is
+        the whole answer. The two idioms below are therefore not
+        interchangeable.
+        """
+        from agm.agl.semantics.analyses import field_templates, nominal_references
+
+        flags = self._declaration_flags(prop).flagged
         result: set[DeclId] = set()
         for _field_name, template in field_templates(typedef, self._defs):
             for ref in nominal_references(template):
-                if self.nominal_reaches_non_data(ref):
+                if reaches_bad(ref):
                     result.add(ref.decl_id)
         if typedef.kind == "exception":
             if typedef.base is not None and typedef.base in flags:
@@ -1750,6 +2208,22 @@ class TypeTable:
     def _decl_id_sort_key(self, decl_id: DeclId) -> tuple[tuple[str, ...], tuple[str, ...], str]:
         """Resolve *decl_id* against this table for :func:`decl_id_sort_key`."""
         return decl_id_sort_key(self._defs, decl_id)
+
+    def relevant_params_by_decl(self) -> Mapping[DeclId, frozenset[str]]:
+        """Return each declaration's own type parameters that can reach a field.
+
+        Phantom parameters are absent.
+        """
+        if self._relevant_params is None:
+            from agm.agl.semantics.analyses import compute_relevant_params
+
+            self._relevant_params = {
+                decl_id: frozenset(params)
+                for decl_id, params in compute_relevant_params(
+                    self._defs, through_containers=True
+                ).items()
+            }
+        return self._relevant_params
 
     def _finite_closure_result(self) -> "FiniteClosure":
         if self._finite_closure is None:
@@ -1788,10 +2262,13 @@ class TypeTable:
             self._invalidate_cache_for(decl_id)
         for name_key, decl_id in other._name_index.items():
             self._name_index[name_key] = decl_id
+        for enum_id, members in other._inline_members.items():
+            self._inline_members.setdefault(enum_id, {}).update(members)
         # Orphan status travels with the declaration: a session seeds a fresh
         # table from its accumulated one on every entry, so a declaration
         # orphaned once must stay orphaned for the rest of the session.
         self._orphaned |= other._orphaned
+        self._hashable_proofs.update(other._hashable_proofs)
         for decl_id, methods in other._methods.items():
             for candidates in methods.values():
                 for method in candidates.values():
@@ -1815,21 +2292,14 @@ def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...
 def decl_id_sort_key(
     defs: Mapping[DeclId, TypeDef], decl_id: DeclId
 ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-    """Deterministic sort key for *decl_id*, resolved to its declaration in *defs*.
+    """Deterministic sort key for registered *decl_id*, resolved to its declaration in *defs*.
 
     Every SCC/BFS traversal that has to order declaration identities sorts by
     declaration name (:func:`decl_def_sort_key`) rather than by identity, so a
     "first"/"culprit" declaration chosen from a fixpoint never depends on
-    declaration numbering. A *decl_id* absent from *defs* (a dangling
-    reference — an internal-invariant violation the fixpoints handle
-    defensively rather than assume away) sorts after every named declaration,
-    using the raw identity only to keep multiple dangling entries mutually
-    ordered.
+    declaration numbering.
     """
-    typedef = defs.get(decl_id)
-    if typedef is None:  # pragma: no cover
-        return ((), (), f"￿<dangling:{decl_id}>")
-    return decl_def_sort_key(typedef)
+    return decl_def_sort_key(defs[decl_id])
 
 
 def qualified_decl_name(typedef: TypeDef) -> str:
@@ -1867,45 +2337,78 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     return None
 
 
-def _reaches_non_data(t: Type, table: TypeTable) -> bool:
-    """True if ``t`` is, or transitively contains, a non-data type.
+def _first_bad_dict_key(t: Type, table: TypeTable, assume_ok: frozenset[str]) -> Type | None:
+    """Return the first non-``Hashable`` dict key type reachable through *t*'s own structure.
 
-    The non-data types are function and ``unit``: function and agent
-    values are opaque / identity-only, and ``unit`` has a single value carrying
-    nothing.  An array, dict, record, enum, or exception that transitively
-    holds one is therefore itself affected.  ``t`` is always a finite tree
-    (array/dict wrapping is structural, not nominal), so recursing through
-    ``ArrayType``/``DictType`` always terminates; a record/enum/exception
-    handle instead defers to :meth:`TypeTable.nominal_reaches_non_data`, which
-    consults a precomputed declaration-level fixpoint rather than re-walking
-    the handle's own fields — the type declarations themselves may be
-    recursive, but this function never re-enters them.
+    Structural only, like :func:`_first_non_data_leaf`: recurses through
+    ``array``/``dict`` but stops at a nominal handle, whose own fields are a
+    declaration-level question answered by
+    :meth:`TypeTable._bad_dict_key_field_culprit` instead. A dict's own
+    (already ``Hashable``) key can never itself embed another dict
+    (``Hashable`` excludes ``array``/``dict`` outright), so only the value
+    recurses further. *assume_ok* — see :attr:`LeafPolicy.dict_key_ok`;
+    passed by a search over one declaration's OWN templates, which assumes
+    the declaration's own type parameters satisfy Hashable (deferred to
+    whatever concrete argument a later reference supplies for them), so a
+    phantom or deferred parameter is never wrongly named the culprit.
+    """
+    if isinstance(t, DictType):
+        if not dict_key_is_hashable(t.key, table, assume_ok):
+            return t.key
+        return _first_bad_dict_key(t.value, table, assume_ok)
+    if isinstance(t, (RecordType, EnumType, ExceptionType)):
+        return None
+    for child in type_children(t):
+        found = _first_bad_dict_key(child, table, assume_ok)
+        if found is not None:
+            return found
+    return None
+
+
+def satisfies(
+    t: Type, kind: ConstraintKind, table: TypeTable, bounds: ConstraintBounds | None
+) -> bool:
+    """Return ``True`` if a value of type ``t`` satisfies *kind*, given in-scope ``bounds``.
+
+    Structural: every scalar satisfies both kinds; a function or ``unit`` type satisfies
+    neither, transitively (a container/record/enum/exception that reaches one
+    at any depth is itself disqualified — the nominal case defers to
+    :meth:`TypeTable.nominal_satisfies`); ``array`` satisfies only ``Eq``,
+    recursing into the element type; ``dict`` satisfies only ``Eq``, and only
+    when both its key and value do (never ``Hashable``, regardless of content).
+
+    A bare type variable, the bottom type, and an unresolved inference
+    variable — anywhere, including nested inside an array/dict/nominal
+    argument — satisfy *kind* when ``bounds`` is ``None`` (open-world mode:
+    the bound is deferred to wherever the type is actually instantiated),
+    and otherwise only a type variable does, and only when ``bounds`` states
+    *kind* for its name (``bounds`` are implication-closed, see
+    :func:`~agm.agl.constraints.close_constraints`).
     """
     match t:
+        case TypeVarType():
+            return bounds is None or kind in bounds.get(t.name, frozenset())
+        case BottomType() | InferenceVarType():
+            return bounds is None
         case FunctionType() | UnitType():
-            return True
-        case ArrayType():
-            return _reaches_non_data(t.elem, table)
-        case DictType():
-            return _reaches_non_data(t.value, table)
-        case RecordType() | EnumType() | ExceptionType():
-            return table.nominal_reaches_non_data(t)
-        case (
-            TextType()
-            | JsonType()
-            | BoolType()
-            | IntType()
-            | DecimalType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
             return False
+        case ArrayType():
+            return kind is ConstraintKind.EQ and satisfies(t.elem, kind, table, bounds)
+        case DictType():
+            return (
+                kind is ConstraintKind.EQ
+                and satisfies(t.key, kind, table, bounds)
+                and satisfies(t.value, kind, table, bounds)
+            )
+        case RecordType() | EnumType() | ExceptionType():
+            return table.nominal_satisfies(t, kind, bounds)
+        case TextType() | JsonType() | BoolType() | IntType() | DecimalType():
+            return True
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
-def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
+def comparable_types(left: Type, right: Type, table: TypeTable, bounds: ConstraintBounds) -> bool:
     """Return ``True`` if ``left`` and ``right`` may be compared.
 
     Equality (``=``, ``!=``) and ordering comparisons require both operands to
@@ -1917,29 +2420,28 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     JSON-shaped scalars here: ``json = json`` is allowed but ``json`` vs any
     non-``json`` type is a static error.
 
-    ``FunctionType`` and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error.
-    This rule is **transitive**: an ``array``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function or ``unit``
-    value likewise has no equality and cannot be compared with ``=``/``!=``.
-    ``table`` resolves record/enum field shapes for that transitive walk.
+    Thin wrapper over :func:`satisfies` (``Eq``) plus the identity/numeric-pair
+    rule. A type variable — top-level or nested — is comparable only when its
+    name is bound ``Eq``/``Hashable`` in ``bounds``; the bottom type and an
+    inference variable are then never comparable.
+    Callers always supply the checker's real bound environment (possibly
+    empty), never open-world mode.
     """
-    # Function/unit values — and any container/record/enum that transitively
-    # holds one — have no value equality.
-    if _reaches_non_data(left, table) or _reaches_non_data(right, table):
-        return False
-    # Bare type variables and the bottom type are never comparable here (the
-    # checker additionally rejects bare type variables at the comparison site).
-    if isinstance(left, (BottomType, TypeVarType, InferenceVarType)) or isinstance(
-        right, (BottomType, TypeVarType, InferenceVarType)
-    ):
-        return False
-    if left == right:
-        return True
+    return (
+        satisfies(left, ConstraintKind.EQ, table, bounds)
+        and satisfies(right, ConstraintKind.EQ, table, bounds)
+        and (
+            same_comparison_type(left, right)
+            or _nominal_widens(table, left, right)
+            or _nominal_widens(table, right, left)
+        )
+    )
+
+
+def same_comparison_type(left: Type, right: Type) -> bool:
+    """Whether ``left`` and ``right`` are one type, or the int/decimal pair."""
     numeric = (IntType, DecimalType)
-    if isinstance(left, numeric) and isinstance(right, numeric):
-        return True
-    return _nominal_widens(table, left, right) or _nominal_widens(table, right, left)
+    return left == right or (isinstance(left, numeric) and isinstance(right, numeric))
 
 
 # ---------------------------------------------------------------------------
@@ -1951,17 +2453,19 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
     """Return ``True`` if ``t`` has a JSON representation.
 
     The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
-    directly; an ``array``/``dict`` converts iff its element/value type does;
-    a record or exception converts to a JSON object of its fields and an enum
+    directly; an ``array`` converts iff its element type does; a ``dict``
+    converts iff its key is ``Hashable`` and its value type converts; a
+    record or exception
+    converts to a JSON object of its fields and an enum
     to its member's tag (with the member's fields, if any has one), so a
     nominal converts iff no non-data type is reachable from its declaration
     (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
-    ``unit``, ``agent``, and function types — have no representation at all.
+    ``unit`` and function types — have no representation at all.
 
     A free type variable is never convertible, its own arm here and, for a
     nominal, in its type arguments: casts are compiled once and type arguments
-    are erased, so a ``T`` later instantiated with ``agent`` would otherwise
-    reach the conversion at runtime. Note the deliberate asymmetry with the
+    are erased, so a ``T`` later instantiated with a function type would
+    otherwise reach the conversion at runtime. Note the deliberate asymmetry with the
     declaration-level fixpoint, which correctly treats a type variable in a
     field template as *not* a problem — that is what its relevant-parameter
     analysis is for.
@@ -1978,7 +2482,13 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
         case ArrayType():
             return is_json_convertible(t.elem, table)
         case DictType():
-            return is_json_convertible(t.value, table)
+            # A hashable key always has a JSON wire form (text/stringified/
+            # entries — chosen at encode/schema time by its DictKeyForm).
+            return (
+                dict_key_is_hashable(t.key, table)
+                and is_json_convertible(t.key, table)
+                and is_json_convertible(t.value, table)
+            )
         case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
             return False
         case ExceptionType():
@@ -1991,6 +2501,29 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return False
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def is_extern_keyable(t: Type, table: TypeTable) -> bool:
+    """Return ``True`` if every ``dict`` in *t* has an extern-keyable key.
+
+    Structural, like :func:`is_json_convertible`, except that a function type
+    recurses into its parameter and result types (a companion builds a
+    callback's arguments), and a free type variable passes (an extern
+    signature's own type parameters are not erased). The only obstacle is a
+    ``dict`` whose key is not ``Hashable`` anywhere
+    (:class:`~agm.agl.semantics.analyses.DataProperty.EXTERN_KEYABLE`): a
+    companion inserts keys into parameter dicts and returns dicts whose keys
+    are inserted. A ``dict``'s key is checked directly
+    (:func:`dict_key_is_hashable_assuming_type_vars`) and only its value
+    recurses; a nominal delegates to the table.
+    """
+    if isinstance(t, DictType):
+        return dict_key_is_hashable_assuming_type_vars(t.key, table) and is_extern_keyable(
+            t.value, table
+        )
+    if isinstance(t, (RecordType, EnumType, ExceptionType)):
+        return table.nominal_is_extern_keyable(t)
+    return all(is_extern_keyable(child, table) for child in type_children(t))
 
 
 def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> bool:
@@ -2054,6 +2587,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     declaration-level facts a ``json`` target needs (see
     :func:`is_json_convertible`).
     """
+    # A target is a resolved annotation or ``parse`` argument, never an inference variable.
+    target = cast(CheckedType, target)
     # Bottom is a valid source because a raise expression never reaches the
     # conversion. Other non-data sources and all non-data targets are invalid.
     if isinstance(source, (UnitType, FunctionType)) or isinstance(
@@ -2140,8 +2675,11 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
             return CastKind.FALLIBLE
         return CastKind.STATIC_ERROR
 
-    # All target types are covered above; this is a safety fallback.
-    return CastKind.STATIC_ERROR  # pragma: no cover
+    if isinstance(target, TypeVarType):
+        # A cast target that is still a bare type parameter (e.g. `x as T`
+        # inside a generic function) names no concrete shape to convert into.
+        return CastKind.STATIC_ERROR
+    assert_never(target)  # pragma: no cover
 
 
 def parse_classification(target: Type, table: TypeTable) -> CastKind:
@@ -2755,6 +3293,14 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "KeyError": TypeDef(
         kind="exception",
         name="KeyError",
+        module_id=RESERVED_ID,
+        fields=(_fields := (("key", TextType()),)),
+        base=_EXCEPTION_ROOT_ID,
+        field_kinds=_standard(_fields),
+    ),
+    "DuplicateKeyError": TypeDef(
+        kind="exception",
+        name="DuplicateKeyError",
         module_id=RESERVED_ID,
         fields=(_fields := (("key", TextType()),)),
         base=_EXCEPTION_ROOT_ID,

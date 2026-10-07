@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "first_branches",
+      "module_roots": ["program_modules/modules/hiding_verdicts"],
+      "params": {"n": 0},
+      "expect": {"stdout": "2 51 red\n"}
+    },
+    {
+      "name": "second_branches",
+      "module_roots": ["program_modules/modules/hiding_verdicts"],
+      "params": {"n": 1},
+      "expect": {"stdout": "20 120 blue\n"}
+    }
+  ]
+}

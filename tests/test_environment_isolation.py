@@ -10,14 +10,16 @@ project directory or a workspace shell must not inherit either.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import httpx2
 import pytest
 
 from agm.config.context import current_config_context
-from agm.config.general import agm_home_dir
+from agm.config.home import agm_home_dir
 from agm.packages.activation import load_activation_index
+from tests._git_helpers import git_output, init_repo
 from tests.conftest import LAUNCH_ENVIRONMENT
 
 
@@ -60,3 +62,47 @@ def test_git_identity_does_not_depend_on_a_personal_gitconfig() -> None:
     assert os.environ["GIT_AUTHOR_NAME"]
     assert os.environ["GIT_COMMITTER_EMAIL"]
     assert not (Path(os.environ["HOME"]) / ".gitconfig").exists()
+
+
+def test_git_discovery_cannot_climb_into_a_repository_the_temp_root_sits_inside(
+    tmp_path: Path,
+) -> None:
+    """Git run from a directory with no repository of its own must never discover
+    one, wherever the suite's own temp root happens to sit on the host -- even a
+    repository rooted exactly at the temp root itself (e.g. a sandboxed ``TMPDIR``
+    that is already a git working tree).
+
+    Git never searches the ceiling directory itself or anything above it, so the
+    ceiling must be the temp root, not its parent: a parent-of-root ceiling still
+    lets a repository rooted at the temp root be found.
+    """
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            capture_output=True,
+            text=True,
+        ).returncode
+        != 0
+    )
+
+    temp_root = tmp_path / "pytest-tmp"
+    case_dir = temp_root / "case"
+    init_repo(temp_root, dict(os.environ))
+    case_dir.mkdir()
+
+    unfenced_env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
+    assert git_output(case_dir, ["rev-parse", "--show-toplevel"], unfenced_env) == str(
+        temp_root.resolve()
+    )
+
+    fenced_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(temp_root)}
+    fenced = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=case_dir,
+        env=fenced_env,
+        capture_output=True,
+        text=True,
+    )
+    assert fenced.returncode != 0

@@ -1,0 +1,56 @@
+# An alias of an enum selects the enum's members in type and value position,
+# in patterns, and in `is` tests. An alias of an applied generic enum selects
+# each member at the alias's type arguments; an unapplied parameterized alias
+# infers its own type arguments, so `Rows::Filled` wraps an array.
+
+enum Verdict
+  | Pass(note: text)
+  | Fail
+
+type Outcome = Verdict
+
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Count = Slot[int]
+
+type Holder[T] = Slot[T]
+
+type Rows[A] = Slot[array[A]]
+
+def describe(outcome: Outcome) -> text =
+  case outcome of
+    | Outcome::Pass(note) => "pass: %{note}"
+    | Outcome::Fail => "fail"
+
+def row-width(slot: Slot[array[text]]) -> int =
+  case slot of
+    | Rows::Filled(value) => value.size()
+    | Rows::Empty => 0
+
+def count-of(slot: Count) -> int =
+  case slot of
+    | Count::Filled(value) => value
+    | Count::Empty => 0
+
+program def main(score: int) -> unit =
+  let outcome: Outcome =
+    if score > 0 => Outcome::Pass(note = "score %{score}") else => Outcome::Fail
+  print(describe(outcome))
+  let slot: Count = if score > 0 => Count::Filled(value = score) else => Count::Empty
+  print("count %{count-of(slot)}, filled %{slot is Count::Filled}")
+  let doubled: Count::Filled = Count::Filled(value = score * 2)
+  let held: Holder[text]::Filled = Holder::Filled(value = "held")
+  let pass: Outcome::Pass = Outcome::Pass(note = held.value)
+  print("%{doubled.value} %{pass.note}")
+  let rows: Rows[text] = if score > 0 => Rows::Filled(value = ["a", "b"]) else => Rows::Empty
+  let wrap: (array[int]) -> Rows[int] = Rows::Filled
+  let wrapped: Slot[array[int]] = wrap([score, score])
+  let row = Slot::Filled(value = [score, score, score])
+  let row-size = case row of
+    | Rows::Filled(value) => value.size()
+  let applied-size = case row of
+    | Rows[int]::Filled(value) => value.size() + 1
+  print("width %{row-width(rows)}, wrapped %{wrapped is Rows::Filled}, row %{row-size}")
+  print("applied %{applied-size}")

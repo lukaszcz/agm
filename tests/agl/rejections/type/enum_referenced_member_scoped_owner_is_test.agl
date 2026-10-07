@@ -1,0 +1,10 @@
+scope shapes
+  record Saved
+    id: int
+
+  enum Status = ::shapes::Saved | Fresh(n: int)
+end shapes
+
+program def main() -> unit =
+  let status: shapes::Status = shapes::Saved(id = 1)
+  print(status is shapes::Status::Saved)

@@ -20,7 +20,9 @@ alias, any `def` form (`program`, `builtin`, and `extern` included), a
 
 Several attributes may be written in a row, on the line above the declaration
 or in front of it on the same line. An enum member's attributes follow its
-`|`. Token-level rules: [Lexical structure](lexical-structure.md#attributes).
+`|`; the constructor and further attributes may continue on indented lines
+below the prefix. Constructor fields are indented further below the constructor.
+Token-level rules: [Lexical structure](lexical-structure.md#attributes).
 
 ```agl
 @doc("Formats one entry.")
@@ -32,7 +34,13 @@ record Entry
   @arg-named count: int
 
 enum Shape
-  | @doc("a rectangle") @arg-pos Rect(width: int, height: int)
+  | @doc("""
+      A rectangle with horizontal and vertical extents.
+    """)
+    @arg-pos
+    Rect
+      width: int
+      height: int
   | Empty
 ```
 
@@ -156,8 +164,11 @@ Effective JSON name: `@json-name` if present, else `@name`, else the
 declared name. This is the object key a record or exception field encodes
 and decodes under, and the JSON tag naming a record wherever it inhabits an
 enum, wherever a value crosses JSON: agent structured output, `as`/`as?`
-casts, and program parameters. Rendering (`print`, string interpolation, …)
-always uses the declared name.
+casts, program parameters, and [uncaught-exception
+reports](host-environment.md#results-and-termination). A dict key of an enum whose members have no
+fields encodes as its member's tag ([Dict wire
+forms](types.md#dict-wire-forms)). Rendering (`print`, string
+interpolation, …) always uses the declared name.
 
 Two sibling fields or enum members whose effective JSON names collide, or
 whose declared/`@name` spellings collide, are static errors, checked across
@@ -186,8 +197,8 @@ record Job
 ## `@command`
 
 `@command` registers a `program def` as a command of the package that owns its
-module ([Packages](packages.md#commands)). Its argument is a command path:
-space-separated words naming the command a reader invokes, so
+module ([Packages](packages.md#programs-and-commands)). Its argument is a
+command path: space-separated words naming the command a reader invokes, so
 `@command("devel review")` is invoked as `devel review`. A path whose first
 word is one of the host's own commands, or any word of which looks like an
 option, is a static error; validating the package also rejects a first word
@@ -252,8 +263,8 @@ one or more `key = value` entries, comma-separated and optionally spanning
 several lines with a trailing comma, and is legal only on a `program def`, at
 most once.
 
-Each `key` is an ordinary AgL reference — bare, suffix-qualified, fully
-qualified, anchored with a leading `::`, or a scope path — resolved by
+Each `key` is an ordinary AgL reference — bare, qualified relative to the
+enclosing scopes, anchored with a leading `::`, or a module route — resolved by
 ordinary scope lookup in the scope that declares the `program def` (not its
 own parameter scope). The same visibility and import rules apply as for any
 reference: a target reached only through another module still needs that

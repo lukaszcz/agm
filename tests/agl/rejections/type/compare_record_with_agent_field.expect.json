@@ -1,7 +1,7 @@
 {
   "diagnostic": {
     "message_contains": [
-      "Equality operands"
+      "needs 'Eq'"
     ],
     "line": 9
   }

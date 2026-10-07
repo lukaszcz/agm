@@ -50,9 +50,10 @@ bind an argument.
 - Separate extern and builtin function declarations with a blank line before the next
   declaration's attributes.
 
-- Document all public-facing declarations with `@doc`, including functions,
-  methods, types, constructors, fields, and module bindings. A type or
-  constructor may omit `@doc` only when its name makes its meaning obvious.
+- Document non-obvious information about public-facing declarations with
+  `@doc`, including functions, methods, types, constructors, fields, and
+  module bindings. Omit annotations that only restate names, types, or
+  information already documented on the enclosing declaration.
   Put the annotation on a separate line before the declaration (after `|`
   for an enum member). Start with one concise sentence describing the
   declaration. Put exception conditions and other notes in separate

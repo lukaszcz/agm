@@ -1,0 +1,29 @@
+# Agent-enhanced git operations
+
+import std/config
+
+def Agent::merge(self, ref: text) -> unit =
+  exec $ git merge %{ref}
+  let unmerged: text = exec $ git ls-files -u
+  if unmerged != "" =>
+    self.ask """
+      Fix all conflicts and finish the merge. Make sure to preserve functionality from both branches.
+    """
+
+def Agent::commit(self) -> unit =
+  self.ask("Commit changes on the current branch.")
+
+@command("devel merge")
+@doc("Merge given ref and fix all conflicts.")
+program def merge-main(
+  ref: text,
+  agent: Agent = config::default-agent
+) -> unit =
+  agent.merge(ref)
+
+@command("devel commit")
+@doc("Commit changes on the current branch.")
+program def commit-main(
+  agent: Agent = config::default-agent
+) -> unit =
+  agent.commit()

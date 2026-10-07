@@ -1,6 +1,20 @@
 # Common utility functions
 
 import std/time
+import std/os
+import std/fs
 
 def new-path(prefix: text, extension: text) -> path =
   ".agent-files/" ++ prefix ++ "-" ++ time::timestamp() ++ extension
+
+def Agent::edit-and-chat(self, prompt: text) -> unit =
+  let prompt-file = fs::temp-file("prompt")
+  fs::write(prompt-file, prompt)
+  os::edit(prompt-file)
+  self.chat(fs::read(prompt-file))
+
+def Agent::ask-or-chat(self, prompt: text, interactive: bool) -> unit =
+  if interactive =>
+    self.chat(prompt)
+  else =>
+    self.ask(prompt)

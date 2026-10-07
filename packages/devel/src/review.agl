@@ -99,6 +99,27 @@ def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent,
     let ct = revise-agent.revise-review(review)
   until not ct
 
+def refine-tests-prompt() -> text =
+  """
+  Perform a thorough review of the test suite. Evaluate the general robustness and thoroughness of the test suite, as well as the following concrete aspects.
+    - Do the tests actually make meaningful non-trivial assertions about the tested code?
+    - Are error paths tested in addition to success paths?
+    - Are all edge cases covered?
+    - Are complex user workflows tested?
+    - Is real behavior actually tested, not mocked?
+    - Do the tests exercise real bussiness logic requirements instead of overfitting to implementation details?
+    - Is test suite performance acceptable, with no single test taking more than 1s?
+    - Are testing guidelines from relevant AGENTS.md files followed?
+
+  Use mutation testing to assess the effectiveness of the test suite.
+
+  Iterate on fixing all found issues until the test suite satisfies ALL of the
+  requirements above.
+  """
+
+def Agent::refine-tests(self, interactive: bool) -> unit =
+  self.ask-or-chat(refine-tests-prompt(), interactive)
+
 let default-aspects = "correctness, maintainability, efficency, adherence to relevant AGENTS.md files"
 
 @command("devel review")
@@ -167,3 +188,12 @@ program def refine-main(
   log::info("review-agent: %{review-agent}")
   log::info("revise-agent: %{revise-agent}")
   refine(scope, aspects', review-agent, revise-agent, max-steps, save-reviews)
+
+@command("devel refine-tests")
+@doc("Review and refine the test suite using mutation testing.")
+program def refine-tests-main(
+  agent: Agent = config::default-agent,
+  @opt-short("i")
+  interactive: bool = false
+) -> unit =
+  agent.refine-tests(interactive)

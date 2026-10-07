@@ -8,5 +8,7 @@ Perform a thorough review of the test suite. Evaluate the general robustness and
   - Is test suite performance acceptable, with no single test taking more than 1s?
   - Are testing guidelines from relevant AGENTS.md files followed?
 
+Use mutation testing to assess the effectiveness of the test suite.
+
 Iterate on fixing all found issues until the test suite satisfies ALL of the
 requirements above.

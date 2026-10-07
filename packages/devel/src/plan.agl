@@ -1,8 +1,7 @@
 # Planning and design workflows
 
-import std/fs
-import std/os
 import std/config
+import devel/utils
 
 def plan-prompt(plan-file: path) -> text =
   """
@@ -17,13 +16,36 @@ def plan-prompt(plan-file: path) -> text =
   For every owner decision, present several alternatives with pros and cons and a single recommendation. Before writing the plan, ask me, one-by-one, about each major decision, explaining the issue and presenting the options together with your recommendation.
   """
 
+def design-prompt(design-file: path, reports-dir: path) -> text =
+  """
+  <PROBLEM>
+
+  Your task is to create a design document for the above. Save the design to %{design-file}
+
+  This is a deep research task. Search the web, investigate precedents and related designs. Read relevant research literature.
+
+  Save any research reports created in this session to %{reports-dir}/*.md
+
+  All solutions must be principled, consistent, general and extensible - no pragmatic fixes.
+
+  If anything is unclear, don't make assumptions, but ask me questions instead. Do NOT silently make major architectural decisions that are not explicitly specified by the owner.
+
+  For every owner decision, present several alternatives with pros and cons and a single recommendation. Before writing the design doc, ask me, one-by-one, about each decision, explaining the issue and presenting the options together with your recommendation.
+  """
+
 @command("devel plan")
 @doc("Create a plan interactively")
 program def plan-main(
   file: path = ".agent-files/PLAN.md",
   agent: Agent = config::default-agent
 ) -> unit =
-  let prompt-file = fs::temp-file("prompt")
-  fs::write(prompt-file, plan-prompt(file))
-  os::edit(prompt-file)
-  agent.chat(fs::read(prompt-file))
+  agent.edit-and-chat(plan-prompt(file))
+
+@command("devel design")
+@doc("Create a deeply researched design interactively")
+program def plan-design(
+  file: path = ".agent-files/DESIGN.md",
+  reports-dir: path = ".agent-files/reports",
+  agent: Agent = config::default-agent
+) -> unit =
+  agent.edit-and-chat(design-prompt(file, reports-dir))

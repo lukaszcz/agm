@@ -53,7 +53,7 @@ var noul-threshold: decimal = 0.5
 record Noul
   probability: decimal
 
-# `true` when `probability` reaches `threshold`.
+@doc("Check if the noul probability reaches the threshold.")
 def Noul::value(self, threshold: decimal = ::noul-threshold) -> bool =
   self.probability >= threshold
 
@@ -156,13 +156,27 @@ exception JevResponseError extends JevError
 exception JevTargetError extends JevError
   target: text
 
-# Asks `questions`, keyed by name, about `state` in one request.
 @extern-name("system_one")
+@doc("""
+  Ask the named questions about the state in one request and return raw answers.
+
+  Raises `JevError` for SDK failures or `JevResponseError` for invalid answers. A non-positive,
+  unparseable, or excessively large `timeout` raises `std/errors::TypeError` before a request.
+
+  Questions and answers are keyed by question name. Instructions and criteria accept structured
+  JSON. Request settings default to the module settings; `None` uses the SDK's environment and
+  defaults. The SDK handles retries and response validation.
+""")
 extern def system-one(state: json, questions: dict[text, Question],
                       model: Option[text] = ::model, timeout: Option[text] = ::timeout,
                       api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
                       max-retries: int = ::max-retries) -> Response
 
+@doc("""
+  Ask the named questions about the state, returning `JevError` failures as `Err`.
+
+  Uses `system-one`; `std/errors::TypeError` for an invalid timeout still propagates.
+""")
 def try-system-one(state: json, questions: dict[text, Question], model: Option[text] = ::model,
                    timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                    base-url: Option[text] = ::base-url,
@@ -171,11 +185,25 @@ def try-system-one(state: json, questions: dict[text, Question], model: Option[t
   catch JevError as e => Err(e)
 
 @extern-name("ask_noul")
+@doc("""
+  Ask a noul (yes/no) question and return its probability.
+
+  Raises `JevError` for SDK failures or `JevResponseError` for an invalid answer.
+  An invalid timeout raises `std/errors::TypeError`.
+
+  `criteria`, when supplied, describes the yes and no outcomes. Settings default to the module
+  settings, as in `system-one`.
+""")
 extern def ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
                     model: Option[text] = ::model, timeout: Option[text] = ::timeout,
                     api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
                     max-retries: int = ::max-retries) -> Noul
 
+@doc("""
+  Ask a noul question, returning `JevError` failures as `Err`.
+
+  Uses `ask-noul`; `std/errors::TypeError` for an invalid timeout still propagates.
+""")
 def try-ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
                  model: Option[text] = ::model, timeout: Option[text] = ::timeout,
                  api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
@@ -187,29 +215,69 @@ def try-ask-noul(instructions: text, state: json = "", criteria: Option[NoulCrit
 # `try-` twins; catch `JevError` instead.
 
 @extern-name("ask_choice")
+@doc("""
+  Ask a choice question over the enum members of `C` and return the chosen member with probabilities.
+
+  Raises `JevTargetError` unless `C` is an enum with at least two fieldless members, or
+  `JevResponseError` when the answer's labels do not match `C`. Other SDK failures raise `JevError`;
+  an invalid timeout raises `std/errors::TypeError`.
+
+  Each option uses its member's JSON tag and `@doc`, or `null` when undocumented. Probabilities
+  are keyed by members of `C`. The target is inferred from the call site; settings follow
+  `system-one`.
+""")
 extern def ask-choice[C](instructions: text, state: json = "", model: Option[text] = ::model,
                          timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                          base-url: Option[text] = ::base-url,
                          max-retries: int = ::max-retries) -> Choice[C]
 
 @extern-name("ask_score")
+@doc("""
+  Ask a score question using the enum members of `L` as an ordered rubric.
+
+  Raises `JevTargetError` unless `L` is an enum with 2-10 fieldless members, or `JevResponseError`
+  when probabilities do not cover exactly its level indices. Other SDK failures raise `JevError`;
+  an invalid timeout raises `std/errors::TypeError`.
+
+  Levels follow declaration order; each description is its member's `@doc`, else its JSON tag.
+  The result includes the most probable member, choosing the lowest index on a tie, the score,
+  confidence, and probabilities keyed by members of `L`. The target is inferred from the call
+  site; settings follow `system-one`.
+""")
 extern def ask-score[L](instructions: text, state: json = "", model: Option[text] = ::model,
                         timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                         base-url: Option[text] = ::base-url,
                         max-retries: int = ::max-retries) -> Score[L]
 
-# Asks one question typed by the target.
+@doc("""
+  Ask one question selected by the target type and return its typed answer.
+
+  Raises `JevTargetError` for an unsupported target or `JevResponseError` when the answer cannot
+  fit it. Other SDK failures raise `JevError`; an invalid timeout raises `std/errors::TypeError`.
+
+  `bool` and `Noul` select a noul question; `bool` uses `noul-threshold`. A fieldless enum or
+  `Choice[C]` selects a choice question; `Score[L]` selects a score question. Choice and score
+  enums follow `ask-choice` and `ask-score`. The target is inferred from the call site; settings
+  follow `system-one`.
+""")
 extern def ask[T](instructions: text, state: json = "", model: Option[text] = ::model,
                   timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                   base-url: Option[text] = ::base-url, max-retries: int = ::max-retries,
                   noul-threshold: decimal = ::noul-threshold) -> T
 
-# Asks one question per field of the record target in one request, keyed by
-# the field's JSON name. A field is `bool`, `Noul`, a fieldless enum,
-# `Choice[E]`, or `Score[L]`; its instructions are its `@doc`, else its name.
-# A record without fields, or any other field, raises `JevTargetError`; for a
-# field, its `target` is `<record>.<field>`.
 @extern-name("ask_many")
+@doc("""
+  Ask one question per field of the target record in one request and return the populated record.
+
+  Raises `JevTargetError` for a non-record target, an empty record, or an unsupported field;
+  a field error names `<record>.<field>`. An answer that cannot fit its field raises
+  `JevResponseError`. Other SDK failures raise `JevError`; an invalid timeout raises
+  `std/errors::TypeError`.
+
+  Each field uses the target rules of `ask`. Questions are keyed by the field's JSON name;
+  instructions are its `@doc`, else its declared name. The target is inferred from the call site;
+  settings follow `system-one`.
+""")
 extern def ask-many[T](state: json, model: Option[text] = ::model,
                        timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                        base-url: Option[text] = ::base-url, max-retries: int = ::max-retries,

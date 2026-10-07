@@ -121,7 +121,7 @@
         }
       ],
       "expect": {
-        "stdout": "[true, false, true]\ntrue\ntrue\n{\"Billing\": 0.7, \"Technical\": 0.2, \"acct\": 0.1}\ntrue\n[0.05, 0.1, 0.85]\n"
+        "stdout": "[true, false, true]\ntrue\ntrue\n{Team::Billing: 0.7, Team::Technical: 0.2, Team::Account: 0.1}\ntrue\n{Level::Low: 0.05, Level::Medium: 0.1, Level::High: 0.85}\n"
       }
     },
     {
@@ -245,7 +245,7 @@
         }
       ],
       "expect": {
-        "stdout": "[false, true, true]\nfalse\nfalse\n{\"Billing\": 0.2, \"Technical\": 0.7, \"acct\": 0.1}\nfalse\n[0.7, 0.3, 0]\n"
+        "stdout": "[false, true, true]\nfalse\nfalse\n{Team::Billing: 0.2, Team::Technical: 0.7, Team::Account: 0.1}\nfalse\n{Level::Low: 0.7, Level::Medium: 0.3, Level::High: 0}\n"
       }
     },
     {
@@ -403,7 +403,7 @@
         }
       ],
       "expect": {
-        "stdout": "[0.1, 0.7]\ntrue\n{\"Billing\": 0.2, \"Technical\": 0.1, \"acct\": 0.7}\ntrue\n"
+        "stdout": "[0.1, 0.7]\ntrue\n{Team::Billing: 0.2, Team::Technical: 0.1, Team::Account: 0.7}\ntrue\n"
       }
     },
     {
@@ -444,7 +444,7 @@
         }
       ],
       "expect": {
-        "stdout": "[0.6, 0.5]\nfalse\n{\"Billing\": 0.5, \"Technical\": 0.3, \"acct\": 0.2}\nfalse\n"
+        "stdout": "[0.6, 0.5]\nfalse\n{Team::Billing: 0.5, Team::Technical: 0.3, Team::Account: 0.2}\nfalse\n"
       }
     },
     {

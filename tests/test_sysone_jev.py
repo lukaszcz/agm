@@ -85,8 +85,9 @@ let default-value: bool = noul.value()
 let explicit-value: bool = noul.value(0.9)
 let billing: Team = Team::Billing
 let high: Level = Level::High
-let choice: jev::Choice[Team] = jev::Choice(billing, 0.9, {"Billing": 0.9})
-let score: jev::Score[Level] = jev::Score(high, 0.9, 0.8, [0.1, 0.9])
+let choice: jev::Choice[Team] = jev::Choice(billing, 0.9, {billing: 0.9})
+let score: jev::Score[Level] = jev::Score(high, 0.9, 0.8,
+  {Level::Low as Level: 0.1, high: 0.9})
 let answer: jev::Answer = jev::Answer::NoulAnswer(0.5)
 let response = jev::Response("jev-1", {"a": answer}, jev::Usage(None, Some(1)), None)
 let auth = jev::JevAuthError(request-id = None, status = 401, body = null, message = "m")
@@ -1213,6 +1214,58 @@ _BILLING_ODDS = {"Billing": 0.7, "Technical": 0.2, "acct": 0.1}
 _TECHNICAL_ODDS = {"Billing": 0.2, "Technical": 0.7, "acct": 0.1}
 
 
+@pytest.mark.parametrize("generic", (False, True))
+@pytest.mark.parametrize(
+    ("kind", "enum", "members", "question", "answer", "expected"),
+    (
+        (
+            "choice",
+            "Team",
+            "Billing, Technical, Account",
+            _CHOICE_Q,
+            _choice("acct", {"acct": 0.7, "Technical": 0.2, "Billing": 0.1}),
+            ["0.1", "0.2", "0.7", "0.7"],
+        ),
+        (
+            "score",
+            "Level",
+            "Low, Medium, High",
+            _SCORE_Q,
+            _score(1.4, {"2": 0.4, "0": 0.0, "1": 0.6}),
+            ["0", "0.6", "0.4", "0.6"],
+        ),
+    ),
+)
+def test_probabilities_are_keyed_by_enum_members(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    generic: bool,
+    kind: str,
+    enum: str,
+    members: str,
+    question: dict[str, object],
+    answer: dict[str, object],
+    expected: list[str],
+) -> None:
+    call = "ask" if generic else f"ask-{kind}"
+    target = f"jev::{kind.capitalize()}[{enum}]" if generic else enum
+    selected = "choice" if kind == "choice" else "level"
+    body = f"""\
+let answer = jev::{call}::[{target}]("Which?", "{_STATE}" as json)
+let probabilities: dict[{enum}, decimal] = answer.probabilities
+let members: array[{enum}] = [{members}]
+for member in members do
+  print(probabilities[member])
+done
+print(probabilities[answer.{selected}])
+"""
+    result, mount = _run_jev(monkeypatch, [_single(question, answer)], body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == expected
+
+
 @pytest.mark.parametrize(
     ("target", "question", "answer", "expected"),
     (
@@ -1226,20 +1279,24 @@ _TECHNICAL_ODDS = {"Billing": 0.2, "Technical": 0.7, "acct": 0.1}
             _CHOICE_Q,
             _choice("Technical", {"Billing": 0.1, "Technical": 0.7, "acct": 0.2}),
             "jev::Choice(Team::Technical as Team, 0.7,"
-            ' {"Billing": 0.1, "Technical": 0.7, "acct": 0.2})',
+            " {Team::Billing as Team: 0.1, Team::Technical as Team: 0.7,"
+            " Team::Account as Team: 0.2})",
         ),
         # A tie between the two most probable levels selects the lower one.
         (
             "jev::Score[Level]",
             _SCORE_Q,
             _score(1.2, _EVEN_TIE),
-            "jev::Score(Level::Medium as Level, 1.2, 0.4, [0.2, 0.4, 0.4])",
+            "jev::Score(Level::Medium as Level, 1.2, 0.4,"
+            " {Level::Low as Level: 0.2, Level::Medium as Level: 0.4, Level::High as Level: 0.4})",
         ),
         (
             "jev::Score[Level]",
             _SCORE_Q,
             _score(1.9, {"2": 0.9, "0": 0.05, "1": 0.05}),
-            "jev::Score(Level::High as Level, 1.9, 0.4, [0.05, 0.05, 0.9])",
+            "jev::Score(Level::High as Level, 1.9, 0.4,"
+            " {Level::Low as Level: 0.05, Level::Medium as Level: 0.05,"
+            " Level::High as Level: 0.9})",
         ),
     ),
 )
@@ -1280,12 +1337,13 @@ def test_ask_choice_and_ask_score_wrap_their_member_type(
     ]
     body = f"""\
 let state = "{_STATE}" as json
-let probabilities = {{"Billing": 0.1, "Technical": 0.1, "acct": 0.8}}
+let probabilities: dict[Team, decimal] = {{Billing: 0.1, Technical: 0.1, Account: 0.8}}
 let chosen: jev::Choice[Team] = jev::Choice(Team::Account as Team, 0.7, probabilities)
 print(jev::ask-choice::[Team]("Which?", state) == chosen)
 let contextual-choice: jev::Choice[Team] = jev::ask-choice("Which?", state)
 print(contextual-choice == chosen)
-let scored: jev::Score[Level] = jev::Score(Level::Low as Level, 0.3, 0.4, [0.7, 0.3, 0.0])
+let scored: jev::Score[Level] = jev::Score(Level::Low as Level, 0.3, 0.4,
+  {{Level::Low as Level: 0.7, Level::Medium as Level: 0.3, Level::High as Level: 0.0}})
 print(jev::ask-score::[Level]("Which?", state) == scored)
 let contextual-score: jev::Score[Level] = jev::ask-score("Which?", state)
 print(contextual-score == scored)
@@ -1318,9 +1376,10 @@ _TRIAGE_QUESTIONS = {
                 "sev": _score(1.2, _EVEN_TIE),
             },
             "Triage(true, jev::Noul(0.1), Team::Billing,"
-            ' jev::Choice(Team::Account as Team, 0.7, {"Billing": 0.1, "Technical": 0.2,'
-            ' "acct": 0.7}),'
-            " jev::Score(Level::Medium as Level, 1.2, 0.4, [0.2, 0.4, 0.4]))",
+            " jev::Choice(Team::Account as Team, 0.7, {Team::Billing as Team: 0.1,"
+            " Team::Technical as Team: 0.2, Team::Account as Team: 0.7}),"
+            " jev::Score(Level::Medium as Level, 1.2, 0.4,"
+            " {Level::Low as Level: 0.2, Level::Medium as Level: 0.4, Level::High as Level: 0.4}))",
         ),
         (
             {
@@ -1331,9 +1390,10 @@ _TRIAGE_QUESTIONS = {
                 "urgent": _noul(0.2),
             },
             "Triage(false, jev::Noul(0.9), Team::Account,"
-            ' jev::Choice(Team::Technical as Team, 0.7, {"Billing": 0.2, "Technical": 0.7,'
-            ' "acct": 0.1}),'
-            " jev::Score(Level::Low as Level, 0.0, 0.4, [1.0, 0.0, 0.0]))",
+            " jev::Choice(Team::Technical as Team, 0.7, {Team::Billing as Team: 0.2,"
+            " Team::Technical as Team: 0.7, Team::Account as Team: 0.1}),"
+            " jev::Score(Level::Low as Level, 0.0, 0.4,"
+            " {Level::Low as Level: 1.0, Level::Medium as Level: 0.0, Level::High as Level: 0.0}))",
         ),
     ),
 )

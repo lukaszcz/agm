@@ -57,19 +57,19 @@ record Noul
 def Noul::value(self, threshold: decimal = ::noul-threshold) -> bool =
   self.probability >= threshold
 
-# `probabilities` is keyed by member tag.
+# `probabilities` is keyed by choice member.
 record Choice[C]
   choice: C
   confidence: decimal
-  probabilities: dict[text, decimal]
+  probabilities: dict[C, decimal]
 
 # `level` is the most probable member, the lowest-index one on a tie; `score`
-# is the probability-weighted level index; `probabilities` is by level index.
+# is the probability-weighted level index; `probabilities` is keyed by rubric member.
 record Score[L]
   level: L
   score: decimal
   confidence: decimal
-  probabilities: array[decimal]
+  probabilities: dict[L, decimal]
 
 # Descriptions of the yes and no outcomes.
 record NoulCriteria
@@ -86,8 +86,12 @@ enum Question
   | ScoreQuestion(instructions: json, levels: array[json])
 
 enum Answer
-  | NoulAnswer(noul: decimal)
-  | ChoiceAnswer(choice: text, confidence: decimal, probabilities: dict[text, decimal])
+  | NoulAnswer
+      noul: decimal
+  | ChoiceAnswer
+      choice: text
+      confidence: decimal
+      probabilities: dict[text, decimal]
   | ScoreAnswer
       score: decimal
       confidence: decimal

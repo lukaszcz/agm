@@ -183,15 +183,20 @@ def _wire_question(question: Any) -> QuestionModel:
 
 
 def _graded(answer: ChoiceAnswer | ScoreAnswer) -> dict[str, object]:
-    """The AgL ``confidence`` and ``probabilities`` of *answer*, and a score's ``score``."""
-    if isinstance(answer, ChoiceAnswer):
-        probabilities = {label: _decimal(p) for label, p in answer.probabilities.items()}
-        return {"confidence": _decimal(answer.confidence), "probabilities": agl_dict(probabilities)}
-    return {
-        "score": _decimal(answer.score),
-        "confidence": _decimal(answer.confidence),
-        "probabilities": array([_decimal(p) for _, p in sorted(answer.probabilities.items())]),
-    }
+    """The AgL ``confidence`` of *answer*, and a score's ``score``."""
+    fields: dict[str, object] = {"confidence": _decimal(answer.confidence)}
+    if isinstance(answer, ScoreAnswer):
+        fields["score"] = _decimal(answer.score)
+    return fields
+
+
+def _probabilities[K](
+    probabilities: Mapping[K, float], members: Mapping[K, TypeContract]
+) -> object:
+    """Wire probabilities keyed by their enum members."""
+    return agl_dict(
+        {_build(member): _decimal(probabilities[key]) for key, member in members.items()}
+    )
 
 
 def _answer(answer: NoulAnswer | ChoiceAnswer | ScoreAnswer) -> object:
@@ -199,9 +204,16 @@ def _answer(answer: NoulAnswer | ChoiceAnswer | ScoreAnswer) -> object:
     if isinstance(answer, NoulAnswer):
         return _jev.Answer.NoulAnswer(noul=_decimal(answer.noul))
     if isinstance(answer, ChoiceAnswer):
-        return _jev.Answer.ChoiceAnswer(choice=answer.choice, **_graded(answer))
+        return _jev.Answer.ChoiceAnswer(
+            choice=answer.choice,
+            probabilities=agl_dict(
+                {label: _decimal(p) for label, p in answer.probabilities.items()}
+            ),
+            **_graded(answer),
+        )
     return _jev.Answer.ScoreAnswer(
         **_graded(answer),
+        probabilities=array([_decimal(p) for _, p in sorted(answer.probabilities.items())]),
         legend=array([_from_wire(text) for _, text in sorted(answer.legend.items())]),
     )
 
@@ -459,7 +471,13 @@ def _choice(enum: TypeContract, *, wrap: bool) -> _Typed:
         if answer.probabilities.keys() != members.keys():
             raise _Outside("probabilities")
         chosen = _build(member)
-        return _jev.Choice(choice=chosen, **_graded(answer)) if wrap else chosen
+        if not wrap:
+            return chosen
+        return _jev.Choice(
+            choice=chosen,
+            probabilities=_probabilities(answer.probabilities, members),
+            **_graded(answer),
+        )
 
     return _Typed(lambda instructions: _choice_question(instructions, options), ChoiceAnswer, value)
 
@@ -470,7 +488,7 @@ def _score(enum: TypeContract) -> _Typed:
     if len(members) > _MAX_LEVELS:
         raise _Unsupported(f"{enum.label} has more than {_MAX_LEVELS} levels")
     levels = [member.doc or tag for tag, member in members.items()]
-    rubric = list(members.values())
+    rubric = dict(enumerate(members.values()))
 
     def value(answer: ScoreAnswer) -> object:
         # The API gives every level a probability.
@@ -479,7 +497,11 @@ def _score(enum: TypeContract) -> _Typed:
             raise _Outside("probabilities")
         # The most probable level; `max` keeps the first, so the lowest index on a tie.
         best = max(indices, key=answer.probabilities.__getitem__)
-        return _jev.Score(level=_build(rubric[best]), **_graded(answer))
+        return _jev.Score(
+            level=_build(rubric[best]),
+            probabilities=_probabilities(answer.probabilities, rubric),
+            **_graded(answer),
+        )
 
     return _Typed(lambda instructions: _score_question(instructions, levels), ScoreAnswer, value)
 

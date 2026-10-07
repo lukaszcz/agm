@@ -49,111 +49,171 @@ var max-retries: int = 2
 @param @opt-name("jev-noul-threshold") @doc("Probability from which a noul answer is true.")
 var noul-threshold: decimal = 0.5
 
-# A noul answer: the probability of yes.
+@doc("A noul answer containing the probability of yes.")
 record Noul
+  @doc("The probability of yes.")
   probability: decimal
 
 @doc("Check if the noul probability reaches the threshold.")
 def Noul::value(self, threshold: decimal = ::noul-threshold) -> bool =
   self.probability >= threshold
 
-# `probabilities` is keyed by choice member.
+@doc("A choice answer with the chosen member, confidence, and probabilities.")
 record Choice[C]
+  @doc("The chosen enum member.")
   choice: C
+  @doc("The confidence reported by the API.")
   confidence: decimal
+  @doc("The probability of each member of `C`.")
   probabilities: dict[C, decimal]
 
-# `level` is the most probable member, the lowest-index one on a tie; `score`
-# is the probability-weighted level index; `probabilities` is keyed by rubric member.
+@doc("A score answer over the ordered rubric members of `L`.")
 record Score[L]
+  @doc("The most probable member, choosing the lowest index on a tie.")
   level: L
+  @doc("The probability-weighted level index.")
   score: decimal
+  @doc("The confidence reported by the API.")
   confidence: decimal
+  @doc("The probability of each rubric member of `L`.")
   probabilities: dict[L, decimal]
 
-# Descriptions of the yes and no outcomes.
+@doc("Structured JSON descriptions of the yes and no outcomes of a noul question.")
 record NoulCriteria
+  @doc("A description of the yes outcome.")
   when-true: json
+  @doc("A description of the no outcome.")
   when-false: json
 
-# The raw API shape. Instructions and descriptions accept structured JSON as
-# the API does.
+@doc("Raw API questions whose instructions and outcome descriptions accept structured JSON.")
 enum Question
-  | NoulQuestion(instructions: json, criteria: Option[NoulCriteria])
-  # Label to description, or `null` for an undescribed label.
-  | ChoiceQuestion(instructions: json, options: dict[text, json])
-  # Ordered level descriptions, 2-10.
-  | ScoreQuestion(instructions: json, levels: array[json])
+  | @doc("A yes/no question with optional outcome descriptions.")
+    NoulQuestion
+      @doc("The question's instructions.")
+      instructions: json
+      @doc("Outcome descriptions, or `None` when unspecified.")
+      criteria: Option[NoulCriteria]
+  | @doc("A choice question mapping each label to its description, or `null` when undescribed.")
+    ChoiceQuestion
+      @doc("The question's instructions.")
+      instructions: json
+      @doc("A description for each label, or `null` when undescribed.")
+      options: dict[text, json]
+  | @doc("A score question with 2-10 level descriptions in rubric order.")
+    ScoreQuestion
+      @doc("The question's instructions.")
+      instructions: json
+      @doc("The level descriptions in rubric order.")
+      levels: array[json]
 
+@doc("Raw API answers returned by `system-one`.")
 enum Answer
-  | NoulAnswer
+  | @doc("A yes/no answer containing the probability of yes.")
+    NoulAnswer
+      @doc("The probability of yes.")
       noul: decimal
-  | ChoiceAnswer
+  | @doc("A choice answer with the chosen label and probabilities keyed by label.")
+    ChoiceAnswer
+      @doc("The chosen option's label.")
       choice: text
+      @doc("The confidence reported by the API.")
       confidence: decimal
+      @doc("The probability of each option label.")
       probabilities: dict[text, decimal]
-  | ScoreAnswer
+  | @doc("A score answer with probabilities and legend descriptions ordered by level index.")
+    ScoreAnswer
+      @doc("The probability-weighted level index.")
       score: decimal
+      @doc("The confidence reported by the API.")
       confidence: decimal
+      @doc("The level probabilities in rubric order.")
       probabilities: array[decimal]
+      @doc("The level descriptions in rubric order.")
       legend: array[json]
 
+@doc("Input and output token counts, or `None` when the API omits them.")
 record Usage
+  @doc("The input token count, or `None` when omitted.")
   input-tokens: Option[int]
+  @doc("The output token count, or `None` when omitted.")
   output-tokens: Option[int]
 
-# `answers` is keyed by question name.
+@doc("A System One response with answers keyed by question name, usage, and an optional request id.")
 record Response
+  @doc("The model that answered the request.")
   model: text
+  @doc("The answers keyed by question name.")
   answers: dict[text, Answer]
+  @doc("The request's token usage.")
   usage: Usage
+  @doc("The request id, or `None` when unavailable.")
   request-id: Option[text]
 
-# `message` is the SDK's message. An SDK error with no more specific class
-# below (a missing API key, an invalid retry policy, no questions), including
-# one raised while building the client, is a plain `JevError` whose
-# `request-id` is `None`.
+@doc("""
+  The base exception for SDK failures and invalid Jev targets or responses.
+
+  `message` is the SDK's message for SDK failures. An SDK failure with no more specific exception,
+  such as a missing API key, invalid retry policy, or empty questions, is a plain `JevError` with
+  `request-id` set to `None`, including failures while building the client.
+""")
 exception JevError extends Exception
+  @doc("The request id, or `None` when unavailable.")
   request-id: Option[text]
 
-# An unsuccessful HTTP response after the SDK's retries.
+@doc("An unsuccessful HTTP response after the SDK's retries, carrying its status and JSON body.")
 exception JevApiError extends JevError
+  @doc("The response's HTTP status.")
   status: int
+  @doc("The response body as JSON, or `null` when unavailable or invalid.")
   body: json
 
-# 401 or 403.
+@doc("An HTTP 401 or 403 authentication or permission failure.")
 exception JevAuthError extends JevApiError
 
-# 400, 404, or 422.
+@doc("An HTTP 400, 404, or 422 request failure.")
 exception JevRequestError extends JevApiError
 
-# 429.
+@doc("An HTTP 429 rate limit failure with an optional retry delay in milliseconds.")
 exception JevRateLimitError extends JevApiError
+  @doc("The retry delay in milliseconds, or `None` when unspecified.")
   retry-after-ms: Option[int]
 
-# 5xx.
+@doc("An HTTP 5xx server failure.")
 exception JevServerError extends JevApiError
 
-# The request reached no response.
+@doc("A request that received no response, carrying the transport failure's cause.")
 exception JevConnectionError extends JevError
+  @doc("The transport failure's cause.")
   cause: text
 
-# `timeout` is the timeout the SDK reported for the request, as duration
-# text in the `timeout` form above (such as `"10.0s"`).
+@doc("""
+  A request that exceeded its timeout.
+
+  `timeout` is the duration reported by the SDK, formatted as duration text such as `\"10.0s\"`.
+""")
 exception JevTimeoutError extends JevError
+  @doc("The timeout reported by the SDK, formatted as duration text.")
   timeout: text
 
-# A success response whose body is structurally invalid at `field-path`, or
-# whose answer the target cannot hold: `answers.<question>.choice` for a label
-# outside it, `answers.<question>.probabilities` for keys other than exactly
-# its labels or level indices.
+@doc("""
+  A success response with an invalid body or an answer its target cannot hold.
+
+  `field-path` locates the invalid response field: `answers.<question>.choice` for an unknown
+  label, or `answers.<question>.probabilities` for keys other than exactly the target's labels
+  or level indices.
+""")
 exception JevResponseError extends JevError
+  @doc("The path of the invalid response field.")
   field-path: text
 
-# A target type no question kind maps; `target` is its type label (such as
-# `Team` or `std/option::Option[Team]`), or `<record>.<field>` for an
-# `ask-many` field.
+@doc("""
+  A target type that no Jev question kind supports.
+
+  `target` is the type label, such as `Team` or `std/option::Option[Team]`, or `<record>.<field>`
+  for an unsupported `ask-many` field. Raised before any request is sent.
+""")
 exception JevTargetError extends JevError
+  @doc("The unsupported target's type label or record field path.")
   target: text
 
 @extern-name("system_one")

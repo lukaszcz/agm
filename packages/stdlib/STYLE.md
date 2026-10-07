@@ -50,10 +50,13 @@ bind an argument.
 - Separate extern and builtin function declarations with a blank line before the next
   declaration's attributes.
 
-- Document functions with `@doc` on a separate line before the declaration.
-  Start with one concise sentence describing the function. Put exception
-  conditions and other notes in separate paragraphs; use a block string for
-  multiline documentation.
+- Document all public-facing declarations with `@doc`, including functions,
+  methods, types, constructors, fields, and module bindings. A type or
+  constructor may omit `@doc` only when its name makes its meaning obvious.
+  Put the annotation on a separate line before the declaration (after `|`
+  for an enum member). Start with one concise sentence describing the
+  declaration. Put exception conditions and other notes in separate
+  paragraphs; use a block string for multiline documentation.
 
 - Declare a record's fields in the indented block form, one field per line,
   rather than in a parenthesized list:
@@ -62,7 +65,7 @@ bind an argument.
   record Choice[C]
     choice: C
     confidence: decimal
-    probabilities: dict[text, decimal]
+    probabilities: dict[C, decimal]
   ```
 
 - Declare an exception's new fields the same way, one field per line:

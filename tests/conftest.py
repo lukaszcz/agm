@@ -265,7 +265,7 @@ def isolate_host_environment(
 
     ``HOME`` resolves the AGM home (``~/.agm``), so without this a developer who
     has run ``agm pkg install`` makes the suite read their installed package
-    store, their ``config.toml`` and their prompts — the suite would then pass
+    store and their ``config.toml`` — the suite would then pass
     or fail depending on the machine.  Point ``HOME`` (and the XDG roots git
     consults) at a per-test directory, supply git identity explicitly so an
     empty home can still commit, and drop the project/terminal variables an agm

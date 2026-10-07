@@ -81,10 +81,8 @@ def install_user_config(
 ) -> InstallUserConfigResult:
     agm_config_dir = agm_home_dir(home=install_root, env=env)
     sandbox_dir = agm_config_dir / "sandbox"
-    prompts_dir = agm_config_dir / "prompts"
     micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
-    prompts_dir.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     skipped: list[Path] = []
@@ -105,15 +103,6 @@ def install_user_config(
             installed.append(sandbox_destination)
         else:
             skipped.append(sandbox_destination)
-
-    for prompt_source in sorted((repo_root / "prompts").iterdir()):
-        if not prompt_source.is_file():
-            continue
-        prompt_destination = prompts_dir / prompt_source.name
-        if _install_file(source=prompt_source, destination=prompt_destination, force=force):
-            installed.append(prompt_destination)
-        else:
-            skipped.append(prompt_destination)
 
     # The package domain owns the managed stdlib's locked staging,
     # publication, integrity record, activation, and stale-file replacement.

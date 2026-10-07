@@ -2,7 +2,7 @@
 
 Every other test trusts that AGM resolves its home, project, and shell state
 from what that test set up.  These tests verify that trust: a developer with a
-real ``~/.agm`` — installed packages, a personal ``config.toml``, prompts — must
+real ``~/.agm`` — installed packages and a personal ``config.toml`` — must
 get the same results as a clean checkout, and a suite launched from inside a
 project directory or a workspace shell must not inherit either.
 """

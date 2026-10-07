@@ -21,7 +21,6 @@ markdown_extensions:
 exclude_docs: |
   AGENTS.md
   README.md
-  /prompts/
 
 validation:
   nav:

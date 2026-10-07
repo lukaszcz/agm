@@ -2,7 +2,6 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
-prompts_dir := justfile_directory() + "/prompts"
 
 # Display the available recipes when no recipe is specified
 [private]
@@ -169,7 +168,6 @@ install-prefix *args:
 # Install agm, its user config, editor modes, and repository packages, then sync
 # the active packages' Python requirements into the freshly installed environment
 install *args:
-    test -d "{{prompts_dir}}"
     just install-agm {{args}}
     uv run python tools/install_agm_config.py {{args}}
     just setup-emacs-optional {{args}}

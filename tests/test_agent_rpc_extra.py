@@ -295,14 +295,63 @@ def test_protocol_error_is_retained_alongside_stderr(
     backend.close()
 
 
-def test_bounded_records_output_and_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    too_large = "x" * (rpc._MAX_JSONL_RECORD_BYTES + 1)
-    RpcStub(tmp_path, monkeypatch, {"prompt": [{"raw": too_large}]})
-    backend = open_backend()
-    with pytest.raises(SessionAskError):
-        backend.ask(SessionAskRequest("hello"))
-    backend.close()
+@pytest.mark.parametrize("event_type", ["message_end", "tool_execution_end", "agent_end"])
+def test_large_valid_events_preserve_the_reply_and_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_type: str
+) -> None:
+    large = "x" * (2 * 1_048_576)
+    reply = large if event_type == "message_end" else "answer"
+    message: dict[str, object] = {
+        "role": "assistant",
+        "stopReason": "stop",
+        "content": [{"type": "text", "text": reply}],
+    }
+    tool_content = [
+        {"type": "text", "text": "tool output"},
+        {"type": "image", "data": large, "mimeType": "image/png"},
+    ]
+    event: dict[str, object]
+    if event_type == "message_end":
+        event = {"type": event_type, "message": message}
+    elif event_type == "tool_execution_end":
+        event = {
+            "type": event_type,
+            "toolCallId": "large-tool",
+            "result": {"content": tool_content},
+            "isError": False,
+        }
+    else:
+        event = {
+            "type": event_type,
+            "messages": [{"role": "toolResult", "content": tool_content}],
+            "willRetry": False,
+        }
+    events = [
+        {"id": "$id", "type": "response", "command": "prompt", "success": True},
+        event,
+    ]
+    if event_type != "message_end":
+        events.append({"type": "message_end", "message": message})
+    events.append({"type": "agent_settled"})
+    RpcStub(tmp_path, monkeypatch, {"prompt": events})
+    backend = open_backend(timeout=10)
+    output: list[tuple[str, str]] = []
 
+    def callback(phase: AgentOutputPhase, text: str, **_metadata: object) -> None:
+        output.append((phase, text))
+
+    try:
+        assert backend.ask(SessionAskRequest("hello", output_callback=callback)).content == reply
+        assert output == (
+            [("progress", "tool output")] if event_type == "tool_execution_end" else []
+        )
+        backend.compact("")
+        assert backend.stats().input_tokens == 11
+    finally:
+        backend.close()
+
+
+def test_stderr_retains_only_its_bounded_tail() -> None:
     child = _child(object())
     child.stderr.append(b"x" * (rpc._MAX_STDERR_BYTES + 1))
     assert len(child.stderr.data) == rpc._MAX_STDERR_BYTES
@@ -568,16 +617,8 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     child.stdout.put(b"\xff\n")
     with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
-    child.stdout.put(b"x" * (rpc._MAX_JSONL_RECORD_BYTES + 1) + b"\n")
-    with pytest.raises(rpc._RpcProtocolError):
-        backend._next_line(child)
-    child.stdout_buffer.clear()
     backend._settings = replace(backend._settings, idle_timeout=0)
     with pytest.raises(rpc._RpcIdleTimeout):
-        backend._next_line(child)
-
-    child.stdout_buffer[:] = b"x" * (rpc._MAX_JSONL_RECORD_BYTES + 1) + b"\n"
-    with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
 
     class FullQueue:

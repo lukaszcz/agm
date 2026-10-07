@@ -56,7 +56,6 @@ _RpcOperation = Literal[
 
 _MAX_STDOUT_CHUNKS = 64
 _MAX_STDERR_BYTES = 16_384
-_MAX_JSONL_RECORD_BYTES = 1_048_576
 _MAX_PROMPT_CHARS = 4_194_304
 _CONTEXT_PERCENT_UNAVAILABLE = Decimal("0")
 _T = TypeVar("_T")
@@ -96,7 +95,7 @@ class _Lock(Protocol):
 
 @dataclass(slots=True)
 class _RpcChild:
-    """The process and bounded asynchronously drained streams for one Pi session."""
+    """The process and asynchronously drained streams for one Pi session."""
 
     process: subprocess.Popen[bytes]
     agent: AgentPi
@@ -471,6 +470,7 @@ class PiRpcSessionBackend(SandboxFixture):
         return event
 
     def _next_line(self, child: _RpcChild) -> str:
+        """Read an uncapped LF-delimited record; Pi events can include images and transcripts."""
         deadline = (
             None
             if self._settings.idle_timeout is None
@@ -482,8 +482,6 @@ class PiRpcSessionBackend(SandboxFixture):
             if newline >= 0:
                 line = bytes(buffer[:newline])
                 del buffer[: newline + 1]
-                if len(line) > _MAX_JSONL_RECORD_BYTES:
-                    raise _RpcProtocolError("Pi RPC JSONL record exceeded the protocol limit")
                 if line.endswith(b"\r"):
                     line = line[:-1]
                 if not line:
@@ -505,8 +503,6 @@ class PiRpcSessionBackend(SandboxFixture):
             if chunk is None:
                 raise _RpcProcessExited
             child.stdout_buffer.extend(chunk)
-            if len(child.stdout_buffer) > _MAX_JSONL_RECORD_BYTES:
-                raise _RpcProtocolError("Pi RPC JSONL record exceeded the protocol limit")
 
     def _raise_transport_or_host(
         self,
